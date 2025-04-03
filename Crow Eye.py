@@ -15,7 +15,7 @@ import shutil
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from Artifacts_Collectors import reg_Claw, A_CJL_LNK_Claw, Prefetch_claw, WinLog_Claw 
+from Artifacts_Collectors import reg_Claw, Prefetch_claw
 from subprocess import call
 
 
@@ -1907,7 +1907,7 @@ class Ui_Crow_Eye(object):
             load_data_from_Prefetch()  
    
         def parse_LNK_files():
-            call(["python","Artifacts_Collectors\A_CJL_LNK_Claw.py"])
+            call(["python",r"Artifacts_Collectors\A_CJL_LNK_Claw.py"])
 
         def parse_registry():
             reg_Claw.reg_Claw()
@@ -1916,7 +1916,7 @@ class Ui_Crow_Eye(object):
             Prefetch_claw.prefetch_claw()
 
         def parse_logs():
-            call(["python","Artifacts_Collectors\WinLog_Claw.py"])
+            call(["python",r"Artifacts_Collectors\WinLog_Claw.py"])
               
                 
         self.lnkbutton.clicked.connect(parse_LNK_files)
@@ -2277,4 +2277,3 @@ if __name__ == "__main__":
     ui.setupUi(Crow_Eye)
     Crow_Eye.show()
     sys.exit(app.exec_())
-
