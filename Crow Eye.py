@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from Artifacts_Collectors import reg_Claw, Prefetch_claw
 from subprocess import call
+import GUI_resources
 
 
 class Ui_Crow_Eye(object):
@@ -32,7 +33,7 @@ class Ui_Crow_Eye(object):
 "    border: 1px solid #3c3c3c;\n"
 "    border-radius: 8px;\n"
 "    background-color: #2c2c2c;\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */\n"
+
 "}\n"
 "\n"
 "/* Style for each tab */\n"
@@ -44,7 +45,7 @@ class Ui_Crow_Eye(object):
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    margin-right: -1px; /* Ensures adjacent tabs have no gap */\n"
-"    transition: background-color 0.3s ease, color 0.3s ease; /* Smooth color transition */\n"
+
 "}\n"
 "\n"
 "/* Style for the active tab */\n"
@@ -65,10 +66,7 @@ class Ui_Crow_Eye(object):
 "}\n"
 "\n"
 "/* Additional hover effect for better user experience */\n"
-"QTabBar::tab:!selected:hover {\n"
-"    transform: scale(1.05); /* Slightly enlarge the tab */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Subtle shadow on hover */\n"
-"}\n"
+
 "")
         Crow_Eye.setIconSize(QtCore.QSize(50, 50))
         Crow_Eye.setDockOptions(QtWidgets.QMainWindow.AllowTabbedDocks|QtWidgets.QMainWindow.AnimatedDocks|QtWidgets.QMainWindow.VerticalTabs)
@@ -78,7 +76,7 @@ class Ui_Crow_Eye(object):
 "    border: 1px solid #444;\n"
 "    border-radius: 8px;\n"
 "    background-color: #2c2c2c;\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */\n"
+
 "}\n"
 "\n"
 "/* Style for each tab */\n"
@@ -90,7 +88,6 @@ class Ui_Crow_Eye(object):
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    margin-right: -1px; /* Ensures adjacent tabs have no gap */\n"
-"    transition: background-color 0.3s ease, color 0.3s ease; /* Smooth color transition */\n"
 "}\n"
 "\n"
 "/* Style for the active tab */\n"
@@ -111,10 +108,7 @@ class Ui_Crow_Eye(object):
 "}\n"
 "\n"
 "/* Additional hover effect for better user experience */\n"
-"QTabBar::tab:!selected:hover {\n"
-"    transform: scale(1.05); /* Slightly enlarge the tab */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Subtle shadow on hover */\n"
-"}\n"
+
 "")
         self.centralwidget.setObjectName("centralwidget")
         self.verticalLayout_2 = QtWidgets.QVBoxLayout(self.centralwidget)
@@ -156,7 +150,7 @@ class Ui_Crow_Eye(object):
 "    background-color: rgb(0, 0, 0);\n"
 "    image: url(:/Icons/main-menu.png);\n"
 "    border: 2px solid rgb(255, 255, 255); /* Added border property */\n"
-"    transition: background-color 0.3s, border-color 0.3s;\n"
+
 "}\n"
 "\n"
 "QPushButton:hover {\n"
@@ -225,23 +219,22 @@ class Ui_Crow_Eye(object):
 "    padding: 7px 15px;\n"
 "    text-align: center;\n"
 "    text-decoration: none;\n"
-"    display: inline-block;\n"
 "    font-size: 16px;\n"
 "    margin: 4px 2px;\n"
 "    border-radius: 12px;\n"
-"    transition-duration: 0.4s;\n"
+
 "}\n"
 "\n"
 "QPushButton:hover {\n"
 "   \n"
 "    background-color: rgb(213, 112, 23);\n"
-"    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);\n"
+
 "}\n"
 "\n"
 "QPushButton:pressed {\n"
 "    background-color: #3a6ca4;\n"
-"    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);\n"
-"    transform: translateY(2px);\n"
+
+
 "}\n"
 "")
         self.loadData.setObjectName("loadData")
@@ -265,20 +258,18 @@ class Ui_Crow_Eye(object):
 "    color: white;\n"
 "    background-color: #001f3f; /* Navy background color */\n"
 "    padding: 1em 2em;\n"
-"    transition: background-color 0.3s, color 0.3s, box-shadow 0.3s;\n"
+
 "}\n"
 "\n"
 "QPushButton:hover {\n"
 "    background-color: #003366; /* Slightly lighter navy on hover */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Add shadow on hover */\n"
 "}\n"
 "\n"
 "QPushButton:pressed {\n"
 "    border: 2px solid #cccccc; /* Adjust border width and color */\n"
 "    color: green; /* Adjust pressed color */\n"
 "    background-color: #002244; /* Darker navy on press */\n"
-"    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Reduce shadow on press */\n"
-"    transform: translateY(2px); /* Slightly move button down on press */\n"
+
 "}\n"
 "")
         self.registrybutton.setCheckable(True)
@@ -296,20 +287,20 @@ class Ui_Crow_Eye(object):
 "    color: white;\n"
 "    background-color: #001f3f; /* Navy background color */\n"
 "    padding: 1em 2em;\n"
-"    transition: background-color 0.3s, color 0.3s, box-shadow 0.3s;\n"
+
 "}\n"
 "\n"
 "QPushButton:hover {\n"
 "    background-color: #003366; /* Slightly lighter navy on hover */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Add shadow on hover */\n"
+
 "}\n"
 "\n"
 "QPushButton:pressed {\n"
 "    border: 2px solid #cccccc; /* Adjust border width and color */\n"
 "    color: green; /* Adjust pressed color */\n"
 "    background-color: #002244; /* Darker navy on press */\n"
-"    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Reduce shadow on press */\n"
-"    transform: translateY(2px); /* Slightly move button down on press */\n"
+
+
 "}")
         self.lnkbutton.setCheckable(True)
         self.lnkbutton.setChecked(True)
@@ -332,20 +323,20 @@ class Ui_Crow_Eye(object):
 "    color: white;\n"
 "    background-color: #001f3f; /* Navy background color */\n"
 "    padding: 1em 2em;\n"
-"    transition: background-color 0.3s, color 0.3s, box-shadow 0.3s;\n"
+
 "}\n"
 "\n"
 "QPushButton:hover {\n"
 "    background-color: #003366; /* Slightly lighter navy on hover */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Add shadow on hover */\n"
+
 "}\n"
 "\n"
 "QPushButton:pressed {\n"
 "    border: 2px solid #cccccc; /* Adjust border width and color */\n"
 "    color: green; /* Adjust pressed color */\n"
 "    background-color: #002244; /* Darker navy on press */\n"
-"    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Reduce shadow on press */\n"
-"    transform: translateY(2px); /* Slightly move button down on press */\n"
+
+
 "}")
         self.Prefetchbutton.setCheckable(True)
         self.Prefetchbutton.setChecked(True)
@@ -362,20 +353,20 @@ class Ui_Crow_Eye(object):
 "    color: white;\n"
 "    background-color: #001f3f; /* Navy background color */\n"
 "    padding: 1em 2em;\n"
-"    transition: background-color 0.3s, color 0.3s, box-shadow 0.3s;\n"
+
 "}\n"
 "\n"
 "QPushButton:hover {\n"
 "    background-color: #003366; /* Slightly lighter navy on hover */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Add shadow on hover */\n"
+
 "}\n"
 "\n"
 "QPushButton:pressed {\n"
 "    border: 2px solid #cccccc; /* Adjust border width and color */\n"
 "    color: green; /* Adjust pressed color */\n"
 "    background-color: #002244; /* Darker navy on press */\n"
-"    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Reduce shadow on press */\n"
-"    transform: translateY(2px); /* Slightly move button down on press */\n"
+
+
 "}")
         self.logbutton.setCheckable(True)
         self.logbutton.setChecked(True)
@@ -405,20 +396,20 @@ class Ui_Crow_Eye(object):
 "    color: white;\n"
 "    background-color: #001f3f; /* Navy background color */\n"
 "    padding: 1em 2em;\n"
-"    transition: background-color 0.3s, color 0.3s, box-shadow 0.3s;\n"
+
 "}\n"
 "\n"
 "QPushButton:hover {\n"
 "    background-color: #003366; /* Slightly lighter navy on hover */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Add shadow on hover */\n"
+
 "}\n"
 "\n"
 "QPushButton:pressed {\n"
 "    border: 2px solid #cccccc; /* Adjust border width and color */\n"
 "    color: green; /* Adjust pressed color */\n"
 "    background-color: #002244; /* Darker navy on press */\n"
-"    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Reduce shadow on press */\n"
-"    transform: translateY(2px); /* Slightly move button down on press */\n"
+
+
 "}")
         self.time_line_button.setCheckable(True)
         self.time_line_button.setChecked(True)
@@ -502,7 +493,6 @@ class Ui_Crow_Eye(object):
         self.Registry_widget = QtWidgets.QTabWidget(self.Registry_Tab)
         self.Registry_widget.setStyleSheet("/* Container for the tab widget */\n"
 ".tab-container {\n"
-"  display: flex;\n"
 "  background-color: #333;\n"
 "  border: 1px solid #444;\n"
 "  border-radius: 5px;\n"
@@ -518,7 +508,7 @@ class Ui_Crow_Eye(object):
 "  background-color: #444;\n"
 "  border-right: 1px solid #555;\n"
 "  cursor: pointer;\n"
-"  transition: background-color 0.3s ease;\n"
+
 "}\n"
 "\n"
 "/* Remove border for the last tab */\n"
@@ -605,7 +595,7 @@ class Ui_Crow_Eye(object):
 "    border: 1px solid #3c3c3c;\n"
 "    border-radius: 8px;\n"
 "    background-color: #2c2c2c;\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */\n"
+
 "}\n"
 "\n"
 "/* Style for each tab */\n"
@@ -617,7 +607,7 @@ class Ui_Crow_Eye(object):
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    margin-right: -1px; /* Ensures adjacent tabs have no gap */\n"
-"    transition: background-color 0.3s ease, color 0.3s ease; /* Smooth color transition */\n"
+
 "}\n"
 "\n"
 "/* Style for the active tab */\n"
@@ -639,8 +629,8 @@ class Ui_Crow_Eye(object):
 "\n"
 "/* Additional hover effect for better user experience */\n"
 "QTabBar::tab:!selected:hover {\n"
-"    transform: scale(1.05); /* Slightly enlarge the tab */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Subtle shadow on hover */\n"
+
+
 "}\n"
 "")
         self.NetworkLists_table.setObjectName("NetworkLists_table")
@@ -667,7 +657,7 @@ class Ui_Crow_Eye(object):
 "    border: 1px solid #3c3c3c;\n"
 "    border-radius: 8px;\n"
 "    background-color: #2c2c2c;\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */\n"
+
 "}\n"
 "\n"
 "/* Style for each tab */\n"
@@ -679,7 +669,7 @@ class Ui_Crow_Eye(object):
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    margin-right: -1px; /* Ensures adjacent tabs have no gap */\n"
-"    transition: background-color 0.3s ease, color 0.3s ease; /* Smooth color transition */\n"
+
 "}\n"
 "\n"
 "/* Style for the active tab */\n"
@@ -700,10 +690,7 @@ class Ui_Crow_Eye(object):
 "}\n"
 "\n"
 "/* Additional hover effect for better user experience */\n"
-"QTabBar::tab:!selected:hover {\n"
-"    transform: scale(1.05); /* Slightly enlarge the tab */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Subtle shadow on hover */\n"
-"}\n"
+
 "")
         self.MachineRun_table.setObjectName("MachineRun_table")
         self.MachineRun_table.setColumnCount(3)
@@ -745,7 +732,7 @@ class Ui_Crow_Eye(object):
 "    border: 1px solid #3c3c3c;\n"
 "    border-radius: 8px;\n"
 "    background-color: #2c2c2c;\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */\n"
+
 "}\n"
 "\n"
 "/* Style for each tab */\n"
@@ -757,7 +744,7 @@ class Ui_Crow_Eye(object):
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    margin-right: -1px; /* Ensures adjacent tabs have no gap */\n"
-"    transition: background-color 0.3s ease, color 0.3s ease; /* Smooth color transition */\n"
+
 "}\n"
 "\n"
 "/* Style for the active tab */\n"
@@ -778,10 +765,7 @@ class Ui_Crow_Eye(object):
 "}\n"
 "\n"
 "/* Additional hover effect for better user experience */\n"
-"QTabBar::tab:!selected:hover {\n"
-"    transform: scale(1.05); /* Slightly enlarge the tab */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Subtle shadow on hover */\n"
-"}\n"
+
 "")
         self.UserRun_table.setObjectName("UserRun_table")
         self.UserRun_table.setColumnCount(3)
@@ -839,7 +823,7 @@ class Ui_Crow_Eye(object):
 "    border: 1px solid #3c3c3c;\n"
 "    border-radius: 8px;\n"
 "    background-color: #2c2c2c;\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */\n"
+
 "}\n"
 "\n"
 "/* Style for each tab */\n"
@@ -851,7 +835,7 @@ class Ui_Crow_Eye(object):
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    margin-right: -1px; /* Ensures adjacent tabs have no gap */\n"
-"    transition: background-color 0.3s ease, color 0.3s ease; /* Smooth color transition */\n"
+
 "}\n"
 "\n"
 "/* Style for the active tab */\n"
@@ -872,10 +856,7 @@ class Ui_Crow_Eye(object):
 "}\n"
 "\n"
 "/* Additional hover effect for better user experience */\n"
-"QTabBar::tab:!selected:hover {\n"
-"    transform: scale(1.05); /* Slightly enlarge the tab */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Subtle shadow on hover */\n"
-"}\n"
+
 "")
         self.LastUpdateInfo_table.setFrameShadow(QtWidgets.QFrame.Raised)
         self.LastUpdateInfo_table.setLineWidth(2)
@@ -901,7 +882,6 @@ class Ui_Crow_Eye(object):
         self.ShutDown_table = QtWidgets.QTableWidget(self.ShutDown_tab)
         self.ShutDown_table.setStyleSheet("/* Container for the tab widget */\n"
 ".tab-container {\n"
-"  display: flex;\n"
 "  background-color: #333;\n"
 "  border: 1px solid #444;\n"
 "  border-radius: 5px;\n"
@@ -917,7 +897,7 @@ class Ui_Crow_Eye(object):
 "  background-color: #444;\n"
 "  border-right: 1px solid #555;\n"
 "  cursor: pointer;\n"
-"  transition: background-color 0.3s ease;\n"
+
 "}\n"
 "\n"
 "/* Remove border for the last tab */\n"
@@ -975,7 +955,6 @@ class Ui_Crow_Eye(object):
 "    border: 1px solid #3c3c3c;\n"
 "    border-radius: 8px;\n"
 "    background-color: #2c2c2c;\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */\n"
 "}\n"
 "\n"
 "/* Style for each tab */\n"
@@ -987,7 +966,7 @@ class Ui_Crow_Eye(object):
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    margin-right: -1px; /* Ensures adjacent tabs have no gap */\n"
-"    transition: background-color 0.3s ease, color 0.3s ease; /* Smooth color transition */\n"
+
 "}\n"
 "\n"
 "/* Style for the active tab */\n"
@@ -1008,10 +987,7 @@ class Ui_Crow_Eye(object):
 "}\n"
 "\n"
 "/* Additional hover effect for better user experience */\n"
-"QTabBar::tab:!selected:hover {\n"
-"    transform: scale(1.05); /* Slightly enlarge the tab */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Subtle shadow on hover */\n"
-"}\n"
+
 "")
         self.LNK_table.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.LNK_table.setDragDropOverwriteMode(False)
@@ -1120,7 +1096,7 @@ class Ui_Crow_Eye(object):
 "    border: 1px solid #3c3c3c;\n"
 "    border-radius: 8px;\n"
 "    background-color: #2c2c2c;\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Soft shadow for depth */\n"
+
 "}\n"
 "\n"
 "/* Style for each tab */\n"
@@ -1132,7 +1108,7 @@ class Ui_Crow_Eye(object):
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    margin-right: -1px; /* Ensures adjacent tabs have no gap */\n"
-"    transition: background-color 0.3s ease, color 0.3s ease; /* Smooth color transition */\n"
+
 "}\n"
 "\n"
 "/* Style for the active tab */\n"
@@ -1153,10 +1129,7 @@ class Ui_Crow_Eye(object):
 "}\n"
 "\n"
 "/* Additional hover effect for better user experience */\n"
-"QTabBar::tab:!selected:hover {\n"
-"    transform: scale(1.05); /* Slightly enlarge the tab */\n"
-"    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Subtle shadow on hover */\n"
-"}\n"
+
 "\n"
 "")
         self.Clj_table.setIconSize(QtCore.QSize(24, 0))
@@ -1385,23 +1358,21 @@ class Ui_Crow_Eye(object):
 "    padding: 7px 15px;\n"
 "    text-align: center;\n"
 "    text-decoration: none;\n"
-"    display: inline-block;\n"
 "    font-size: 16px;\n"
 "    margin: 4px 2px;\n"
 "    border-radius: 12px;\n"
-"    transition-duration: 0.4s;\n"
+
 "}\n"
 "\n"
 "QPushButton:hover {\n"
 "   \n"
 "    background-color: rgb(213, 112, 23);\n"
-"    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);\n"
+
 "}\n"
 "\n"
 "QPushButton:pressed {\n"
 "    background-color: #3a6ca4;\n"
-"    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);\n"
-"    transform: translateY(2px);\n"
+
 "}\n"
 "")
         self.tabWidget.setObjectName("tabWidget")
@@ -1899,13 +1870,42 @@ class Ui_Crow_Eye(object):
             subprocess.Popen(['streamlit', 'run', 'Data_visualization.py'])
 
         def load_all_data():
-            load_data_from_database_lnkAJL()
-            load_data_from_database_CJL() 
-            load_allReg_data()  
-            load_files_acitvity()  
-            load_all_logs()  
-            load_data_from_Prefetch()  
+            """Load all forensic data with basic error handling"""
+            try:
+                load_data_from_database_lnkAJL()
+            except Exception as e:
+                print(f"[LNK Error] Couldn't load JumpLists: {str(e)}")
+
+            try:
+                load_data_from_database_CJL()
+            except Exception as e:
+                print(f"[CustomJL Error] Couldn't load Custom JumpLists: {str(e)}")
+
+            try:
+                load_allReg_data()
+            except Exception as e:
+                print(f"[Registry Error] Couldn't load registry data: {str(e)}")
+
+            try:
+                load_files_acitvity()
+            except Exception as e:
+                print(f"[File Activity Error] Couldn't load file history: {str(e)}")
+
+            try:
+                load_all_logs()
+            except Exception as e:
+                print(f"[Logs Error] Couldn't load event logs: {str(e)}")
+
+            try:
+                load_data_from_Prefetch()
+            except Exception as e:
+                print(f"[Prefetch Error] Couldn't load prefetch data: {str(e)}")
+            
+            print("\033[92m\nData has been loaded into the GUI Successfully\033[0m")
    
+        
+        
+        
         def parse_LNK_files():
             call(["python",r"Artifacts_Collectors\A_CJL_LNK_Claw.py"])
 
