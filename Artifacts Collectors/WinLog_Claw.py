@@ -220,6 +220,8 @@ def main():
 
     conn.commit()
     conn.close()
+    
+    print("\033[92m\nParsing logs has been completed by Crow Eye\033[0m")
 
 if __name__ == "__main__":
     main()

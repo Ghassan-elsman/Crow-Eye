@@ -91,6 +91,7 @@ def prefetch_claw():
 
     # Parse all prefetch files in the directory and store the data in the database
     parse_prefetch_directory(directory)
+    print("\033[92m\nParsing Prefetch has been completed by Crow Eye\033[0m")
 
-if __name__ == "__maim__":
+if __name__ == "__main__":
     prefetch_claw()

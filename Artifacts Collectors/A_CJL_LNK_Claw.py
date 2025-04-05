@@ -521,7 +521,7 @@ def print_database_content(db_file):
     except Exception as e:
         print(f'An error occurred while reading the database: {e}')
 
-def main():
+def  A_CJL_LNK_Claw():
     """Main execution function"""
     try:
         # First collect all forensic artifacts
@@ -548,5 +548,6 @@ def main():
     except Exception as e:
         print(f"\n [!!!] Critical error: {str(e)}")
 
+    print("\033[92m\nParsing automatic,custom jumplist and LNK files has been completed by Crow Eye\033[0m")
 if __name__ == "__main__":
-    A_CJL_LNK_Claw
+    A_CJL_LNK_Claw()

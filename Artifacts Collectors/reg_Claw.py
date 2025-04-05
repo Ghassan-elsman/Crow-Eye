@@ -1,6 +1,6 @@
 def reg_Claw():    
     import sqlite3
-    from python_registry import Registry
+    from Registry import Registry
     print("Import successful")
     import binascii
     import os
@@ -11,9 +11,9 @@ def reg_Claw():
     system_reg_hive = os.path.join(os.getenv('SystemRoot', ''), 'System32', 'config', 'SYSTEM')
     Software_reg_hive = os.path.join(os.getenv('SystemRoot', ''), 'System32', 'config', 'SOFTWARE')
 
-    Ntuser_reg_hive = r"Artifacts Collectors\Target Artifacts\Registry Hives\NTUSER.DAT"
-    system_reg_hive = r"Artifacts Collectors\Target Artifacts\Registry Hives\SYSTEM"
-    Software_reg_hive = r"Artifacts Collectors\Target Artifacts\Registry Hives\SOFTWARE"
+    Ntuser_reg_hive = r"Artifacts_Collectors\Target Artifacts\Registry Hives\NTUSER.DAT"
+    system_reg_hive = r"Artifacts_Collectors\Target Artifacts\Registry Hives\SYSTEM"
+    Software_reg_hive = r"Artifacts_Collectors\Target Artifacts\Registry Hives\SOFTWARE"
     # Check if the paths are valid
     if not Ntuser_reg_hive or not system_reg_hive or not Software_reg_hive:
         raise ValueError("One or more registry hive paths are invalid. Please check the environment variables.")
@@ -370,6 +370,7 @@ def reg_Claw():
     conn.commit()
 
     conn.close()
+    print("\033[92m\nParsing Registry has been completed by Crow Eye\033[0m")
 
 if __name__ == "__main__":
     reg_Claw()
