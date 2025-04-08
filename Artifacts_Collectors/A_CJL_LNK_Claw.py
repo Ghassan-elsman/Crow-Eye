@@ -14,7 +14,7 @@ TARGET_DIRS = {
 }
 
 # System configuration
-SYSTEM_DRIVE = os.environ["SystemDrive"]
+SYSTEM_DRIVE = os.environ["SystemDrive"] + "\\"  
 USER_PROFILES_PATH = os.path.join(SYSTEM_DRIVE, "Users")
 
 def create_target_directories():
