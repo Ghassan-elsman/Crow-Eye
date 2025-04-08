@@ -156,4 +156,7 @@ Jump List/LNK parsing based on work by Saleh Muhaysin
 
 
 ![Screenshot 2025-04-03 225113](https://github.com/user-attachments/assets/515aa6c5-c5e4-43aa-8b2e-2cbfe3f5ebd6)
+![Screenshot 2025-04-08 134045](https://github.com/user-attachments/assets/f0da8f6f-bca4-4724-b13f-6d2044b1584f)
+![Screenshot 2025-04-08 134131](https://github.com/user-attachments/assets/09e953aa-be3e-4273-b7ec-ffe529bbb50f)
+
 
