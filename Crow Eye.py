@@ -1870,7 +1870,7 @@ class Ui_Crow_Eye(object):
             subprocess.Popen(['streamlit', 'run', 'Data_visualization.py'])
 
         def load_all_data():
-            """Load all forensic data with basic error handling"""
+            
             try:
                 load_data_from_database_lnkAJL()
             except Exception as e:
@@ -1908,15 +1908,44 @@ class Ui_Crow_Eye(object):
         
         def parse_LNK_files():
             call(["python",r"Artifacts_Collectors\A_CJL_LNK_Claw.py"])
+            try:
+                load_data_from_database_CJL()
+            except Exception as e:
+                print(f"[CustomJL Error] Couldn't load Custom JumpLists: {str(e)}")
+            try:
+                load_data_from_database_lnkAJL()
+            except Exception as e:
+                print(f"[LNK Error] Couldn't load JumpLists: {str(e)}")
+
 
         def parse_registry():
             reg_Claw.reg_Claw()
+            try:
+                load_allReg_data()
+            except Exception as e:
+                print(f"[Registry Error] Couldn't load registry data: {str(e)}")
+            try:
+                load_files_acitvity()
+            except Exception as e:
+                print(f"[File Activity Error] Couldn't load file history: {str(e)}")
 
         def parse_perfetch():
             Prefetch_claw.prefetch_claw()
+            try:
+                load_data_from_Prefetch()
+            except Exception as e:
+                print(f"[Prefetch Error] Couldn't load prefetch data: {str(e)}")
+            
+            
+   
 
         def parse_logs():
             call(["python",r"Artifacts_Collectors\WinLog_Claw.py"])
+            try:
+                load_all_logs()
+            except Exception as e:
+                print(f"[Logs Error] Couldn't load event logs: {str(e)}")
+
               
                 
         self.lnkbutton.clicked.connect(parse_LNK_files)
