@@ -120,7 +120,7 @@ def main():
         print("   .\\.venv\\Scripts\\activate")
     else:
         print("   source .venv/bin/activate")
-    print("2. Run your application")
+
 
 if __name__ == "__main__":
     main()
