@@ -153,3 +153,7 @@ Some artifacts require special handling due to Windows file locking mechanisms
 
 Development Credits
 Jump List/LNK parsing based on work by Saleh Muhaysin
+
+
+![Screenshot 2025-04-03 225113](https://github.com/user-attachments/assets/515aa6c5-c5e4-43aa-8b2e-2cbfe3f5ebd6)
+
