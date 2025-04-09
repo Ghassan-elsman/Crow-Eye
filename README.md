@@ -5,6 +5,12 @@ Overview
 Crow Eye is a Windows forensics tool designed to parse various Windows artifacts and present them via a user-friendly GUI for easier analysis. The tool focuses on collecting and analyzing key forensic artifacts from Windows systems.
 
 How to Use Crow Eye
+1. download requirment file
+2. run Eye as admin
+
+
+
+Crow Eye Artifacts 
 1. Automatic/Custom Jump Lists and LNK Files
 Automatic Parsing:
 The tool will parse these artifacts automatically from the system.
