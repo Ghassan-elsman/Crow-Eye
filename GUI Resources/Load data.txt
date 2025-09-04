@@ -1,0 +1,364 @@
+
+        def load_data_from_database_NetworkLists():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Network_list")
+            rows = cursor.fetchall()
+            self.NetworkLists_table.setRowCount(0)
+            for row in rows:
+                row_index = self.NetworkLists_table.rowCount()
+                self.NetworkLists_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.NetworkLists_table.setItem(row_index, col_index, item)
+            conn.close()
+        def load_data_from_database_ComputerName():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM computer_Name")
+            rows = cursor.fetchall()
+            self.computerName_table.setRowCount(0)
+            for row in rows:
+                row_index = self.computerName_table.rowCount()
+                self.computerName_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.computerName_table.setItem(row_index, col_index, item)
+            conn.close()
+        def load_data_from_database_Timezone():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM time_zone")
+            rows = cursor.fetchall()
+            self.TimeZone_table.setRowCount(0)
+            for row in rows:
+                row_index = self.TimeZone_table.rowCount()
+                self.TimeZone_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.TimeZone_table.setItem(row_index, col_index, item)
+            conn.close()
+
+        def load_data_from_database_NetworkInterfaces():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM network_interfaces")
+            rows = cursor.fetchall()
+            self.NetworkInterface_table.setRowCount(0)
+            for row in rows:
+                row_index = self.NetworkInterface_table.rowCount()
+                self.NetworkInterface_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.NetworkInterface_table.setItem(row_index, col_index, item)
+            conn.close()
+        def load_data_from_database_MachineRune():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM machine_run")
+            rows = cursor.fetchall()
+            self.MachineRun_table.setRowCount(0)
+            for row in rows:
+                row_index = self.MachineRun_table.rowCount()
+                self.MachineRun_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.MachineRun_table.setItem(row_index, col_index, item)
+            conn.close()        
+        
+        def load_data_from_database_MachineRuneOnce():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM machine_run_once")
+            rows = cursor.fetchall()
+            self.MachineRunOnce_tabel.setRowCount(0)
+            for row in rows:
+                row_index = self.MachineRunOnce_tabel.rowCount()
+                self.MachineRunOnce_tabel.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.MachineRunOnce_tabel.setItem(row_index, col_index, item)
+            conn.close()                
+        def load_data_from_database_UserRun():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM user_run")
+            rows = cursor.fetchall()
+            self.UserRun_table.setRowCount(0)
+            for row in rows:
+                row_index = self.UserRun_table.rowCount()
+                self.UserRun_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.UserRun_table.setItem(row_index, col_index, item)
+            conn.close()   
+        def load_data_from_database_UserRunOnce():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM user_run_once")
+            rows = cursor.fetchall()
+            self.UserRunOnce_table.setRowCount(0)
+            for row in rows:
+                row_index = self.UserRunOnce_table.rowCount()
+                self.UserRunOnce_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.UserRunOnce_table.setItem(row_index, col_index, item)
+            conn.close() 
+        def load_data_from_database_LastUpdate():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Windows_lastupdate")
+            rows = cursor.fetchall()
+            self.LastUpdate_table.setRowCount(0)
+            for row in rows:
+                row_index = self.LastUpdate_table.rowCount()
+                self.LastUpdate_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.LastUpdate_table.setItem(row_index, col_index, item)
+            conn.close()        
+        def load_data_from_database_LastUpdate_subkeys():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Windows_lastupdate")
+            rows = cursor.fetchall()
+            self.LastUpdateInfo_table.setRowCount(0)
+            for row in rows:
+                row_index = self.LastUpdateInfo_table.rowCount()
+                self.LastUpdateInfo_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.LastUpdateInfo_table.setItem(row_index, col_index, item)
+            conn.close() 
+        def load_data_from_database_shutdowninfo():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Windows_lastupdate")
+            rows = cursor.fetchall()
+            self.ShutDown_table.setRowCount(0)
+            for row in rows:
+                row_index = self.ShutDown_table.rowCount()
+                self.ShutDown_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.ShutDown_table.setItem(row_index, col_index, item)
+            conn.close()
+        def load_data_from_database_RecentDocs():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM RecentDocs")
+            rows = cursor.fetchall()
+            self.RecentDocs_table.setRowCount(0)
+            for row in rows:
+                row_index = self.RecentDocs_table.rowCount()
+                self.RecentDocs_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.RecentDocs_table.setItem(row_index, col_index, item)
+            conn.close()
+        
+        def load_data_from_database_search_explorer_bar():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Search_Explorer_bar")
+            rows = cursor.fetchall()
+            self.SearchViaExplorer_table.setRowCount(0)
+            for row in rows:
+                row_index = self.SearchViaExplorer_table.rowCount()
+                self.SearchViaExplorer_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.SearchViaExplorer_table.setItem(row_index, col_index, item)
+            conn.close()
+        def load_data_from_database_OpenSaveMRU():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM OpenSaveMRU")
+            rows = cursor.fetchall()
+            self.OpenSaveMRU_table.setRowCount(0)
+            for row in rows:
+                row_index = self.OpenSaveMRU_table.rowCount()
+                self.OpenSaveMRU_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.OpenSaveMRU_table.setItem(row_index, col_index, item)
+            conn.close()
+            
+        def load_data_from_database_LastSaveMRU():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM lastSaveMRU")
+            rows = cursor.fetchall()
+            self.LastSaveMRU_table.setRowCount(0)
+            for row in rows:
+                row_index = self.LastSaveMRU_table.rowCount()
+                self.LastSaveMRU_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.LastSaveMRU_table.setItem(row_index, col_index, item)
+            conn.close()
+        def load_data_from_database_TypedPathes():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM TypedPaths")
+            rows = cursor.fetchall()
+            self.TypedPath_table.setRowCount(0)
+            for row in rows:
+                row_index = self.TypedPath_table.rowCount()
+                self.TypedPath_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.TypedPath_table.setItem(row_index, col_index, item)
+            conn.close()
+        
+        def load_data_from_database_BAM():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM BAM")
+            rows = cursor.fetchall()
+            self.Bam_table.setRowCount(0)
+            for row in rows:
+                row_index = self.Bam_table.rowCount()
+                self.Bam_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.Bam_table.setItem(row_index, col_index, item)
+            conn.close()
+        
+        def load_data_from_database_DAM():
+            conn = sqlite3.connect('registry_data.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM DAM")
+            rows = cursor.fetchall()
+            self.Dam_table.setRowCount(0)
+            for row in rows:
+                row_index = self.Dam_table.rowCount()
+                self.Dam_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.Dam_table.setItem(row_index, col_index, item)
+            conn.close()
+        
+                                
+        def load_data_from_database_lnkAJL():
+            conn = sqlite3.connect('LnkDB.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM JLCE")
+            rows = cursor.fetchall()
+            self.LNK_table.setRowCount(0)
+            for row in rows:
+                row_index = self.LNK_table.rowCount()
+                self.LNK_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.LNK_table.setItem(row_index, col_index, item)
+            conn.close()
+        
+        def load_data_from_database_CJL():
+            conn = sqlite3.connect('LnkDB.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Custom_JLCE")
+            rows = cursor.fetchall()
+            # Populate the table widget with data from the database
+            self.Clj_table.setRowCount(0)
+            for row in rows:
+                row_index = self.Clj_table.rowCount()
+                self.Clj_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.Clj_table.setItem(row_index, col_index, item)
+
+            conn.close()
+
+        def load_data_from_SystemLogs():
+            conn = sqlite3.connect('Log_Claw.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM SystemLogs")
+            rows = cursor.fetchall()
+            # Populate the table widget with data from the database
+            self.tableWidget_22.setRowCount(0)
+            for row in rows:
+                row_index = self.tableWidget_22.rowCount()
+                self.tableWidget_22.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.tableWidget_22.setItem(row_index, col_index, item)
+
+            conn.close()
+        
+        def load_data_from_appsLogs():
+            conn = sqlite3.connect('Log_Claw.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM ApplicationLogs")
+            rows = cursor.fetchall()
+            # Populate the table widget with data from the database
+            self.AppLogs_table.setRowCount(0)
+            for row in rows:
+                row_index = self.AppLogs_table.rowCount()
+                self.AppLogs_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.AppLogs_table.setItem(row_index, col_index, item)
+
+            conn.close()
+        def load_data_from_SecurityLogs():
+            conn = sqlite3.connect('Log_Claw.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM SecurityLogs")
+            rows = cursor.fetchall()
+            # Populate the table widget with data from the database
+            self.SecurityLogs_table.setRowCount(0)
+            for row in rows:
+                row_index = self.SecurityLogs_table.rowCount()
+                self.SecurityLogs_table.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    self.SecurityLogs_table.setItem(row_index, col_index, item)
+
+            conn.close()
+            
+            
+        
+        
+        
+        
+        
+        
+        def load_allReg_data():
+            load_data_from_database_NetworkLists()
+            load_data_from_database_NetworkInterfaces()
+            load_data_from_database_ComputerName()
+            load_data_from_database_Timezone()
+            load_data_from_database_LastUpdate()
+            load_data_from_database_LastUpdate_subkeys()
+            load_data_from_database_shutdowninfo()
+            load_data_from_database_MachineRune()
+            load_data_from_database_MachineRuneOnce()
+            load_data_from_database_UserRun()
+            load_data_from_database_UserRunOnce()
+        
+        def load_files_activity():
+            load_data_from_database_search_explorer_bar()
+            load_data_from_database_RecentDocs()
+            load_data_from_database_TypedPathes
+            load_data_from_database_OpenSaveMRU()
+            load_data_from_database_LastSaveMRU()
+            load_data_from_database_BAM()
+            load_data_from_database_DAM()
+        
+        def load_all_logs():
+            load_data_from_SystemLogs()
+            load_data_from_SecurityLogs()
+            load_data_from_appsLogs()
+
+        
+
+        
+        self.lnkbutton.clicked.connect(load_data_from_database_lnkAJL)
+        self.Jumblistbutton.clicked.connect(load_data_from_database_CJL)
+        self.registrybutton.clicked.connect(load_allReg_data)
+        self.filesactivitybutton.clicked.connect(load_files_activity)
+        self.logbutton.clicked.connect(load_all_logs)
+        
+        

@@ -1,0 +1,2 @@
+Version: 1.10.1
+Arguments: ['C:\\Python312\\Lib\\site-packages\\delvewheel\\__main__.py', 'repair', '-vv', '--ignore-existing', '--with-mangle', '-w', 'repaired_wheels', 'C:\\arrow\\python\\dist\\pyarrow-21.0.0-cp312-cp312-win_amd64.whl']

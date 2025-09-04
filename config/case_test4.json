@@ -1,0 +1,17 @@
+{
+    "case_name": "test4",
+    "opened_date": "2025-08-20T00:19:52.014031",
+    "paths": {
+        "case_root": "C:/Users/Ghass/Downloads/test4",
+        "artifacts_dir": "C:/Users/Ghass/Downloads/test4\\Target_Artifacts",
+        "c_ajl_lnk_dir": "C:/Users/Ghass/Downloads/test4\\Target_Artifacts\\C_AJL_Lnk",
+        "registry_dir": "C:/Users/Ghass/Downloads/test4\\Target_Artifacts\\Registry_Hives",
+        "prefetch_dir": "C:/Users/Ghass/Downloads/test4\\Target_Artifacts\\Prefetch"
+    },
+    "databases": {
+        "registry": "C:/Users/Ghass/Downloads/test4\\Target_Artifacts\\registry_data.db",
+        "lnk": "C:/Users/Ghass/Downloads/test4\\Target_Artifacts\\LnkDB.db",
+        "logs": "C:/Users/Ghass/Downloads/test4\\Target_Artifacts\\Log_Claw.db",
+        "prefetch": "C:/Users/Ghass/Downloads/test4\\Target_Artifacts\\prefetch.db"
+    }
+}
