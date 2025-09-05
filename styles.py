@@ -48,7 +48,7 @@ class CrowEyeStyles:
         table_widget.setStyleSheet('')
         
         # Apply the complete table style
-        table_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE + CrowEyeStyles.SCROLLBAR_STYLE)
+        table_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE)
         
         # Configure header
         header = table_widget.horizontalHeader()
@@ -167,6 +167,35 @@ class CrowEyeStyles:
         }
         QPushButton:pressed {
             background-color: #047857;
+        }
+        QPushButton:disabled {
+            background-color: #64748B;
+            color: #94A3B8;
+        }
+    """
+    
+    # Case Button Style - Smaller buttons for top bar
+    CASE_BUTTON = """
+        QPushButton {
+            background-color: #2563EB;
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 600;
+            font-size: 12px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 100px;
+            max-height: 32px;
+        }
+        QPushButton:hover {
+            background-color: #3B82F6;
+            border: 1px solid #00FFFF;
+        }
+        QPushButton:pressed {
+            background-color: #1D4ED8;
         }
         QPushButton:disabled {
             background-color: #64748B;
@@ -314,9 +343,7 @@ class CrowEyeStyles:
     
 
     
-    # ============================================================================
-    # UNIFIED TABLE STYLE
-    # ============================================================================
+
     
 
     # Input Field Style
@@ -356,10 +383,10 @@ class CrowEyeStyles:
     
 
     
-    # Unified Modern Table Style with Dark Slate Background
+    # Unified Modern Table Style with Dark Slate Background and Cyberpunk Elements
     UNIFIED_TABLE_STYLE = """
         QHeaderView::section {
-            background-color: #3B82F6;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563EB, stop:1 #1E40AF);
             color: #FFFFFF;
             padding: 12px 16px;
             border: none;
@@ -370,17 +397,25 @@ class CrowEyeStyles:
             text-transform: uppercase;
             letter-spacing: 0.8px;
         }
-        QHeaderView::section:hover {
-            background-color: #60A5FA;
+        QHeaderView::section:first {
+            border-top-left-radius: 8px;
         }
-        QHeaderView::section:checked {
-            background-color: #1E40AF;
+        QHeaderView::section:last {
+            border-top-right-radius: 8px;
+        }
+        QHeaderView::section:hover {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
+            color: #FFFFFF;
             border-bottom: 2px solid #00FFFF;
         }
-        
-        /* Vertical header (row numbers) styling */
+        QHeaderView::section:checked {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1E40AF, stop:1 #1E3A8A);
+            border-bottom: 2px solid #00FFFF;
+        }
+
+        /* Vertical header */
         QHeaderView::section:vertical {
-            background-color: #1E293B;
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0F172A, stop:1 #020617);
             color: #94A3B8;
             padding: 8px 12px;
             border: none;
@@ -391,12 +426,13 @@ class CrowEyeStyles:
             min-width: 40px;
             text-align: center;
         }
-        
         QHeaderView::section:vertical:hover {
-            background-color: #334155;
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #334155, stop:1 #1E293B);
             color: #E2E8F0;
+            border-right: 2px solid rgba(0, 255, 255, 0.5);
         }
 
+        /* Table core */
         QTableWidget {
             background-color: #0B1220;
             border: 1px solid #334155;
@@ -405,57 +441,61 @@ class CrowEyeStyles:
             outline: 0;
             selection-background-color: #3B82F6;
             selection-color: #FFFFFF;
-            alternate-background-color: #1E293B;
+            alternate-background-color: #162032;   /* softer alt rows */
             color: #E2E8F0;
             show-decoration-selected: 1;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
         }
 
+        /* Table cells */
         QTableWidget::item {
             padding: 14px 18px;
             border-bottom: 1px solid #334155;
             border-right: 1px solid #334155;
             font-size: 13px;
         }
-
         QTableWidget::item:selected {
-            background-color: #3B82F6;
+            background-color: #2563EB;  /* deeper blue */
             color: #FFFFFF;
+            font-weight: 600;
+            border-left: 2px solid #00FFFF;
         }
-
         QTableWidget::item:hover {
-            background-color: rgba(0, 255, 255, 0.1);
+            background-color: rgba(0, 255, 255, 0.12);
             color: #00FFFF;
+            font-weight: 500;
         }
-
         QTableWidget::item:alternate {
             background-color: #1E293B;
         }
 
+        /* Corner button */
         QTableCornerButton::section {
-            background-color: #3B82F6;
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3B82F6, stop:1 #1E40AF);
             border: 1px solid #334155;
+            border-top-left-radius: 8px;
         }
-    """
-    
-    # Scrollbar Style
-    SCROLLBAR_STYLE = """
+        QTableCornerButton::section:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #60A5FA, stop:1 #3B82F6);
+            border: 1px solid #00FFFF;
+        }
+        
+        /* Scrollbar styling - Enhanced Cyberpunk Theme */
         QScrollBar:vertical {
             border: none;
-            background: #1E293B;
+            background: #0B1220;
             width: 12px;
             margin: 0;
             border-radius: 6px;
         }
         
         QScrollBar::handle:vertical {
-            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                      stop: 0 #3B82F6, stop: 1 #2563EB);
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #334155, stop:1 #1E293B);
             min-height: 30px;
             border-radius: 6px;
-            margin: 2px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin: 1px;
+            border: 1px solid rgba(0, 255, 255, 0.2);
         }
         
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
@@ -468,32 +508,29 @@ class CrowEyeStyles:
         }
         
         QScrollBar::handle:vertical:hover {
-            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                      stop: 0 #00FFFF, stop: 1 #3B82F6);
-            border: 1px solid rgba(0, 255, 255, 0.5);
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #475569, stop:1 #334155);
+            border: 1px solid #00FFFF;
         }
         
         QScrollBar::handle:vertical:pressed {
-            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                      stop: 0 #1E40AF, stop: 1 #1D4ED8);
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E293B, stop:1 #0F172A);
             border: 1px solid #00FFFF;
         }
         
         QScrollBar:horizontal {
             border: none;
-            background: #1E293B;
+            background: #0B1220;
             height: 12px;
             margin: 0;
             border-radius: 6px;
         }
         
         QScrollBar::handle:horizontal {
-            background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                      stop: 0 #3B82F6, stop: 1 #2563EB);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #334155, stop:1 #1E293B);
             min-width: 30px;
             border-radius: 6px;
-            margin: 2px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin: 1px;
+            border: 1px solid rgba(0, 255, 255, 0.2);
         }
         
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
@@ -506,14 +543,85 @@ class CrowEyeStyles:
         }
         
         QScrollBar::handle:horizontal:hover {
-            background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                      stop: 0 #00FFFF, stop: 1 #3B82F6);
-            border: 1px solid rgba(0, 255, 255, 0.5);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #475569, stop:1 #334155);
+            border: 1px solid #00FFFF;
         }
         
         QScrollBar::handle:horizontal:pressed {
-            background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                      stop: 0 #1E40AF, stop: 1 #1D4ED8);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1E293B, stop:1 #0F172A);
+            border: 1px solid #00FFFF;
+        }
+    """
+    
+    # Scrollbar Style - Enhanced Cyberpunk Theme
+    SCROLLBAR_STYLE = """
+        QScrollBar:vertical {
+            border: none;
+            background: #0B1220;
+            width: 12px;
+            margin: 0;
+            border-radius: 6px;
+        }
+        
+        QScrollBar::handle:vertical {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #334155, stop:1 #1E293B);
+            min-height: 30px;
+            border-radius: 6px;
+            margin: 1px;
+            border: 1px solid rgba(0, 255, 255, 0.2);
+        }
+        
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
+            background: none;
+        }
+        
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: none;
+        }
+        
+        QScrollBar::handle:vertical:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #475569, stop:1 #334155);
+            border: 1px solid #00FFFF;
+        }
+        
+        QScrollBar::handle:vertical:pressed {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E293B, stop:1 #0F172A);
+            border: 1px solid #00FFFF;
+        }
+        
+        QScrollBar:horizontal {
+            border: none;
+            background: #0B1220;
+            height: 12px;
+            margin: 0;
+            border-radius: 6px;
+        }
+        
+        QScrollBar::handle:horizontal {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #334155, stop:1 #1E293B);
+            min-width: 30px;
+            border-radius: 6px;
+            margin: 1px;
+            border: 1px solid rgba(0, 255, 255, 0.2);
+        }
+        
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0px;
+            background: none;
+        }
+        
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+            background: none;
+        }
+        
+        QScrollBar::handle:horizontal:hover {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #475569, stop:1 #334155);
+            border: 1px solid #00FFFF;
+        }
+        
+        QScrollBar::handle:horizontal:pressed {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1E293B, stop:1 #0F172A);
             border: 1px solid #00FFFF;
         }
     """
@@ -553,7 +661,6 @@ class CrowEyeStyles:
             border-radius: 8px;
             background-color: #0B1220;
             padding: 16px;
-            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
         }
         QTabBar::tab {
             background-color: #1E293B;
@@ -574,12 +681,10 @@ class CrowEyeStyles:
             color: #00FFFF;
             border-bottom: 3px solid #00FFFF;
             font-weight: bold;
-            box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
         }
         QTabBar::tab:hover:!selected {
             background-color: #334155;
             color: #00FFFF;
-            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
         }
         QTabBar::tab:disabled {
             color: #64748B;
@@ -614,12 +719,10 @@ class CrowEyeStyles:
             color: #00FFFF;
             border-bottom: 3px solid #00FFFF;
             font-weight: bold;
-            box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
         }
         QTabWidget#main_tab QTabBar::tab:hover:!selected {
             background-color: #334155;
             color: #FFFFFF;
-            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
         }
     """
 
@@ -1072,32 +1175,49 @@ class CrowEyeStyles:
     # Main hamburger/menu button in top frame
     MAIN_MENU_BUTTON = """
         QPushButton {
-            background-color: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.08);
-            padding: 6px;
+            background-color: rgba(15,23,42,0.8);
+            border: 1px solid rgba(0,255,255,0.3);
+            padding: 0px;
             border-radius: 8px;
+            max-width: 42px;
+            max-height: 42px;
+            icon-size: 42px;
         }
         QPushButton:hover {
-            background-color: rgba(59,130,246,0.10);
-            border-color: rgba(59,130,246,0.45);
+            background-color: rgba(30,41,59,0.9);
+            border-color: rgba(0,255,255,0.6);
         }
         QPushButton:pressed {
-            background-color: rgba(37,99,235,0.25);
-            border-color: rgba(37,99,235,0.65);
+            background-color: rgba(15,23,42,1.0);
+            border-color: rgba(0,255,255,0.8);
         }
         QPushButton:checked {
-            background-color: rgba(37,99,235,0.20);
-            border-color: rgba(37,99,235,0.65);
+            background-color: rgba(30,41,59,0.9);
+            border-color: rgba(0,255,255,0.8);
+            border-width: 2px;
         }
     """
 
     # Main title label in top frame
     MAIN_LABEL = """
         QLabel {
-            color: #F9FAFB;
-            font-size: 16px;
+            color: #00FFFF;
+            font-size: 18px;
             font-weight: bold;
-            letter-spacing: 0.5px;
+            letter-spacing: 1.0px;
+            text-align: center;
+            padding: 6px 12px;
+            background-color: rgba(15,23,42,0.7);
+            border-radius: 7px;
+            border: 1px solid rgba(0,255,255,0.4);
+            text-transform: uppercase;
+            max-width: 300px;
+        }
+        QLabel:hover {
+            background-color: rgba(15,23,42,0.8);
+            border: 1px solid rgba(0,255,255,0.6);
+            color: #00FFFF;
+            text-shadow: 0 0 8px rgba(0,255,255,0.8);
         }
     """
 
@@ -1180,7 +1300,6 @@ class CrowEyeStyles:
         QPushButton:hover {
             background-color: #334155;
             color: #FFFFFF;
-            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
         }
         QPushButton:pressed {
             background-color: #475569;
@@ -1189,7 +1308,6 @@ class CrowEyeStyles:
             background-color: #3B82F6;
             color: #FFFFFF;
             border-left: 4px solid #00FFFF;
-            box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
             font-weight: bold;
         }
         QPushButton:disabled {
@@ -1216,11 +1334,9 @@ class CrowEyeStyles:
         }
         QPushButton:hover {
             background-color: #94A3B8;
-            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
         }
         QPushButton:pressed {
             background-color: #334155;
-            box-shadow: inset 0 0 8px rgba(0, 255, 255, 0.3);
         }
         QPushButton:disabled {
             background-color: #475569;
@@ -1264,12 +1380,13 @@ class CrowEyeStyles:
 
 
 
-    # Modern Parse All Button with Purple Accent
+    # Enhanced Darker Cyberpunk Parse All Button
     PARSE_ALL_BUTTON = """
         QPushButton {
-            background: linear-gradient(45deg, #8B5CF6, #3B82F6);
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #6D28D9, stop:0.5 #4C1D95, stop:1 #1E40AF);
             color: #FFFFFF;
-            border: none;
+            border: 2px solid #00FFFF;
             border-radius: 8px;
             padding: 14px 28px;
             font-weight: 700;
@@ -1279,16 +1396,19 @@ class CrowEyeStyles:
             letter-spacing: 1px;
         }
         QPushButton:hover {
-            background: linear-gradient(45deg, #A78BFA, #60A5FA);
-
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #8B5CF6, stop:0.5 #6D28D9, stop:1 #3B82F6);
+            border: 2px solid #00FFFF;
         }
         QPushButton:pressed {
-            background: linear-gradient(45deg, #7C3AED, #1E40AF);
-
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #4C1D95, stop:0.5 #312E81, stop:1 #1E3A8A);
+            border: 2px solid #00FFFF;
         }
         QPushButton:disabled {
-            background-color: #64748B;
+            background-color: #475569;
             color: #94A3B8;
+            border: 2px solid #334155;
         }
     """
     
@@ -1466,13 +1586,11 @@ class CrowEyeStyles:
             color: #00FFFF;
             border-bottom: 3px solid #00FFFF;
             font-weight: bold;
-            box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
         }
         
         QTabBar::tab:hover:!selected {
             background-color: #334155;
             color: #FFFFFF;
-            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
         }
         
         QTabBar::tab:disabled {
@@ -1542,13 +1660,11 @@ class CrowEyeStyles:
             color: #00FFFF;
             border-bottom: 3px solid #00FFFF;
             font-weight: bold;
-            box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
         }
         
         QTabBar::tab:hover:!selected {
             background-color: #334155;
             color: #FFFFFF;
-            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
         }
         
         QTabBar::tab:disabled {
