@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import ctypes
+import collections
 
 def is_admin():
     try:
@@ -47,6 +48,9 @@ install_initial_requirements()
 
 # Now we can safely import these
 from colorama import init, Fore
+from PyQt5.QtGui import QMovie
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
+from PyQt5 import QtGui
 import importlib.metadata
 
 def setup_virtual_environment():
@@ -170,6 +174,27 @@ from styles import CrowEyeStyles
 
 
 
+
+class SearchWorker(QObject):
+    finished = pyqtSignal(list)
+
+    def __init__(self, tables, search_text):
+        super().__init__()
+        self.tables = tables
+        self.search_text = search_text
+
+    def run(self):
+        results = []
+        search_text_lower = self.search_text.lower()
+        for table in self.tables:
+            if not hasattr(table, 'rowCount') or not hasattr(table, 'columnCount'):
+                continue
+            for row in range(table.rowCount()):
+                for col in range(table.columnCount()):
+                    item = table.item(row, col)
+                    if item and search_text_lower in item.text().lower():
+                        results.append((table, row, col))
+        self.finished.emit(results)
 
 class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain object
     # Add data loading methods to the class
@@ -1059,6 +1084,50 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"[SecurityLogs] Error loading data: {str(e)}")
     
+    def load_shimcache_data(self):
+        """Load ShimCache data from the shimcache database"""
+        try:
+            # Get the database path from case configuration
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                print("[ShimCache] No active case found")
+                return
+                
+            db_path = self.case_paths.get('databases', {}).get('shimcache')
+            if not db_path:
+                print("[ShimCache] Database path not found in case configuration")
+                return
+                
+            # Check if database exists
+            if not os.path.exists(db_path):
+                print(f"[ShimCache] Database not found at: {db_path}")
+                print(f"[ShimCache] Please run ShimCache analysis first to create the database")
+                return
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Check if ShimCache table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ShimCache'")
+            if not cursor.fetchone():
+                print(f"[ShimCache] ShimCache table not found in database: {db_path}")
+                conn.close()
+                return
+                
+            cursor.execute("SELECT * FROM ShimCache")
+            rows = cursor.fetchall()
+            if hasattr(self, 'ShimCache_table'):
+                self.ShimCache_table.setRowCount(0)
+                for row in rows:
+                    row_index = self.ShimCache_table.rowCount()
+                    self.ShimCache_table.insertRow(row_index)
+                    for col_index, value in enumerate(row):
+                        item = QtWidgets.QTableWidgetItem(str(value))
+                        self.ShimCache_table.setItem(row_index, col_index, item)
+                print(f"[ShimCache] Successfully loaded {len(rows)} records from {db_path}")
+            conn.close()
+        except Exception as e:
+            print(f"[ShimCache] Error loading data: {str(e)}")
+    
     # ============================================================================
     # ENHANCED GROUPED DATA LOADING METHODS
     # ============================================================================
@@ -1316,6 +1385,84 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             if artifacts_dir and os.path.exists(artifacts_dir):
                 db_path = os.path.join(artifacts_dir, 'LnkDB.db')
         return db_path
+        
+    def get_shimcache_db_path(self):
+        """Helper function to get shimcache.db path based on current case"""
+        db_path = 'shimcache.db'
+        if hasattr(self, 'case_paths') and self.case_paths:
+            artifacts_dir = self.case_paths.get('artifacts_dir')
+            if artifacts_dir and os.path.exists(artifacts_dir):
+                db_path = os.path.join(artifacts_dir, 'shimcache.db')
+        return db_path
+        
+    def load_shimcache_data(self):
+        """Load ShimCache data from database to table"""
+        try:
+            # Get the database path based on current case
+            db_path = self.get_shimcache_db_path()
+            
+            # Check if database exists
+            if not os.path.exists(db_path):
+                print(f"[ShimCache] Database not found at: {db_path}")
+                print(f"[ShimCache] Please run ShimCache analysis first to create the database")
+                return
+            
+            # Connect to database
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Check if shimcache_entries table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='shimcache_entries'")
+            if not cursor.fetchone():
+                print(f"[ShimCache] shimcache_entries table not found in database: {db_path}")
+                conn.close()
+                return
+                
+            # Query to get all ShimCache entries
+            cursor.execute("""SELECT filename, path, last_modified, last_modified_readable, parsed_timestamp 
+                          FROM shimcache_entries ORDER BY last_modified DESC""")
+            rows = cursor.fetchall()
+            
+            # Load data into the main ShimCache table
+            if hasattr(self, 'ShimCache_main_table'):
+                # Disable updates during loading for performance
+                was_updates_enabled = self.ShimCache_main_table.updatesEnabled()
+                self.ShimCache_main_table.setUpdatesEnabled(False)
+                
+                # Set column headers if not already set
+                if self.ShimCache_main_table.columnCount() != 5:
+                    self.ShimCache_main_table.setColumnCount(5)
+                    headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+                    self.ShimCache_main_table.setHorizontalHeaderLabels(headers)
+                
+                # Clear existing rows
+                self.ShimCache_main_table.setRowCount(0)
+                
+                # Add data in batches for better performance
+                batch_size = 100
+                for i, row in enumerate(rows):
+                    row_index = self.ShimCache_main_table.rowCount()
+                    self.ShimCache_main_table.insertRow(row_index)
+                    for col_index, value in enumerate(row):
+                        item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # Make cells read-only
+                        self.ShimCache_main_table.setItem(row_index, col_index, item)
+                    
+                    # Process events periodically to keep UI responsive
+                    if (i + 1) % batch_size == 0:
+                        QtWidgets.QApplication.processEvents()
+                
+                # Re-enable updates and resize columns to content
+                self.ShimCache_main_table.setUpdatesEnabled(was_updates_enabled)
+                self.ShimCache_main_table.resizeColumnsToContents()
+                
+                print(f"[ShimCache] Loaded {len(rows)} records into main ShimCache table")
+            
+            conn.close()
+        except Exception as e:
+            print(f"[ShimCache] Error loading data: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def create_crow_eye_dialog(self, title, style_sheet=None):
         """Helper function to create standardized Crow Eye dialogs - reduces code duplication"""
@@ -2115,7 +2262,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Store search results
         self.search_results = []  # Will store tuples of (table, row, column)
         self.current_result_index = -1  # Current position in search results
-        
+        self.highlight_queue = collections.deque()
+        self.highlight_timer = QtCore.QTimer()
+        self.highlight_timer.setInterval(50)  # Process queue every 50ms
+        self.highlight_timer.timeout.connect(self.process_highlight_queue)
+        self.highlight_timer.start()
+        self.is_processing_highlight = False
         # Initialize loading overlay
         self.loading_overlay = QtWidgets.QWidget(self.main_window)
         self.loading_overlay.hide()  # Hide by default
@@ -2140,65 +2292,88 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.top_frame.setFrameShadow(QtWidgets.QFrame.Raised)
         self.top_frame.setObjectName("top_frame")
         self.horizontalLayout_3 = QtWidgets.QHBoxLayout(self.top_frame)
-        self.horizontalLayout_3.setContentsMargins(0, 0, 0, 0)
-        self.horizontalLayout_3.setSpacing(0)
+        self.horizontalLayout_3.setContentsMargins(10, 5, 10, 5)
+        self.horizontalLayout_3.setSpacing(8)
         self.horizontalLayout_3.setObjectName("horizontalLayout_3")
+        
+        # Left section: Menu button and case buttons
+        self.left_section = QtWidgets.QHBoxLayout()
+        self.left_section.setSpacing(8)
+        self.left_section.setObjectName("left_section")
+        
+        # Menu button
         self.main_menu = QtWidgets.QPushButton(self.top_frame)
         self.main_menu.setEnabled(True)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        sizePolicy.setHorizontalStretch(5)
-        sizePolicy.setVerticalStretch(5)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.main_menu.sizePolicy().hasHeightForWidth())
         self.main_menu.setSizePolicy(sizePolicy)
-        self.main_menu.setMinimumSize(QtCore.QSize(4, 4))
-        self.main_menu.setBaseSize(QtCore.QSize(5, 5))
+        self.main_menu.setMinimumSize(QtCore.QSize(42, 42))
+        self.main_menu.setMaximumSize(QtCore.QSize(42, 42))
         self.main_menu.setFont(self.create_rockwell_font(8, False))
-        self.main_menu.setToolTip("")
+        self.main_menu.setToolTip("Toggle Sidebar")
         self.main_menu.setAutoFillBackground(False)
         self.main_menu.setStyleSheet(CrowEyeStyles.MAIN_MENU_BUTTON)
         self.main_menu.setText("")
         icon1 = QtGui.QIcon()
-        icon1.addPixmap(QtGui.QPixmap(":/Logo/main-menu.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        icon1.addPixmap(QtGui.QPixmap(":/Icons/icons/menu-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.main_menu.setIcon(icon1)
-        self.main_menu.setIconSize(QtCore.QSize(60, 60))
+        self.main_menu.setIconSize(QtCore.QSize(42, 42))
         self.main_menu.setCheckable(True)
         self.main_menu.setChecked(True)
         self.main_menu.setFlat(False)
         self.main_menu.setObjectName("main_menu")
-        self.horizontalLayout_3.addWidget(self.main_menu)
-        # Animate sidebar on main menu toggle
-        self.main_menu.toggled.connect(self.toggle_sidebar)
-        # Apply menu icon button style
-        try:
-            self.main_menu.setStyleSheet(CrowEyeStyles.MAIN_MENU_BUTTON)
-        except Exception:
-            pass
-        # Ensure it shows icon only
-        self.main_menu.setText("")
+        self.left_section.addWidget(self.main_menu)
+        
+        # Small spacing after menu button
+        self.left_section.addSpacing(10)
+        
+        # Create Case button
+        self.Creat_case = QtWidgets.QPushButton(self.top_frame)
+        self.Creat_case.setStyleSheet(CrowEyeStyles.CASE_BUTTON)
+        self.Creat_case.setObjectName("Creat_case")
+        self.Creat_case.setMaximumHeight(32)
+        icon_new_case = QtGui.QIcon()
+        icon_new_case.addPixmap(QtGui.QPixmap(":/Icons/icons/new-case-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        self.Creat_case.setIcon(icon_new_case)
+        self.Creat_case.setIconSize(QtCore.QSize(20, 20))
+        self.left_section.addWidget(self.Creat_case)
+        
+        # Open Case button
+        self.open_case_btn = QtWidgets.QPushButton(self.top_frame)
+        self.open_case_btn.setStyleSheet(CrowEyeStyles.CASE_BUTTON)
+        self.open_case_btn.setObjectName("pushButton_2")
+        self.open_case_btn.setMaximumHeight(32)
+        icon_open_case = QtGui.QIcon()
+        icon_open_case.addPixmap(QtGui.QPixmap(":/Icons/icons/open-case-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        self.open_case_btn.setIcon(icon_open_case)
+        self.open_case_btn.setIconSize(QtCore.QSize(20, 20))
+        self.left_section.addWidget(self.open_case_btn)
+        
+        # Add left section to main layout
+        self.horizontalLayout_3.addLayout(self.left_section)
+        
+        # Center section: Case name label
         spacerItem = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
         self.horizontalLayout_3.addItem(spacerItem)
+        
         self.label = QtWidgets.QLabel(self.top_frame)
         self.label.setEnabled(True)
         self.label.setFont(self.create_rockwell_font(10, False))
         self.label.setAutoFillBackground(False)
         self.label.setStyleSheet(CrowEyeStyles.MAIN_LABEL)
+        self.label.setAlignment(QtCore.Qt.AlignCenter)
         self.label.setObjectName("label")
+        self.label.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        self.label.setMaximumWidth(300)
         self.horizontalLayout_3.addWidget(self.label)
-        spacerItem1 = QtWidgets.QSpacerItem(300, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        
+        spacerItem1 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
         self.horizontalLayout_3.addItem(spacerItem1)
-        self.open_case_btn = QtWidgets.QPushButton(self.top_frame)
-        self.open_case_btn.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
-        self.open_case_btn.setObjectName("pushButton_2")
-        self.horizontalLayout_3.addWidget(self.open_case_btn)
         
-        # Add spacing between buttons
-        button_spacer = QtWidgets.QSpacerItem(15, 20, QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Minimum)
-        self.horizontalLayout_3.addItem(button_spacer)
-        
-        self.Creat_case = QtWidgets.QPushButton(self.top_frame)
-        self.Creat_case.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
-        self.Creat_case.setObjectName("Creat_case")
-        self.horizontalLayout_3.addWidget(self.Creat_case)
+        # Animate sidebar on main menu toggle
+        self.main_menu.toggled.connect(self.toggle_sidebar)
         
         # Add search bar to the top frame
         self.search_frame = QtWidgets.QFrame(self.top_frame)
@@ -2228,12 +2403,24 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.search_input.setObjectName("search_input")
         self.search_input.returnPressed.connect(self.search_tables)
         self.horizontalLayout_search.addWidget(self.search_input)
+
+        self.loading_label = QtWidgets.QLabel(self.search_frame)
+        self.loading_label.setFixedSize(24, 24)
+        self.loading_movie = QMovie(os.path.join('GUI Resources', 'loading.gif'))
+        self.loading_movie.setScaledSize(QtCore.QSize(24, 24))
+        self.loading_label.setMovie(self.loading_movie)
+        self.loading_label.hide()
+        self.horizontalLayout_search.addWidget(self.loading_label)
         
         # Search button
         self.search_button = QtWidgets.QPushButton(self.search_frame)
         self.search_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
         self.search_button.setText("Search")
         self.search_button.setObjectName("search_button")
+        icon_search = QtGui.QIcon()
+        icon_search.addPixmap(QtGui.QPixmap(":/Icons/icons/search-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        self.search_button.setIcon(icon_search)
+        self.search_button.setIconSize(QtCore.QSize(16, 16))
         self.search_button.clicked.connect(self.search_tables)
         self.horizontalLayout_search.addWidget(self.search_button)
         
@@ -2347,6 +2534,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.setup_parse_button(self.Prefetchbutton, True, True, True)
         self.Prefetchbutton.setObjectName("Prefetchbutton")
         self.verticalLayout_3.addWidget(self.Prefetchbutton)
+        
+        self.ShimCacheButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.ShimCacheButton, True, True, True)
+        self.ShimCacheButton.setObjectName("ShimCacheButton")
+        self.verticalLayout_3.addWidget(self.ShimCacheButton)
+        
         self.logbutton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.logbutton, True, True, False)
         self.logbutton.setObjectName("logbutton")
@@ -2476,6 +2669,18 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.MachineRunOnce_tabel.setObjectName("MachineRunOnce_tabel")
         self.verticalLayout_12.addWidget(self.MachineRunOnce_tabel)
         self.Registry_widget.addTab(self.Machine_run_once, "")
+        
+        # ShimCache Tab
+        self.ShimCache_tab = QtWidgets.QWidget()
+        self.ShimCache_tab.setObjectName("ShimCache_tab")
+        self.verticalLayout_shimcache = QtWidgets.QVBoxLayout(self.ShimCache_tab)
+        self.verticalLayout_shimcache.setObjectName("verticalLayout_shimcache")
+        self.ShimCache_table = QtWidgets.QTableWidget(self.ShimCache_tab)
+        self.setup_standard_table(self.ShimCache_table, 6, True, 300, 190)
+        self.ShimCache_table.setObjectName("ShimCache_table")
+        self.verticalLayout_shimcache.addWidget(self.ShimCache_table)
+        self.Registry_widget.addTab(self.ShimCache_tab, "")
+        
         self.User_run = QtWidgets.QWidget()
         self.User_run.setObjectName("User_run")
         self.verticalLayout_13 = QtWidgets.QVBoxLayout(self.User_run)
@@ -2486,6 +2691,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.UserRun_table.setObjectName("UserRun_table")
         self.verticalLayout_13.addWidget(self.UserRun_table)
         self.Registry_widget.addTab(self.User_run, "")
+        
+        # ShimCache tab was moved to main tab
+        
         self.User_run_once = QtWidgets.QWidget()
         self.User_run_once.setObjectName("User_run_once")
         self.verticalLayout_14 = QtWidgets.QVBoxLayout(self.User_run_once)
@@ -2533,6 +2741,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.Browser_history_table.setObjectName("Browser_history_table")
         self.verticalLayout_31.addWidget(self.Browser_history_table)
         self.Registry_widget.addTab(self.Browser_history, "")
+        
+        # ShimCache tab was moved to main tab
         self.tab = QtWidgets.QWidget()
         self.tab.setObjectName("tab")
         self.horizontalLayout_4 = QtWidgets.QHBoxLayout(self.tab)
@@ -2732,19 +2942,19 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.setup_standard_tab_widget(self.tabWidget, style_sheet=CrowEyeStyles.UNIFIED_TAB_STYLE)
         self.apply_custom_tab_style(self.tabWidget)
         self.setup_standard_tab_background(self.tabWidget)
-        self.AppLogs_tap = QtWidgets.QWidget()
-        self.AppLogs_tap.setObjectName("AppLogs_tap")
-        self.verticalLayout_28 = QtWidgets.QVBoxLayout(self.AppLogs_tap)
+        self.AppLogs_tab = QtWidgets.QWidget()
+        self.AppLogs_tab.setObjectName("AppLogs_tab")
+        self.verticalLayout_28 = QtWidgets.QVBoxLayout(self.AppLogs_tab)
         self.verticalLayout_28.setObjectName("verticalLayout_28")
         self.horizontalLayout_7 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_7.setObjectName("horizontalLayout_7")
         self.verticalLayout_28.addLayout(self.horizontalLayout_7)
-        self.AppLogs_table = QtWidgets.QTableWidget(self.AppLogs_tap)
+        self.AppLogs_table = QtWidgets.QTableWidget(self.AppLogs_tab)
         self.AppLogs_table.setMinimumSize(QtCore.QSize(2, 2))
         self.setup_standard_table(self.AppLogs_table, 9, True, 300, 190)
         self.AppLogs_table.setObjectName("AppLogs_table")
         self.verticalLayout_28.addWidget(self.AppLogs_table)
-        self.tabWidget.addTab(self.AppLogs_tap, "")
+        self.tabWidget.addTab(self.AppLogs_tab, "")
         self.SecurityLogs_tab = QtWidgets.QWidget()
         self.SecurityLogs_tab.setObjectName("SecurityLogs_tab")
         self.verticalLayout_29 = QtWidgets.QVBoxLayout(self.SecurityLogs_tab)
@@ -2773,6 +2983,23 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.tabWidget.addTab(self.SystemLogs_tab, "")
         self.verticalLayout_27.addWidget(self.tabWidget)
         self.main_tab.addTab(self.Logs_tab, "")
+        
+        # Create ShimCache main tab
+        self.ShimCache_main_tab = QtWidgets.QWidget()
+        self.ShimCache_main_tab.setObjectName("ShimCache_main_tab")
+        self.verticalLayout_shimcache_main = QtWidgets.QVBoxLayout(self.ShimCache_main_tab)
+        self.verticalLayout_shimcache_main.setObjectName("verticalLayout_shimcache_main")
+        
+        # Create ShimCache table
+        self.ShimCache_main_table = QtWidgets.QTableWidget(self.ShimCache_main_tab)
+        self.ShimCache_main_table.setMinimumSize(QtCore.QSize(2, 2))
+        self.setup_standard_table(self.ShimCache_main_table, 5, True, 300, 190)
+        self.ShimCache_main_table.setObjectName("ShimCache_main_table")
+        self.verticalLayout_shimcache_main.addWidget(self.ShimCache_main_table)
+        
+        # Add ShimCache tab to main tab widget
+        self.main_tab.addTab(self.ShimCache_main_tab, "")
+        
         self.verticalLayout.addWidget(self.main_tab)
         self.horizontalLayout_2.addWidget(self.info_frame)
         # Give all stretch to content and none to sidebar
@@ -2821,6 +3048,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.lnkbutton.setText(_translate("Crow_Eye", "LNK and A-JL"))
 
         self.Prefetchbutton.setText(_translate("Crow_Eye", "Prefetch"))
+        self.ShimCacheButton.setText(_translate("Crow_Eye", "ShimCache"))
         self.logbutton.setText(_translate("Crow_Eye", "Logs"))
         self.Offline_analysis.setText(_translate("Crow_Eye", "offline analysis"))
         self.registry_offline.setText(_translate("Crow_Eye", "Registry offline"))
@@ -2952,6 +3180,38 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.Registry_widget.indexOf(self.User_run),
                 _translate("Crow_Eye", "User_Run")
             )
+            
+        # Initialize ShimCache_table headers if it exists (for Registry widget)
+        if hasattr(self, 'ShimCache_table'):
+            self.ShimCache_table.setColumnCount(5)
+            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.ShimCache_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        
+        # Initialize ShimCache_main_table headers for main tab
+        if hasattr(self, 'ShimCache_main_table'):
+            self.ShimCache_main_table.setColumnCount(5)
+            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.ShimCache_main_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        
+        # Set tab text for ShimCache main tab
+        if hasattr(self, 'ShimCache_main_tab') and hasattr(self, 'main_tab'):
+            self.main_tab.setTabText(
+                self.main_tab.indexOf(self.ShimCache_main_tab),
+                _translate("Crow_Eye", "ShimCache")
+            )
+            
+        # Set tab text for ShimCache tab (in Registry widget)
+        if hasattr(self, 'ShimCache_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.ShimCache_tab),
+                _translate("Crow_Eye", "ShimCache")
+            )
         
         # Initialize UserRunOnce_table headers if it exists
         if hasattr(self, 'UserRunOnce_table'):
@@ -3029,6 +3289,22 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.Registry_widget.setTabText(
                 self.Registry_widget.indexOf(self.Browser_history),
                 _translate("Crow_Eye", "Browser History")
+            )
+            
+        # Initialize ShimCache_table headers if it exists
+        if hasattr(self, 'ShimCache_table'):
+            self.ShimCache_table.setColumnCount(5)
+            headers = ["Filename", "Path", "Last Modified", "Last Modified (Readable)", "Parsed Timestamp"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.ShimCache_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        
+        # Set tab text for ShimCache tab
+        if hasattr(self, 'ShimCache_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.ShimCache_tab),
+                _translate("Crow_Eye", "ShimCache")
             )
         
         # Initialize tableWidget_3 headers if it exists (USB Devices)
@@ -3364,9 +3640,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     item.setText(_translate("Crow_Eye", header))
             
             # Set tab text for AppLogs tab if it exists
-            if hasattr(self, 'tabWidget') and hasattr(self, 'AppLogs_tap'):
+            if hasattr(self, 'tabWidget') and hasattr(self, 'AppLogs_tab'):
                 self.tabWidget.setTabText(
-                    self.tabWidget.indexOf(self.AppLogs_tap),
+                    self.tabWidget.indexOf(self.AppLogs_tab),
                     _translate("Crow_Eye", "Application Logs")
                 )
         # Initialize SecurityLogs_table headers if it exists
@@ -3433,6 +3709,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.registrybutton.clicked.connect(self.run_registry_analysis)
         self.logbutton.clicked.connect(self.run_logs_analysis)
         self.Prefetchbutton.clicked.connect(self.run_prefetch_analysis)
+        self.ShimCacheButton.clicked.connect(self.run_shimcache_analysis)
         self.exprot_json_CSV.clicked.connect(self.export_all_tables)    
         self.Creat_case.clicked.connect(self.create_directory)
         self.open_case_btn.clicked.connect(self.open_existing_case)
@@ -3527,7 +3804,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'registry': os.path.join(self.case_paths['artifacts_dir'], 'registry_data.db'),
                     'lnk': os.path.join(self.case_paths['artifacts_dir'], 'LnkDB.db'),
                     'logs': os.path.join(self.case_paths['artifacts_dir'], 'Log_Claw.db'),
-                    'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch.db')
+                    'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch.db'),
+                    'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db')
                 }
             }
             config_path = os.path.join(config_dir, f"case_{case_name}.json")
@@ -3718,7 +3996,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'registry': os.path.join(self.case_paths['artifacts_dir'], 'registry_data.db'),
                     'lnk': os.path.join(self.case_paths['artifacts_dir'], 'LnkDB.db'),
                     'logs': os.path.join(self.case_paths['artifacts_dir'], 'Log_Claw.db'),
-                    'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch.db')
+                    'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch.db'),
+                    'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db')
                 }
             }
             
@@ -3846,7 +4125,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             except Exception as ex:
                 # Show error with error style
                 error_msg = f"[Error] Operation failed: {str(ex)}"
-                loading_dialog.add_log_message(error_msg, "error")
+                loading_dialog.add_log_message(error_msg)
                 QtWidgets.QApplication.processEvents()
                 
                 # Keep error dialog open longer
@@ -3930,6 +4209,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Run prefetch analysis with loading screen"""
         self.run_analysis_with_loading("Running Prefetch Analysis...", self.parse_perfetch)
     
+    def run_shimcache_analysis(self):
+        """Run ShimCache analysis with loading screen and switch to ShimCache tab"""
+        self.run_analysis_with_loading("Running ShimCache Analysis...", self.parse_shimcache)
+        # Switch to the ShimCache main tab
+        self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.ShimCache_main_tab))
+    
     def run_logs_analysis(self):
         """Run Windows logs analysis with loading screen"""
         self.run_analysis_with_loading("Running Windows Logs Analysis...", self.parse_logs)
@@ -4007,6 +4292,33 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"[Logs Error] {str(e)}")
             raise
+            
+    def parse_shimcache(self):
+        """Parse ShimCache data"""
+        try:
+            print("[ShimCache] Starting ShimCache collection...")
+            from Artifacts_Collectors.shimcash_claw import ShimCacheParser
+            case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+            artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
+            
+            # Set the database path based on case directory if available
+            if artifacts_dir:
+                db_path = os.path.join(artifacts_dir, 'shimcache.db')
+            else:
+                db_path = 'shimcache.db'
+                
+            # Initialize and run the ShimCache parser
+            parser = ShimCacheParser(db_path)
+            parser.run()
+            print("[ShimCache] ShimCache data collected successfully")
+            
+            # Load the data into the UI
+            self.load_shimcache_data()
+        except Exception as e:
+            print(f"[ShimCache Error] {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def parse_offline_lnk_files(self):
         """Parse offline LNK files and Jump Lists using the offline module"""
@@ -4076,6 +4388,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "Collecting Registry data", 
                 "Collecting Prefetch files",
                 "Collecting Event Logs",
+                "Collecting ShimCache data",
                 "Loading data into GUI"
             ]
             
@@ -4147,10 +4460,29 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 except Exception as e:
                     print(f"[Logs Error] {str(e)}")
                 
+                # Step 6: ShimCache data
+                dialog.update_step(5, "🔍 COLLECTING SHIMCACHE DATA")
+                QtWidgets.QApplication.processEvents()  # Force GUI update
+                try:
+                    print("[ShimCache] Collecting ShimCache data...")
+                    # Import and call the ShimCache collection function
+                    from Artifacts_Collectors.shimcash_claw import ShimCacheParser
+                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                    artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
+                    if artifacts_dir:
+                        db_path = os.path.join(artifacts_dir, 'shimcache.db')
+                    else:
+                        db_path = 'shimcache.db'
+                    parser = ShimCacheParser(db_path)
+                    parser.run()
+                    print("[ShimCache] ShimCache data collected successfully")
+                except Exception as e:
+                    print(f"[ShimCache Error] {str(e)}")
+                
                 print("[Open Case] Artifact collection finished. Loading data into UI...")
                 
-                # Step 6: Load data into GUI
-                dialog.update_step(5, "📊 LOADING DATA INTO GUI")
+                # Step 7: Load data into GUI
+                dialog.update_step(6, "📊 LOADING DATA INTO GUI")
                 QtWidgets.QApplication.processEvents()  # Force GUI update
                 try:
                     self.load_all_data_internal()
@@ -4238,6 +4570,20 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 collect_logs(case_path=case_root)
             except Exception as e:
                 print(f"[Logs Error] {str(e)}")
+            try:
+                print("[ShimCache] Collecting ShimCache data...")
+                from Artifacts_Collectors.shimcash_claw import ShimCacheParser
+                case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
+                if artifacts_dir:
+                    db_path = os.path.join(artifacts_dir, 'shimcache.db')
+                else:
+                    db_path = 'shimcache.db'
+                parser = ShimCacheParser(db_path)
+                parser.run()
+                print("[ShimCache] ShimCache data collected successfully")
+            except Exception as e:
+                print(f"[ShimCache Error] {str(e)}")
             
             print("[Open Case] Artifact collection finished. Loading data into UI...")
             
@@ -4269,6 +4615,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "Loading File Activity data",
                 "Loading Prefetch data",
                 "Loading Event Logs",
+                "Loading ShimCache data",
                 "Loading Registry Database"
             ]
             
@@ -4307,8 +4654,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.load_all_logs()
                 print("[Logs] Completed loading Event Logs")
                 
-                # Step 7: Loading Registry Database
-                dialog.update_step(6, "💾 LOADING REGISTRY DATABASE")
+                # Step 7: Loading ShimCache data
+                dialog.update_step(6, "🔍 LOADING SHIMCACHE DATA")
+                print("[ShimCache] Starting to load ShimCache Data...")
+                self.load_shimcache_data()
+                print("[ShimCache] Completed loading ShimCache Data")
+                
+                # Step 8: Loading Registry Database
+                dialog.update_step(7, "💾 LOADING REGISTRY DATABASE")
                 print("[Registry] Starting to load Registry Database...")
                 self.load_registry_data_from_db()
                 print("[Registry] Completed loading Registry Database")
@@ -4372,6 +4725,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.load_data_from_Prefetch()
         except Exception as e:
             print(f"[Prefetch Error] Couldn't load prefetch data: {str(e)}")
+            
+        try:
+            self.load_shimcache_data()
+        except Exception as e:
+            print(f"[ShimCache Error] Couldn't load ShimCache data: {str(e)}")
         try:
             self.load_registry_data_from_db()
         except Exception as e:
@@ -4386,7 +4744,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             "Loading Custom Jump Lists", 
             "Loading Registry data",
             "Loading Prefetch data",
-            "Loading Event Logs"
+            "Loading Event Logs",
+            "Loading ShimCache data"
         ]
         
         try:
@@ -4428,6 +4787,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print("[Registry] Starting to load Registry Database...")
             self.load_registry_data_from_db()
             print("[Registry] Completed loading Registry Database")
+            
+            # Load ShimCache Data
+            loading_dialog.update_step(5, "🔄 Loading ShimCache data...")
+            QApplication.processEvents()
+            print("[ShimCache] Starting to load ShimCache Data...")
+            self.load_shimcache_data()
+            print("[ShimCache] Completed loading ShimCache Data")
             
             loading_dialog.status_label.setText("Data loading completed successfully!")
             QApplication.processEvents()
@@ -4619,6 +4985,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "LastUpdate": self.LastUpdate_table,
                 "LastUpdateInfo": self.LastUpdateInfo_table,
                 "ShutDown": self.ShutDown_table,
+                "ShimCache": self.ShimCache_main_table,
                 "BrowserHistory": self.Browser_history_table,
                 "USBDevices": self.tableWidget_3,
                 "USBInstances": self.tableWidget_4,
@@ -4687,45 +5054,62 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 
                     
     def search_tables(self):
-        """Search for text in all table widgets"""
         search_text = self.search_input.text().strip()
+        print(f"DEBUG: search_tables called with search_text: '{search_text}'")
         if not search_text:
             QMessageBox.information(self.main_window, "Search", "Please enter text to search for.")
             return
-            
-        # Clear previous search results and highlighting
+
+        self.loading_label.show()
+        self.loading_movie.start()
         self.clear_search_results()
-        
-        search_text_lower = search_text.lower()
-        
-        # Get all table widgets in the application
+
         tables = self.find_all_table_widgets()
+        print(f"DEBUG: Found {len(tables)} tables to search.")
+
+        self.thread = QThread()
+        self.worker = SearchWorker(tables, search_text)
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self.on_search_finished)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.start()
+
+    def on_search_finished(self, results):
+        self.search_results = results
+        print(f"DEBUG: on_search_finished called with {len(self.search_results)} results.")
+        self.loading_movie.stop()
+        self.loading_label.hide()
+
+        # Clear any existing highlights and queue
+        self.highlight_queue.clear()
         
-        # Search in each table
-        for table in tables:
-            if not hasattr(table, 'rowCount') or not hasattr(table, 'columnCount'):
-                continue
-                
-            for row in range(table.rowCount()):
-                for col in range(table.columnCount()):
-                    item = table.item(row, col)
-                    if item and search_text_lower in item.text().lower():
-                        # Store the match
-                        self.search_results.append((table, row, col))
-        
-        # Update UI based on search results
         if self.search_results:
+            # Initialize the current result index
             self.current_result_index = 0
-            self.highlight_current_result()
+            print(f"DEBUG: Initial current_result_index: {self.current_result_index}")
+            
+            # Update the search result label
+            self.update_search_result_label()
+            
+            # Enable navigation buttons
             self.prev_result_button.setEnabled(len(self.search_results) > 1)
             self.next_result_button.setEnabled(len(self.search_results) > 1)
             if hasattr(self, '_search_button'):
                 self._search_button.setEnabled(True)
-            QMessageBox.information(self.main_window, "Search Results", 
-                                  f"Found {len(self.search_results)} matches for '{search_text}'")
+                
+            # Trigger highlighting of the first result
+            self.highlight_current_result()
+            
+            # Show message after highlighting is queued
+            QMessageBox.information(self.main_window, "Search Results",
+                                  f"Found {len(self.search_results)} matches.")
         else:
-            QMessageBox.information(self.main_window, "Search Results", 
-                                  f"No matches found for '{search_text}'")
+            # No results found
+            self.search_label.setText("Search:")
+            QMessageBox.information(self.main_window, "Search Results", "No matches found.")
             self.prev_result_button.setEnabled(False)
             self.next_result_button.setEnabled(False)
             if hasattr(self, '_search_button'):
@@ -4776,93 +5160,395 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # If clicking a different column, default to ascending order
             table.sortItems(column_index, Qt.AscendingOrder)
     
-    def highlight_current_result(self):
-        """Highlight the current search result"""
-        if not self.search_results or self.current_result_index < 0:
-            return
+    def highlight_current_result(self, process_immediately=False):
+        """Adds a highlight request to the queue.
+        
+        Args:
+            process_immediately (bool): If True, process the highlight immediately instead of waiting for the timer.
             
-        # Get the current result
-        table, row, col = self.search_results[self.current_result_index]
+        Returns:
+            bool: True if a highlight request was added to the queue, False otherwise.
+        """
+        if 0 <= self.current_result_index < len(self.search_results):
+            # Clear the queue to avoid backlog of highlights
+            self.highlight_queue.clear()
+            self.highlight_queue.append(self.current_result_index)
+            
+            # Process immediately if requested
+            if process_immediately:
+                print(f"DEBUG: Processing highlight immediately for result {self.current_result_index}")
+                self.process_highlight_queue(force=True)
+                return True
+                
+            # Otherwise ensure the timer is running
+            if not self.highlight_timer.isActive():
+                self.highlight_timer.start()
+            return True
+        return False
+
+    def process_highlight_queue(self, force=False):
+        """Processes one highlight request from the queue.
         
-        # Clear previous highlighting (restore default background)
-        self.clear_highlighting()
-        
-        # Highlight the current cell
-        item = table.item(row, col)
-        if item:
-            item.setBackground(QtGui.QColor(255, 255, 0, 100))  # Semi-transparent yellow
-            item.setForeground(QtGui.QColor(0, 0, 0))  # Black text for contrast
-        
-        # Make the table visible (switch to its tab)
-        self.make_table_visible(table)
-        
-        # Scroll to the cell
-        table.scrollToItem(item)
-        table.setCurrentCell(row, col)
+        Args:
+            force (bool): If True, process the queue even if is_processing_highlight is True.
+        """
+        if (self.is_processing_highlight and not force) or not self.highlight_queue:
+            return
+
+        self.is_processing_highlight = True
+        try:
+            result_index = self.highlight_queue.popleft()
+            if not (0 <= result_index < len(self.search_results)):
+                return
+
+            # Set current_result_index to the index we're processing
+            self.current_result_index = result_index
+            
+            table, row, _ = self.search_results[result_index]
+            if not table or not isinstance(table, QtWidgets.QTableWidget):
+                return
+
+            print(f"DEBUG: Processing highlight for table {table.objectName()}, row {row}")
+            
+            # For all tables, use the enhanced make_table_visible method
+            self.make_table_visible(table)
+            
+            # Process events to ensure UI updates
+            QtWidgets.QApplication.processEvents()
+            
+            # Wait for the table to become visible with a timeout
+            start_time = QtCore.QTime.currentTime()
+            max_wait_time = 2000  # Increase timeout to 2 seconds for complex nested tabs
+            while not table.isVisible() and start_time.msecsTo(QtCore.QTime.currentTime()) < max_wait_time:
+                QtWidgets.QApplication.processEvents()
+                QtCore.QThread.msleep(50)
+            
+            # Ensure the table is actually visible before proceeding
+            if not table.isVisible():
+                print(f"WARNING: Table {table.objectName()} is still not visible after waiting")
+                
+                # Special handling for LNK_table
+                if table.objectName() == "LNK_table" and hasattr(self, 'main_tab') and hasattr(self, 'LNK_AL_Tab'):
+                    print(f"DEBUG: Special retry for LNK_table")
+                    # Force the main tab to show LNK_AL_Tab
+                    for i in range(self.main_tab.count()):
+                        if self.main_tab.widget(i) is self.LNK_AL_Tab:
+                            self.main_tab.setCurrentIndex(i)
+                            self.main_tab.update()
+                            self.main_tab.repaint()
+                            break
+                    
+                    # Force application to process all pending events
+                    QtWidgets.QApplication.processEvents()
+                    QtCore.QThread.msleep(500)  # Much longer delay
+                    QtWidgets.QApplication.processEvents()
+                    
+                    # Try to force focus and visibility
+                    self.LNK_AL_Tab.show()
+                    self.LNK_AL_Tab.raise_()
+                    self.LNK_AL_Tab.setFocus()
+                    self.LNK_AL_Tab.update()
+                    self.LNK_AL_Tab.repaint()
+                    QtWidgets.QApplication.processEvents()
+                    
+                    table.show()
+                    table.raise_()
+                    table.setFocus()
+                    table.update()
+                    table.repaint()
+                    QtWidgets.QApplication.processEvents()
+                
+                # Try to force focus on the table's parent
+                parent = table.parentWidget()
+                if parent:
+                    parent.show()
+                    parent.raise_()
+                    parent.setFocus()
+                    parent.update()
+                    parent.repaint()
+                    QtWidgets.QApplication.processEvents()
+                    QtCore.QThread.msleep(200)
+                
+                # If still not visible, try again with a longer delay
+                if not table.isVisible():
+                    print(f"ERROR: Table {table.objectName()} could not be made visible, retrying...")
+                    # Use a longer delay and try again
+                    QtCore.QTimer.singleShot(500, lambda: self.highlight_current_result(True))
+                    return
+
+            print(f"DEBUG: Table {table.objectName()} is now visible, proceeding with highlighting")
+            
+            # Clear previous selection and highlights
+            table.clearSelection()
+
+            # Scroll to and select the item
+            item = table.item(row, 0)
+            if item:
+                # First ensure the table has focus
+                table.setFocus()
+                QtWidgets.QApplication.processEvents()
+                
+                # Scroll the item into view
+                table.scrollToItem(item, QtWidgets.QAbstractItemView.ScrollHint.PositionAtCenter)
+                QtWidgets.QApplication.processEvents()
+                
+                # Select the row
+                table.selectRow(row)
+                QtWidgets.QApplication.processEvents()
+                
+                print(f"DEBUG: Scrolled to and selected row {row} in table {table.objectName()}")
+                
+                # Update the search result label
+                self.update_search_result_label()
+                
+                # Enable navigation buttons
+                self.prev_result_button.setEnabled(len(self.search_results) > 1)
+                self.next_result_button.setEnabled(len(self.search_results) > 1)
+                if hasattr(self, '_search_button'):
+                    self._search_button.setEnabled(True)
+            else:
+                print(f"WARNING: Could not find item at row {row}, column 0 in table {table.objectName()}")
+
+        finally:
+            self.is_processing_highlight = False
+
+    def update_search_result_label(self):
+        if self.search_results:
+            self.search_label.setText(f"Result {self.current_result_index + 1} of {len(self.search_results)}")
+        else:
+            self.search_label.setText("Search:")
     
     def make_table_visible(self, table):
-        """Make the table visible by switching to its tab"""
-        # Find the tab widget containing this table
-        for attr_name in dir(self):
-            attr = getattr(self, attr_name)
-            if isinstance(attr, QtWidgets.QTabWidget):
-                # Check each tab in this tab widget
-                for i in range(attr.count()):
-                    tab = attr.widget(i)
-                    # Check if the table is in this tab's layout
-                    if self.is_table_in_widget(table, tab):
-                        attr.setCurrentIndex(i)
-                        return
-    
-    def is_table_in_widget(self, table, widget):
-        """Check if the table is contained within the widget or its children"""
-        if widget == table:
-            return True
-            
-        # Check all children
-        for child in widget.findChildren(QtWidgets.QWidget):
-            if child == table:
-                return True
-        return False
-    
-    def clear_highlighting(self):
-        """Clear highlighting from all tables"""
-        tables = self.find_all_table_widgets()
-        for table in tables:
-            if not hasattr(table, 'rowCount') or not hasattr(table, 'columnCount'):
-                continue
+        """Make the table visible by switching to its tab, handling nested tabs."""
+        print(f"DEBUG: make_table_visible called for table: {table.objectName()}")
+        
+        # Store the original table to check if it's visible at the end
+        original_table = table
+        
+        # Find the direct parent widget of the table
+        direct_parent = table.parentWidget()
+        print(f"DEBUG: Direct parent of {table.objectName()} is {direct_parent.objectName()}")
+        
+        # Special handling for LNK_table
+        if table.objectName() == "LNK_table":
+            # Make sure we're on the LNK_AL_Tab in the main_tab
+            if hasattr(self, 'main_tab') and hasattr(self, 'LNK_AL_Tab'):
+                # First, ensure main_tab is visible and has focus
+                self.main_tab.show()
+                self.main_tab.setFocus()
+                QtWidgets.QApplication.processEvents()
                 
-            for row in range(table.rowCount()):
-                for col in range(table.columnCount()):
-                    item = table.item(row, col)
-                    if item:
-                        item.setBackground(QtGui.QBrush())  # Reset to default
-                        item.setForeground(QtGui.QBrush())  # Reset to default
+                # Find and select the LNK_AL_Tab in main_tab
+                for i in range(self.main_tab.count()):
+                    if self.main_tab.widget(i) is self.LNK_AL_Tab:
+                        print(f"DEBUG: Setting main_tab to LNK_AL_Tab (index {i})")
+                        self.main_tab.setCurrentIndex(i)
+                        QtWidgets.QApplication.processEvents()
+                        QtCore.QThread.msleep(200)  # Longer delay for tab switching
+                        QtWidgets.QApplication.processEvents()
+                        break
+            
+            # Force focus on the LNK_AL_Tab and then the table
+            if hasattr(self, 'LNK_AL_Tab'):
+                self.LNK_AL_Tab.show()
+                self.LNK_AL_Tab.raise_()
+                self.LNK_AL_Tab.setFocus()
+                QtWidgets.QApplication.processEvents()
+                QtCore.QThread.msleep(100)
+                
+                # Now focus on the table itself
+                table.show()
+                table.raise_()
+                table.setFocus()
+                QtWidgets.QApplication.processEvents()
+            
+            # Wait for the table to become visible with a timeout
+            start_time = QtCore.QTime.currentTime()
+            timeout_ms = 2000  # Increase timeout to 2 seconds for complex tab structures
+            while not table.isVisible() and start_time.msecsTo(QtCore.QTime.currentTime()) < timeout_ms:
+                QtWidgets.QApplication.processEvents()
+                QtCore.QThread.msleep(50)
+            
+            # If still not visible, try more aggressive approach
+            if not table.isVisible():
+                print(f"DEBUG: Trying more aggressive approach for {table.objectName()}")
+                # Try to force the main window to update
+                if hasattr(self, 'main_tab'):
+                    self.main_tab.update()
+                if hasattr(self, 'LNK_AL_Tab'):
+                    self.LNK_AL_Tab.update()
+                table.update()
+                QtWidgets.QApplication.processEvents()
+                QtCore.QThread.msleep(200)
+                
+                # Last resort - try to force repaint
+                if hasattr(self, 'main_tab'):
+                    self.main_tab.repaint()
+                if hasattr(self, 'LNK_AL_Tab'):
+                    self.LNK_AL_Tab.repaint()
+                table.repaint()
+                QtWidgets.QApplication.processEvents()
+            
+            return
+        
+        # Special handling for the AppLogs_table which seems to have issues
+        if table.objectName() == "AppLogs_table":
+            # Make sure we're on the Logs tab in the main_tab
+            if hasattr(self, 'main_tab') and hasattr(self, 'Logs_tab'):
+                # First, ensure main_tab is visible and has focus
+                self.main_tab.show()
+                self.main_tab.setFocus()
+                QtWidgets.QApplication.processEvents()
+                
+                # Find and select the Logs tab in main_tab
+                for i in range(self.main_tab.count()):
+                    if self.main_tab.widget(i) is self.Logs_tab:
+                        print(f"DEBUG: Setting main_tab to Logs_tab (index {i})")
+                        self.main_tab.setCurrentIndex(i)
+                        QtWidgets.QApplication.processEvents()
+                        QtCore.QThread.msleep(200)  # Longer delay for tab switching
+                        QtWidgets.QApplication.processEvents()
+                        break
+            
+            # Make sure we're on the AppLogs_tab in the tabWidget
+            if hasattr(self, 'tabWidget') and hasattr(self, 'AppLogs_tab'):
+                # Ensure tabWidget is visible and has focus
+                self.tabWidget.show()
+                self.tabWidget.setFocus()
+                QtWidgets.QApplication.processEvents()
+                
+                # Find and select the AppLogs_tab in tabWidget
+                for i in range(self.tabWidget.count()):
+                    if self.tabWidget.widget(i) is self.AppLogs_tab:
+                        print(f"DEBUG: Setting tabWidget to AppLogs_tab (index {i})")
+                        self.tabWidget.setCurrentIndex(i)
+                        QtWidgets.QApplication.processEvents()
+                        QtCore.QThread.msleep(200)  # Longer delay for tab switching
+                        QtWidgets.QApplication.processEvents()
+                        break
+            
+            return
+        
+        # Find all tab widgets in the hierarchy for other tables
+        tab_hierarchy = []
+        current_widget = direct_parent
+        while current_widget is not None:
+            parent_widget = current_widget.parentWidget()
+            if parent_widget is not None and isinstance(parent_widget, QtWidgets.QTabWidget):
+                tab_hierarchy.append((parent_widget, current_widget))
+                print(f"DEBUG: Found tab widget: {parent_widget.objectName()} containing {current_widget.objectName()}")
+            current_widget = parent_widget
+        
+        # Reverse the hierarchy to start from the outermost tab widget
+        tab_hierarchy.reverse()
+        
+        # Set each tab widget to the correct index
+        for tab_widget, tab_content in tab_hierarchy:
+            # Ensure the tab widget is visible and has focus
+            tab_widget.show()
+            tab_widget.setFocus()
+            QtWidgets.QApplication.processEvents()
+            
+            for i in range(tab_widget.count()):
+                if tab_widget.widget(i) is tab_content:
+                    print(f"DEBUG: Setting {tab_widget.objectName()} to index {i} ({tab_content.objectName()})")
+                    tab_widget.setCurrentIndex(i)
+                    # Process events after each tab change to ensure UI updates
+                    QtWidgets.QApplication.processEvents()
+                    # Add a longer delay to allow the UI to update
+                    QtCore.QThread.msleep(200)  # Increased delay for better reliability
+                    QtWidgets.QApplication.processEvents()
+                    break
+        
+        # Process Qt events to ensure UI updates before continuing
+        QtWidgets.QApplication.processEvents()
+        
+        # Wait for the table to become visible with a timeout
+        start_time = QtCore.QTime.currentTime()
+        timeout_ms = 2000  # Increase timeout to 2 seconds for complex tab structures
+        while not original_table.isVisible() and start_time.msecsTo(QtCore.QTime.currentTime()) < timeout_ms:
+            QtWidgets.QApplication.processEvents()
+            QtCore.QThread.msleep(50)
+        
+        # Verify the table is now visible
+        if original_table.isVisible():
+            print(f"DEBUG: Table {original_table.objectName()} is now visible")
+        else:
+            print(f"WARNING: Table {original_table.objectName()} is still not visible after tab changes")
+            # Try more aggressive approach
+            print(f"DEBUG: Trying more aggressive approach for {original_table.objectName()}")
+            
+            # Force update on the entire hierarchy
+            for tab_widget, tab_content in tab_hierarchy:
+                tab_widget.update()
+                tab_content.update()
+            
+            if direct_parent:
+                direct_parent.show()
+                direct_parent.raise_()
+                direct_parent.setFocus()
+                direct_parent.update()
+                QtWidgets.QApplication.processEvents()
+                QtCore.QThread.msleep(200)
+            
+            original_table.show()
+            original_table.raise_()
+            original_table.setFocus()
+            original_table.update()
+            QtWidgets.QApplication.processEvents()
+                
+            # Final check
+            if original_table.isVisible():
+                print(f"DEBUG: Table {original_table.objectName()} is now visible after additional attempts")
+            else:
+                print(f"ERROR: Table {original_table.objectName()} could not be made visible")
+                # Last resort - try again with a longer delay
+                QtCore.QTimer.singleShot(300, lambda: self._check_table_visibility(original_table))
+    
+    def _check_table_visibility(self, table):
+        """Check if a table is visible after a delay and log the result."""
+        if table.isVisible():
+            print(f"DEBUG: Table {table.objectName()} is now visible after delay")
+        else:
+            print(f"WARNING: Table {table.objectName()} is still not visible after delay")
     
     def go_to_next_result(self):
         """Navigate to the next search result"""
-        if not self.search_results:
-            return
-            
-        self.current_result_index = (self.current_result_index + 1) % len(self.search_results)
-        self.highlight_current_result()
+        if self.search_results and len(self.search_results) > 0:
+            self.current_result_index = (self.current_result_index + 1) % len(self.search_results)
+            print(f"DEBUG: go_to_next_result - new index: {self.current_result_index}")
+            # Process the highlight immediately
+            self.highlight_current_result(process_immediately=True)
     
     def go_to_previous_result(self):
         """Navigate to the previous search result"""
-        if not self.search_results:
-            return
-            
-        self.current_result_index = (self.current_result_index - 1) % len(self.search_results)
-        self.highlight_current_result()
+        if self.search_results and len(self.search_results) > 0:
+            self.current_result_index = (self.current_result_index - 1 + len(self.search_results)) % len(self.search_results)
+            print(f"DEBUG: go_to_previous_result - new index: {self.current_result_index}")
+            # Process the highlight immediately
+            self.highlight_current_result(process_immediately=True)
     
     def clear_search_results(self):
         """Clear all search results and highlighting"""
-        # Clear highlighting first
-        self.clear_highlighting()
+        print("DEBUG: Clearing all search results")
+        
+        # Clear the highlight queue and stop processing
+        self.highlight_queue.clear()
+        self.is_processing_highlight = False
+        
+        # Clear selection from all tables
+        for table in self.find_all_table_widgets():
+            table.clearSelection()
         
         # Reset search results
         self.search_results = []
         self.current_result_index = -1
+        
+        # Clear the search input
+        self.search_input.clear()
+        
+        # Reset the search label
+        self.search_label.setText("Search:")
         
         # Update navigation buttons
         if hasattr(self, 'prev_result_button'):
