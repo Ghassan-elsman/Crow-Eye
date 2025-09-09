@@ -1,0 +1,18 @@
+{
+    "case_name": "yaser",
+    "created_date": "2025-09-06T22:08:16.829842",
+    "paths": {
+        "case_root": "C:/Users/Ghass/Downloads\\yaser",
+        "artifacts_dir": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts",
+        "c_ajl_lnk_dir": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts/C_AJL_Lnk",
+        "registry_dir": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts/Registry_Hives",
+        "prefetch_dir": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts/Prefetch"
+    },
+    "databases": {
+        "registry": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts\\registry_data.db",
+        "lnk": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts\\LnkDB.db",
+        "logs": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts\\Log_Claw.db",
+        "prefetch": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts\\prefetch_data.db",
+        "shimcache": "C:/Users/Ghass/Downloads\\yaser\\Target_Artifacts\\shimcache.db"
+    }
+}

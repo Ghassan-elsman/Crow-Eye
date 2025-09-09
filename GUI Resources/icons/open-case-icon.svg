@@ -1,0 +1,20 @@
+<svg width="20" height="20" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .icon-path {
+      stroke: #090630;
+      stroke-width: 1.5;
+      fill: none;
+      transition: all 0.2s ease;
+    }
+    svg:hover .icon-path {
+      stroke: #00FFFF;
+      filter: drop-shadow(0 0 1px #00FFFF);
+    }
+    .active .icon-path {
+      stroke: #3B82F6;
+      filter: drop-shadow(0 0 2px #3B82F6);
+    }
+  </style>
+  <path d="M2.5 4.5h5l1.5 1.5h6.5c0.75 0 1.5 0.75 1.5 1.5v7.5c0 0.75-0.75 1.5-1.5 1.5h-13c-0.75 0-1.5-0.75-1.5-1.5v-9c0-0.75 0.75-1.5 1.5-1.5z" class="icon-path" />
+  <path d="M2.5 8.5h15v6.5c0 0.75-0.75 1.5-1.5 1.5h-12c-0.75 0-1.5-0.75-1.5-1.5v-6.5z" class="icon-path" />
+</svg>

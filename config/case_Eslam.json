@@ -1,0 +1,19 @@
+{
+    "case_name": "Eslam",
+    "opened_date": "2025-09-09T21:26:26.978257",
+    "paths": {
+        "case_root": "C:/Users/Ghass/Downloads/Eslam",
+        "artifacts_dir": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts",
+        "c_ajl_lnk_dir": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\C_AJL_Lnk",
+        "registry_dir": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\Registry_Hives",
+        "prefetch_dir": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\Prefetch"
+    },
+    "databases": {
+        "registry": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\registry_data.db",
+        "lnk": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\LnkDB.db",
+        "logs": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\Log_Claw.db",
+        "prefetch": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\prefetch_data.db",
+        "shimcache": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\shimcache.db",
+        "amcache": "C:/Users/Ghass/Downloads/Eslam\\Target_Artifacts\\amcache.db"
+    }
+}

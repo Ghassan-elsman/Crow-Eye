@@ -219,11 +219,13 @@ class CrowEyeStyles:
         }
         QPushButton:hover {
             background-color: #60A5FA;
-            box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+            /* Qt doesn't support box-shadow, using border instead */
+            border: 1px solid rgba(0, 255, 255, 0.4);
         }
         QPushButton:pressed {
             background-color: #1E40AF;
-            box-shadow: inset 0 0 10px rgba(0, 255, 255, 0.3);
+            /* Qt doesn't support box-shadow, using border instead */
+            border: 1px solid rgba(0, 255, 255, 0.3);
         }
         QPushButton:disabled {
             background-color: #64748B;
@@ -247,11 +249,13 @@ class CrowEyeStyles:
         }
         QPushButton:hover {
             background-color: #94A3B8;
-            box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+            /* Qt doesn't support box-shadow, using border instead */
+            border: 1px solid rgba(0, 255, 255, 0.4);
         }
         QPushButton:pressed {
             background-color: #334155;
-            box-shadow: inset 0 0 10px rgba(0, 255, 255, 0.3);
+            /* Qt doesn't support box-shadow, using border instead */
+            border: 1px solid rgba(0, 255, 255, 0.3);
         }
         QPushButton:disabled {
             background-color: #475569;
@@ -282,6 +286,62 @@ class CrowEyeStyles:
         QPushButton:disabled {
             background-color: #64748B;
             color: #94A3B8;
+        }
+    """
+    
+    # Message Box Style with Enhanced Cyberpunk Theme - Larger Size for Better Visibility
+    MESSAGE_BOX_STYLE = """
+        QMessageBox {
+            background-color: #0F172A;
+            color: #E2E8F0;
+            border: 3px solid #334155;
+            border-radius: 15px;
+            min-width: 550px;
+            min-height: 300px;
+            padding: 30px;
+            /* Qt doesn't support box-shadow, using border instead */
+            border: 3px solid rgba(0, 255, 255, 0.4);
+        }
+        QMessageBox QLabel {
+            color: #E2E8F0;
+            font-size: 18px;
+            font-weight: 600;
+            font-family: 'Segoe UI', sans-serif;
+            margin-bottom: 20px;
+            padding: 15px;
+            border-left: 4px solid #00FFFF;
+            background-color: rgba(0, 255, 255, 0.08);
+            letter-spacing: 0.5px;
+            line-height: 1.4;
+        }
+        QMessageBox QPushButton {
+            background-color: #3B82F6;
+            color: #FFFFFF;
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            border-radius: 10px;
+            padding: 15px 30px;
+            font-weight: 600;
+            font-size: 16px;
+            font-family: 'Segoe UI', sans-serif;
+            min-width: 180px;
+            min-height: 45px;
+            margin: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        QMessageBox QPushButton:hover {
+            background-color: #60A5FA;
+            border: 2px solid #00FFFF;
+            /* Qt doesn't support box-shadow, using border instead */
+            border: 3px solid rgba(0, 255, 255, 0.5);
+        }
+        QMessageBox QPushButton:pressed {
+            background-color: #1E40AF;
+            border: 2px solid #00FFFF;
+        }
+        QMessageBox QPushButton:focus {
+            outline: none;
+            border: 3px solid #00FFFF;
         }
     """
 
@@ -1217,7 +1277,8 @@ class CrowEyeStyles:
             background-color: rgba(15,23,42,0.8);
             border: 1px solid rgba(0,255,255,0.6);
             color: #00FFFF;
-            text-shadow: 0 0 8px rgba(0,255,255,0.8);
+            /* Qt doesn't support text-shadow, using brighter color instead */
+            color: #80FFFF;
         }
     """
 
@@ -1366,11 +1427,11 @@ class CrowEyeStyles:
         }
         QPushButton:hover {
             background-color: #60A5FA;
-            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+            border: 1px solid rgba(0, 255, 255, 0.3); /* Replaced box-shadow with border for Qt compatibility */
         }
         QPushButton:pressed {
             background-color: #1E40AF;
-            box-shadow: inset 0 0 8px rgba(0, 255, 255, 0.3);
+            border: 1px solid rgba(0, 255, 255, 0.3); /* Replaced box-shadow with border for Qt compatibility */
         }
         QPushButton:disabled {
             background-color: #64748B;
@@ -1380,11 +1441,11 @@ class CrowEyeStyles:
 
 
 
-    # Enhanced Darker Cyberpunk Parse All Button
+    # Enhanced Cyberpunk Parse All Button
     PARSE_ALL_BUTTON = """
         QPushButton {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
-                                      stop:0 #6D28D9, stop:0.5 #4C1D95, stop:1 #1E40AF);
+                                      stop:0 #8B5CF6, stop:0.5 #6D28D9, stop:1 #3B82F6);
             color: #FFFFFF;
             border: 2px solid #00FFFF;
             border-radius: 8px;
@@ -1394,21 +1455,22 @@ class CrowEyeStyles:
             font-family: 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 1px;
+            /* Removed box-shadow for Qt compatibility */
         }
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
-                                      stop:0 #8B5CF6, stop:0.5 #6D28D9, stop:1 #3B82F6);
-            border: 2px solid #00FFFF;
+                                      stop:0 #A78BFA, stop:0.5 #8B5CF6, stop:1 #60A5FA);
+            border: 3px solid #00FFFF; /* Enhanced border to replace box-shadow effect */
         }
         QPushButton:pressed {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
-                                      stop:0 #4C1D95, stop:0.5 #312E81, stop:1 #1E3A8A);
-            border: 2px solid #00FFFF;
+                                      stop:0 #7C3AED, stop:0.5 #4C1D95, stop:1 #1E40AF);
+            border: 2px solid #80FFFF; /* Changed border color to replace box-shadow effect */
         }
         QPushButton:disabled {
-            background-color: #475569;
+            background-color: #64748B;
             color: #94A3B8;
-            border: 2px solid #334155;
+            border: 2px solid #475569;
         }
     """
     
@@ -1469,11 +1531,15 @@ class CrowEyeStyles:
             border-radius: 8px;
             text-align: center;
             font-family: 'Consolas', 'Courier New', monospace;
-            font-weight: bold;
-            font-size: 12px;
-            color: #00ffff;
+            font-weight: 900;
+            font-size: 14px;
+            /* Qt doesn't support text-shadow, using contrasting color and font styling instead */
+            color: #ffffff;
+            /* Removed text-shadow: 0 0 5px #00ffff, 0 0 10px #00ffff; */
+            font-weight: 900;
+            letter-spacing: 1px;
             background-color: rgba(10, 25, 41, 0.8);
-            min-height: 25px;
+            min-height: 30px;
         }
         QProgressBar::chunk {
             background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
@@ -1543,6 +1609,44 @@ class CrowEyeStyles:
         }
         QScrollBar::handle:vertical:hover {
             background: #00ff00;
+        }
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {
+            height: 0px;
+            background: none;
+            border: none;
+        }
+        QScrollBar::add-page:vertical,
+        QScrollBar::sub-page:vertical {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+        }
+        QScrollBar:horizontal {
+            border: none;
+            background: rgba(0, 0, 0, 0.3);
+            height: 12px;
+            margin: 0;
+            border-radius: 6px;
+        }
+        QScrollBar::handle:horizontal {
+            background: #00ffff;
+            min-width: 20px;
+            border-radius: 6px;
+            margin: 2px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background: #00ff00;
+        }
+        QScrollBar::add-line:horizontal,
+        QScrollBar::sub-line:horizontal {
+            width: 0px;
+            background: none;
+            border: none;
+        }
+        QScrollBar::add-page:horizontal,
+        QScrollBar::sub-page:horizontal {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
         }
     """
 

@@ -1,607 +1,990 @@
 import os
-import sqlite3
 import struct
+import datetime
+import enum
+import sqlite3
 import json
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from typing import List, Optional
+import ctypes
+import re
+from ctypes import windll, wintypes
 
-def prefetch_claw(case_path=None, offline_mode=False):
+class Version(enum.IntEnum):
+    WIN_XP_OR_2003 = 17
+    VISTA_OR_WIN7 = 23
+    WIN8X_OR_WIN2012X = 26
+    WIN10_OR_WIN11 = 30
+    WIN11 = 31
+
+@dataclass
+class Header:
+    version: Version
+    signature: str
+    file_size: int
+    executable_filename: str
+    hash: str
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> 'Header':
+        version = Version(struct.unpack_from("<I", data, 0)[0])
+        signature = data[4:8].decode('ascii')
+        file_size = struct.unpack_from("<I", data, 12)[0]
+        
+        exe_filename_bytes = data[16:76]
+        exe_filename = exe_filename_bytes.decode('utf-16le').split('\x00')[0].strip()
+        
+        hash_val = hex(struct.unpack_from("<I", data, 76)[0])[2:].upper()
+        
+        return cls(version, signature, file_size, exe_filename, hash_val)
+
+@dataclass
+class MFTInformation:
+    mft_entry: int
+    sequence_number: int
     
+    @classmethod
+    def from_bytes(cls, data: bytes) -> 'MFTInformation':
+        entry_seq = struct.unpack("<Q", data)[0]
+        mft_entry = entry_seq & 0xFFFFFFFFFFFF
+        sequence_number = entry_seq >> 48
+        
+        return cls(mft_entry, sequence_number)
     
-    def format_size(size):
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size < 1024:
-                return f"{size:.2f} {unit}"
-            size /= 1024
+    def __str__(self) -> str:
+        return f"{self.mft_entry}-{self.sequence_number}"
 
-    def filetime_to_dt(ft):
-        if ft == 0:
-            return None
-        return datetime(1601, 1, 1) + timedelta(microseconds=ft/10)
+@dataclass
+class FileMetric:
+    unknown0: int = 0
+    unknown1: int = 0
+    unknown2: int = 0
+    unknown3: int = 0
+    filename_string_offset: int = 0
+    filename_string_size: int = 0
+    mft_info: Optional[MFTInformation] = None
+    
+    @classmethod
+    def from_bytes(cls, data: bytes, is_version17: bool) -> 'FileMetric':
+        if is_version17:
+            unknown0 = struct.unpack_from("<I", data, 0)[0]
+            unknown1 = struct.unpack_from("<I", data, 4)[0]
+            filename_offset = struct.unpack_from("<I", data, 8)[0]
+            filename_size = struct.unpack_from("<I", data, 12)[0]
+            unknown2 = struct.unpack_from("<I", data, 16)[0]
+            
+            return cls(
+                unknown0=unknown0,
+                unknown1=unknown1,
+                filename_string_offset=filename_offset,
+                filename_string_size=filename_size,
+                unknown2=unknown2
+            )
+        else:
+            unknown0 = struct.unpack_from("<I", data, 0)[0]
+            unknown1 = struct.unpack_from("<I", data, 4)[0]
+            unknown2 = struct.unpack_from("<I", data, 8)[0]
+            filename_offset = struct.unpack_from("<I", data, 12)[0]
+            filename_size = struct.unpack_from("<I", data, 16)[0]
+            unknown3 = struct.unpack_from("<I", data, 20)[0]
+            
+            mft_info = MFTInformation.from_bytes(data[24:32])
+            
+            return cls(
+                unknown0=unknown0,
+                unknown1=unknown1,
+                unknown2=unknown2,
+                unknown3=unknown3,
+                filename_string_offset=filename_offset,
+                filename_string_size=filename_size,
+                mft_info=mft_info
+            )
 
-    def calculate_prefetch_hash(executable_name):
-        try:
-            executable_name = executable_name.upper().encode('utf-16le')
-            hash_value = 0
-            for byte in executable_name:
-                hash_value = (37 * hash_value + byte) & 0xFFFFFFFF
-            return hash_value
-        except:
-            return 0
+@dataclass
+class TraceChain:
+    next_array_entry_index: int
+    total_block_load_count: int
+    unknown0: int = 0
+    loaded_block_count: int = 0
+    
+    @classmethod
+    def from_bytes(cls, data: bytes, has_loaded_count: bool) -> 'TraceChain':
+        next_index = struct.unpack_from("<I", data, 0)[0]
+        total_count = struct.unpack_from("<I", data, 4)[0]
+        
+        if has_loaded_count:
+            unknown = struct.unpack_from("<H", data, 8)[0]
+            loaded_count = struct.unpack_from("<H", data, 10)[0]
+            return cls(next_index, total_count, unknown, loaded_count)
+        else:
+            unknown = struct.unpack_from("<I", data, 8)[0]
+            return cls(next_index, total_count, unknown)
 
-    def safe_int_convert(value, max_value=9223372036854775807):
-        """Safely convert integers for SQLite storage, avoiding overflow errors"""
-        try:
-            if isinstance(value, int):
-                if value > max_value or value < -max_value:
-                    return str(value)  # Store as TEXT if too large
-                return value
-            return value
-        except:
-            return 0
+@dataclass
+class VolumeInfo:
+    device_name_offset: int
+    creation_time: datetime.datetime
+    serial_number: str
+    device_name: str
+    file_references: List[MFTInformation] = field(default_factory=list)
+    directory_names: List[str] = field(default_factory=list)
 
-    def parse_prefetch_file(filepath):
-        try:
-            with open(filepath, 'rb') as f:
-                data = f.read()
+class PrefetchFile:
+    SIGNATURE = 0x41434353  # 'SCCA' in little-endian
+    
+    def __init__(self):
+        self.raw_bytes = None
+        self.source_filename = ""
+        self.source_created_on = None
+        self.source_modified_on = None
+        self.source_accessed_on = None
+        
+        self.header = None
+        self.file_metrics_offset = 0
+        self.file_metrics_count = 0
+        self.filename_strings_offset = 0
+        self.filename_strings_size = 0
+        self.volumes_info_offset = 0
+        self.volume_count = 0
+        self.volumes_info_size = 0
+        self.total_directory_count = -1
+        
+        self.last_run_times = []
+        self.volume_information = []
+        self.run_count = 0
+        self.parsing_error = False
+        
+        self.filenames = []
+        self.file_metrics = []
+
+    @classmethod
+    def open(cls, file_path: str) -> 'PrefetchFile':
+        with open(file_path, 'rb') as f:
+            raw_bytes = f.read()
+            return cls.from_bytes(raw_bytes, file_path)
+    
+    @staticmethod
+    def _decompress_win10_prefetch(data: bytes) -> bytes:
+        if data[:3] == b'MAM':
+            try:
+                size = struct.unpack("<I", data[4:8])[0]
+                compressed_data = data[8:]
                 
-                if len(data) < 0x100:
-                    print(f"File too small: {filepath}")
-                    return None
-                
-                file_stat = os.stat(filepath)
-                signature = data[:4]
-                
-                # Handle different prefetch formats
-                if signature == b'MAM\x04':  # Windows 10/11
-                    version = 30
-                    name_offset = 0x10
-                    name_length = 0x14
-                    metrics_offset = 0x64
-                    file_hash_offset = 0x4C
-                    vol_offset = 0x68
-                elif signature == b'MAM\x00':  # Older Windows
-                    version = struct.unpack_from('<I', data, 4)[0]
-                    name_offset = 0x10
-                    name_length = 0x14
-                    metrics_offset = 0x64
-                    file_hash_offset = 0x4C
-                    vol_offset = 0x68
-                elif signature == b'SCCA':  # Windows 8
-                    version = struct.unpack_from('<I', data, 4)[0]
-                    name_offset = 0x10
-                    name_length = 0x14
-                    metrics_offset = 0x64
-                    file_hash_offset = 0x4C
-                    vol_offset = 0x68
-                else:
-                    print(f"Unsupported prefetch format in {filepath}: {signature}")
-                    return None
-                
-                # Get executable name
-                filename = os.path.basename(filepath)
-                if '-' in filename:
-                    fallback_name = filename.split('-')[0]
-                else:
-                    fallback_name = filename.replace('.pf', '')
-                
-                try:
-                    name_offset_val = struct.unpack_from('<I', data, name_offset)[0]
-                    name_length_val = struct.unpack_from('<I', data, name_length)[0]
+                if os.name == 'nt':
+                    COMPRESSION_FORMAT_XPRESS_HUFF = 4
+                    ntdll = windll.ntdll
                     
-                    if (name_offset_val + name_length_val * 2) > len(data) or name_length_val == 0:
-                        executable_name = fallback_name
-                    else:
-                        executable_name = data[name_offset_val:name_offset_val+name_length_val*2].decode('utf-16le', errors='replace').rstrip('\x00')
-                except:
-                    executable_name = fallback_name
-                
-                try:
-                    metrics_offset_val = struct.unpack_from('<I', data, metrics_offset)[0]
-                    file_hash = struct.unpack_from('<I', data, file_hash_offset)[0]
-                except:
-                    metrics_offset_val = 0
-                    file_hash = 0
-                
-                # Parse execution metrics
-                run_count = 0
-                last_run_times = []
-                duration_info = {'total_ms': 0, 'last_ms': 0}
-                
-                if metrics_offset_val + 0x30 < len(data):
-                    try:
-                        run_count = struct.unpack_from('<I', data, metrics_offset_val + 4)[0]
-                        
-                        time_offset = metrics_offset_val + 8
-                        for _ in range(8):
-                            try:
-                                ft = struct.unpack_from('<Q', data, time_offset)[0]
-                                dt = filetime_to_dt(ft)
-                                if dt:
-                                    last_run_times.append(dt.strftime('%Y-%m-%d %H:%M:%S'))
-                            except:
-                                pass
-                            time_offset += 8
-                        
-                        duration_info = {
-                            'total_ms': struct.unpack_from('<I', data, metrics_offset_val + 0x20)[0] if metrics_offset_val + 0x20 < len(data) else 0,
-                            'last_ms': struct.unpack_from('<I', data, metrics_offset_val + 0x24)[0] if metrics_offset_val + 0x24 < len(data) else 0
-                        }
-                    except:
-                        pass
+                    compress_workspace_size = wintypes.ULONG()
+                    compress_fragment_workspace_size = wintypes.ULONG()
+                    
+                    status = ntdll.RtlGetCompressionWorkSpaceSize(
+                        COMPRESSION_FORMAT_XPRESS_HUFF,
+                        ctypes.byref(compress_workspace_size),
+                        ctypes.byref(compress_fragment_workspace_size)
+                    )
+                    
+                    if status != 0:
+                        raise Exception(f"RtlGetCompressionWorkSpaceSize failed with status {status}")
+                    
+                    workspace = (ctypes.c_ubyte * compress_fragment_workspace_size.value)()
+                    uncompressed_buffer = (ctypes.c_ubyte * size)()
+                    final_size = wintypes.ULONG()
+                    
+                    compressed_buffer = (ctypes.c_ubyte * len(compressed_data))()
+                    for i, b in enumerate(compressed_data):
+                        compressed_buffer[i] = b
+                    
+                    status = ntdll.RtlDecompressBufferEx(
+                        COMPRESSION_FORMAT_XPRESS_HUFF,
+                        uncompressed_buffer,
+                        size,
+                        compressed_buffer,
+                        len(compressed_data),
+                        ctypes.byref(final_size),
+                        workspace
+                    )
+                    
+                    if status != 0:
+                        raise Exception(f"RtlDecompressBufferEx failed with status {status}")
+                    
+                    return bytes(uncompressed_buffer)
+                else:
+                    raise NotImplementedError(
+                        "Windows 10/11 prefetch decompression is only supported on Windows."
+                    )
+            except Exception as e:
+                print(f"Error decompressing Windows 10/11 prefetch: {e}")
+                raise
+        return data
 
-                # =============================================
-                # Enhanced Volume Information Parsing
-                # =============================================
-                volume_info = []
-                volume_serial_numbers = set()
-                
-                try:
-                    for vol_entry in range(4):  # Typically 4 volume entries in prefetch
-                        try:
-                            entry_offset = struct.unpack_from('<I', data, vol_offset)[0]
-                            if entry_offset == 0:
-                                vol_offset += 4
-                                continue
-                            
-                            if entry_offset + 20 > len(data):
-                                vol_offset += 4
-                                continue
-                                
-                            # Extract volume metadata
-                            vol_creation = struct.unpack_from('<Q', data, entry_offset)[0]
-                            vol_serial = struct.unpack_from('<I', data, entry_offset + 8)[0]
-                            vol_path_len = struct.unpack_from('<I', data, entry_offset + 12)[0]
-                            
-                            # Skip if we can't read the full path
-                            if entry_offset + 16 + vol_path_len*2 > len(data):
-                                vol_offset += 4
-                                continue
-                                
-                            # Extract volume path
-                            vol_path = data[entry_offset+16:entry_offset+16+vol_path_len*2].decode('utf-16le', errors='replace').rstrip('\x00')
-                            
-                            # Determine volume type and name
-                            if vol_path.startswith('\\'):
-                                vol_type = 'Network'
-                                vol_name = vol_path.split('\\')[2] if len(vol_path.split('\\')) > 2 else vol_path
-                            else:
-                                vol_type = 'Local'
-                                vol_name = os.path.splitdrive(vol_path)[0]
-                            
-                            # Skip duplicate volumes (same serial number)
-                            if vol_serial in volume_serial_numbers:
-                                vol_offset += 4
-                                continue
-                                
-                            volume_serial_numbers.add(vol_serial)
-                            
-                            # Create detailed volume entry
-                            volume_entry = {
-                                'creation_time': filetime_to_dt(vol_creation).strftime('%Y-%m-%d %H:%M:%S') if vol_creation else None,
-                                'serial_number': f"{vol_serial:08X}",
-                                'serial_decimal': vol_serial,
-                                'path': vol_path,
-                                'type': vol_type,
-                                'name': vol_name,
-                                'device_type': None,
-                                'suspicious': False,
-                                'flags': []
-                            }
-                            
-                            # Determine device type for local volumes
-                            if vol_type == 'Local':
-                                if vol_name.lower() == 'c:':
-                                    volume_entry['device_type'] = 'System'
-                                elif any(vol_name.lower().startswith(d) for d in ['a:', 'b:']):
-                                    volume_entry['device_type'] = 'Floppy'
-                                elif any(vol_name.lower().startswith(d) for d in ['d:', 'e:', 'f:']):
-                                    volume_entry['device_type'] = 'Optical'
-                                else:
-                                    volume_entry['device_type'] = 'Storage'
-                            
-                            # Check for suspicious volume characteristics
-                            if vol_type == 'Network':
-                                if any(s in vol_path.lower() for s in ['temp', 'tmp', 'share']):
-                                    volume_entry['flags'].append('suspicious_network_share')
-                                    volume_entry['suspicious'] = True
-                            
-                            if vol_serial == 0:
-                                volume_entry['flags'].append('null_serial_number')
-                                volume_entry['suspicious'] = True
-                            
-                            if not vol_creation:
-                                volume_entry['flags'].append('missing_creation_time')
-                            
-                            volume_info.append(volume_entry)
-                            
-                        except Exception as e:
-                            print(f"Error parsing volume entry {vol_entry}: {str(e)}")
-                        finally:
-                            vol_offset += 4
-                            
-                except Exception as e:
-                    print(f"Error during volume parsing: {str(e)}")
-
-                # =============================================
-                # Enhanced File References Parsing
-                # =============================================
-                all_file_references = []
-                suspicious_files = []
-                dll_loading = []
-                directory_stats = {}
-
-                # Define detection criteria
-                SUSPICIOUS = {
-                    'extensions': {'.dll', '.exe', '.vbs', '.ps1', '.js', '.bat', '.cmd', '.scr', '.jar', '.msi', '.com'},
-                    'path_terms': {
-                        'temp': ['temp', 'tmp', 'cache', '\\~'],
-                        'appdata': ['appdata', 'localappdata', 'roaming'],
-                        'system': ['system32', 'syswow64', 'drivers\\'],
-                        'unusual': ['$recycle.bin', 'programdata', 'downloads', 'public\\']
-                    },
-                    'name_indicators': {
-                        'spaces': [' '],
-                        'special_chars': ['$', '@', '!', '#', '%'],
-                        'patterns': ['update', 'install', 'patch']
-                    }
-                }
-
-                try:
-                    file_refs_offset_pos = metrics_offset_val + 0x48
-                    if file_refs_offset_pos + 8 < len(data):
-                        file_refs_offset = struct.unpack_from('<I', data, file_refs_offset_pos)[0]
-                        file_refs_count = struct.unpack_from('<I', data, file_refs_offset_pos + 4)[0]
-                        
-                        if file_refs_offset > 0 and file_refs_count > 0:
-                            for i in range(min(file_refs_count, 1000)):  # Safety limit
-                                try:
-                                    entry_offset = file_refs_offset + (i * 12)
-                                    if entry_offset + 8 > len(data):
-                                        continue
-                                        
-                                    filename_offset = struct.unpack_from('<I', data, entry_offset + 4)[0]
-                                    if filename_offset + 4 > len(data):
-                                        continue
-                                    
-                                    filename_len = struct.unpack_from('<I', data, filename_offset)[0]
-                                    if filename_offset + 4 + filename_len*2 > len(data):
-                                        continue
-                                        
-                                    filename = data[filename_offset+4:filename_offset+4+filename_len*2].decode('utf-16le', errors='replace').rstrip('\x00')
-                                    
-                                    # Create base file entry
-                                    file_entry = {
-                                        'path': filename,
-                                        'name': os.path.basename(filename),
-                                        'directory': os.path.dirname(filename),
-                                        'extension': os.path.splitext(filename)[1].lower(),
-                                        'order': i+1,
-                                        'suspicious': False,
-                                        'flags': []
-                                    }
-
-                                    # Check for suspicious indicators
-                                    # 1. Extension check
-                                    if file_entry['extension'] in SUSPICIOUS['extensions']:
-                                        file_entry['flags'].append(f"suspicious_extension:{file_entry['extension']}")
-                                    
-                                    # 2. Path check
-                                    lower_path = filename.lower()
-                                    for category, terms in SUSPICIOUS['path_terms'].items():
-                                        for term in terms:
-                                            if term in lower_path:
-                                                file_entry['flags'].append(f"suspicious_path:{category}:{term}")
-                                                break
-                                    
-                                    # 3. Filename check
-                                    lower_name = file_entry['name'].lower()
-                                    # Check for special characters
-                                    for char in SUSPICIOUS['name_indicators']['special_chars']:
-                                        if char in file_entry['name']:
-                                            file_entry['flags'].append(f"suspicious_char:{char}")
-                                            break
-                                    
-                                    # Check for spaces
-                                    if ' ' in file_entry['name']:
-                                        file_entry['flags'].append("suspicious_space_in_name")
-                                    
-                                    # Check for long names
-                                    if len(file_entry['name']) > 50:
-                                        file_entry['flags'].append("suspicious_long_name")
-                                    
-                                    # Check for suspicious patterns
-                                    for pattern in SUSPICIOUS['name_indicators']['patterns']:
-                                        if pattern in lower_name:
-                                            file_entry['flags'].append(f"suspicious_pattern:{pattern}")
-                                    
-                                    # Mark as suspicious if any flags were raised
-                                    if file_entry['flags']:
-                                        file_entry['suspicious'] = True
-                                        suspicious_files.append(file_entry.copy())
-                                    
-                                    # Track all files
-                                    all_file_references.append(file_entry)
-                                    
-                                    # Track DLLs separately
-                                    if file_entry['extension'] == '.dll':
-                                        dll_entry = file_entry.copy()
-                                        dll_entry['load_order'] = len(dll_loading) + 1
-                                        dll_loading.append(dll_entry)
-                                        
-                                    # Update directory stats
-                                    dirname = file_entry['directory']
-                                    if dirname in directory_stats:
-                                        directory_stats[dirname]['count'] += 1
-                                        if file_entry['suspicious']:
-                                            directory_stats[dirname]['suspicious_count'] += 1
-                                    else:
-                                        directory_stats[dirname] = {
-                                            'count': 1,
-                                            'suspicious_count': 1 if file_entry['suspicious'] else 0
-                                        }
-                                        
-                                except Exception as e:
-                                    print(f"Error processing file reference {i}: {str(e)}")
-                                    continue
-                except Exception as e:
-                    print(f"Error parsing file references: {str(e)}")
-                
-                # Prepare directory analysis
-                directory_analysis = []
-                for dirname, stats in directory_stats.items():
-                    dir_analysis = {
-                        'path': dirname,
-                        'total_files': stats['count'],
-                        'suspicious_files': stats['suspicious_count'],
-                        'suspicious_ratio': (stats['suspicious_count'] / stats['count']) * 100 if stats['count'] > 0 else 0
-                    }
-                    directory_analysis.append(dir_analysis)
-                
-                # Sort directories by suspicious ratio
-                directory_analysis.sort(key=lambda x: x['suspicious_ratio'], reverse=True)
-
-                # Add forensic flags
-                forensic_flags = {
-                    'high_run_count': run_count > 100,
-                    'temp_files': any(('temp' in f['path'].lower() or 'tmp' in f['path'].lower()) for f in all_file_references),
-                    'scripts_loaded': any(f['extension'] in {'.vbs', '.ps1', '.js', '.bat', '.cmd'} for f in all_file_references),
-                    'suspicious_paths': any(('appdata' in f['path'].lower() or 'temp' in f['path'].lower()) for f in all_file_references),
-                    'unusual_name': ' ' in executable_name or len(executable_name) > 50,
-                    'multiple_volumes': len(volume_serial_numbers) > 1,
-                    'network_volumes': any(v['type'] == 'Network' for v in volume_info),
-                    'suspicious_volumes': any(v['suspicious'] for v in volume_info)
-                }
-                
-                # Prepare metadata fields with safe integer conversion
-                metadata = {
-                    'size': format_size(file_stat.st_size),
-                    'modified': datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
-                    'created': datetime.fromtimestamp(file_stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S'),
-                    'accessed': datetime.fromtimestamp(file_stat.st_atime).strftime('%Y-%m-%d %H:%M:%S'),
-                    'mode': oct(file_stat.st_mode),
-                    'inode': safe_int_convert(file_stat.st_ino),
-                    'device': safe_int_convert(file_stat.st_dev),
-                    'nlink': safe_int_convert(file_stat.st_nlink),
-                    'uid': safe_int_convert(file_stat.st_uid),
-                    'gid': safe_int_convert(file_stat.st_gid)
-                }
-                
-                # Prepare execution info fields
-                execution_info = {
-                    'count': run_count,
-                    'last_runs': json.dumps(last_run_times),
-                    'durations_total_ms': duration_info['total_ms'],
-                    'durations_last_ms': duration_info['last_ms'],
-                    'calculated_hash': hex(calculate_prefetch_hash(executable_name)),
-                    'stored_hash': hex(file_hash),
-                    'hash_match': calculate_prefetch_hash(executable_name) == file_hash
-                }
-                
-                return {
-                    'executable': executable_name,
-                    'filepath': filepath,
-                    'version': version,
-                    'metadata': metadata,
-                    'execution_info': execution_info,
-                    'volumes': {
-                        'all': volume_info,
-                        'suspicious': [v for v in volume_info if v['suspicious']],
-                        'stats': {
-                            'total': len(volume_info),
-                            'local': len([v for v in volume_info if v['type'] == 'Local']),
-                            'network': len([v for v in volume_info if v['type'] == 'Network']),
-                            'suspicious': len([v for v in volume_info if v['suspicious']])
-                        }
-                    },
-                    'files': {
-                        'all_references': all_file_references,
-                        'suspicious_references': suspicious_files,
-                        'dll_loading_order': dll_loading,
-                        'directory_analysis': directory_analysis,
-                        'stats': {
-                            'total_files': len(all_file_references),
-                            'suspicious_files': len(suspicious_files),
-                            'suspicious_ratio': (len(suspicious_files) / len(all_file_references)) * 100 if all_file_references else 0,
-                            'dll_count': len(dll_loading)
-                        }
-                    },
-                    'forensic_flags': forensic_flags
-                }
-                
+    @classmethod
+    def from_bytes(cls, data: bytes, source_filename: str = "") -> 'PrefetchFile':
+        data = cls._decompress_win10_prefetch(data)
+        
+        signature = struct.unpack_from("<I", data, 4)[0]
+        if signature != cls.SIGNATURE:
+            raise ValueError(f"Invalid signature: {signature:08X}, expected 'SCCA' (0x{cls.SIGNATURE:08X})")
+        
+        version = struct.unpack_from("<I", data, 0)[0]
+        
+        instance = cls()
+        instance.raw_bytes = data
+        instance.source_filename = source_filename
+        
+        if source_filename:
+            try:
+                stat_info = os.stat(source_filename)
+                instance.source_created_on = datetime.datetime.fromtimestamp(stat_info.st_ctime)
+                instance.source_modified_on = datetime.datetime.fromtimestamp(stat_info.st_mtime)
+                instance.source_accessed_on = datetime.datetime.fromtimestamp(stat_info.st_atime)
+            except Exception:
+                pass
+        
+        try:
+            if version == Version.WIN_XP_OR_2003:
+                instance._parse_version17()
+            elif version == Version.VISTA_OR_WIN7:
+                instance._parse_version23()
+            elif version == Version.WIN8X_OR_WIN2012X:
+                instance._parse_version26()
+            elif version == Version.WIN10_OR_WIN11 or version == Version.WIN11:
+                instance._parse_version30or31()
+            else:
+                raise ValueError(f"Unknown version: {version}")
+            
+            # Check for unusually high run count and adjust silently
+            if instance.run_count > 1000000:
+                instance.run_count = len([t for t in instance.last_run_times if t is not None]) or 0
+            
+            # Adjust run count if 0 but execution times exist
+            if instance.run_count == 0 and len(instance.last_run_times) > 0:
+                instance.run_count = len([t for t in instance.last_run_times if t is not None])
+        
         except Exception as e:
-            print(f"Error processing {filepath}: {str(e)}")
+            print(f"Error parsing prefetch file: {e}")
+            instance.parsing_error = True
+            
+        return instance
+    
+    def _parse_version17(self):
+        header_bytes = self.raw_bytes[:84]
+        self.header = Header.from_bytes(header_bytes)
+        
+        file_info_bytes = self.raw_bytes[84:152]
+        
+        self.file_metrics_offset = struct.unpack_from("<I", file_info_bytes, 0)[0]
+        self.file_metrics_count = struct.unpack_from("<I", file_info_bytes, 4)[0]
+        self.filename_strings_offset = struct.unpack_from("<I", file_info_bytes, 16)[0]
+        self.filename_strings_size = struct.unpack_from("<I", file_info_bytes, 20)[0]
+        self.volumes_info_offset = struct.unpack_from("<I", file_info_bytes, 24)[0]
+        self.volume_count = struct.unpack_from("<I", file_info_bytes, 28)[0]
+        self.volumes_info_size = struct.unpack_from("<I", file_info_bytes, 32)[0]
+        
+        raw_time = struct.unpack_from("<Q", file_info_bytes, 36)[0]
+        self.last_run_times = [self._filetime_to_datetime(raw_time)]
+        
+        self.run_count = struct.unpack_from("<I", file_info_bytes, 60)[0]
+        
+        self._parse_file_metrics(True)
+        self._parse_filenames()
+        self._parse_volume_info()
+    
+    def _parse_version23(self):
+        header_bytes = self.raw_bytes[:84]
+        self.header = Header.from_bytes(header_bytes)
+        
+        file_info_bytes = self.raw_bytes[84:156]
+        
+        self.file_metrics_offset = struct.unpack_from("<I", file_info_bytes, 0)[0]
+        self.file_metrics_count = struct.unpack_from("<I", file_info_bytes, 4)[0]
+        self.filename_strings_offset = struct.unpack_from("<I", file_info_bytes, 16)[0]
+        self.filename_strings_size = struct.unpack_from("<I", file_info_bytes, 20)[0]
+        self.volumes_info_offset = struct.unpack_from("<I", file_info_bytes, 24)[0]
+        self.volume_count = struct.unpack_from("<I", file_info_bytes, 28)[0]
+        self.volumes_info_size = struct.unpack_from("<I", file_info_bytes, 32)[0]
+        
+        run_time_offset = 44
+        self.last_run_times = []
+        for i in range(8):
+            raw_time = struct.unpack_from("<Q", file_info_bytes, run_time_offset)[0]
+            if raw_time > 0:
+                self.last_run_times.append(self._filetime_to_datetime(raw_time))
+            run_time_offset += 8
+        
+        self.run_count = struct.unpack_from("<I", file_info_bytes, run_time_offset)[0]
+        
+        self._parse_file_metrics(False)
+        self._parse_filenames()
+        self._parse_volume_info()
+    
+    def _parse_version26(self):
+        header_bytes = self.raw_bytes[:84]
+        self.header = Header.from_bytes(header_bytes)
+        
+        file_info_bytes = self.raw_bytes[84:224]
+        
+        self.file_metrics_offset = struct.unpack_from("<I", file_info_bytes, 0)[0]
+        self.file_metrics_count = struct.unpack_from("<I", file_info_bytes, 4)[0]
+        self.filename_strings_offset = struct.unpack_from("<I", file_info_bytes, 16)[0]
+        self.filename_strings_size = struct.unpack_from("<I", file_info_bytes, 20)[0]
+        self.volumes_info_offset = struct.unpack_from("<I", file_info_bytes, 24)[0]
+        self.volume_count = struct.unpack_from("<I", file_info_bytes, 28)[0]
+        self.volumes_info_size = struct.unpack_from("<I", file_info_bytes, 32)[0]
+        self.total_directory_count = struct.unpack_from("<I", file_info_bytes, 36)[0]
+        
+        run_time_offset = 44
+        self.last_run_times = []
+        for i in range(8):
+            raw_time = struct.unpack_from("<Q", file_info_bytes, run_time_offset)[0]
+            if raw_time > 0:
+                self.last_run_times.append(self._filetime_to_datetime(raw_time))
+            run_time_offset += 8
+        
+        self.run_count = struct.unpack_from("<I", file_info_bytes, run_time_offset)[0]
+        
+        self._parse_file_metrics(False)
+        self._parse_filenames()
+        self._parse_volume_info()
+    
+    def _parse_version30or31(self):
+        header_bytes = self.raw_bytes[:84]
+        self.header = Header.from_bytes(header_bytes)
+        
+        file_info_bytes = self.raw_bytes[84:224]
+        
+        self.file_metrics_offset = struct.unpack_from("<I", file_info_bytes, 0)[0]
+        self.file_metrics_count = struct.unpack_from("<I", file_info_bytes, 4)[0]
+        self.filename_strings_offset = struct.unpack_from("<I", file_info_bytes, 16)[0]
+        self.filename_strings_size = struct.unpack_from("<I", file_info_bytes, 20)[0]
+        self.volumes_info_offset = struct.unpack_from("<I", file_info_bytes, 24)[0]
+        self.volume_count = struct.unpack_from("<I", file_info_bytes, 28)[0]
+        self.volumes_info_size = struct.unpack_from("<I", file_info_bytes, 32)[0]
+        self.total_directory_count = struct.unpack_from("<I", file_info_bytes, 36)[0]
+        
+        run_time_offset = 44
+        self.last_run_times = []
+        for i in range(8):
+            raw_time = struct.unpack_from("<Q", file_info_bytes, run_time_offset)[0]
+            if raw_time > 0:
+                self.last_run_times.append(self._filetime_to_datetime(raw_time))
+            run_time_offset += 8
+        
+        self.run_count = struct.unpack_from("<I", file_info_bytes, run_time_offset)[0]
+        
+        self._parse_file_metrics(False)
+        self._parse_filenames()
+        self._parse_volume_info()
+    
+    def _parse_file_metrics(self, is_version17: bool):
+        self.file_metrics = []
+        
+        if self.file_metrics_count == 0:
+            return
+        
+        metric_size = 20 if is_version17 else 32
+        
+        metrics_end = self.file_metrics_offset + (self.file_metrics_count * metric_size)
+        if metrics_end > len(self.raw_bytes):
+            print(f"Warning: File metrics extend beyond file size")
+            return
+        
+        try:
+            metrics_data = self.raw_bytes[self.file_metrics_offset:metrics_end]
+            
+            for i in range(self.file_metrics_count):
+                offset = i * metric_size
+                if offset + metric_size > len(metrics_data):
+                    print(f"Warning: Incomplete file metric at index {i}")
+                    break
+                
+                metric_data = metrics_data[offset:offset + metric_size]
+                self.file_metrics.append(FileMetric.from_bytes(metric_data, is_version17))
+        except Exception as e:
+            print(f"Error parsing file metrics: {e}")
+            return
+        
+        # Parse trace chains (if applicable, for newer versions)
+        if not is_version17:
+            trace_chain_offset = self.file_metrics_offset + (self.file_metrics_count * metric_size)
+            trace_chain_size = 12 if self.header.version <= Version.VISTA_OR_WIN7 else 16
+            trace_chain_end = trace_chain_offset + (self.file_metrics_count * trace_chain_size)
+            
+            if trace_chain_end <= len(self.raw_bytes):
+                try:
+                    trace_data = self.raw_bytes[trace_chain_offset:trace_chain_end]
+                    for i in range(self.file_metrics_count):
+                        offset = i * trace_chain_size
+                        if offset + trace_chain_size > len(trace_data):
+                            print(f"Warning: Incomplete trace chain at index {i}")
+                            break
+                        trace_chain_data = trace_data[offset:offset + trace_chain_size]
+                        has_loaded_count = self.header.version >= Version.WIN8X_OR_WIN2012X
+                        self.file_metrics[i].trace_chain = TraceChain.from_bytes(trace_chain_data, has_loaded_count)
+                except Exception as e:
+                    print(f"Error parsing trace chains: {e}")
+    
+    def _parse_filenames(self):
+        self.filenames = []
+        
+        if self.filename_strings_size == 0:
+            return
+        
+        if self.filename_strings_offset + self.filename_strings_size > len(self.raw_bytes):
+            print(f"Warning: Filename strings extend beyond file size")
+            return
+        
+        try:
+            filenames_data = self.raw_bytes[self.filename_strings_offset:
+                                            self.filename_strings_offset + self.filename_strings_size]
+            
+            filenames_str = filenames_data.decode('utf-16le')
+            self.filenames = [name for name in filenames_str.split('\x00') if name]
+        except Exception as e:
+            print(f"Error parsing filename strings: {e}")
+    
+    def _parse_volume_info(self):
+        self.volume_information = []
+        
+        if self.volumes_info_size == 0 or self.volume_count == 0:
+            print("Warning: No volume information in prefetch file")
+            return
+        
+        if self.volumes_info_offset + self.volumes_info_size > len(self.raw_bytes):
+            print(f"Warning: Volume info extends beyond file size (offset:{self.volumes_info_offset}, size:{self.volumes_info_size}, file size:{len(self.raw_bytes)})")
+            return
+        
+        vol_entry_size = 40
+        
+        try:
+            volume_data = self.raw_bytes[self.volumes_info_offset:
+                                        self.volumes_info_offset + self.volumes_info_size]
+            
+            for i in range(self.volume_count):
+                if i * vol_entry_size + vol_entry_size > len(volume_data):
+                    print(f"Warning: Not enough data for volume {i+1}/{self.volume_count}")
+                    break
+                
+                offset = i * vol_entry_size
+                vol_data = volume_data[offset:offset + vol_entry_size]
+                
+                try:
+                    vol_dev_offset = struct.unpack_from("<I", vol_data, 0)[0]
+                    vol_dev_num_char = struct.unpack_from("<I", vol_data, 4)[0]
+                    
+                    creation_time_raw = struct.unpack_from("<Q", vol_data, 8)[0]
+                    creation_time = self._filetime_to_datetime(creation_time_raw)
+                    
+                    serial_number = hex(struct.unpack_from("<I", vol_data, 16)[0])[2:].upper()
+                    
+                    if self.volumes_info_offset + vol_dev_offset + (vol_dev_num_char * 2) > len(self.raw_bytes):
+                        print(f"Warning: Device name for volume {i+1} extends beyond file size")
+                        device_name = "Unknown Device"
+                    else:
+                        try:
+                            dev_name_bytes = self.raw_bytes[self.volumes_info_offset + vol_dev_offset:
+                                                        self.volumes_info_offset + vol_dev_offset + (vol_dev_num_char * 2)]
+                            device_name = dev_name_bytes.decode('utf-16le')
+                            
+                            readable_name = self._get_readable_volume_name(device_name, serial_number)
+                            if readable_name:
+                                device_name = f"{device_name} ({readable_name})"
+                        except Exception as e:
+                            print(f"Warning: Error decoding device name: {e}")
+                            device_name = f"Device-{serial_number}"
+                    
+                    vol_info = VolumeInfo(vol_dev_offset, creation_time, serial_number, device_name)
+                    
+                    file_ref_offset = struct.unpack_from("<I", vol_data, 20)[0]
+                    file_ref_size = struct.unpack_from("<I", vol_data, 24)[0]
+                    
+                    dir_strings_offset = struct.unpack_from("<I", vol_data, 28)[0]
+                    num_dir_strings = struct.unpack_from("<I", vol_data, 32)[0]
+                    
+                    if self.volumes_info_offset + file_ref_offset + file_ref_size > len(self.raw_bytes):
+                        print(f"Warning: File references for volume {i+1} extend beyond file size")
+                    else:
+                        try:
+                            file_refs_index = self.volumes_info_offset + file_ref_offset
+                            file_ref_bytes = self.raw_bytes[file_refs_index:file_refs_index + file_ref_size]
+                            
+                            if len(file_ref_bytes) >= 8:
+                                file_ref_ver = struct.unpack_from("<I", file_ref_bytes, 0)[0]
+                                num_file_refs = struct.unpack_from("<I", file_ref_bytes, 4)[0]
+                                
+                                temp_index = 8
+                                while temp_index + 8 <= len(file_ref_bytes) and len(vol_info.file_references) < num_file_refs:
+                                    mft_data = file_ref_bytes[temp_index:temp_index + 8]
+                                    vol_info.file_references.append(MFTInformation.from_bytes(mft_data))
+                                    temp_index += 8
+                        except Exception as e:
+                            print(f"Warning: Error parsing file references: {e}")
+                    
+                    if self.volumes_info_offset + dir_strings_offset > len(self.raw_bytes):
+                        print(f"Warning: Directory strings for volume {i+1} extend beyond file size")
+                    else:
+                        try:
+                            dir_strings_index = self.volumes_info_offset + dir_strings_offset
+                            dir_strings_bytes = self.raw_bytes[dir_strings_index:]
+                            
+                            temp_index = 0
+                            for k in range(num_dir_strings):
+                                if temp_index + 2 > len(dir_strings_bytes):
+                                    break
+                                
+                                dir_char_count = struct.unpack_from("<H", dir_strings_bytes, temp_index)[0] * 2 + 2
+                                temp_index += 2
+                                
+                                if temp_index + dir_char_count > len(dir_strings_bytes):
+                                    break
+                                
+                                dir_name_bytes = dir_strings_bytes[temp_index:temp_index + dir_char_count]
+                                dir_name = dir_name_bytes.decode('utf-16le').rstrip('\x00')
+                                vol_info.directory_names.append(dir_name)
+                                
+                                temp_index += dir_char_count
+                        except Exception as e:
+                            print(f"Warning: Error parsing directory strings: {e}")
+                    
+                    self.volume_information.append(vol_info)
+                except Exception as e:
+                    print(f"Error parsing volume {i+1}: {e}")
+        except Exception as e:
+            print(f"Error parsing volume information: {e}")
+    
+    @staticmethod
+    def _filetime_to_datetime(filetime: int) -> datetime.datetime:
+        if filetime == 0:
             return None
+        
+        seconds_since_1601 = filetime / 10000000
+        epoch_diff = 11644473600
+        timestamp = seconds_since_1601 - epoch_diff
+        
+        return datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc)
+    
+    def _format_paths_with_drive_letters(self, paths):
+        formatted_paths = []
+        
+        for path in paths:
+            drive_letter = None
+            volume_id = None
+            
+            if "\\VOLUME{" in path:
+                for vol in self.volume_information:
+                    if vol.device_name in path:
+                        if "Drive" in vol.device_name and ":" in vol.device_name:
+                            match = re.search(r'Drive ([A-Z]):', vol.device_name)
+                            if match:
+                                drive_letter = match.group(1)
+                                volume_id = vol.device_name
+                                break
+            
+            if drive_letter and volume_id:
+                idx = path.find(volume_id)
+                if idx >= 0:
+                    end_idx = idx + len(volume_id)
+                    rest_of_path = path[end_idx:].lstrip("\\")
+                    formatted_path = f"{drive_letter}:\\{rest_of_path}"
+                    formatted_paths.append(formatted_path)
+                    continue
+        
+            formatted_paths.append(path)
+        
+        return formatted_paths
+
+    def save_to_sqlite(self, db_path: str):
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA integrity_check")
+            conn.close()
+        except sqlite3.DatabaseError:
+            print(f"Database at {db_path} is malformed. Recreating database...")
+            try:
+                os.remove(db_path)
+            except OSError as e:
+                print(f"Error removing corrupted database: {e}")
+                return
+
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS prefetch_data (
+                    filename TEXT,
+                    executable_name TEXT,
+                    hash TEXT,
+                    run_count INTEGER,
+                    last_executed TIMESTAMP,
+                    run_times JSON,
+                    volumes JSON,
+                    directories JSON,
+                    resources JSON,
+                    created_on TIMESTAMP,
+                    modified_on TIMESTAMP,
+                    accessed_on TIMESTAMP,
+                    PRIMARY KEY(filename, hash)
+                )
+            """)
+
+            filename = os.path.basename(self.source_filename) if self.source_filename else "Unknown"
+            most_recent = max([t for t in self.last_run_times if t is not None], default=None)
+            display_run_count = self.run_count
+            if display_run_count > 1000000:
+                display_run_count = len([t for t in self.last_run_times if t is not None])
+                if display_run_count == 0:
+                    display_run_count = None
+
+            drive_letters = {}
+            volume_pattern = re.compile(r'\\VOLUME\{[0-9a-f-]+\}', re.IGNORECASE)
+            
+            for vol in self.volume_information:
+                if "Drive" in vol.device_name and ":" in vol.device_name:
+                    match = re.search(r'Drive ([A-Z]):', vol.device_name)
+                    if match:
+                        drive_letter = match.group(1)
+                        drive_letters[vol.device_name] = drive_letter
+                        volume_match = volume_pattern.search(vol.device_name)
+                        if volume_match:
+                            volume_id = volume_match.group(0)
+                            drive_letters[volume_id] = drive_letter
+
+            volumes_data = []
+            directories_data = []
+            for i, vol in enumerate(self.volume_information, 1):
+                drive_letter = drive_letters.get(vol.device_name)
+                vol_id = f"{drive_letter}:" if drive_letter else f"Volume{i}"
+                volumes_data.append({
+                    "volume_id": vol_id,
+                    "device_name": vol.device_name,
+                    "creation_time": str(vol.creation_time) if vol.creation_time else None,
+                    "serial_number": vol.serial_number
+                })
+                
+                formatted_dirs = []
+                for dir_name in vol.directory_names:
+                    formatted_dir = dir_name
+                    volume_match = volume_pattern.search(dir_name)
+                    if volume_match and drive_letter:
+                        volume_id = volume_match.group(0)
+                        rest_of_path = dir_name[volume_match.end():].lstrip("\\")
+                        formatted_dir = f"{drive_letter}:\\{rest_of_path}"
+                    formatted_dirs.append(formatted_dir)
+                directories_data.extend(formatted_dirs)
+
+            formatted_resources = []
+            for name in self.filenames:
+                formatted_name = name
+                volume_match = volume_pattern.search(name)
+                if volume_match:
+                    volume_id = volume_match.group(0)
+                    drive_letter = drive_letters.get(volume_id)
+                    if not drive_letter:
+                        for vol in self.volume_information:
+                            if volume_id in vol.device_name:
+                                drive_letter = drive_letters.get(vol.device_name)
+                                if drive_letter:
+                                    break
+                    if drive_letter:
+                        rest_of_path = name[volume_match.end():].lstrip("\\")
+                        formatted_name = f"{drive_letter}:\\{rest_of_path}"
+                formatted_resources.append(formatted_name)
+
+            run_times_data = [str(t) for t in sorted([t for t in self.last_run_times if t is not None], reverse=True)]
+
+            # Check for existing record with the same filename and hash
+            cursor.execute("""
+                SELECT COUNT(*) FROM prefetch_data
+                WHERE filename = ? AND hash = ?
+            """, (filename, self.header.hash))
+            if cursor.fetchone()[0] > 0:
+                conn.close()
+                return
+
+            cursor.execute("""
+                INSERT INTO prefetch_data (
+                    filename, executable_name, hash, run_count, last_executed,
+                    run_times, volumes, directories, resources,
+                    created_on, modified_on, accessed_on
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                filename,
+                self.header.executable_filename,
+                self.header.hash,
+                display_run_count,
+                most_recent,
+                json.dumps(run_times_data),
+                json.dumps(volumes_data),
+                json.dumps(directories_data),
+                json.dumps(formatted_resources),
+                self.source_created_on,
+                self.source_modified_on,
+                self.source_accessed_on
+            ))
+
+            conn.commit()
+        except sqlite3.DatabaseError as e:
+            print(f"Database error: {e}")
+        finally:
+            conn.close()
+
+    def __str__(self) -> str:
+        result = []
+
+        filename = os.path.basename(self.source_filename) if self.source_filename else "Unknown"
+        result.append(f"Prefetch File: {filename}")
+
+        result.append(f"Executable Name: {self.header.executable_filename}")
+        result.append(f"Hash: {self.header.hash}")
+
+        display_run_count = self.run_count
+        if display_run_count > 1000000:
+            display_run_count = len([t for t in self.last_run_times if t is not None])
+            if display_run_count == 0:
+                display_run_count = "Unknown (parsing error)"
+        
+        result.append(f"Run Count: {display_run_count}")
+
+        if self.last_run_times and len(self.last_run_times) > 0:
+            most_recent = max([t for t in self.last_run_times if t is not None], default=None)
+            if most_recent:
+                result.append(f"Last Executed: {most_recent}")
+        
+            valid_times = [t for t in self.last_run_times if t is not None]
+            if len(valid_times) > 1:
+                result.append("Execution Timeline:")
+                for i, time in enumerate(sorted(valid_times, reverse=True), 1):
+                    result.append(f"  {i}. {time}")
+
+        if self.volume_information:
+            result.append("Volume Information:")
+        
+            drive_letters = {}
+            volume_pattern = re.compile(r'\\VOLUME\{[0-9a-f-]+\}', re.IGNORECASE)
+        
+            for vol in self.volume_information:
+                if "Drive" in vol.device_name and ":" in vol.device_name:
+                    match = re.search(r'Drive ([A-Z]):', vol.device_name)
+                    if match:
+                        drive_letter = match.group(1)
+                        drive_letters[vol.device_name] = drive_letter
+                        volume_match = volume_pattern.search(vol.device_name)
+                        if volume_match:
+                            volume_id = volume_match.group(0)
+                            drive_letters[volume_id] = drive_letter
+
+            for i, vol in enumerate(self.volume_information, 1):
+                drive_letter = drive_letters.get(vol.device_name)
+                vol_id = f"{drive_letter}:" if drive_letter else f"Volume{i}"
+                result.append(f"Volume {vol_id}:")
+                result.append(f"  Device Name: {vol.device_name}")
+                result.append(f"  Creation Date: {vol.creation_time}")
+                result.append(f"  Serial Number: {vol.serial_number}")
+            
+                if vol.directory_names:
+                    result.append(f"  Directories Referenced:")
+                    formatted_dirs = []
+                    for dir_name in vol.directory_names:
+                        formatted_dir = dir_name
+                        volume_match = volume_pattern.search(dir_name)
+                        if volume_match and drive_letter:
+                            volume_id = volume_match.group(0)
+                            rest_of_path = dir_name[volume_match.end():].lstrip("\\")
+                            formatted_dir = f"{drive_letter}:\\{rest_of_path}"
+                        formatted_dirs.append(formatted_dir)
+                    for dir_path in formatted_dirs:
+                        result.append(f"    {dir_path}")
+
+        if self.filenames:
+            result.append("Resources Loaded:")
+            formatted_resources = []
+            for name in self.filenames:
+                formatted_name = name
+                volume_match = volume_pattern.search(name)
+                if volume_match:
+                    volume_id = volume_match.group(0)
+                    drive_letter = drive_letters.get(volume_id)
+                    if not drive_letter:
+                        for vol in self.volume_information:
+                            if volume_id in vol.device_name:
+                                drive_letter = drive_letters.get(vol.device_name)
+                                if drive_letter:
+                                    break
+                    if drive_letter:
+                        rest_of_path = name[volume_match.end():].lstrip("\\")
+                        formatted_name = f"{drive_letter}:\\{rest_of_path}"
+                formatted_resources.append(formatted_name)
+        
+            for i, name in enumerate(formatted_resources, 1):
+                result.append(f"  {i}. {name}")
+
+        return "\n".join(result)
+
+    @staticmethod
+    def _get_readable_volume_name(device_name, serial_number):
+        guid_match = re.search(r'\{([0-9a-f-]+)\}', device_name, re.IGNORECASE)
+        
+        if guid_match:
+            guid = guid_match.group(1)
+            
+            if os.name == 'nt':
+                try:
+                    from ctypes.wintypes import DWORD, LPCWSTR, LPWSTR
+                    
+                    DRIVE_UNKNOWN = 0
+                    DRIVE_REMOVABLE = 2
+                    DRIVE_FIXED = 3
+                    DRIVE_REMOTE = 4
+                    DRIVE_CDROM = 5
+                    DRIVE_RAMDISK = 6
+                    
+                    drives = []
+                    bitmask = windll.kernel32.GetLogicalDrives()
+                    for letter in range(ord('A'), ord('Z')+1):
+                        if bitmask & 1:
+                            drives.append(chr(letter))
+                        bitmask >>= 1
+                    
+                    for drive in drives:
+                        drive_path = f"{drive}:\\"
+                        
+                        drive_type = windll.kernel32.GetDriveTypeW(LPCWSTR(drive_path))
+                        
+                        vol_name_buf = ctypes.create_unicode_buffer(1024)
+                        fs_name_buf = ctypes.create_unicode_buffer(1024)
+                        serial_num = DWORD(0)
+                        
+                        result = windll.kernel32.GetVolumeInformationW(
+                            LPCWSTR(drive_path),
+                            vol_name_buf,
+                            ctypes.sizeof(vol_name_buf),
+                            ctypes.byref(serial_num),
+                            None,
+                            None,
+                            fs_name_buf,
+                            ctypes.sizeof(fs_name_buf)
+                        )
+                        
+                        if result:
+                            drive_serial = format(serial_num.value, '08X')
+                            
+                            if drive_serial == serial_number:
+                                vol_label = vol_name_buf.value
+                                drive_type_str = {
+                                    DRIVE_UNKNOWN: "Unknown",
+                                    DRIVE_REMOVABLE: "Removable",
+                                    DRIVE_FIXED: "Fixed",
+                                    DRIVE_REMOTE: "Network",
+                                    DRIVE_CDROM: "CD-ROM",
+                                    DRIVE_RAMDISK: "RAM Disk"
+                                }.get(drive_type, "Unknown")
+                                
+                                if vol_label:
+                                    return f"Drive {drive}: '{vol_label}' ({drive_type_str})"
+                                else:
+                                    return f"Drive {drive}: ({drive_type_str})"
+                
+                    return None
+                    
+                except Exception as e:
+                    return f"Volume ID: {guid}"
+            
+            return f"Volume ID: {guid}"
+        
+        return None
+
+def process_prefetch_files(case_path: str = None, offline_mode: bool = False):
+    """
+    Process prefetch files and store results in a SQLite database with case management.
+    
+    Args:
+        case_path (str, optional): Path to the case directory for offline analysis.
+        offline_mode (bool): If True, process files from case_path/Target_Artifacts/Prefetch.
+    """
+    # Set the database path and prefetch directory
+    default_db_path = "prefetch_data.db"
+    default_prefetch_dir = "C:\\Windows\\Prefetch"
+    
+    if offline_mode and case_path:
+        artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
+        os.makedirs(artifacts_dir, exist_ok=True)
+        db_path = os.path.join(artifacts_dir, 'prefetch_data.db')
+        prefetch_dir = os.path.join(artifacts_dir, 'Prefetch')
+        print(f"Offline mode: Using prefetch files from {prefetch_dir}")
+        print(f"Database will be saved to: {db_path}")
+    else:
+        # For live mode, check if we're running within Crow Eye with a case directory
+        # This ensures the database is saved to the case directory when run from Crow Eye
+        if case_path and os.path.exists(case_path):
+            artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
+            os.makedirs(artifacts_dir, exist_ok=True)
+            db_path = os.path.join(artifacts_dir, 'prefetch_data.db')
+            print(f"Live mode with case: Using prefetch files from {default_prefetch_dir}")
+            print(f"Database will be saved to: {db_path}")
+        else:
+            db_path = default_db_path
+            print(f"Live mode: Using prefetch files from {default_prefetch_dir}")
+            print(f"Database will be saved to: {db_path}")
+        prefetch_dir = default_prefetch_dir
+    
+    parsed_files = []
+    total_pf_files = 0
+    failed_files = []
 
     try:
-        # Set the database path based on case_path if provided
-        db_path = 'prefetch.db'  # Default path
-        if case_path:
-            # If a case path is provided, use it for the database
-            artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
-            if not os.path.exists(artifacts_dir):
-                os.makedirs(artifacts_dir, exist_ok=True)
-            db_path = os.path.join(artifacts_dir, 'prefetch.db')
-            print(f"Using case path for database: {db_path}")
-            
-        # Initialize database
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
-        cursor = conn.cursor()
+        if not os.path.isdir(prefetch_dir):
+            raise NotADirectoryError(f"Prefetch directory not found: {prefetch_dir}")
         
-        # Process prefetch files
-        if offline_mode and case_path:
-            # Use the prefetch directory from the case path for offline analysis
-            prefetch_dir = os.path.join(case_path, 'Target_Artifacts', 'Prefetch')
-            print(f"Offline mode: Using prefetch files from {prefetch_dir}")
-        else:
-            # Use the local Windows prefetch directory
-            prefetch_dir = 'C:\\Windows\\Prefetch'
+        files = [f for f in os.listdir(prefetch_dir) if f.lower().endswith('.pf')]
+        total_pf_files = len(files)
         
-        # Create table with enhanced schema - Updated column types to handle large integers
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS prefetch_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                executable TEXT NOT NULL, 
-                filepath TEXT UNIQUE NOT NULL,
-                version INTEGER,
-                
-                -- Metadata columns (changed problematic INTEGER columns to TEXT for large values)
-                size TEXT,
-                modified TEXT,
-                created TEXT,
-                accessed TEXT,
-                mode TEXT,
-                inode_number TEXT,  -- Changed from INTEGER to TEXT
-                device TEXT,        -- Changed from INTEGER to TEXT  
-                nlink TEXT,         -- Changed from INTEGER to TEXT
-                uid TEXT,           -- Changed from INTEGER to TEXT
-                gid TEXT,           -- Changed from INTEGER to TEXT
-                
-                -- Execution info columns
-                run_count INTEGER,
-                last_runs TEXT,
-                durations_total_ms INTEGER,
-                durations_last_ms INTEGER,
-                calculated_hash TEXT,
-                stored_hash TEXT,
-                hash_match INTEGER,
-                
-                -- Volume data (as JSON)
-                volume_info TEXT,
-                suspicious_volumes TEXT,
-                volume_stats TEXT,
-                
-                -- File reference data (as JSON)
-                all_file_references TEXT,
-                suspicious_files TEXT,
-                dll_loading TEXT,
-                directory_stats TEXT,
-                file_stats TEXT,
-                
-                -- Forensic flags
-                forensic_flags TEXT,
-                processed_time TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Process prefetch files
-        if not os.path.exists(prefetch_dir):
-            print(f"Prefetch directory not found: {prefetch_dir}")
-            return
-            
-        files = [f for f in os.listdir(prefetch_dir) if f.endswith('.pf')]
-        total_files = len(files)
-        processed_count = 0
-        inserted_count = 0
-        failed_files = []
-
-        for filename in files:
-            filepath = os.path.join(prefetch_dir, filename)
-            data = parse_prefetch_file(filepath)
-            
-            if data:
-                try:
-                    cursor.execute('''
-                        INSERT OR IGNORE INTO prefetch_data (
-                            executable, filepath, version,
-                            size, modified, created, accessed, mode, inode_number, device, nlink, uid, gid,
-                            run_count, last_runs, durations_total_ms, durations_last_ms, calculated_hash, stored_hash, hash_match,
-                            volume_info, suspicious_volumes, volume_stats,
-                            all_file_references, suspicious_files, dll_loading, directory_stats, file_stats,
-                            forensic_flags, processed_time
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        data['executable'],
-                        data['filepath'],
-                        data['version'],
-
-                        # Metadata (now safely converted)
-                        data['metadata']['size'],
-                        data['metadata']['modified'],
-                        data['metadata']['created'],
-                        data['metadata']['accessed'],
-                        data['metadata']['mode'],
-                        str(data['metadata']['inode']),    # Convert to string
-                        str(data['metadata']['device']),   # Convert to string
-                        str(data['metadata']['nlink']),    # Convert to string
-                        str(data['metadata']['uid']),      # Convert to string
-                        str(data['metadata']['gid']),      # Convert to string
-
-                        # Execution info
-                        data['execution_info']['count'],
-                        data['execution_info']['last_runs'],
-                        data['execution_info']['durations_total_ms'],
-                        data['execution_info']['durations_last_ms'],
-                        data['execution_info']['calculated_hash'],
-                        data['execution_info']['stored_hash'],
-                        int(data['execution_info']['hash_match']),
-
-                        # Volume data
-                        json.dumps(data['volumes']['all']),
-                        json.dumps(data['volumes']['suspicious']),
-                        json.dumps(data['volumes']['stats']),
-
-                        # File reference data
-                        json.dumps(data['files']['all_references']),
-                        json.dumps(data['files']['suspicious_references']),
-                        json.dumps(data['files']['dll_loading_order']),
-                        json.dumps(data['files']['directory_analysis']),
-                        json.dumps(data['files']['stats']),
-
-                        # Forensic flags
-                        json.dumps(data['forensic_flags']),
-
-                        # Explicit processed_time value
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    ))
-                    if cursor.rowcount > 0:
-                        inserted_count += 1
-                    conn.commit()
-                except sqlite3.Error as e:
-                    print(f"Database error for {filename}: {str(e)}")
-                    conn.rollback()
-                    failed_files.append(filename)
-            else:
+        for idx, filename in enumerate(files, 1):
+            file_path = os.path.join(prefetch_dir, filename)
+            try:
+                prefetch = PrefetchFile.open(file_path)
+                prefetch.save_to_sqlite(db_path)
+                parsed_files.append(filename)
+                print(f"Processed {filename} ({idx}/{total_pf_files})")
+            except Exception as e:
+                print(f"Error processing {filename}: {e}")
                 failed_files.append(filename)
-
-            processed_count += 1
-            if processed_count % 10 == 0 or processed_count == total_files:
-                progress = (processed_count / total_files) * 100
-                print(f"\rProcessing: {processed_count}/{total_files} ({progress:.1f}%)", end='')
-
+            
+            # Progress update every 10 files or at the end
+            if idx % 10 == 0 or idx == total_pf_files:
+                progress = (idx / total_pf_files) * 100
+                print(f"\rProgress: {idx}/{total_pf_files} ({progress:.1f}%)", end='')
+        
         print("\n")
-        print(f"Successfully processed {inserted_count}/{total_files} prefetch files")
+        percentage = (len(parsed_files) / total_pf_files * 100) if total_pf_files > 0 else 0
+        print(f"Successfully processed {len(parsed_files)}/{total_pf_files} prefetch files ({percentage:.2f}%)")
+        
         if failed_files:
-            print(f"Failed to process {len(failed_files)} files")
             failed_log_path = os.path.join(os.path.dirname(db_path), 'failed_prefetch_files.txt')
             with open(failed_log_path, 'w') as f:
                 for file in failed_files:
                     f.write(f"{file}\n")
-            print(f"List of failed files saved to {failed_log_path}")
-        print(f"\033[92mPrefetch forensic analysis completed!\nDatabase saved to: {db_path}\033[0m")
-    finally:
-        if 'conn' in locals():
-            conn.close()
+            print(f"Failed to process {len(failed_files)} files. List saved to {failed_log_path}")
+        
+        print(f"\033[92mPrefetch forensic analysis completed! Database saved to: {db_path}\033[0m")
+        
+    except Exception as e:
+        print(f"Error accessing prefetch directory: {e}")
+        if total_pf_files == 0:
+            print("No .pf files found in the prefetch directory.")
+
+def prefetch_claw(case_path=None, offline_mode=False):
+    """Wrapper function for process_prefetch_files to maintain compatibility with Crow Eye.
+    
+    Args:
+        case_path (str, optional): Path to the case directory.
+        offline_mode (bool): If True, process files from case_path/Target_Artifacts/Prefetch.
+    """
+    return process_prefetch_files(case_path=case_path, offline_mode=offline_mode)
 
 if __name__ == "__main__":
-    prefetch_claw()
+    # Example usage: Live mode
+    process_prefetch_files()
+    
+    # Example usage: Offline mode
+    # process_prefetch_files(case_path="path/to/case", offline_mode=True)

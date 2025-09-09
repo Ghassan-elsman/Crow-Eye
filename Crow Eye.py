@@ -54,7 +54,11 @@ from PyQt5 import QtGui
 import importlib.metadata
 
 def setup_virtual_environment():
-    """Create and activate virtual environment for Crow Eye."""
+    """Create and activate virtual environment for Crow Eye.
+    
+    This function handles the creation and activation of a virtual environment for Crow Eye.
+    It uses subprocess.Popen instead of os.execv to properly handle paths with spaces and special characters.
+    """
     init()  # Initialize colorama
     
     # Check if already in virtual environment
@@ -88,7 +92,11 @@ def setup_virtual_environment():
         if os.path.exists(venv_python):
             print(Fore.GREEN + 'Restarting with virtual environment...' + Fore.RESET)
             # Restart the script using the virtual environment's Python
-            os.execv(venv_python, [venv_python] + sys.argv)
+            # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
+            # This fixes issues with paths like 'C:\Arab con\Crow-Eye-Crow-Eye' where os.execv fails
+            script_path = os.path.abspath(sys.argv[0])
+            subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
+            sys.exit(0)  # Exit current process after starting the new one
         else:
             print(Fore.RED + f'Virtual environment Python not found at {venv_python}' + Fore.RESET)
             input('Press Enter to continue with global Python environment...')
@@ -1084,6 +1092,76 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"[SecurityLogs] Error loading data: {str(e)}")
     
+    def create_amcache_table_tabs(self):
+        """Create table tabs for each Amcache table based on the schema"""
+        # Import the schema from amcacheparser.py
+        try:
+            from Artifacts_Collectors.amcacheparser import AMCACHE_SCHEMAS
+        except ImportError:
+            print("[Amcache] Error importing AMCACHE_SCHEMAS from amcacheparser.py")
+            return
+            
+        # Create a tab for each table in the schema
+        for table_name, columns in AMCACHE_SCHEMAS.items():
+            # Create a tab for this table
+            tab = QtWidgets.QWidget()
+            tab.setObjectName(f"Amcache_{table_name}_tab")
+            
+            # Create a layout for the tab
+            layout = QtWidgets.QVBoxLayout(tab)
+            layout.setObjectName(f"verticalLayout_Amcache_{table_name}")
+            
+            # Create a table widget for this table
+            table_widget = QtWidgets.QTableWidget(tab)
+            table_widget.setObjectName(f"Amcache_{table_name}_table")
+            
+            # Set table properties
+            table_widget.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+            table_widget.setAlternatingRowColors(True)
+            table_widget.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+            table_widget.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+            table_widget.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+            table_widget.setSortingEnabled(True)
+            
+            # Set up columns based on the schema (include 'id' column)
+            # Add 'id' as the first column, followed by schema columns
+            table_widget.setColumnCount(len(columns) + 1)
+            
+            # Set 'id' as the first column
+            item = QtWidgets.QTableWidgetItem('id')
+            table_widget.setHorizontalHeaderItem(0, item)
+            
+            # Set remaining columns from schema
+            for i, column_name in enumerate(columns):
+                item = QtWidgets.QTableWidgetItem(column_name)
+                table_widget.setHorizontalHeaderItem(i + 1, item)
+            
+            # Ensure headers are fully visible
+            table_widget.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+            table_widget.horizontalHeader().setStretchLastSection(True)
+            
+            # Store the table widget as an attribute of the class
+            setattr(self, f"Amcache_{table_name}_table", table_widget)
+            
+            # Apply unified table style
+            from styles import CrowEyeStyles
+            self.apply_table_styles(table_widget)
+            
+            # Add the table widget to the layout
+            layout.addWidget(table_widget)
+            
+            # Add the tab to the Amcache tab widget
+            self.Amcache_tab_widget.addTab(tab, table_name)
+            
+            # Set a friendly display name for the tab
+            friendly_name = table_name
+            if table_name.startswith("Inventory"):
+                friendly_name = table_name[9:]  # Remove "Inventory" prefix
+            self.Amcache_tab_widget.setTabText(
+                self.Amcache_tab_widget.indexOf(tab), 
+                friendly_name
+            )
+    
     def load_shimcache_data(self):
         """Load ShimCache data from the shimcache database"""
         try:
@@ -1127,6 +1205,84 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             conn.close()
         except Exception as e:
             print(f"[ShimCache] Error loading data: {str(e)}")
+    
+    def load_amcache_data(self):
+        """Load Amcache data from the amcache database"""
+        try:
+            # Get the database path from case configuration
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                print("[Amcache] No active case found")
+                return
+                
+            # Get the current case name
+            case_name = os.path.basename(self.case_paths.get('case_root', ''))
+            if not case_name:
+                print("[Amcache] Invalid case name, cannot load Amcache data")
+                return
+                
+            # Load the current case configuration
+            config_dir, _ = self.get_app_config_dir()
+            config_path = os.path.join(config_dir, f"case_{case_name}.json")
+            
+            try:
+                with open(config_path, 'r') as config_file:
+                    case_config = json.load(config_file)
+                    
+                # Get the database path from the case configuration
+                db_path = case_config.get('databases', {}).get('amcache')
+                if not db_path:
+                    print("[Amcache] Database path not found in case configuration")
+                    return
+            except Exception as e:
+                print(f"[Amcache Error] Failed to load case configuration: {str(e)}")
+                return
+                
+            # Check if database exists
+            if not os.path.exists(db_path):
+                print(f"[Amcache] Database not found at: {db_path}")
+                print(f"[Amcache] Please run Amcache analysis first to create the database")
+                return
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Get all tables in the Amcache database
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = cursor.fetchall()
+            
+            # Load data for each table
+            for table in tables:
+                table_name = table[0]
+                # Skip sqlite_sequence table
+                if table_name == 'sqlite_sequence':
+                    continue
+                    
+                # Get the corresponding table widget attribute name
+                table_widget_name = f"Amcache_{table_name}_table"
+                
+                if hasattr(self, table_widget_name):
+                    cursor.execute(f"SELECT * FROM {table_name}")
+                    rows = cursor.fetchall()
+                    
+                    table_widget = getattr(self, table_widget_name)
+                    table_widget.setRowCount(0)
+                    
+                    for row in rows:
+                        row_index = table_widget.rowCount()
+                        table_widget.insertRow(row_index)
+                        for col_index, value in enumerate(row):
+                            item = QtWidgets.QTableWidgetItem(str(value))
+                            table_widget.setItem(row_index, col_index, item)
+                    
+                    print(f"[Amcache] Successfully loaded {len(rows)} records from {table_name} table")
+                    
+                    # Apply unified table style
+                    from styles import CrowEyeStyles
+                    self.apply_table_styles(table_widget)
+            
+            conn.close()
+        except Exception as e:
+            print(f"[Amcache] Error loading data: {str(e)}")
     
     # ============================================================================
     # ENHANCED GROUPED DATA LOADING METHODS
@@ -2146,13 +2302,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 case_root = self.case_paths.get('case_root')
                 artifacts_dir = self.case_paths.get('artifacts_dir')
                 if artifacts_dir and os.path.exists(artifacts_dir):
-                    db_path = os.path.join(artifacts_dir, 'prefetch.db')
+                    db_path = os.path.join(artifacts_dir, 'prefetch_data.db')
                 elif case_root:
-                    db_path = os.path.join(case_root, 'Target_Artifacts', 'prefetch.db')
+                    db_path = os.path.join(case_root, 'Target_Artifacts', 'prefetch_data.db')
                 else:
-                    db_path = 'prefetch.db'
+                    db_path = 'prefetch_data.db'
             else:
-                db_path = 'prefetch.db'
+                db_path = 'prefetch_data.db'
             
             if not os.path.exists(db_path):
                 print(f"[Prefetch Error] Database file not found: {db_path}")
@@ -2166,6 +2322,76 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             success = self.load_registry_data_to_table("prefetch_data", self.Prefetch_table, db_path)
             if success:
                 print(f"[Prefetch] Successfully loaded records from prefetch_data")
+                
+                # Format JSON columns for better display
+                for row in range(self.Prefetch_table.rowCount()):
+                    # Format Run Times column (index 5)
+                    run_times_item = self.Prefetch_table.item(row, 5)
+                    if run_times_item and run_times_item.text():
+                        try:
+                            run_times = json.loads(run_times_item.text())
+                            formatted_times = " | ".join(run_times)
+                            run_times_item.setText(formatted_times)
+                        except json.JSONDecodeError:
+                            pass
+                    
+                    # Format Volumes column (index 6)
+                    volumes_item = self.Prefetch_table.item(row, 6)
+                    if volumes_item and volumes_item.text():
+                        try:
+                            volumes = json.loads(volumes_item.text())
+                            volume_details = []
+                            for v in volumes:
+                                vol_id = v.get('volume_id', 'Unknown')
+                                device_name = v.get('device_name', '')
+                                creation_time = v.get('creation_time', '')
+                                serial_num = v.get('serial_number', '')
+                                
+                                # Format creation time if available
+                                creation_str = ''
+                                if creation_time and creation_time.lower() != 'none':
+                                    try:
+                                        # Try to parse and format the datetime
+                                        creation_dt = datetime.datetime.fromisoformat(creation_time)
+                                        creation_str = f", Created: {creation_dt.strftime('%Y-%m-%d')}"
+                                    except:
+                                        creation_str = f", Created: {creation_time}"
+                                
+                                # Format volume info with all available details in a more compact way
+                                vol_info = f"{vol_id}"
+                                if device_name:
+                                    # Extract just the volume name without the full path
+                                    device_short = device_name.split('\\')[-1] if '\\' in device_name else device_name
+                                    vol_info += f" ({device_short})"
+                                if serial_num:
+                                    vol_info += f", SN:{serial_num}"
+                                vol_info += creation_str
+                                
+                                volume_details.append(vol_info)
+                            formatted_volumes = " | ".join(volume_details)
+                            volumes_item.setText(formatted_volumes)
+                        except json.JSONDecodeError:
+                            pass
+                    
+                    # Format Directories column (index 7)
+                    dirs_item = self.Prefetch_table.item(row, 7)
+                    if dirs_item and dirs_item.text():
+                        try:
+                            dirs = json.loads(dirs_item.text())
+                            formatted_dirs = " | ".join(dirs)
+                            dirs_item.setText(formatted_dirs)
+                        except json.JSONDecodeError:
+                            pass
+                    
+                    # Format Resources column (index 8)
+                    resources_item = self.Prefetch_table.item(row, 8)
+                    if resources_item and resources_item.text():
+                        try:
+                            resources = json.loads(resources_item.text())
+                            formatted_resources = " | ".join(resources)
+                            resources_item.setText(formatted_resources)
+                        except json.JSONDecodeError:
+                            pass
             else:
                 self.show_error_message(
                     "Prefetch Data",
@@ -2366,7 +2592,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.label.setAlignment(QtCore.Qt.AlignCenter)
         self.label.setObjectName("label")
         self.label.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
-        self.label.setMaximumWidth(300)
+        self.label.setMaximumWidth(500)
         self.horizontalLayout_3.addWidget(self.label)
         
         spacerItem1 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
@@ -2539,6 +2765,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.setup_parse_button(self.ShimCacheButton, True, True, True)
         self.ShimCacheButton.setObjectName("ShimCacheButton")
         self.verticalLayout_3.addWidget(self.ShimCacheButton)
+        
+        self.AmcacheButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.AmcacheButton, True, True, True)
+        self.AmcacheButton.setObjectName("AmcacheButton")
+        self.verticalLayout_3.addWidget(self.AmcacheButton)
         
         self.logbutton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.logbutton, True, True, False)
@@ -3000,6 +3231,25 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Add ShimCache tab to main tab widget
         self.main_tab.addTab(self.ShimCache_main_tab, "")
         
+        # Create Amcache main tab
+        self.Amcache_main_tab = QtWidgets.QWidget()
+        self.Amcache_main_tab.setObjectName("Amcache_main_tab")
+        self.verticalLayout_amcache_main = QtWidgets.QVBoxLayout(self.Amcache_main_tab)
+        self.verticalLayout_amcache_main.setObjectName("verticalLayout_amcache_main")
+        
+        # Create Amcache tab widget to hold all table tabs
+        self.Amcache_tab_widget = QtWidgets.QTabWidget(self.Amcache_main_tab)
+        self.Amcache_tab_widget.setObjectName("Amcache_tab_widget")
+        
+        # Make tabs wider to fit text
+        self.Amcache_tab_widget.setStyleSheet("QTabBar::tab { min-width: 150px; padding: 5px; }")
+        
+        # Create tabs for each Amcache table
+        self.create_amcache_table_tabs()
+        
+        self.verticalLayout_amcache_main.addWidget(self.Amcache_tab_widget)
+        self.main_tab.addTab(self.Amcache_main_tab, "")
+        
         self.verticalLayout.addWidget(self.main_tab)
         self.horizontalLayout_2.addWidget(self.info_frame)
         # Give all stretch to content and none to sidebar
@@ -3038,7 +3288,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         QtCore.QTimer.singleShot(100, self.refresh_all_tables)
         # Enable sorting for all tables
         self.enable_sorting_for_all_tables()
-        self.label.setText(_translate("Crow_Eye", "Case name"))
+        self.label.setText(_translate("Crow_Eye", "Case:"))
         self.open_case_btn.setText(_translate("Crow_Eye", "Open case"))
         self.Creat_case.setText(_translate("Crow_Eye", "Creat case"))
         self.exprot_json_CSV.setText(_translate("Crow_Eye", "exprot as json and CSV"))
@@ -3049,6 +3299,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 
         self.Prefetchbutton.setText(_translate("Crow_Eye", "Prefetch"))
         self.ShimCacheButton.setText(_translate("Crow_Eye", "ShimCache"))
+        self.AmcacheButton.setText(_translate("Crow_Eye", "Amcache"))
         self.logbutton.setText(_translate("Crow_Eye", "Logs"))
         self.Offline_analysis.setText(_translate("Crow_Eye", "offline analysis"))
         self.registry_offline.setText(_translate("Crow_Eye", "Registry offline"))
@@ -3204,6 +3455,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.main_tab.setTabText(
                 self.main_tab.indexOf(self.ShimCache_main_tab),
                 _translate("Crow_Eye", "ShimCache")
+            )
+            
+        # Set tab text for Amcache main tab
+        if hasattr(self, 'Amcache_main_tab') and hasattr(self, 'main_tab'):
+            self.main_tab.setTabText(
+                self.main_tab.indexOf(self.Amcache_main_tab),
+                _translate("Crow_Eye", "Amcache")
             )
             
         # Set tab text for ShimCache tab (in Registry widget)
@@ -3545,16 +3803,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Initialize Prefetch_table headers if it exists
         if hasattr(self, 'Prefetch_table'):
-            self.Prefetch_table.setColumnCount(31)  # Total number of columns in the table
+            self.Prefetch_table.setColumnCount(12)  # Updated column count to match new database structure
             headers = [
-                "ID", "Executable Name", "File Path", "Version", "Size",
-                "Modified Time", "Creation Time", "Access Time", "Run Count",
-                "Volume Serial", "Inode Number", "Device", "Number Links",
-                "UID", "GID", "Run Count", "Last Runs", "Duration MS",
-                "Duration Last MS", "Calculated Hash", "Stored Hash",
-                "Hash Match", "Volume Info", "Suspicious Volumes", "Volume Stats",
-                "All files references", "Suspicious Files", "Dll loading",
-                "Directory Stats", "File Stats", "Forensics Flags", "Analyzing Time"
+                "Filename", "Executable Name", "Hash", "Run Count", "Last Executed",
+                "Run Times", "Volumes", "Directories", "Resources",
+                "Created On", "Modified On", "Accessed On"
             ]
             for i, header in enumerate(headers):
                 if i < self.Prefetch_table.columnCount():  # Ensure we don't exceed column count
@@ -3710,6 +3963,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.logbutton.clicked.connect(self.run_logs_analysis)
         self.Prefetchbutton.clicked.connect(self.run_prefetch_analysis)
         self.ShimCacheButton.clicked.connect(self.run_shimcache_analysis)
+        self.AmcacheButton.clicked.connect(self.run_amcache_analysis)
         self.exprot_json_CSV.clicked.connect(self.export_all_tables)    
         self.Creat_case.clicked.connect(self.create_directory)
         self.open_case_btn.clicked.connect(self.open_existing_case)
@@ -3794,7 +4048,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 os.makedirs(p, exist_ok=True)
             # Update UI
             case_name = os.path.basename(directory_path)
-            self.label.setText(f"Case name: {case_name}")
+            self.label.setText(f"Case: {case_name}")
             # Save case config and mark as last
             case_config = {
                 'case_name': case_name,
@@ -3804,8 +4058,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'registry': os.path.join(self.case_paths['artifacts_dir'], 'registry_data.db'),
                     'lnk': os.path.join(self.case_paths['artifacts_dir'], 'LnkDB.db'),
                     'logs': os.path.join(self.case_paths['artifacts_dir'], 'Log_Claw.db'),
-                    'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch.db'),
-                    'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db')
+                    'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch_data.db'),
+                    'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db'),
+                    'amcache': os.path.join(self.case_paths['artifacts_dir'], 'amcache.db')
                 }
             }
             config_path = os.path.join(config_dir, f"case_{case_name}.json")
@@ -3864,6 +4119,39 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "Error",
                 f"Failed to load case configuration:\n{str(e)}"
             )
+            return None
+            
+    def save_case_config(self):
+        """Save current case configuration to file"""
+        if not hasattr(self, 'case_paths') or not self.case_paths:
+            print("[Warning] No case paths available to save configuration")
+            return
+            
+        case_name = os.path.basename(self.case_paths.get('case_root', ''))
+        if not case_name:
+            print("[Warning] Invalid case name, cannot save configuration")
+            return
+            
+        config_dir, _ = self.get_app_config_dir()  # Get config dir only
+        config_path = os.path.join(config_dir, f"case_{case_name}.json")
+        
+        try:
+            # Load existing config first
+            with open(config_path, 'r') as config_file:
+                case_config = json.load(config_file)
+                
+            # Update the config with current paths and databases
+            case_config['paths'] = self.case_paths
+            
+            # Write back the updated config
+            with open(config_path, 'w') as config_file:
+                json.dump(case_config, config_file, indent=4)
+                
+            # Update last case file
+            self.save_last_case(case_config)
+            print(f"[Info] Case configuration saved for: {case_name}")
+        except Exception as e:
+            print(f"[Error] Failed to save case configuration: {str(e)}")
             return None
 
     def clear_all_tables(self):
@@ -3996,8 +4284,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'registry': os.path.join(self.case_paths['artifacts_dir'], 'registry_data.db'),
                     'lnk': os.path.join(self.case_paths['artifacts_dir'], 'LnkDB.db'),
                     'logs': os.path.join(self.case_paths['artifacts_dir'], 'Log_Claw.db'),
-                    'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch.db'),
-                    'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db')
+                    'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch_data.db'),
+                    'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db'),
+                    'amcache': os.path.join(self.case_paths['artifacts_dir'], 'amcache.db')
                 }
             }
             
@@ -4016,7 +4305,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     json.dump(case_config, config_file, indent=4)
                     
                 # Update UI with case name
-                self.label.setText(f"Case name: {dir_name}")
+                self.label.setText(f"Case: {dir_name}")
                     
                 QMessageBox.information(
                     self.main_window,
@@ -4062,6 +4351,30 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
     def open_existing_case(self):
         """Compatibility wrapper that delegates to open_case()."""
         return self.open_case()
+        
+    def show_case_dialog(self):
+        """Show a dialog asking the user if they want to create a new case or open an existing one."""
+        msg_box = QMessageBox(self.main_window)
+        msg_box.setWindowTitle("Crow Eye - Case Management")
+        msg_box.setText("No active case found. What would you like to do?")
+        
+        # Apply cyberpunk style
+        msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+        
+        # Add buttons
+        create_button = msg_box.addButton("Create New Case", QMessageBox.ActionRole)
+        open_button = msg_box.addButton("Open Existing Case", QMessageBox.ActionRole)
+        exit_button = msg_box.addButton("Exit", QMessageBox.RejectRole)
+        
+        msg_box.exec_()
+        
+        # Handle user choice
+        if msg_box.clickedButton() == create_button:
+            self.create_directory()
+        elif msg_box.clickedButton() == open_button:
+            self.open_case()
+        else:  # Exit button or dialog closed
+            sys.exit(0)
 
     def show_loading_screen_with_function(self, title, function_to_run, *args, run_in_thread=False, **kwargs):
         """Show enhanced cyberpunk loading screen while running a function"""
@@ -4215,6 +4528,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Switch to the ShimCache main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.ShimCache_main_tab))
     
+    def run_amcache_analysis(self):
+        """Run Amcache analysis with loading screen and switch to Amcache tab"""
+        self.run_analysis_with_loading("Running Amcache Analysis...", self.parse_amcache)
+        # Switch to the Amcache main tab
+        self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.Amcache_main_tab))
+    
     def run_logs_analysis(self):
         """Run Windows logs analysis with loading screen"""
         self.run_analysis_with_loading("Running Windows Logs Analysis...", self.parse_logs)
@@ -4269,9 +4588,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Parse prefetch files"""
         try:
             print("[Prefetch] Starting prefetch collection...")
-            from Artifacts_Collectors.Prefetch_claw import prefetch_claw
+            from Artifacts_Collectors.Prefetch_claw import process_prefetch_files
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-            prefetch_claw(case_path=case_root, offline_mode=False)
+            process_prefetch_files(case_path=case_root, offline_mode=False)
             print("[Prefetch] Prefetch data collected successfully")
             # Load the data into the UI using the correct method
             self.load_data_from_Prefetch()
@@ -4319,6 +4638,62 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             import traceback
             traceback.print_exc()
             raise
+            
+    def parse_amcache(self):
+        """Parse Amcache data"""
+        try:
+            print("[Amcache] Starting Amcache collection...")
+            from Artifacts_Collectors.amcacheparser import parse_amcache_hive
+            case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+            artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
+            
+            # Set the database path based on case directory if available
+            if artifacts_dir:
+                db_path = os.path.join(artifacts_dir, 'amcache.db')
+            else:
+                db_path = 'amcache.db'
+                
+            # Run the Amcache parser
+            offline_mode = False
+            result_db_path = parse_amcache_hive(case_path=case_root, offline_mode=offline_mode, db_path=db_path)
+            print("[Amcache] Amcache data collected successfully")
+            
+            # Update case configuration with the database path
+            if result_db_path and hasattr(self, 'case_paths'):
+                # Get the current case name
+                case_name = os.path.basename(self.case_paths.get('case_root', ''))
+                if case_name:
+                    # Load the current case configuration
+                    config_dir, _ = self.get_app_config_dir()
+                    config_path = os.path.join(config_dir, f"case_{case_name}.json")
+                    
+                    try:
+                        with open(config_path, 'r') as config_file:
+                            case_config = json.load(config_file)
+                            
+                        # Update the databases entry
+                        if 'databases' not in case_config:
+                            case_config['databases'] = {}
+                        case_config['databases']['amcache'] = result_db_path
+                        
+                        # Save the updated configuration
+                        with open(config_path, 'w') as config_file:
+                            json.dump(case_config, config_file, indent=4)
+                            
+                        # Update last case file
+                        self.save_last_case(case_config)
+                        print(f"[Amcache] Updated case configuration with database path: {result_db_path}")
+                    except Exception as e:
+                        print(f"[Amcache Warning] Failed to update case configuration: {str(e)}")
+                        # Continue execution even if config update fails
+            
+            # Load the data into the UI
+            self.load_amcache_data()
+        except Exception as e:
+            print(f"[Amcache Error] {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def parse_offline_lnk_files(self):
         """Parse offline LNK files and Jump Lists using the offline module"""
@@ -4342,9 +4717,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Parse offline prefetch files"""
         try:
             print("[Offline Prefetch] Starting offline prefetch analysis...")
-            from Artifacts_Collectors.Prefetch_claw import prefetch_claw
+            from Artifacts_Collectors.Prefetch_claw import process_prefetch_files
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-            prefetch_claw(case_path=case_root, offline_mode=True)
+            process_prefetch_files(case_path=case_root, offline_mode=True)
             print("[Offline Prefetch] Offline prefetch analyzed successfully")
             # Load the data into the UI using the correct method
             self.load_data_from_Prefetch()
@@ -4389,6 +4764,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "Collecting Prefetch files",
                 "Collecting Event Logs",
                 "Collecting ShimCache data",
+                "Collecting Amcache data",
                 "Loading data into GUI"
             ]
             
@@ -4479,10 +4855,30 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 except Exception as e:
                     print(f"[ShimCache Error] {str(e)}")
                 
+                # Step 7: Amcache data
+                dialog.update_step(6, "🔍 COLLECTING AMCACHE DATA")
+                QtWidgets.QApplication.processEvents()  # Force GUI update
+                try:
+                    print("[Amcache] Collecting Amcache data...")
+                    # Import and call the Amcache collection function
+                    from Artifacts_Collectors.amcacheparser import parse_amcache_hive
+                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                    artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
+                    if artifacts_dir:
+                        db_path = os.path.join(artifacts_dir, 'amcache.db')
+                    else:
+                        db_path = 'amcache.db'
+                    # Run the Amcache parser
+                    offline_mode = False
+                    parse_amcache_hive(case_path=case_root, offline_mode=offline_mode, db_path=db_path)
+                    print("[Amcache] Amcache data collected successfully")
+                except Exception as e:
+                    print(f"[Amcache Error] {str(e)}")
+                
                 print("[Open Case] Artifact collection finished. Loading data into UI...")
                 
-                # Step 7: Load data into GUI
-                dialog.update_step(6, "📊 LOADING DATA INTO GUI")
+                # Step 8: Load data into GUI
+                dialog.update_step(7, "📊 LOADING DATA INTO GUI")
                 QtWidgets.QApplication.processEvents()  # Force GUI update
                 try:
                     self.load_all_data_internal()
@@ -4558,9 +4954,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print(f"[Registry Error] {str(e)}")
             try:
                 print("[Prefetch] Collecting prefetch data...")
-                from Artifacts_Collectors.Prefetch_claw import prefetch_claw
+                from Artifacts_Collectors.Prefetch_claw import process_prefetch_files
                 case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                prefetch_claw(case_path=case_root, offline_mode=False)
+                process_prefetch_files(case_path=case_root, offline_mode=False)
             except Exception as e:
                 print(f"[Prefetch Error] {str(e)}")
             try:
@@ -4666,6 +5062,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.load_registry_data_from_db()
                 print("[Registry] Completed loading Registry Database")
                 
+                # Step 9: Loading Amcache data
+                dialog.update_step(7, "📦 LOADING AMCACHE DATA")
+                print("[Amcache] Starting to load Amcache Data...")
+                self.load_amcache_data()
+                print("[Amcache] Completed loading Amcache Data")
+                
                 # Show completion
                 dialog.show_completion("ALL DATA LOADED SUCCESSFULLY")
                 print("\033[92m\nData has been loaded into the GUI Successfully\033[0m")
@@ -4731,6 +5133,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"[ShimCache Error] Couldn't load ShimCache data: {str(e)}")
         try:
+            self.load_amcache_data()
+        except Exception as e:
+            print(f"[Amcache Error] Couldn't load Amcache data: {str(e)}")
+        try:
             self.load_registry_data_from_db()
         except Exception as e:
             print(f"[Registry Error] Couldn't load registry data: {str(e)}")
@@ -4745,7 +5151,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             "Loading Registry data",
             "Loading Prefetch data",
             "Loading Event Logs",
-            "Loading ShimCache data"
+            "Loading ShimCache data",
+            "Loading Amcache data"
         ]
         
         try:
@@ -4780,6 +5187,18 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print("[Prefetch] Starting to load Prefetch Data...")
             self.load_data_from_Prefetch()
             print("[Prefetch] Completed loading Prefetch Data")
+            
+            # Load ShimCache Data
+            loading_dialog.update_step(5, "🔄 Loading ShimCache data...")
+            print("[ShimCache] Starting to load ShimCache Data...")
+            self.load_shimcache_data()
+            print("[ShimCache] Completed loading ShimCache Data")
+            
+            # Load Amcache Data
+            loading_dialog.update_step(6, "🔄 Loading Amcache data...")
+            print("[Amcache] Starting to load Amcache Data...")
+            self.load_amcache_data()
+            print("[Amcache] Completed loading Amcache Data")
             
             # Load Registry Data from DB
             loading_dialog.status_label.setText("Loading Registry Database...")
@@ -4986,6 +5405,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "LastUpdateInfo": self.LastUpdateInfo_table,
                 "ShutDown": self.ShutDown_table,
                 "ShimCache": self.ShimCache_main_table,
+                # Add Amcache tables
+                "Amcache_Application": self.Amcache_InventoryApplication_table,
+                "Amcache_ApplicationFile": self.Amcache_InventoryApplicationFile_table,
+                "Amcache_ApplicationShortcut": self.Amcache_InventoryApplicationShortcut_table,
+                "Amcache_DriverBinary": self.Amcache_InventoryDriverBinary_table,
+                "Amcache_DriverPackage": self.Amcache_InventoryDriverPackage_table,
                 "BrowserHistory": self.Browser_history_table,
                 "USBDevices": self.tableWidget_3,
                 "USBInstances": self.tableWidget_4,
@@ -5575,7 +6000,7 @@ if __name__ == "__main__":
     # Only show the case dialog if there's no last case to load
     if not last_case_loaded:
         print("[Info] No valid last case found. Showing case dialog.")
-        # Fallback: directly open the case selection flow
-        ui.open_existing_case()
+        # Show dialog to create new case or open existing one
+        ui.show_case_dialog()
     
     sys.exit(app.exec_())

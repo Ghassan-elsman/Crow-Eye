@@ -1,6 +1,6 @@
 {
     "case_name": "test 6",
-    "opened_date": "2025-09-04T16:11:26.575917",
+    "opened_date": "2025-09-06T22:26:19.003061",
     "paths": {
         "case_root": "C:/Users/Ghass/Downloads/test 6",
         "artifacts_dir": "C:/Users/Ghass/Downloads/test 6\\Target_Artifacts",
@@ -12,6 +12,7 @@
         "registry": "C:/Users/Ghass/Downloads/test 6\\Target_Artifacts\\registry_data.db",
         "lnk": "C:/Users/Ghass/Downloads/test 6\\Target_Artifacts\\LnkDB.db",
         "logs": "C:/Users/Ghass/Downloads/test 6\\Target_Artifacts\\Log_Claw.db",
-        "prefetch": "C:/Users/Ghass/Downloads/test 6\\Target_Artifacts\\prefetch.db"
+        "prefetch": "C:/Users/Ghass/Downloads/test 6\\Target_Artifacts\\prefetch_data.db",
+        "shimcache": "C:/Users/Ghass/Downloads/test 6\\Target_Artifacts\\shimcache.db"
     }
 }

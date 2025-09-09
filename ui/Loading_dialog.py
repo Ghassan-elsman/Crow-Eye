@@ -148,8 +148,12 @@ class LoadingDialog(QtWidgets.QDialog):
                 border: 2px solid #00ffff;
                 border-radius: 8px;
                 background-color: #1a1a1a;
-                color: #00ffff;
-                font-weight: bold;
+                color: #ffffff;
+                font-weight: 900;
+                font-size: 14px;
+                /* Qt doesn't support text-shadow, using brighter color and font styling instead */
+                /* Removed: text-shadow: 0 0 5px #00ffff, 0 0 10px #00ffff; */
+                letter-spacing: 1px;
                 text-align: center;
             }
             QProgressBar::chunk {
@@ -159,7 +163,7 @@ class LoadingDialog(QtWidgets.QDialog):
                 margin: 1px;
             }
         """)
-        self.progress_bar.setFixedHeight(35)
+        self.progress_bar.setFixedHeight(40)
         content_layout.addWidget(self.progress_bar)
         
         # Small gap
@@ -171,6 +175,7 @@ class LoadingDialog(QtWidgets.QDialog):
         self.log_display.setStyleSheet(CrowEyeStyles.LOADING_DIALOG_LOG_DISPLAY)
         self.log_display.setMinimumHeight(180)
         self.log_display.setMaximumHeight(220)
+        # Apply custom scrollbar style from styles.py
         content_layout.addWidget(self.log_display)
         
         # Add backdrop to main
@@ -200,15 +205,13 @@ class LoadingDialog(QtWidgets.QDialog):
             
             for path in icon_paths:
                 try:
-                    print(f"Trying to load icon from: {path}")  # Debug output
                     icon_pixmap = QtGui.QPixmap(path)
                     if icon_pixmap and not icon_pixmap.isNull():
-                        print(f"Successfully loaded icon from: {path}")  # Debug output
                         break
                     else:
-                        print(f"Failed to load icon from: {path} (null pixmap)")  # Debug output
+                        pass
                 except Exception as ex:
-                    print(f"Exception loading icon from {path}: {ex}")  # Debug output
+ 
                     continue
             
             if icon_pixmap and not icon_pixmap.isNull():

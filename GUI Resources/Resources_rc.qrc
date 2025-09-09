@@ -3,6 +3,10 @@
     <file>main-menu.png</file>
     <file>CrowEye.ico</file>
     <file>hamburger menu.png</file>
+    <file>icons/menu-icon.svg</file>
+    <file>icons/new-case-icon.svg</file>
+    <file>icons/open-case-icon.svg</file>
+    <file>icons/search-icon.svg</file>
   </qresource>
   <qresource prefix="Background">
     <file>gray color image.jpg</file>

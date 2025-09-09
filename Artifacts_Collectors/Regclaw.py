@@ -56,17 +56,19 @@ def parse_live_registry(case_root=None, db_path=None):
     if db_path:
         db_filename = db_path
     else:
-        db_filename = "registry_data_live.db"
+        db_filename = "registry_data.db"  # Changed from registry_data_live.db to registry_data.db
     
     # Use case_root if provided
     if case_root:
         os.makedirs(case_root, exist_ok=True)
-        db_filename = os.path.join(case_root, db_filename)
+        artifacts_dir = os.path.join(case_root, "Target_Artifacts")
+        os.makedirs(artifacts_dir, exist_ok=True)
+        db_filename = os.path.join(artifacts_dir, os.path.basename(db_filename))
     
     # Call the main registry collection function with the database path
     return main_live_reg(db_filename)
 
-def main_live_reg(db_filename='registry_data_live.db'):
+def main_live_reg(db_filename='registry_data.db'):
     # Function to read registry values and their types from a live system
     def reg_Claw_live(hive_key, key_path):
         try:
@@ -190,9 +192,9 @@ def main_live_reg(db_filename='registry_data_live.db'):
         "search_history": "SearchHistory"
     }
 
-    # Create a timestamp for the database filename
+    # Use the provided database filename
+    # No need to override the db_filename as it's passed as a parameter
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    db_filename = 'registry_data_live.db'
 
     # Connect to SQLite database (or create it if it doesn't exist)
     with sqlite3.connect(db_filename) as conn:
