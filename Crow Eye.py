@@ -19,7 +19,7 @@ Key Features:
   * Shimcache (AppCompatCache)
   * Registry hives
   * Event logs
-  * SRUM database
+
   * And more
 
 
@@ -77,38 +77,100 @@ else:
     
 
 def install_initial_requirements():
-    """Install essential packages required before the main dependency installation.
+    """Install all required packages for Crow Eye application.
     
-    This function ensures that critical base packages (colorama for colored console output
-    and setuptools for package management) are installed before attempting to set up the
-    virtual environment or install other dependencies. These packages are prerequisites
-    for the proper functioning of the dependency management system.
+    This function ensures that all necessary packages are installed before the application starts.
+    It handles both critical base packages and application-specific dependencies in a unified way.
     
-    The function will exit the program if installation fails, as these packages are
+    The function will:
+    1. Install essential base packages (colorama, setuptools) first
+    2. Import colorama for colored console output
+    3. Check and install all Crow Eye dependencies
+    4. Handle missing packages with appropriate error messages
+    
+    The function will exit the program if critical installations fail, as these packages are
     essential for the tool's operation.
     
     Returns:
-        None: Function exits the program if installation fails
+        None: Function exits the program if essential packages cannot be installed
     """
-    initial_requirements = ['colorama', 'setuptools']
+    # First install essential base packages
+    essential_packages = ['colorama', 'setuptools']
     
-    for package in initial_requirements:
+    for package in essential_packages:
         try:
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
             print(f'Successfully installed {package}')
         except subprocess.CalledProcessError:
             print(f'Failed to install {package}')
             sys.exit(1)  # Exit if essential packages cannot be installed
+    
+    # Now we can safely import colorama
+    from colorama import init, Fore
+    import importlib.metadata
+    
+    init()  # Initialize colorama for colored output
+    
+    # Define all Crow Eye requirements
+    crow_eye_requirements = [
+        'PyQt5',        # GUI framework
+        'python-registry', # Registry parsing
+        'pywin32',      # Windows API access
+        'pandas',       # Data manipulation
+        'streamlit',    # Web-based visualization
+        'altair',       # Interactive charts
+        'olefile',      # OLE file parsing
+        'windowsprefetch' # Prefetch file parsing
+    ]
+    
+    # Check and install all required packages
+    missing_packages = []
+    
+    # First check PyQt5 separately as it's critical
+    try:
+        importlib.metadata.version('PyQt5')
+        print(Fore.GREEN + 'PyQt5 is already installed' + Fore.RESET)
+    except importlib.metadata.PackageNotFoundError:
+        print(Fore.RED + 'PyQt5 is not installed. Installing now...' + Fore.RESET)
+        try:
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'PyQt5'])
+            print(Fore.GREEN + 'Successfully installed PyQt5' + Fore.RESET)
+        except subprocess.CalledProcessError:
+            print(Fore.RED + 'Failed to install PyQt5' + Fore.RESET)
+            sys.exit(1)  # Exit if PyQt5 cannot be installed
+    
+    # Check all other packages
+    for package in crow_eye_requirements:
+        if package == 'PyQt5':  # Skip PyQt5 as we already checked it
+            continue
+            
+        try:
+            importlib.metadata.version(package)
+            print(Fore.GREEN + f'{package} is already installed' + Fore.RESET)
+        except importlib.metadata.PackageNotFoundError:
+            print(Fore.RED + f'{package} is not installed' + Fore.RESET)
+            missing_packages.append(package)
 
-# Install initial requirements first
+    # Install any missing packages
+    if missing_packages:
+        print(Fore.YELLOW + '\nInstalling missing packages...' + Fore.RESET)
+        for package in missing_packages:
+            try:
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+                print(Fore.GREEN + f'Successfully installed {package}' + Fore.RESET)
+            except subprocess.CalledProcessError:
+                print(Fore.RED + f'Failed to install {package}' + Fore.RESET)
+                # Continue with other packages even if one fails
+    else:
+        print(Fore.GREEN + '\nAll required packages are installed!' + Fore.RESET)
+
+# Install all requirements
 install_initial_requirements()
 
-# Now we can safely import these
-from colorama import init, Fore
+# Now we can safely import PyQt5
 from PyQt5.QtGui import QMovie
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from PyQt5 import QtGui
-import importlib.metadata
 
 def setup_virtual_environment():
     """Create and activate a virtual environment for Crow Eye.
@@ -179,74 +241,41 @@ def setup_virtual_environment():
 # Setup virtual environment
 setup_virtual_environment()
 
-Crow_Eye_Requirements = [
-    'PyQt5',
-    'python-registry',
-    'pywin32',
-    'pandas',
-    'streamlit',
-    'altair',
-    'olefile',
-    'windowsprefetch'
-]
+# Note: The package requirements and installation functionality has been merged into the install_initial_requirements function
 
-def check_and_install_requirements():
-    """Check and install required packages for Crow Eye application."""
-    def install_package(package):
-        try:
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
-            print(Fore.GREEN + f'Successfully installed {package}' + Fore.RESET)
-            return True
-        except subprocess.CalledProcessError:
-            print(Fore.RED + f'Failed to install {package}' + Fore.RESET)
-            return False
-
-    missing_packages = []
-    for package in Crow_Eye_Requirements:
-        try:
-            importlib.metadata.version(package)
-            print(Fore.GREEN + f'{package} is already installed' + Fore.RESET)
-        except importlib.metadata.PackageNotFoundError:
-            print(Fore.RED + f'{package} is not installed' + Fore.RESET)
-            missing_packages.append(package)
-
-    if missing_packages:
-        print('\nInstalling missing packages...')
-        for package in missing_packages:
-            install_package(package)
-    else:
-        print(Fore.GREEN + '\nAll required packages are installed!' + Fore.RESET)
-
-# Check and install required packages
-check_and_install_requirements()
-
+# Import standard libraries first
 import sqlite3
-from PyQt5 import QtCore, QtGui, QtWidgets 
-from PyQt5.QtWidgets import QFileDialog
 import os
-from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox
-from PyQt5.QtWidgets import QInputDialog, QLineEdit 
 import subprocess
 import shutil
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
-from Artifacts_Collectors import offline_RegClaw, Prefetch_claw
-from subprocess import call
-import GUI_resources
 import json
 import datetime
+from subprocess import call
+
+# Add parent directory to path for local imports
+sys.path.append(str(Path(__file__).parent.parent))
+
+# Now import PyQt5 modules after ensuring they're installed
+from PyQt5 import QtCore, QtGui, QtWidgets 
+from PyQt5.QtWidgets import QFileDialog, QApplication, QMainWindow, QMessageBox, QInputDialog, QLineEdit
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QProgressBar, QLabel, QTextEdit, QHBoxLayout, QFrame, QSplitter
+from PyQt5.QtCore import QObject, pyqtSignal, Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt5.QtGui import QFont, QPainter, QColor
+
+# Import local modules
+import GUI_resources
+from styles import CrowEyeStyles
+
+# Import artifact collectors
+from Artifacts_Collectors import offline_RegClaw, Prefetch_claw
 import Artifacts_Collectors.Prefetch_claw as Prefetch_claw
 import Artifacts_Collectors.offline_RegClaw as offline_RegClaw
 import Artifacts_Collectors.WinLog_Claw as WinLog_Claw
 import Artifacts_Collectors.A_CJL_LNK_Claw as A_CJL_LNK_Claw
 import Artifacts_Collectors.JLParser as JLParser
 import Artifacts_Collectors.Regclaw as Regclaw
-from PyQt5.QtCore import QObject, pyqtSignal, Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QProgressBar, QLabel, QTextEdit, QHBoxLayout, QFrame, QSplitter
-from PyQt5.QtGui import QFont, QPainter, QColor
-from PyQt5 import QtCore, QtGui, QtWidgets
-from styles import CrowEyeStyles
 
 # ============================================================================
 # ENHANCED UI COMPONENTS SECTION
