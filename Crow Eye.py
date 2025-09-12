@@ -20,7 +20,7 @@ Key Features:
   * Registry hives
   * Event logs
 
-  * And more
+
 
 
 
