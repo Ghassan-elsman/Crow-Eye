@@ -1,4 +1,4 @@
-# Crow Eye
+# Crow Eye - Windows Forensics Tool
 
 <p align="center">
   <img src="GUI Resources/CrowEye.jpg" alt="Crow Eye Logo" width="200"/>
@@ -6,114 +6,214 @@
 
 ## Overview
 
-Crow Eye is an open-source Windows forensic investigation tool designed to collect, analyze, and visualize various Windows artifacts. It features a modular architecture with specialized components for artifact collection, data processing, and visualization through a cyberpunk-themed GUI.
+Crow Eye is a comprehensive Windows forensics tool designed to collect, parse, and analyze various Windows artifacts through a user-friendly GUI interface. The tool focuses on extracting key forensic evidence from Windows systems to support digital investigations.
 
-## Features
+## Created by
+Ghassan Elsman
 
-### Artifact Collection
+## Installation
 
-Crow Eye can collect and parse the following Windows artifacts:
+### Requirements
+It will be installed when you run Crow-Eye
+- Python 3.12.4
+- The following packages are required to run Crow Eye:
+  - PyQt5
+  - python-registry
+  - pywin32
+  - pandas
+  - streamlit
+  - altair
+  - olefile
+  - windowsprefetch
+  - sqlite3
+  - colorama
+  - setuptools
 
-- **Prefetch Files**: Extract program execution history from Windows Prefetch files
-- **Registry Hives**: Analyze Windows Registry for forensic artifacts (UserAssist, ShimCache, BAM, etc.)
-- **Amcache**: Extract application execution history from Amcache.hve
-- **Event Logs**: Parse Windows Event Logs for security events
-- **Jump Lists & LNK Files**: Process AutomaticDestinations-MS, CustomDestinations, Jump Lists, and LNK files
-- **Shim Cache**: Extract data from the Application Compatibility Shim Cache
+## How to Use Crow Eye
 
-### Data Correlation
-
-Crow Eye correlates evidence across different artifacts:
-
-- Cross-reference execution evidence between Prefetch, Amcache, and Registry
-- Compare timestamps to identify potential anomalies
-- Link related artifacts for comprehensive analysis
-
-### Cyberpunk UI
-
-The interface features a distinctive dark/cyberpunk theme:
-
-- Dark backgrounds with neon accents
-- Custom-styled tables, buttons, and dialogs
-- Animated components for visual feedback
-
-## Getting Started
-
-### Prerequisites
-
-- Windows operating system (Windows 7/10/11)
-- Python 3.7 or higher
-- Administrator privileges (for accessing certain artifacts)
-
-### Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Ghassan-Elsman/Crow-Eye.git
-   cd Crow-Eye
+1. Run Crow Eye as administrator to ensure access to all system artifacts:
    ```
-
-2. Run the main application with administrator privileges:
-   ```bash
-   python "Crow Eye.py"
+   python Crow_Eye.py
    ```
+2. The main interface will appear, showing different tabs for various forensic artifacts
+3. Create your case then start the analysis
 
-   The application will automatically set up a virtual environment and install the required dependencies.
+## Analysis Types
 
-### Usage
+Crow Eye offers two primary modes of operation:
 
-#### Creating a New Case
+### 1. Live Analysis
+- Analyzes artifacts directly from the running system
+- Automatically extracts and parses artifacts from their standard locations
+- Provides real-time forensic analysis of the current Windows environment
 
-1. Launch Crow Eye
-2. Click on "New Case" in the main menu
-3. Enter a case name and select a location to store case files
-4. Click "Create Case"
+### 2. Offline Analysis
+- Allows analysis of artifacts from external sources
+- Perfect for examining evidence from different systems
+- Supports forensic investigation of collected artifacts
 
-#### Collecting Artifacts
+### Case Management
+- Upon launch, Crow Eye creates a case to organize and save all analysis output
+- Each case maintains a separate directory structure for different artifact types
+- Results are preserved for later review and reporting
 
-1. Open a case
-2. Navigate to the artifact collection tab
-3. Select the artifacts you want to collect
-4. Click "Collect Artifacts"
+### Custom Artifact Analysis
+To analyze custom artifacts:
+1. Navigate to your case directory
+2. Go to the `target artifacts/` folder
+3. Add files to the appropriate subdirectories:
+   - `C_AJL_Lnk/`: For LNK files and automatic/custom jump lists
+   - `prefetch/`: For prefetch files
+   - `registry/`: For registry hive files
+4. After adding the files, press "Parse Offline Artifacts" in the Crow Eye interface
 
-#### Analyzing Data
+### Search and Export Features
+- **Search Bar**: Quickly find specific artifacts or information within the database
+- **Export Options**: Convert analysis results from the database into:
+  - CSV format for spreadsheet analysis
+  - JSON format for integration with other tools
+- These features make it easy to further process and analyze the collected forensic data
 
-1. Navigate to the analysis tab
-2. Select the artifacts you want to analyze
-3. Use the search and filter functions to find specific information
-4. View correlations between different artifacts
+### Supported Artifacts and Functionality
 
-## Documentation
+#### 1. Jump Lists and LNK Files Analysis
 
-Crow Eye includes comprehensive documentation to help users and contributors:
+**Automatic Parsing:**
+- The tool automatically parses Jump Lists and LNK files from standard system locations
 
-- **[CROW_EYE_TECHNICAL_DOCUMENTATION.md](CROW_EYE_TECHNICAL_DOCUMENTATION.md)**: Comprehensive technical documentation including architecture, components, and development workflows
-- **[CROW_EYE_CONTRIBUTION_GUIDE.md](CROW_EYE_CONTRIBUTION_GUIDE.md)**: Contribution guidelines and documentation index
+**Custom/Selective Parsing:**
+- Copy specific Jump Lists/LNK files you want to analyze
+- Paste them into `CrowEye/Artifacts Collectors/Target Artifacts` or your case directory's `C_AJL_Lnk/` folder
+- Run the analysis
 
-## Project Structure
+#### 2. Registry Analysis
 
-```
-Crow-Eye/
-├── Artifacts_Collectors/       # Specialized parsers for Windows artifacts
-├── data/                       # Data management components
-├── ui/                         # UI components
-├── utils/                      # Utility functions
-├── GUI Resources/              # UI assets and resources
-├── config/                     # Case configuration files
-├── Crow Eye.py                 # Main application entry point
-├── styles.py                   # UI styling definitions
-└── GUI_resources.py            # Compiled UI resources
-```
+**Automatic Parsing:**
+- Crow Eye automatically parses registry hives from the system
 
-## Contributing
+**Custom Registry Analysis:**
+- Copy the following registry files to `CrowEye/Artifacts Collectors/Target Artifacts` or your case directory's `registry/` folder:
+  - `NTUSER.DAT` from `C:\Users\<Username>\NTUSER.DAT`
+  - `SOFTWARE` from `C:\Windows\System32\config\SOFTWARE`
+  - `SYSTEM` from `C:\Windows\System32\config\SYSTEM`
 
-Contributions are welcome! Please see [CROW_EYE_CONTRIBUTION_GUIDE.md](CROW_EYE_CONTRIBUTION_GUIDE.md) for guidelines on how to contribute to Crow Eye.
+**Important Note:**
+- Windows locks these registry files during operation
+- For custom registry analysis of a live system, you must:
+  - Boot from external media (WinPE/Live CD)
+  - Use forensic acquisition tools
+  - Analyze a disk image
 
-## License
+#### 3. Prefetch Files Analysis
+- Automatically parses prefetch files from `C:\Windows\Prefetch`
+- For custom analysis, add prefetch files to your case directory's `prefetch/` folder
+- Extracts execution history and other forensic metadata
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+#### 4. Event Logs Analysis
+- Automatic parsing of Windows event logs
+- Logs are saved into a database for comprehensive analysis
 
-## Acknowledgments
+## Data Collected by Crow Eye
 
-- Thanks to all contributors who have helped make Crow Eye better
-- Special thanks to the open-source forensic community for their valuable resources and tools
+### Registry Data
+- Network interfaces
+- Network list (networks the computer accessed)
+- Machine auto-run programs
+- User auto-run programs
+- Last Windows update
+- Last Windows shutdown time
+- Time zone information
+
+### File Activity Data
+- Recent documents
+- Searches via Explorer bar
+- Typed paths
+- Open/Save MRU (Most Recently Used)
+- Last save MRU
+
+### Prefetch Files Data
+- Executable name
+- Run counts
+- File size
+- Last modified time
+- Last accessed time
+- Creation time
+- File node
+- Inode number
+- Device ID
+- User UID
+- Group UID
+
+### Jump Lists and LNK Files Data
+- Source name
+- Source path
+- Owner UID
+- Group UID
+- Time accessed
+- Time created
+- Time modified
+- Data flag
+- Local path
+- File size header size
+- Show window settings
+- File permissions
+- Device ID
+- Inode number
+
+### Event Logs Analysis
+- Application logs
+- System logs
+- Security logs
+
+### ShimCache Data
+- Application path
+- Last modified time
+- Process execution flag
+- File size
+- Last update time
+
+### AmCache Data
+- Application full path
+- File size
+- SHA1 hash
+- Compilation time
+- Installation time
+- Last modification time
+- Product name
+- Company name
+- File description
+- Original file name
+- Program ID
+
+## Technical Notes
+- The tool incorporates a modified version of the JumpList_Lnk_Parser Python module
+- Registry parsing requires complete registry hive files
+- Some artifacts require special handling due to Windows file locking mechanisms
+
+## Screenshots
+![Screenshot 1](https://github.com/user-attachments/assets/a768a871-b9aa-4e9b-a8d8-3d12b0439865)
+![Screenshot 2](https://github.com/user-attachments/assets/a937f1ca-4b2d-4365-809e-4dc71ae2650d)
+![Screenshot 3](https://github.com/user-attachments/assets/c63ebbcc-a88d-468e-81ea-1c610b5e3345)
+![Screenshot 4](https://github.com/user-attachments/assets/532ff85e-ae66-4434-ae01-79a8ea151f48)
+
+## 🌐 Official Website
+Visit our official website: [https://croweye.pages.dev/](https://croweye.pages.dev/)
+
+For additional resources, documentation, and updates, check out our dedicated website.
+
+## 🚀 Coming Soon Features
+- 📁 MFT Parser
+- 🔐 Registry Binary Data Parsing
+- 🗂️ File Explorer for Artifact Paths
+- 🔎 Enhanced Search Functionality
+- 🔍 Timeline Correlation View
+
+If you're interested in contributing to these features or have suggestions for additional forensic artifacts, please feel free to:
+
+* Open an issue with your ideas
+* Submit a pull request
+* Contact me
+
+## Development Credits
+- Jump List/LNK parsing based on work by Saleh Muhaysin
+- Created and maintained by Ghassan Elsman
