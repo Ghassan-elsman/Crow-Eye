@@ -24,13 +24,6 @@ Key Features:
 
 
 
-
-Forensic Value:
-- Provides investigators with a unified interface for Windows artifact analysis
-- Correlates evidence across multiple sources for stronger conclusions
-- Helps identify suspicious activity through anomaly detection
-- Supports both live system analysis and offline forensic image examination
-
 Author: Ghassan Elsman
 Version: 0.2
 License: GPL-3.0
