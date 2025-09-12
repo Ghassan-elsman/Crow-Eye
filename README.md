@@ -168,14 +168,10 @@ To analyze custom artifacts:
 ### ShimCache Data
 - Application path
 - Last modified time
-- Process execution flag
-- File size
-- Last update time
+
 
 ### AmCache Data
 - Application full path
-- File size
-- SHA1 hash
 - Compilation time
 - Installation time
 - Last modification time
