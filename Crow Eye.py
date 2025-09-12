@@ -20,7 +20,7 @@ Key Features:
   * Registry hives
   * Event logs
 
-
+  * And more
 
 
 
@@ -35,6 +35,7 @@ import subprocess
 import sys
 import ctypes
 import collections
+import datetime
 
 def is_admin():
     """Check if the current process has administrator privileges.
@@ -80,6 +81,7 @@ def install_initial_requirements():
     2. Import colorama for colored console output
     3. Check and install all Crow Eye dependencies
     4. Handle missing packages with appropriate error messages
+    5. Provide detailed feedback during installation process
     
     The function will exit the program if critical installations fail, as these packages are
     essential for the tool's operation.
@@ -90,75 +92,287 @@ def install_initial_requirements():
     # First install essential base packages
     essential_packages = ['colorama', 'setuptools']
     
-    for package in essential_packages:
+    print("┌─────────────────────────────────────────────────┐")
+    print("│ Crow Eye - Initializing Environment            │")
+    print("└─────────────────────────────────────────────────┘")
+    print("Checking essential packages...")
+    
+    for i, package in enumerate(essential_packages):
+        progress = f"[{i+1}/{len(essential_packages)}]"
         try:
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
-            print(f'Successfully installed {package}')
-        except subprocess.CalledProcessError:
-            print(f'Failed to install {package}')
+            print(f"{progress} Installing {package}...")
+            # Capture output to provide more detailed feedback
+            process = subprocess.Popen(
+                [sys.executable, '-m', 'pip', 'install', package],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
+            stdout, stderr = process.communicate()
+            
+            if process.returncode != 0:
+                print(f"Failed to install {package}:")
+                print(stderr)
+                sys.exit(1)  # Exit if essential packages cannot be installed
+            else:
+                print(f"Successfully installed {package}")
+        except Exception as e:
+            print(f"Error during {package} installation: {str(e)}")
             sys.exit(1)  # Exit if essential packages cannot be installed
     
+    print("\n✓ Essential packages installed successfully")
+    print("\nPreparing Crow Eye environment...")
+    print("─────────────────────────────────────────────────")
+    
     # Now we can safely import colorama
-    from colorama import init, Fore
-    import importlib.metadata
-    
-    init()  # Initialize colorama for colored output
-    
-    # Define all Crow Eye requirements
-    crow_eye_requirements = [
-        'PyQt5',        # GUI framework
-        'python-registry', # Registry parsing
-        'pywin32',      # Windows API access
-        'pandas',       # Data manipulation
-        'streamlit',    # Web-based visualization
-        'altair',       # Interactive charts
-        'olefile',      # OLE file parsing
-        'windowsprefetch' # Prefetch file parsing
-    ]
-    
-    # Check and install all required packages
-    missing_packages = []
-    
-    # First check PyQt5 separately as it's critical
+from colorama import init, Fore
+import importlib.metadata
+
+init()  # Initialize colorama for colored output
+
+# Define all Crow Eye requirements
+crow_eye_requirements = [
+    'PyQt5',        # GUI framework
+    'python-registry', # Registry parsing
+    'pywin32',      # Windows API access
+    'pandas',       # Data manipulation
+    'streamlit',    # Web-based visualization
+    'altair',       # Interactive charts
+    'olefile',      # OLE file parsing
+    'windowsprefetch' # Prefetch file parsing
+]
+
+# Special handling for pywin32 to ensure all components are properly installed
+def verify_pywin32_installation():
     try:
-        importlib.metadata.version('PyQt5')
-        print(Fore.GREEN + 'PyQt5 is already installed' + Fore.RESET)
-    except importlib.metadata.PackageNotFoundError:
-        print(Fore.RED + 'PyQt5 is not installed. Installing now...' + Fore.RESET)
+        # Try to import a specific module from pywin32 to verify installation
+        import win32evtlog
+        print(Fore.GREEN + 'pywin32 components verified successfully' + Fore.RESET)
+        return True
+    except ImportError:
+        print(Fore.RED + 'pywin32 components not properly installed. Reinstalling...' + Fore.RESET)
         try:
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'PyQt5'])
-            print(Fore.GREEN + 'Successfully installed PyQt5' + Fore.RESET)
-        except subprocess.CalledProcessError:
-            print(Fore.RED + 'Failed to install PyQt5' + Fore.RESET)
-            sys.exit(1)  # Exit if PyQt5 cannot be installed
-    
-    # Check all other packages
-    for package in crow_eye_requirements:
-        if package == 'PyQt5':  # Skip PyQt5 as we already checked it
-            continue
+            # Force reinstall pywin32
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', '--force-reinstall', 'pywin32'])
             
+            # Run the post-install script for pywin32
+            try:
+                import site
+                site_packages = site.getsitepackages()[0]
+                post_install_script = os.path.join(site_packages, 'pywin32_system32', 'scripts', 'pywin32_postinstall.py')
+                if os.path.exists(post_install_script):
+                    print(Fore.YELLOW + 'Running pywin32 post-install script...' + Fore.RESET)
+                    subprocess.check_call([sys.executable, post_install_script, '-install'])
+            except Exception as e:
+                print(Fore.YELLOW + f'Note: Could not run post-install script: {e}' + Fore.RESET)
+                print(Fore.YELLOW + 'This is not critical if pywin32 was installed correctly' + Fore.RESET)
+            
+            # Verify installation again
+            try:
+                import win32evtlog
+                print(Fore.GREEN + 'pywin32 components installed successfully' + Fore.RESET)
+                return True
+            except ImportError:
+                print(Fore.RED + 'Failed to install pywin32 components properly' + Fore.RESET)
+                return False
+        except subprocess.CalledProcessError:
+            print(Fore.RED + 'Failed to reinstall pywin32' + Fore.RESET)
+            return False
+
+# Check and install all required packages
+missing_packages = []
+
+# First check PyQt5 separately as it's critical
+try:
+    importlib.metadata.version('PyQt5')
+    print(Fore.GREEN + 'PyQt5 is already installed' + Fore.RESET)
+except importlib.metadata.PackageNotFoundError:
+    print(Fore.RED + 'PyQt5 is not installed. Installing now...' + Fore.RESET)
+    try:
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'PyQt5'])
+        print(Fore.GREEN + 'Successfully installed PyQt5' + Fore.RESET)
+    except subprocess.CalledProcessError:
+        print(Fore.RED + 'Failed to install PyQt5' + Fore.RESET)
+        sys.exit(1)  # Exit if PyQt5 cannot be installed
+
+# Define critical modules to verify for each package
+package_verification_modules = {
+    'PyQt5': ['PyQt5.QtWidgets'],
+    'python-registry': ['Registry'],
+    'pywin32': ['win32api', 'win32evtlog'],
+    'pandas': ['pandas'],
+    'streamlit': ['streamlit'],
+    'altair': ['altair'],
+    'olefile': ['olefile'],
+    'windowsprefetch': ['windowsprefetch']
+}
+
+# Function to verify package functionality by importing key modules
+def verify_package(package_name):
+    """Verify that a package is properly installed and functional.
+    
+    This function checks if a package is installed and verifies its functionality
+    by attempting to import key modules from the package.
+    
+    Args:
+        package_name (str): The name of the package to verify
+        
+    Returns:
+        tuple: (is_installed, is_functional, error_message)
+    """
+    # First check if package is installed
+    try:
+        version = importlib.metadata.version(package_name)
+        is_installed = True
+    except importlib.metadata.PackageNotFoundError:
+        return False, False, f"{package_name} is not installed"
+    
+    # If no specific modules to verify, consider it functional
+    if package_name not in package_verification_modules:
+        return True, True, None
+    
+    # Try to import key modules to verify functionality
+    for module_name in package_verification_modules[package_name]:
         try:
-            importlib.metadata.version(package)
-            print(Fore.GREEN + f'{package} is already installed' + Fore.RESET)
-        except importlib.metadata.PackageNotFoundError:
-            print(Fore.RED + f'{package} is not installed' + Fore.RESET)
-            missing_packages.append(package)
+            importlib.import_module(module_name)
+        except ImportError as e:
+            return True, False, f"{package_name} is installed (v{version}) but module {module_name} failed to import: {str(e)}"
+    
+    return True, True, None
+
+# Check all other packages
+for package in crow_eye_requirements:
+    if package == 'PyQt5':  # Skip PyQt5 as we already checked it
+        continue
+        
+    is_installed, is_functional, error_msg = verify_package(package)
+    
+    if is_installed and is_functional:
+        print(Fore.GREEN + f'{package} is installed and functional' + Fore.RESET)
+    elif is_installed and not is_functional:
+        print(Fore.YELLOW + f'Warning: {error_msg}' + Fore.RESET)
+        missing_packages.append(package)  # Add to missing packages to reinstall
+    else:
+        print(Fore.RED + f'{package} is not installed' + Fore.RESET)
+        missing_packages.append(package)
 
     # Install any missing packages
-    if missing_packages:
-        print(Fore.YELLOW + '\nInstalling missing packages...' + Fore.RESET)
-        for package in missing_packages:
+if missing_packages:
+    print(Fore.YELLOW + '\n┌─────────────────────────────────────────────────┐' + Fore.RESET)
+    print(Fore.YELLOW + '│ Installing Missing Packages                    │' + Fore.RESET)
+    print(Fore.YELLOW + '└─────────────────────────────────────────────────┘' + Fore.RESET)
+    
+    total_packages = len(missing_packages)
+    failed_packages = []
+    successful_packages = []
+    
+    for i, package in enumerate(missing_packages):
+        progress = f"[{i+1}/{total_packages}]"
+        max_attempts = 3
+        
+        print(Fore.CYAN + f"\n{progress} Processing {package}..." + Fore.RESET)
+        
+        for attempt in range(1, max_attempts + 1):
             try:
-                subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
-                print(Fore.GREEN + f'Successfully installed {package}' + Fore.RESET)
-            except subprocess.CalledProcessError:
-                print(Fore.RED + f'Failed to install {package}' + Fore.RESET)
-                # Continue with other packages even if one fails
+                if attempt > 1:
+                    print(Fore.YELLOW + f'  Retry attempt {attempt}/{max_attempts}...' + Fore.RESET)
+                
+                # Show installation in progress
+                print(Fore.CYAN + f'  Installing {package}...' + Fore.RESET)
+                
+                # Use Popen to capture output for better error reporting
+                process = subprocess.Popen(
+                    [sys.executable, '-m', 'pip', 'install', '--upgrade', package],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True
+                )
+                stdout, stderr = process.communicate()
+                
+                if process.returncode == 0:
+                    print(Fore.GREEN + f'  ✓ Successfully installed {package}' + Fore.RESET)
+                    successful_packages.append(package)
+                    break
+                else:
+                    raise subprocess.CalledProcessError(process.returncode, f'pip install --upgrade {package}')
+                    
+            except subprocess.CalledProcessError as e:
+                if attempt == max_attempts:
+                    error_msg = f'Failed to install {package} after {max_attempts} attempts'
+                    print(Fore.RED + f'  ✗ {error_msg}' + Fore.RESET)
+                    
+                    # Show a snippet of the error for context
+                    if stderr:
+                        error_lines = stderr.strip().split('\n')
+                        relevant_error = '\n    '.join(error_lines[-3:]) if len(error_lines) > 3 else stderr
+                        print(Fore.RED + f'  Error details:\n    {relevant_error}' + Fore.RESET)
+                    
+                    failed_packages.append(package)
+                    
+                    # Log the complete error to a file for troubleshooting
+                    with open('crow_eye_install_errors.log', 'a') as log_file:
+                        log_file.write(f'\n--- {datetime.datetime.now()} ---\n')
+                        log_file.write(f'Package: {package}\n')
+                        log_file.write(f'Error: {str(e)}\n')
+                        if stderr:
+                            log_file.write(f'Details:\n{stderr}\n')
+    
+    # Summary report
+    print(Fore.CYAN + '\n─────────────────────────────────────────────────' + Fore.RESET)
+    print(Fore.CYAN + ' Installation Summary' + Fore.RESET)
+    print(Fore.CYAN + '─────────────────────────────────────────────────' + Fore.RESET)
+    
+    if successful_packages:
+        print(Fore.GREEN + f'✓ Successfully installed {len(successful_packages)}/{total_packages} packages' + Fore.RESET)
+    
+    if failed_packages:
+        print(Fore.RED + f'✗ Failed to install {len(failed_packages)}/{total_packages} packages: {", ".join(failed_packages)}' + Fore.RESET)
+        print(Fore.YELLOW + '  Some features may not work correctly.' + Fore.RESET)
+        print(Fore.YELLOW + '  Check crow_eye_install_errors.log for detailed error information.' + Fore.RESET)
+        
+        # Give user a chance to see the errors if not in virtual environment
+        if not hasattr(sys, 'real_prefix') and not (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+            input(Fore.YELLOW + '\nPress Enter to continue anyway...' + Fore.RESET)
     else:
-        print(Fore.GREEN + '\nAll required packages are installed!' + Fore.RESET)
+        print(Fore.GREEN + '\n✓ All missing packages were successfully installed!' + Fore.RESET)
+else:
+    print(Fore.GREEN + '\n✓ All required packages are installed!' + Fore.RESET)
+    
+    # Special verification for pywin32 to ensure all components are properly installed
+    if 'pywin32' in crow_eye_requirements and 'pywin32' not in missing_packages:
+        verify_pywin32_installation()
 
-# Install all requirements
-install_initial_requirements()
+# Check if installation has already been completed
+def check_installation_completed():
+    """Check if the installation process has already been completed.
+    
+    This function checks for the existence of a flag file that indicates
+    the installation process has already been completed successfully.
+    
+    Returns:
+        bool: True if installation has been completed, False otherwise
+    """
+    flag_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.crow_eye_installed')
+    return os.path.exists(flag_file)
+
+def mark_installation_completed():
+    """Mark the installation process as completed.
+    
+    This function creates a flag file to indicate that the installation
+    process has been completed successfully.
+    """
+    flag_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.crow_eye_installed')
+    with open(flag_file, 'w') as f:
+        f.write(f"Installation completed on {datetime.datetime.now()}")
+    print(Fore.GREEN + '✓ Installation marked as completed' + Fore.RESET)
+
+# Only run installation if it hasn't been completed before
+if not check_installation_completed():
+    print(Fore.CYAN + 'First-time setup: Installing required packages...' + Fore.RESET)
+    install_initial_requirements()
+    mark_installation_completed()
+else:
+    print(Fore.GREEN + '✓ Installation already completed, skipping package installation' + Fore.RESET)
 
 # Now we can safely import PyQt5 and other required modules
 from PyQt5.QtGui import QMovie
@@ -210,14 +424,28 @@ def setup_virtual_environment():
     else:
         print(Fore.GREEN + 'Virtual environment already exists' + Fore.RESET)
 
-    # Restart the script with the virtual environment's Python executable
+    # Install essential packages in the virtual environment
     try:
         if os.name == 'nt':  # Windows
             venv_python = os.path.join(venv_path, 'Scripts', 'python.exe')
+            venv_pip = os.path.join(venv_path, 'Scripts', 'pip.exe')
         else:  # Unix-like
             venv_python = os.path.join(venv_path, 'bin', 'python')
+            venv_pip = os.path.join(venv_path, 'bin', 'pip')
         
         if os.path.exists(venv_python):
+            # Install essential packages in the virtual environment
+            print(Fore.CYAN + 'Installing essential packages in virtual environment...' + Fore.RESET)
+            essential_packages = ['colorama', 'setuptools', 'PyQt5'] + crow_eye_requirements
+            
+            for package in essential_packages:
+                try:
+                    print(Fore.CYAN + f'Installing {package} in virtual environment...' + Fore.RESET)
+                    subprocess.check_call([venv_pip, 'install', package])
+                    print(Fore.GREEN + f'Successfully installed {package} in virtual environment' + Fore.RESET)
+                except subprocess.CalledProcessError as e:
+                    print(Fore.RED + f'Failed to install {package} in virtual environment: {str(e)}' + Fore.RESET)
+            
             print(Fore.GREEN + 'Restarting with virtual environment...' + Fore.RESET)
             # Restart the script using the virtual environment's Python
             # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
@@ -232,8 +460,27 @@ def setup_virtual_environment():
         print(Fore.RED + f'Failed to restart with virtual environment: {str(e)}' + Fore.RESET)
         input('Press Enter to continue with global Python environment...')
 
-# Setup virtual environment
-setup_virtual_environment()
+# Setup virtual environment only if not already done
+if not check_installation_completed():
+    setup_virtual_environment()
+else:
+    # If already in virtual environment, just continue
+    if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+        print(Fore.GREEN + 'Already running in virtual environment' + Fore.RESET)
+    else:
+        # If not in virtual environment but installation is complete, activate it
+        venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crow_eye_venv')
+        if os.path.exists(venv_path):
+            if os.name == 'nt':  # Windows
+                venv_python = os.path.join(venv_path, 'Scripts', 'python.exe')
+            else:  # Unix-like
+                venv_python = os.path.join(venv_path, 'bin', 'python')
+            
+            if os.path.exists(venv_python):
+                print(Fore.GREEN + 'Virtual environment exists, restarting with it...' + Fore.RESET)
+                script_path = os.path.abspath(sys.argv[0])
+                subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
+                sys.exit(0)  # Exit current process after starting the new one
 
 # Note: The package requirements and installation functionality has been merged into the install_initial_requirements function
 
