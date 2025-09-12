@@ -160,10 +160,11 @@ def install_initial_requirements():
 # Install all requirements
 install_initial_requirements()
 
-# Now we can safely import PyQt5
+# Now we can safely import PyQt5 and other required modules
 from PyQt5.QtGui import QMovie
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from PyQt5 import QtGui
+from colorama import init, Fore  # Import colorama for global use
 
 def setup_virtual_environment():
     """Create and activate a virtual environment for Crow Eye.
