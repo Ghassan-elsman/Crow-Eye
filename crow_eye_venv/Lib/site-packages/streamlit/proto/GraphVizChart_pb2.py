@@ -14,7 +14,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#streamlit/proto/GraphVizChart.proto\"j\n\rGraphVizChart\x12\x0c\n\x04spec\x18\x01 \x01(\t\x12\x1b\n\x13use_container_width\x18\x04 \x01(\x08\x12\x12\n\nelement_id\x18\x05 \x01(\t\x12\x0e\n\x06\x65ngine\x18\x06 \x01(\tJ\x04\x08\x02\x10\x03J\x04\x08\x03\x10\x04\x42\x32\n\x1c\x63om.snowflake.apps.streamlitB\x12GraphVizChartProtob\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#streamlit/proto/GraphVizChart.proto\"n\n\rGraphVizChart\x12\x0c\n\x04spec\x18\x01 \x01(\t\x12\x1f\n\x13use_container_width\x18\x04 \x01(\x08\x42\x02\x18\x01\x12\x12\n\nelement_id\x18\x05 \x01(\t\x12\x0e\n\x06\x65ngine\x18\x06 \x01(\tJ\x04\x08\x02\x10\x03J\x04\x08\x03\x10\x04\x42\x32\n\x1c\x63om.snowflake.apps.streamlitB\x12GraphVizChartProtob\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -22,6 +22,8 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'streamlit.proto.GraphVizCha
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\034com.snowflake.apps.streamlitB\022GraphVizChartProto'
+  _globals['_GRAPHVIZCHART'].fields_by_name['use_container_width']._loaded_options = None
+  _globals['_GRAPHVIZCHART'].fields_by_name['use_container_width']._serialized_options = b'\030\001'
   _globals['_GRAPHVIZCHART']._serialized_start=39
-  _globals['_GRAPHVIZCHART']._serialized_end=145
+  _globals['_GRAPHVIZCHART']._serialized_end=149
 # @@protoc_insertion_point(module_scope)

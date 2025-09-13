@@ -84,23 +84,9 @@ class CrowEyeStyles:
         table_widget.update()
     
     @staticmethod
-    def apply_tab_styles(tab_widget, style_name="main"):
-        if style_name == "main":
-            style = CrowEyeStyles.MAIN_TAB_WIDGET
-            button_style = CrowEyeStyles.TOP_TAB_BUTTON_STYLE
-        elif style_name == "sub":
-            style = CrowEyeStyles.SUB_TAB_WIDGET
-            button_style = ""  # Sub-tab style is self-contained
-        else:
-            style = CrowEyeStyles.UNIFIED_TAB_STYLE
-            button_style = CrowEyeStyles.TAB_BUTTON_STYLE
-
-        # Apply the main tab widget style
-        tab_widget.setStyleSheet(style)
-        
-        # Apply the tab bar button style specifically
-        if button_style:
-            tab_widget.tabBar().setStyleSheet(button_style)
+    def apply_tab_styles(tab_widget, style_name=None):
+        # All tab styles now use UNIFIED_TAB_STYLE
+        tab_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TAB_STYLE)
         
         # Force a style refresh to ensure styles are applied immediately
         tab_widget.style().unpolish(tab_widget)
@@ -354,23 +340,33 @@ class CrowEyeStyles:
         QTabWidget::pane {
             border: 1px solid #334155;
             border-radius: 8px;
-            background-color: #0B1220;
-            padding: 16px;
-            margin-top: 0;
+            background: #1E293B;
+            margin: 0px;
+            padding: 0px;
         }
         QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 14px 28px;
-            min-width: 140px;
-            border: none;
-            border-bottom: 3px solid transparent;
-            margin-right: 4px;
+            background: #1E293B;
+            color: #94A3B8;
+            border: 1px solid #334155;
+            border-bottom: none;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            padding: 14px 24px;
+            margin: 0px 4px 0px 4px;
+            min-width: 160px;
+            max-width: 300px;
+            min-height: 24px;
+        }
+        QTabBar::tab {
             font-weight: 600;
             font-family: 'Segoe UI', sans-serif;
             font-size: 13px;
-            letter-spacing: 0.8px;
+            letter-spacing: 0.5px;
             text-transform: uppercase;
+            qproperty-wordWrap: false;
+            qproperty-textElideMode: 2;  /* 2 = ElideRight */
+            padding-top: 8px;
+            padding-bottom: 8px;
         }
         QTabBar::tab:selected {
             background-color: #0B1220;
@@ -499,7 +495,7 @@ class CrowEyeStyles:
             border-radius: 8px;
             gridline-color: #334155;
             outline: 0;
-            selection-background-color: #3B82F6;
+            selection-background-color: #10B981;  /* emerald green */
             selection-color: #FFFFFF;
             alternate-background-color: #162032;   /* softer alt rows */
             color: #E2E8F0;
@@ -516,10 +512,12 @@ class CrowEyeStyles:
             font-size: 13px;
         }
         QTableWidget::item:selected {
-            background-color: #2563EB;  /* deeper blue */
+            background-color: #10B981;  /* emerald green */
             color: #FFFFFF;
-            font-weight: 600;
-            border-left: 2px solid #00FFFF;
+            font-weight: 700;
+            border: 2px solid #34D399;
+            border-radius: 2px;
+            padding: 2px;
         }
         QTableWidget::item:hover {
             background-color: rgba(0, 255, 255, 0.12);
@@ -714,77 +712,11 @@ class CrowEyeStyles:
 
 
 
-    # Enhanced Cyberpunk Tab Style with Neon Glow
-    CYBERPUNK_TAB_STYLE = """
-        QTabWidget::pane {
-            border: 2px solid #00FFFF;
-            border-radius: 8px;
-            background-color: #0B1220;
-            padding: 16px;
-        }
-        QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 12px 24px;
-            min-width: 120px;
-            border: none;
-            border-bottom: 3px solid transparent;
-            margin-right: 6px;
-            font-weight: 600;
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 3px solid #00FFFF;
-            font-weight: bold;
-        }
-        QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #00FFFF;
-        }
-        QTabBar::tab:disabled {
-            color: #64748B;
-            background-color: #64748B;
-        }
-    """
+    # Enhanced Cyberpunk Tab Style with Neon Glow - Redirects to UNIFIED_TAB_STYLE
+    CYBERPUNK_TAB_STYLE = UNIFIED_TAB_STYLE
 
-    # Modern Main Tab Widget Style
-    MAIN_TAB_WIDGET = """
-        QTabWidget#main_tab::pane {
-            border: 1px solid #334155;
-            border-radius: 8px;
-            background-color: #0B1220;
-            padding: 16px;
-        }
-        QTabWidget#main_tab QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 14px 28px;
-            min-width: 140px;
-            border: none;
-            border-bottom: 3px solid transparent;
-            margin-right: 4px;
-            font-weight: 600;
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-        }
-        QTabWidget#main_tab QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 3px solid #00FFFF;
-            font-weight: bold;
-        }
-        QTabWidget#main_tab QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #FFFFFF;
-        }
-    """
+    # Modern Main Tab Widget Style - Redirects to UNIFIED_TAB_STYLE
+    MAIN_TAB_WIDGET = UNIFIED_TAB_STYLE
 
     # Modern Tab Background
     TAB_BACKGROUND = """
@@ -1703,43 +1635,8 @@ class CrowEyeStyles:
         }
     """
 
-    # Sub Tab Widget Style
-    SUB_TAB_WIDGET = """
-        QTabWidget::pane {
-            border: 1px solid #334155;
-            border-radius: 6px;
-            background-color: #0B1220;
-            padding: 12px;
-        }
-        QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 10px 20px;
-            min-width: 100px;
-            border: none;
-            border-bottom: 2px solid transparent;
-            margin-right: 3px;
-            font-weight: 600;
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.6px;
-        }
-        QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 2px solid #00FFFF;
-            font-weight: bold;
-        }
-        QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #FFFFFF;
-        }
-        QTabBar::tab:disabled {
-            color: #64748B;
-            background-color: #64748B;
-        }
-    """
+    # Sub Tab Widget Style - Redirects to UNIFIED_TAB_STYLE
+    SUB_TAB_WIDGET = UNIFIED_TAB_STYLE
 
     # Modern Top Tab Button Style with Flat Design
     TOP_TAB_BUTTON_STYLE = """

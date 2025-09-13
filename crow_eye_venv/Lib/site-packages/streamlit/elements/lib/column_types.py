@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING, Literal, TypedDict, Union
+from typing import TYPE_CHECKING, Callable, Literal, TypedDict, Union
 
 from typing_extensions import NotRequired, TypeAlias
 
@@ -84,9 +84,17 @@ class CheckboxColumnConfig(TypedDict):
     type: Literal["checkbox"]
 
 
+SelectboxOptionValue: TypeAlias = Union[str, int, float, bool]
+
+
+class SelectboxOption(TypedDict):
+    value: SelectboxOptionValue
+    label: NotRequired[str | None]
+
+
 class SelectboxColumnConfig(TypedDict):
     type: Literal["selectbox"]
-    options: NotRequired[list[str | int | float] | None]
+    options: NotRequired[list[SelectboxOptionValue | SelectboxOption] | None]
 
 
 class LinkColumnConfig(TypedDict):
@@ -190,8 +198,7 @@ class ColumnConfig(TypedDict, total=False):
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -227,7 +234,7 @@ class ColumnConfig(TypedDict, total=False):
     disabled: bool | None
     required: bool | None
     pinned: bool | None
-    default: str | bool | int | float | None
+    default: str | bool | int | float | list[str] | None
     alignment: Literal["left", "center", "right"] | None
     type_config: (
         NumberColumnConfig
@@ -295,8 +302,7 @@ def Column(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -400,8 +406,7 @@ def NumberColumn(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -563,8 +568,7 @@ def TextColumn(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -686,8 +690,7 @@ def LinkColumn(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -845,8 +848,7 @@ def CheckboxColumn(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -919,8 +921,9 @@ def SelectboxColumn(
     disabled: bool | None = None,
     required: bool | None = None,
     pinned: bool | None = None,
-    default: str | int | float | None = None,
-    options: Iterable[str | int | float] | None = None,
+    default: SelectboxOptionValue | None = None,
+    options: Iterable[SelectboxOptionValue] | None = None,
+    format_func: Callable[[SelectboxOptionValue], str] | None = None,
 ) -> ColumnConfig:
     """Configure a selectbox column in ``st.dataframe`` or ``st.data_editor``.
 
@@ -954,8 +957,7 @@ def SelectboxColumn(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -977,11 +979,18 @@ def SelectboxColumn(
         Specifies the default value in this column when a new row is added by
         the user. This defaults to ``None``.
 
-    options: Iterable of str or None
+    options: Iterable[str, int, float, bool] or None
         The options that can be selected during editing. If this is ``None``
         (default), the options will be inferred from the underlying dataframe
         column if its dtype is "category". For more information, see `Pandas docs
         <https://pandas.pydata.org/docs/user_guide/categorical.html>`_).
+
+    format_func: function or None
+        Function to modify the display of the options. It receives
+        the raw option defined in ``options`` as an argument and should output
+        the label to be shown for that option. If this is ``None`` (default),
+        the raw option is used as the label.
+
 
     Examples
     --------
@@ -1022,6 +1031,15 @@ def SelectboxColumn(
         height: 300px
     """
 
+    # Process options with format_func
+    processed_options: Iterable[str | int | float | SelectboxOption] | None = options
+    if options and format_func is not None:
+        processed_options = []
+        for option in options:
+            processed_options.append(
+                SelectboxOption(value=option, label=format_func(option))
+            )
+
     return ColumnConfig(
         label=label,
         width=width,
@@ -1031,7 +1049,8 @@ def SelectboxColumn(
         pinned=pinned,
         default=default,
         type_config=SelectboxColumnConfig(
-            type="selectbox", options=list(options) if options is not None else None
+            type="selectbox",
+            options=list(processed_options) if processed_options is not None else None,
         ),
     )
 
@@ -1427,12 +1446,20 @@ def ListColumn(
     width: ColumnWidth | None = None,
     help: str | None = None,
     pinned: bool | None = None,
+    disabled: bool | None = None,
+    required: bool | None = None,
+    default: Iterable[str] | None = None,
 ) -> ColumnConfig:
     """Configure a list column in ``st.dataframe`` or ``st.data_editor``.
 
-    This is the default column type for list-like values. List columns are not editable
-    at the moment. This command needs to be used in the ``column_config`` parameter of
-    ``st.dataframe`` or ``st.data_editor``.
+    This is the default column type for list-like values. This command needs to
+    be used in the ``column_config`` parameter of ``st.dataframe`` or
+    ``st.data_editor``.
+
+    .. Note::
+        Editing for non-string or mixed type lists can cause issues with Arrow
+        serialization. We recommend you disable editing for these columns or
+        convert of all list values to strings.
 
     Parameters
     ----------
@@ -1463,6 +1490,24 @@ def ListColumn(
         left side no matter where the user scrolls. If this is ``None``
         (default), Streamlit will decide: index columns are pinned, and data
         columns are not pinned.
+
+    disabled: bool or None
+        Whether editing should be disabled for this column. If this is ``None``
+        (default), Streamlit will enable editing wherever possible.
+
+        If a column has mixed types, it may become uneditable regardless of
+        ``disabled``.
+
+    required: bool or None
+        Whether edited cells in the column need to have a value. If this is
+        ``False`` (default), the user can submit empty values for this column.
+        If this is ``True``, an edited cell in this column can only be
+        submitted if its value is not ``None``, and a new row will only be
+        submitted after the user fills in this column.
+
+    default: Iterable of str or None
+        Specifies the default value in this column when a new row is added by
+        the user. This defaults to ``None``.
 
     Examples
     --------
@@ -1501,6 +1546,9 @@ def ListColumn(
         width=width,
         help=help,
         pinned=pinned,
+        disabled=disabled,
+        required=required,
+        default=None if default is None else list(default),
         type_config=ListColumnConfig(type="list"),
     )
 
@@ -1554,8 +1602,7 @@ def DatetimeColumn(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -1717,8 +1764,7 @@ def TimeColumn(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.
@@ -1871,8 +1917,7 @@ def DateColumn(
 
     disabled: bool or None
         Whether editing should be disabled for this column. If this is ``None``
-        (default), Streamlit will decide: indices are disabled and data columns
-        are not.
+        (default), Streamlit will enable editing wherever possible.
 
         If a column has mixed types, it may become uneditable regardless of
         ``disabled``.

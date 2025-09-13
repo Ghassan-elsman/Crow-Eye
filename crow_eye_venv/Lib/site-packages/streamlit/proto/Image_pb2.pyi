@@ -61,16 +61,7 @@ class ImageList(google.protobuf.message.Message):
     IMGS_FIELD_NUMBER: builtins.int
     WIDTH_FIELD_NUMBER: builtins.int
     width: builtins.int
-    """@see WidthBehavior on the backend
-    @see WidthBehavior on the frontend
-    The width of each image.
-    >0 sets the image width explicitly
-    -1 means use the image width
-    -2 means use the column width (deprecated)
-    -3 means use the smaller of image width & column width (deprecated)
-    -4 means use the smaller of image width & container width
-    -5 means use the larger of image width & container width
-    """
+    """DEPRECATED use widthConfig on Element.proto"""
     @property
     def imgs(self) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[global___Image]: ...
     def __init__(

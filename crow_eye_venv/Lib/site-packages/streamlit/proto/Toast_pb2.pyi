@@ -30,16 +30,25 @@ class Toast(google.protobuf.message.Message):
 
     BODY_FIELD_NUMBER: builtins.int
     ICON_FIELD_NUMBER: builtins.int
+    DURATION_FIELD_NUMBER: builtins.int
     body: builtins.str
     """Display message"""
     icon: builtins.str
     """Emoji"""
+    duration: builtins.int
+    """The time to display the toast message in seconds.
+    If not set, the toast will be displayed for 4 seconds. A value of 0
+    indicates that the toast should not be automatically dismissed.
+    """
     def __init__(
         self,
         *,
         body: builtins.str = ...,
         icon: builtins.str = ...,
+        duration: builtins.int | None = ...,
     ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["body", b"body", "icon", b"icon"]) -> None: ...
+    def HasField(self, field_name: typing.Literal["_duration", b"_duration", "duration", b"duration"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["_duration", b"_duration", "body", b"body", "duration", b"duration", "icon", b"icon"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["_duration", b"_duration"]) -> typing.Literal["duration"] | None: ...
 
 global___Toast = Toast

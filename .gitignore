@@ -10,18 +10,32 @@ crow_eye_venv/
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
 
 # Log files
 *.log
 
 # Environment variables
 .env
+*.env.*
+!.env.example
+
+# Config files
+config/*.json
+!config/example_config.json
+
+# Target artifacts
+Target_Artifacts/
+Artifacts_Collectors/Target Artifacts/
 
 # IDE specific files
 .idea/
 .vscode/
 *.swp
 *.swo
+*.swn
 
 # OS specific files
 .DS_Store

@@ -14,7 +14,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1bstreamlit/proto/Toast.proto\"#\n\x05Toast\x12\x0c\n\x04\x62ody\x18\x01 \x01(\t\x12\x0c\n\x04icon\x18\x02 \x01(\tB*\n\x1c\x63om.snowflake.apps.streamlitB\nToastProtob\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1bstreamlit/proto/Toast.proto\"G\n\x05Toast\x12\x0c\n\x04\x62ody\x18\x01 \x01(\t\x12\x0c\n\x04icon\x18\x02 \x01(\t\x12\x15\n\x08\x64uration\x18\x03 \x01(\x05H\x00\x88\x01\x01\x42\x0b\n\t_durationB*\n\x1c\x63om.snowflake.apps.streamlitB\nToastProtob\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -23,5 +23,5 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\034com.snowflake.apps.streamlitB\nToastProto'
   _globals['_TOAST']._serialized_start=31
-  _globals['_TOAST']._serialized_end=66
+  _globals['_TOAST']._serialized_end=102
 # @@protoc_insertion_point(module_scope)

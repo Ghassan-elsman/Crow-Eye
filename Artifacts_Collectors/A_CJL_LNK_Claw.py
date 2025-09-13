@@ -157,6 +157,180 @@ def collect_artifacts(source_path, user=None):
     
     return artifacts
 
+def parse_artifacts_directly(source_path, db_path, user=None):
+    """Parse artifacts directly without copying them"""
+    artifacts = {'recent': [], 'automatic': [], 'custom': []}
+    unparsed_files = []
+    
+    if not os.path.exists(source_path):
+        print(f" [!] Source path does not exist: {source_path}")
+        return artifacts, unparsed_files
+        
+    try:
+        print(f"\nScanning and parsing: {source_path}")
+        with sqlite3.connect(db_path) as conn:
+            C = conn.cursor()
+            
+            for root, _, files in os.walk(source_path):
+                for file in files:
+                    src = os.path.join(root, file)
+                    artifact_type = detect_artifact(src)
+                    
+                    # Map the artifact type to the directory key
+                    dir_key = None
+                    if artifact_type == "lnk":
+                        dir_key = "recent"
+                    elif artifact_type == "Automatic JumpList":
+                        dir_key = "automatic"
+                    elif artifact_type == "Custom JumpList":
+                        dir_key = "custom"
+                    
+                    if dir_key:
+                        try:
+                            # Process the file directly based on its type
+                            if artifact_type == "Custom JumpList":
+                                # Process custom jump list
+                                stat_info = os.stat(src)
+                                
+                                # Collecting relevant statistics with safe timestamp formatting
+                                file_data = {
+                                    'access_time': format_time(stat_info.st_atime),
+                                    'creation_time': format_time(stat_info.st_ctime),
+                                    'modification_time': format_time(stat_info.st_mtime),
+                                    'file_size': format_size(stat_info.st_size),
+                                    'file_permissions': oct(stat_info.st_mode),
+                                    'owner_uid': stat_info.st_uid,
+                                    'owner_gid': stat_info.st_gid,
+                                    'num_hard_links': stat_info.st_nlink,
+                                    'device_id': stat_info.st_dev,
+                                    'inode_number': stat_info.st_ino,
+                                    'file_name': os.path.basename(src),
+                                    'artifact': artifact_type,
+                                    'source_name': os.path.basename(src),
+                                    'source_path': src
+                                }
+                                
+                                # Insert the data using parameter binding for safety
+                                C.execute("""
+                                INSERT INTO Custom_JLCE (
+                                    Source_Name, Source_Path, Owner_UID, Owner_GID,
+                                    Time_Access, Time_Creation, Time_Modification,
+                                    FileSize, File_Permissions, Num_Hard_Links, Device_ID,
+                                    Inode_Number, Artifact)
+                                VALUES (
+                                    :source_name, :source_path, :owner_uid, :owner_gid,
+                                    :access_time, :creation_time, :modification_time,
+                                    :file_size, :file_permissions, :num_hard_links, :device_id,
+                                    :inode_number, :artifact)
+                                """, {
+                                    "source_name": file_data['source_name'],
+                                    "source_path": file_data['source_path'],
+                                    "owner_uid": safe_sqlite_int(file_data['owner_uid']),
+                                    "owner_gid": safe_sqlite_int(file_data['owner_gid']),
+                                    "access_time": file_data['access_time'],
+                                    "creation_time": file_data['creation_time'],
+                                    "modification_time": file_data['modification_time'],
+                                    "file_size": file_data['file_size'],
+                                    "file_permissions": file_data['file_permissions'],
+                                    "num_hard_links": safe_sqlite_int(file_data['num_hard_links']),
+                                    "device_id": safe_sqlite_int(file_data['device_id']),
+                                    "inode_number": safe_sqlite_int(file_data['inode_number']),
+                                    "artifact": file_data['artifact']
+                                })
+                                
+                                conn.commit()
+                                print(f"Successfully processed custom jump list: {src}")
+                                artifacts[dir_key].append(src)
+                                
+                            else:  # LNK or Automatic JumpList
+                                # Process with Claw parser
+                                stat_info = os.stat(src)
+                                Owner_uid = stat_info.st_uid
+                                owner_gid = stat_info.st_gid
+                                
+                                u_l_file = Claw(src).CE_dec()
+                                for item in u_l_file:
+                                    file_permissions = oct(stat_info.st_mode)
+                                    Source_Name = os.path.basename(src)
+                                    Source_Path = src
+                                    # Use safe timestamp formatting
+                                    Time_Access = format_time(item.get("Time_Access"))
+                                    Time_Creation = format_time(item.get("Time_Creation"))
+                                    Time_Modification = format_time(item.get("Time_Modification"))
+                                    AppType = item.get("AppType", "")
+                                    AppID = item.get("AppID", "")
+                                    Artifact = artifact_type
+
+                                    # Insert data into the database
+                                    C.execute("""
+                                    INSERT INTO JLCE (
+                                        Source_Name, Source_Path, Owner_UID, Owner_GID, 
+                                        Time_Access, Time_Creation, Time_Modification, 
+                                        AppType, AppID, Artifact, Data_Flags, Local_Path, 
+                                        Common_Path, Location_Flags, LNK_Class_ID, File_Attributes, 
+                                        FileSize, Header_Size, IconIndex, ShowWindow, 
+                                        Drive_Type, Drive_SN, Volume_Label, entry_number, 
+                                        Network_Device_Name, Network_Providers, Network_Share_Flags, 
+                                        Network_Share_Name, Network_Share_Name_uni, File_Permissions, 
+                                        Num_Hard_Links, Device_ID, Inode_Number)
+                                    VALUES (
+                                        :Source_Name, :Source_Path, :Owner_UID, :Owner_GID, 
+                                        :Time_Access, :Time_Creation, :Time_Modification, 
+                                        :AppType, :AppID, :Artifact, :Data_Flags, :Local_Path, 
+                                        :Common_Path, :Location_Flags, :LNK_Class_ID, :File_Attributes, 
+                                        :FileSize, :Header_Size, :IconIndex, :ShowWindow, 
+                                        :Drive_Type, :Drive_SN, :Volume_Label, :entry_number, 
+                                        :Network_Device_Name, :Network_Providers, :Network_Share_Flags, 
+                                        :Network_Share_Name, :Network_Share_Name_uni, :File_Permissions, 
+                                        :Num_Hard_Links, :Device_ID, :Inode_Number)
+                                    """, {
+                                        "Source_Name": Source_Name,
+                                        "Source_Path": Source_Path,
+                                        "Owner_UID": safe_sqlite_int(Owner_uid),
+                                        "Owner_GID": safe_sqlite_int(owner_gid),
+                                        "Time_Access": Time_Access,
+                                        "Time_Creation": Time_Creation,
+                                        "Time_Modification": Time_Modification,
+                                        "AppType": AppType,
+                                        "AppID": AppID,
+                                        "Artifact": Artifact,
+                                        "Data_Flags": item.get("Data_Flags", ""),
+                                        "Local_Path": item.get("Local_Path", ""),
+                                        "Common_Path": item.get("Common_Path", ""),
+                                        "Location_Flags": item.get("Location_Flags", ""),
+                                        "LNK_Class_ID": item.get("LNK_Class_ID", ""),
+                                        "File_Attributes": item.get("File_Attributes", ""),
+                                        "FileSize": format_size(stat_info.st_size),
+                                        "Header_Size": safe_sqlite_int(item.get("Header_Size")),
+                                        "IconIndex": safe_sqlite_int(item.get("IconIndex")),
+                                        "ShowWindow": item.get("ShowWindow", ""),
+                                        "Drive_Type": item.get("Drive_Type", ""),
+                                        "Drive_SN": item.get("Drive_SN", ""),
+                                        "Volume_Label": item.get("Volume_Label", ""),
+                                        "entry_number": item.get("entry_number", ""),
+                                        "Network_Device_Name": item.get("Network_Device_Name", ""),
+                                        "Network_Providers": item.get("Network_Providers", ""),
+                                        "Network_Share_Flags": item.get("Network_Share_Flags", ""),
+                                        "Network_Share_Name": item.get("Network_Share_Name", ""),
+                                        "Network_Share_Name_uni": item.get("Network_Share_Name_uni", ""),
+                                        "File_Permissions": file_permissions,
+                                        "Num_Hard_Links": safe_sqlite_int(stat_info.st_nlink),
+                                        "Device_ID": safe_sqlite_int(stat_info.st_dev),
+                                        "Inode_Number": safe_sqlite_int(stat_info.st_ino)
+                                    })
+                                    conn.commit()
+                                    print(f"Successfully processed: {src}")
+                                    artifacts[dir_key].append(src)
+                                    
+                        except Exception as e:
+                            print(f'Error processing file {src}: {e}')
+                            unparsed_files.append(src)
+                            
+    except Exception as e:
+        print(f" [!] Error parsing from {source_path}: {str(e)}")
+    
+    return artifacts, unparsed_files
+
 def collect_user_artifacts(user):
     """Collect all artifacts for a specific user"""
     print(f"\n=== Collecting artifacts for user: {user} ===")
@@ -203,6 +377,58 @@ def collect_user_artifacts(user):
     
     return artifacts
 
+def parse_user_artifacts_directly(user, db_path):
+    """Parse all artifacts for a specific user directly without copying"""
+    print(f"\n=== Parsing artifacts for user: {user} ===")
+    artifacts = {
+        'recent': [],
+        'automatic': [],
+        'custom': []
+    }
+    unparsed_files = []
+    
+    base_path = os.path.join(USER_PROFILES_PATH, user, "AppData")
+    print(f"User AppData path: {base_path}")
+    
+    # 1. Recent and Jump Lists
+    recent_path = os.path.join(base_path, "Roaming", "Microsoft", "Windows", "Recent")
+    recent_data, recent_unparsed = parse_artifacts_directly(recent_path, db_path, user)
+    artifacts['recent'].extend(recent_data['recent'])
+    artifacts['automatic'].extend(recent_data['automatic'])
+    artifacts['custom'].extend(recent_data['custom'])
+    unparsed_files.extend(recent_unparsed)
+    
+    # 2. Desktop shortcuts (LNK files)
+    desktop_path = os.path.join(USER_PROFILES_PATH, user, "Desktop")
+    desktop_data, desktop_unparsed = parse_artifacts_directly(desktop_path, db_path, user)
+    artifacts['recent'].extend(desktop_data['recent'])
+    unparsed_files.extend(desktop_unparsed)
+    
+    # 3. Start Menu shortcuts (LNK files)
+    start_menu_paths = [
+        os.path.join(base_path, "Roaming", "Microsoft", "Windows", "Start Menu"),
+        os.path.join(SYSTEM_DRIVE, "ProgramData", "Microsoft", "Windows", "Start Menu")
+    ]
+    for path in start_menu_paths:
+        start_menu_data, start_menu_unparsed = parse_artifacts_directly(path, db_path, user)
+        artifacts['recent'].extend(start_menu_data['recent'])
+        unparsed_files.extend(start_menu_unparsed)
+    
+    # 4. Taskbar shortcuts (LNK files)
+    taskbar_path = os.path.join(base_path, "Roaming", "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar")
+    taskbar_data, taskbar_unparsed = parse_artifacts_directly(taskbar_path, db_path, user)
+    artifacts['recent'].extend(taskbar_data['recent'])
+    unparsed_files.extend(taskbar_unparsed)
+    
+    # 5. Explorer artifacts
+    explorer_path = os.path.join(base_path, "Local", "Microsoft", "Windows", "Explorer")
+    explorer_data, explorer_unparsed = parse_artifacts_directly(explorer_path, db_path, user)
+    artifacts['automatic'].extend(explorer_data['automatic'])
+    artifacts['custom'].extend(explorer_data['custom'])
+    unparsed_files.extend(explorer_unparsed)
+    
+    return artifacts, unparsed_files
+
 def collect_system_artifacts():
     """Collect system-wide artifacts"""
     print("\n=== Collecting system artifacts ===")
@@ -223,6 +449,34 @@ def collect_system_artifacts():
     artifacts['recent'].extend(recycle_data['recent'])
     
     return artifacts
+
+def parse_system_artifacts_directly(db_path):
+    """Parse system-wide artifacts directly without copying"""
+    print("\n=== Parsing system-wide artifacts ===")
+    artifacts = {
+        'recent': [],
+        'automatic': [],
+        'custom': []
+    }
+    unparsed_files = []
+    
+    # 1. Public Desktop shortcuts
+    public_desktop_path = os.path.join(SYSTEM_DRIVE, "Users", "Public", "Desktop")
+    public_desktop_data, public_desktop_unparsed = parse_artifacts_directly(public_desktop_path, db_path, "Public")
+    artifacts['recent'].extend(public_desktop_data['recent'])
+    unparsed_files.extend(public_desktop_unparsed)
+    
+    # 2. Recycle Bin
+    recycle_bin_path = os.path.join(SYSTEM_DRIVE, "$Recycle.Bin")
+    if os.path.exists(recycle_bin_path):
+        for sid_folder in os.listdir(recycle_bin_path):
+            sid_path = os.path.join(recycle_bin_path, sid_folder)
+            if os.path.isdir(sid_path):
+                recycle_bin_data, recycle_bin_unparsed = parse_artifacts_directly(sid_path, db_path, f"RecycleBin_{sid_folder}")
+                artifacts['recent'].extend(recycle_bin_data['recent'])
+                unparsed_files.extend(recycle_bin_unparsed)
+    
+    return artifacts, unparsed_files
 
 def generate_report(stats):
     """Generate comprehensive collection report"""
@@ -676,15 +930,69 @@ def process_lnk_and_jump_list_files(folder_path, db_path='LnkDB.db'):
 
     return len(unparsed_files)
 
-def A_CJL_LNK_Claw(case_path=None, offline_mode=False):
-    """Main execution function"""
+def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=False):
+    """Main execution function
+    
+    Args:
+        case_path (str, optional): Path to case directory. Defaults to None.
+        offline_mode (bool, optional): Whether to run in offline mode. Defaults to False.
+        direct_parse (bool, optional): Whether to parse artifacts directly without copying. Defaults to False.
+    """
     db_path = None  # Initialize db_path to avoid UnboundLocalError
     
     try:
         # Update target directories based on case path
         update_target_directories(case_path)
         
-        if not offline_mode:
+        # Create database with case path
+        db_path = create_database(case_path)
+        
+        if direct_parse:
+            # Direct parsing mode - parse artifacts directly without copying
+            print("\n=== DIRECT PARSING MODE ===")
+            print("Parsing artifacts directly without copying")
+            
+            # Get user profiles
+            users = get_user_profiles()
+            all_unparsed_files = []
+            stats = {
+                'users_processed': 0,
+                'total_recent': 0,
+                'total_automatic': 0,
+                'total_custom': 0
+            }
+            
+            # Process each user's artifacts directly
+            for user in users:
+                try:
+                    user_artifacts, user_unparsed = parse_user_artifacts_directly(user, db_path)
+                    all_unparsed_files.extend(user_unparsed)
+                    stats['users_processed'] += 1
+                    stats['total_recent'] += len(user_artifacts['recent'])
+                    stats['total_automatic'] += len(user_artifacts['automatic'])
+                    stats['total_custom'] += len(user_artifacts['custom'])
+                except Exception as e:
+                    print(f"Error processing user {user}: {e}")
+                    continue
+            
+            # Process system artifacts directly
+            try:
+                system_artifacts, system_unparsed = parse_system_artifacts_directly(db_path)
+                all_unparsed_files.extend(system_unparsed)
+                stats['total_recent'] += len(system_artifacts['recent'])
+                stats['total_automatic'] += len(system_artifacts['automatic'])
+                stats['total_custom'] += len(system_artifacts['custom'])
+            except Exception as e:
+                print(f"Error processing system artifacts: {e}")
+            
+            # Print results
+            print("\n=== DIRECT PARSING RESULTS ===")
+            print(f"LNK Files: {stats['total_recent']}")
+            print(f"Automatic Jump Lists: {stats['total_automatic']}")
+            print(f"Custom Jump Lists: {stats['total_custom']}")
+            print(f"Unparsed files: {len(all_unparsed_files)}")
+            
+        elif not offline_mode:
             # Normal mode - collect artifacts from the live system
             collection_stats = collect_forensic_artifacts()
             print("\n=== COLLECTION RESULTS ===")
@@ -692,56 +1000,94 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False):
             print(f"LNK Files: {collection_stats['total_recent']}")
             print(f"Automatic Jump Lists: {collection_stats['total_automatic']}")
             print(f"Custom Jump Lists: {collection_stats['total_custom']}")
+            
+            # Then process the collected files into the database
+            folder_path = TARGET_BASE_DIR  # Process the entire target directory
+            if not os.path.exists(folder_path):
+                print(f"Creating folder path: {folder_path}")
+                os.makedirs(folder_path, exist_ok=True)
+                
+            print(f"Processing files from: {folder_path}")
+            # Process files and collect statistics
+            custom_jump_lists = []
+            automatic_jump_lists = []
+            lnk_files = []
+            
+            # Walk through the directory and collect files by type
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    artifact_type = detect_artifact(file_path)
+                    if artifact_type == "lnk":
+                        lnk_files.append(file_path)
+                    elif artifact_type == "Custom JumpList":
+                        custom_jump_lists.append(file_path)
+                    elif artifact_type == "Automatic JumpList":
+                        automatic_jump_lists.append(file_path)
+            
+            # Process the files
+            unparsed_count = process_lnk_and_jump_list_files(folder_path, db_path)
+            
+            # Create file_stats dictionary
+            file_stats = {
+                "custom_jump_lists": len(custom_jump_lists),
+                "automatic_jump_lists": len(automatic_jump_lists),
+                "lnk_files": len(lnk_files),
+                "unparsed_files": unparsed_count
+            }
+            
+            # Print results
+            print("\n=== PROCESSING RESULTS ===")
+            print(f"Custom Jump Lists: {file_stats['custom_jump_lists']}")
+            print(f"Automatic Jump Lists: {file_stats['automatic_jump_lists']}")
+            print(f"LNK Files: {file_stats['lnk_files']}")
+            print(f"Unparsed files: {file_stats['unparsed_files']}")
         else:
             # Offline mode - process artifacts from the case directory
             print("\n=== OFFLINE MODE ===")
             print("Processing artifacts from case directory")
             # No collection needed, files should already be in the target directories
             
-        # Create database with case path
-        db_path = create_database(case_path)
-        
-        # Then process the collected files into the database
-        folder_path = TARGET_BASE_DIR  # Process the entire target directory
-        if not os.path.exists(folder_path):
-            print(f"Creating folder path: {folder_path}")
-            os.makedirs(folder_path, exist_ok=True)
+            folder_path = TARGET_BASE_DIR  # Process the entire target directory
+            if not os.path.exists(folder_path):
+                print(f"Creating folder path: {folder_path}")
+                os.makedirs(folder_path, exist_ok=True)
+                
+            print(f"Processing files from: {folder_path}")
+            # Process files and collect statistics
+            custom_jump_lists = []
+            automatic_jump_lists = []
+            lnk_files = []
             
-        print(f"Processing files from: {folder_path}")
-        # Process files and collect statistics
-        custom_jump_lists = []
-        automatic_jump_lists = []
-        lnk_files = []
-        
-        # Walk through the directory and collect files by type
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                file_path = os.path.join(root, file)
-                artifact_type = detect_artifact(file_path)
-                if artifact_type == "lnk":
-                    lnk_files.append(file_path)
-                elif artifact_type == "Custom JumpList":
-                    custom_jump_lists.append(file_path)
-                elif artifact_type == "Automatic JumpList":
-                    automatic_jump_lists.append(file_path)
-        
-        # Process the files
-        unparsed_count = process_lnk_and_jump_list_files(folder_path, db_path)
-        
-        # Create file_stats dictionary
-        file_stats = {
-            "custom_jump_lists": len(custom_jump_lists),
-            "automatic_jump_lists": len(automatic_jump_lists),
-            "lnk_files": len(lnk_files),
-            "unparsed_files": unparsed_count
-        }
-        
-        # Print results
-        print("\n=== PROCESSING RESULTS ===")
-        print(f"Custom Jump Lists: {file_stats['custom_jump_lists']}")
-        print(f"Automatic Jump Lists: {file_stats['automatic_jump_lists']}")
-        print(f"LNK Files: {file_stats['lnk_files']}")
-        print(f"Unparsed files: {file_stats['unparsed_files']}")
+            # Walk through the directory and collect files by type
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    artifact_type = detect_artifact(file_path)
+                    if artifact_type == "lnk":
+                        lnk_files.append(file_path)
+                    elif artifact_type == "Custom JumpList":
+                        custom_jump_lists.append(file_path)
+                    elif artifact_type == "Automatic JumpList":
+                        automatic_jump_lists.append(file_path)
+            
+            # Process the files
+            unparsed_count = process_lnk_and_jump_list_files(folder_path, db_path)
+            
+            # Create file_stats dictionary
+            file_stats = {
+                "custom_jump_lists": len(custom_jump_lists),
+                "automatic_jump_lists": len(automatic_jump_lists),
+                "lnk_files": len(lnk_files),
+                "unparsed_files": unparsed_count
+            }
+            
+            # Print results
+            print("\n=== PROCESSING RESULTS ===")
+            print(f"Custom Jump Lists: {file_stats['custom_jump_lists']}")
+            print(f"Automatic Jump Lists: {file_stats['automatic_jump_lists']}")
+            print(f"LNK Files: {file_stats['lnk_files']}")
+            print(f"Unparsed files: {file_stats['unparsed_files']}")
         
     except KeyboardInterrupt:
         print("\nCollection aborted by user.")
@@ -753,4 +1099,12 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False):
     print(f"\033[92m\nParsing automatic,custom jumplist and LNK files has been completed by Crow Eye\nDatabase saved to: {db_path}\033[0m")
 
 if __name__ == "__main__":
-    A_CJL_LNK_Claw()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Collect and process LNK and Jump List artifacts")
+    parser.add_argument("--case", "-c", help="Path to case directory")
+    parser.add_argument("--offline", "-o", action="store_true", help="Run in offline mode")
+    parser.add_argument("--direct", "-d", action="store_true", help="Parse artifacts directly without copying")
+    args = parser.parse_args()
+    
+    A_CJL_LNK_Claw(args.case, args.offline, args.direct)

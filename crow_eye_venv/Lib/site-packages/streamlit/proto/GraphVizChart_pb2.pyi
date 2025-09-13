@@ -35,7 +35,7 @@ class GraphVizChart(google.protobuf.message.Message):
     spec: builtins.str
     """A specification of the GraphViz graph in the "Dot" language."""
     use_container_width: builtins.bool
-    """If True, will overwrite the chart width spec to fit to container."""
+    """DEPRECATED: We use widthConfig on Element.proto"""
     element_id: builtins.str
     """A unique ID of this element."""
     engine: builtins.str

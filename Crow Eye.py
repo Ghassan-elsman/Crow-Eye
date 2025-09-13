@@ -243,10 +243,11 @@ import Artifacts_Collectors.A_CJL_LNK_Claw as A_CJL_LNK_Claw
 import Artifacts_Collectors.JLParser as JLParser
 import Artifacts_Collectors.Regclaw as Regclaw
 from PyQt5.QtCore import QObject, pyqtSignal, Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QProgressBar, QLabel, QTextEdit, QHBoxLayout, QFrame, QSplitter
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QProgressBar, QLabel, QTextEdit, QHBoxLayout, QFrame, QSplitter, QComboBox, QCheckBox
 from PyQt5.QtGui import QFont, QPainter, QColor
 from PyQt5 import QtCore, QtGui, QtWidgets
 from styles import CrowEyeStyles
+from utils import SearchUtils, SearchWorker
 
 # ============================================================================
 # ENHANCED UI COMPONENTS SECTION
@@ -255,26 +256,7 @@ from styles import CrowEyeStyles
 
 
 
-class SearchWorker(QObject):
-    finished = pyqtSignal(list)
-
-    def __init__(self, tables, search_text):
-        super().__init__()
-        self.tables = tables
-        self.search_text = search_text
-
-    def run(self):
-        results = []
-        search_text_lower = self.search_text.lower()
-        for table in self.tables:
-            if not hasattr(table, 'rowCount') or not hasattr(table, 'columnCount'):
-                continue
-            for row in range(table.rowCount()):
-                for col in range(table.columnCount()):
-                    item = table.item(row, col)
-                    if item and search_text_lower in item.text().lower():
-                        results.append((table, row, col))
-        self.finished.emit(results)
+# SearchWorker class moved to utils/search_utils.py
 
 class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain object
     # Add data loading methods to the class
@@ -529,34 +511,80 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     self.Dam_table.setItem(row_index, col_index, item)
             conn.close()
         
-                                
+                                 
         def load_data_from_database_lnkAJL(self):
             conn = sqlite3.connect('LnkDB.db')
             cursor = conn.cursor()
+            
+            # Get data
             cursor.execute("SELECT * FROM JLCE")
             rows = cursor.fetchall()
+            
+            if not rows:
+                conn.close()
+                return
+                
+            # Get column names
+            cursor.execute("PRAGMA table_info(JLCE)")
+            columns = [col[1] for col in cursor.fetchall()]
+            
+            # Identify ID columns (case-insensitive)
+            id_columns = [i for i, col in enumerate(columns) if any(id_key in col.lower() for id_key in ['uid', 'guid', 'id', 'uuid'])]
+            
+            # Reorder columns: non-ID columns first, then ID columns
+            col_order = [i for i in range(len(columns)) if i not in id_columns] + id_columns
+            
+            # Update column headers
+            self.LNK_table.setColumnCount(len(columns))
+            self.LNK_table.setHorizontalHeaderLabels([columns[i] for i in col_order])
+            
+            # Populate table with reordered columns
             self.LNK_table.setRowCount(0)
             for row in rows:
                 row_index = self.LNK_table.rowCount()
                 self.LNK_table.insertRow(row_index)
-                for col_index, value in enumerate(row):
-                    item = QtWidgets.QTableWidgetItem(str(value))
-                    self.LNK_table.setItem(row_index, col_index, item)
+                for new_col, old_col in enumerate(col_order):
+                    value = row[old_col] if old_col < len(row) else ""
+                    item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                    self.LNK_table.setItem(row_index, new_col, item)
+            
             conn.close()
         
         def load_data_from_database_CJL(self):
             conn = sqlite3.connect('LnkDB.db')
             cursor = conn.cursor()
+            
+            # Get data
             cursor.execute("SELECT * FROM Custom_JLCE")
             rows = cursor.fetchall()
-            # Populate the table widget with data from the database
+            
+            if not rows:
+                conn.close()
+                return
+                
+            # Get column names
+            cursor.execute("PRAGMA table_info(Custom_JLCE)")
+            columns = [col[1] for col in cursor.fetchall()]
+            
+            # Identify ID columns (case-insensitive)
+            id_columns = [i for i, col in enumerate(columns) if any(id_key in col.lower() for id_key in ['uid', 'guid', 'id', 'uuid'])]
+            
+            # Reorder columns: non-ID columns first, then ID columns
+            col_order = [i for i in range(len(columns)) if i not in id_columns] + id_columns
+            
+            # Update column headers
+            self.Clj_table.setColumnCount(len(columns))
+            self.Clj_table.setHorizontalHeaderLabels([columns[i] for i in col_order])
+            
+            # Populate table with reordered columns
             self.Clj_table.setRowCount(0)
             for row in rows:
                 row_index = self.Clj_table.rowCount()
                 self.Clj_table.insertRow(row_index)
-                for col_index, value in enumerate(row):
-                    item = QtWidgets.QTableWidgetItem(str(value))
-                    self.Clj_table.setItem(row_index, col_index, item)
+                for new_col, old_col in enumerate(col_order):
+                    value = row[old_col] if old_col < len(row) else ""
+                    item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                    self.Clj_table.setItem(row_index, new_col, item)
 
             conn.close()
 
@@ -1000,6 +1028,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 conn.close()
                 return
             
+            # Get column names to identify ID columns
+            cursor.execute("PRAGMA table_info(JLCE)")
+            columns = [col[1].lower() for col in cursor.fetchall()]
+            
+            # Identify ID columns (case-insensitive match)
+            id_columns = [i for i, col in enumerate(columns) if any(id_key in col for id_key in ['uid', 'guid', 'id', 'uuid'])]
+            non_id_columns = [i for i in range(len(columns)) if i not in id_columns]
+            
             # Query all records from JLCE table
             cursor.execute("SELECT * FROM JLCE")
             all_rows = cursor.fetchall()
@@ -1019,31 +1055,54 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 else:
                     lnk_rows.append(row)
             
+            # Function to reorder columns with ID columns at the end
+            def reorder_columns(row_data, id_cols, non_id_cols):
+                # Extract non-ID columns first, then ID columns
+                reordered = [row_data[i] for i in non_id_cols]
+                reordered.extend([row_data[i] for i in id_cols])
+                return reordered
+            
             # Load LNK data into LNK table
             if hasattr(self, 'LNK_table'):
                 self.LNK_table.setRowCount(0)
-                for row in lnk_rows:
-                    row_index = self.LNK_table.rowCount()
-                    self.LNK_table.insertRow(row_index)
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value))
-                        self.LNK_table.setItem(row_index, col_index, item)
+                if lnk_rows:
+                    # Set column headers with ID columns at the end
+                    headers = [columns[i] for i in non_id_columns + id_columns]
+                    self.LNK_table.setColumnCount(len(headers))
+                    self.LNK_table.setHorizontalHeaderLabels(headers)
+                    
+                    for row in lnk_rows:
+                        row_index = self.LNK_table.rowCount()
+                        self.LNK_table.insertRow(row_index)
+                        reordered_row = reorder_columns(row, id_columns, non_id_columns)
+                        for col_index, value in enumerate(reordered_row):
+                            item = QtWidgets.QTableWidgetItem(str(value) if value is not None else '')
+                            self.LNK_table.setItem(row_index, col_index, item)
                 print(f"[LNK] Successfully loaded {len(lnk_rows)} LNK records from {db_path}")
             
             # Load Automatic Jump List data into AJL table
             if hasattr(self, 'AJL_table'):
                 self.AJL_table.setRowCount(0)
-                for row in ajl_rows:
-                    row_index = self.AJL_table.rowCount()
-                    self.AJL_table.insertRow(row_index)
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value))
-                        self.AJL_table.setItem(row_index, col_index, item)
+                if ajl_rows:
+                    # Set column headers with ID columns at the end
+                    headers = [columns[i] for i in non_id_columns + id_columns]
+                    self.AJL_table.setColumnCount(len(headers))
+                    self.AJL_table.setHorizontalHeaderLabels(headers)
+                    
+                    for row in ajl_rows:
+                        row_index = self.AJL_table.rowCount()
+                        self.AJL_table.insertRow(row_index)
+                        reordered_row = reorder_columns(row, id_columns, non_id_columns)
+                        for col_index, value in enumerate(reordered_row):
+                            item = QtWidgets.QTableWidgetItem(str(value) if value is not None else '')
+                            self.AJL_table.setItem(row_index, col_index, item)
                 print(f"[AJL] Successfully loaded {len(ajl_rows)} Automatic Jump List records from {db_path}")
             
             conn.close()
         except Exception as e:
             print(f"[LNK/AJL] Error loading data: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def load_data_from_database_CJL(self):
         """Load Custom Jump List data into the CJL table"""
@@ -1066,17 +1125,34 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print(f"[CJL] Custom_JLCE table not found in database: {db_path}")
                 conn.close()
                 return
-                
+            
+            # Get column names to identify ID columns
+            cursor.execute("PRAGMA table_info(Custom_JLCE)")
+            columns = [col[1].lower() for col in cursor.fetchall()]
+            
+            # Identify ID columns (case-insensitive match)
+            id_columns = [i for i, col in enumerate(columns) if any(id_key in col for id_key in ['uid', 'guid', 'id', 'uuid'])]
+            non_id_columns = [i for i in range(len(columns)) if i not in id_columns]
+            
             cursor.execute("SELECT * FROM Custom_JLCE")
             rows = cursor.fetchall()
+            
             if hasattr(self, 'Clj_table') and hasattr(self, 'CJL_subtab'):
                 self.Clj_table.setRowCount(0)
-                for row in rows:
-                    row_index = self.Clj_table.rowCount()
-                    self.Clj_table.insertRow(row_index)
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value))
-                        self.Clj_table.setItem(row_index, col_index, item)
+                if rows:
+                    # Set column headers with ID columns at the end
+                    headers = [columns[i] for i in non_id_columns + id_columns]
+                    self.Clj_table.setColumnCount(len(headers))
+                    self.Clj_table.setHorizontalHeaderLabels(headers)
+                    
+                    for row in rows:
+                        row_index = self.Clj_table.rowCount()
+                        self.Clj_table.insertRow(row_index)
+                        # Reorder columns with ID columns at the end
+                        reordered_row = [row[i] for i in non_id_columns + id_columns]
+                        for col_index, value in enumerate(reordered_row):
+                            item = QtWidgets.QTableWidgetItem(str(value) if value is not None else '')
+                            self.Clj_table.setItem(row_index, col_index, item)
                 print(f"[CJL] Successfully loaded {len(rows)} records from {db_path}")
             conn.close()
         except Exception as e:
@@ -1517,8 +1593,18 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print(f"[Database Error] Unable to retrieve schema for table '{table_name}'")
                 return False
             
-            # Extract column names
+            # Extract column names and identify ID columns to move to end
             columns = [column[1] for column in columns_info]
+            
+            # Identify ID columns (case-insensitive match)
+            id_columns = [col for col in columns if col.lower() in ['uid', 'guid', 'id', 'uuid']]
+            other_columns = [col for col in columns if col.lower() not in ['uid', 'guid', 'id', 'uuid']]
+            
+            # Reorder columns to move ID columns to the end
+            reordered_columns = other_columns + id_columns
+            
+            # Create a mapping from old column index to new column index
+            col_mapping = [columns.index(col) for col in reordered_columns]
             
             # Fetch data
             cursor.execute(f"SELECT * FROM {table_name}")
@@ -1526,7 +1612,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             if not data:
                 print(f"[Database Info] No data found in table '{table_name}'")
-                table_widget.setUpdatesEnabled(was_updates_enabled)
+                table_widget.setUpdatesEnabled(was_updates_enabled) 
                 return True  # Empty table is still a success
                 
             # Validate data consistency
@@ -1534,10 +1620,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print(f"[Database Error] Data column count mismatch in table '{table_name}'")
                 return False
             
-            # Set column count and headers
-            if table_widget.columnCount() != len(columns):
-                table_widget.setColumnCount(len(columns))
-                table_widget.setHorizontalHeaderLabels(columns)
+            # Set column count and headers with reordered columns
+            if table_widget.columnCount() != len(reordered_columns):
+                table_widget.setColumnCount(len(reordered_columns))
+                table_widget.setHorizontalHeaderLabels(reordered_columns)
             
             # Populate data in batches for better performance
             batch_size = 1000
@@ -1546,7 +1632,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             for i in range(0, len(data), batch_size):
                 batch = data[i:i + batch_size]
                 for row_index, row_data in enumerate(batch, start=i):
-                    for col_index, cell_data in enumerate(row_data):
+                    # Reorder the row data according to the new column order
+                    reordered_row = [row_data[col_idx] for col_idx in col_mapping]
+                    for col_index, cell_data in enumerate(reordered_row):
                         item = QtWidgets.QTableWidgetItem(str(cell_data) if cell_data is not None else "")
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # Make cells read-only
                         table_widget.setItem(row_index, col_index, item)
@@ -2111,26 +2199,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"Tab background setup error: {e}")
     
-    def apply_custom_tab_style(self, tab_widget, style_name="cyberpunk"):
-        """Apply custom tab button styles to a tab widget"""
+    def apply_custom_tab_style(self, tab_widget, style_name=None):
+        """Apply unified tab style to a tab widget"""
         try:
             if not tab_widget:
                 return
                 
-            # Map style names to actual styles
-            style_map = {
-                "cyberpunk": CrowEyeStyles.CYBERPUNK_TAB_STYLE,
-                "enhanced": CrowEyeStyles.TAB_BUTTON_STYLE,
-                "main": CrowEyeStyles.MAIN_TAB_WIDGET,
-                "sub": CrowEyeStyles.SUB_TAB_WIDGET
-            }
-            
-            # Apply the selected style
-            if style_name in style_map:
-                tab_widget.setStyleSheet(style_map[style_name])
-            else:
-                # Default to cyberpunk style
-                tab_widget.setStyleSheet(CrowEyeStyles.CYBERPUNK_TAB_STYLE)
+            # Apply the unified style to all tabs
+            tab_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TAB_STYLE)
                 
         except Exception as e:
             print(f"Custom tab style application error: {e}")
@@ -2566,16 +2642,30 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         if rows:
                             # Ensure headers match table structure
                             cursor.execute(f"PRAGMA table_info({db_table})")
-                            columns = [column[1] for column in cursor.fetchall()]
-                            if gui_table.columnCount() != len(columns):
-                                gui_table.setColumnCount(len(columns))
-                                gui_table.setHorizontalHeaderLabels(columns)
+                            columns_info = cursor.fetchall()
+                            columns = [col[1] for col in columns_info]
+                            
+                            # Reorder columns to move UID and GUID to the end
+                            uid_cols = [col for col in columns if col.lower() in ['uid', 'guid', 'id', 'uuid']]
+                            other_cols = [col for col in columns if col.lower() not in ['uid', 'guid', 'id', 'uuid']]
+                            reordered_columns = other_cols + uid_cols
+                            
+                            # Create a mapping from old column index to new column index
+                            col_mapping = [columns.index(col) for col in reordered_columns]
+                            
+                            if gui_table.columnCount() != len(reordered_columns):
+                                gui_table.setColumnCount(len(reordered_columns))
+                                gui_table.setHorizontalHeaderLabels(reordered_columns)
+                            
                             gui_table.setRowCount(len(rows))
                             for r_idx, row in enumerate(rows):
-                                for c_idx, value in enumerate(row):
+                                # Reorder the row data according to the new column order
+                                reordered_row = [row[i] for i in col_mapping]
+                                for c_idx, value in enumerate(reordered_row):
                                     item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
                                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                                     gui_table.setItem(r_idx, c_idx, item)
+                            
                             gui_table.resizeColumnsToContents()
                     except Exception as e:
                         print(f"[Registry Error] Failed to load {db_table}: {str(e)}")
@@ -2924,7 +3014,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.main_tab.setAutoFillBackground(False)
         self.main_tab.setIconSize(QtCore.QSize(30, 16))
         # Apply styles to tab widgets
-        CrowEyeStyles.apply_tab_styles(self.main_tab, style_name="main")
+        CrowEyeStyles.apply_tab_styles(self.main_tab)
 
         # Set object names for specific styling
         self.main_tab.setObjectName("main_tab")
@@ -2937,7 +3027,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.verticalLayout_4.setObjectName("verticalLayout_4")
         self.Registry_widget = QtWidgets.QTabWidget(self.Registry_Tab)
         self.Registry_widget.setObjectName("Registry_widget")
-        CrowEyeStyles.apply_tab_styles(self.Registry_widget, style_name="sub")
+        CrowEyeStyles.apply_tab_styles(self.Registry_widget)
         # Apply standard tab configuration with unified sub-tab styling
         self.setup_standard_tab_widget(self.Registry_widget, style_sheet=CrowEyeStyles.UNIFIED_TAB_STYLE)
         self.apply_custom_tab_style(self.Registry_widget)
@@ -3005,18 +3095,20 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.MachineRunOnce_tabel.setObjectName("MachineRunOnce_tabel")
         self.verticalLayout_12.addWidget(self.MachineRunOnce_tabel)
         self.Registry_widget.addTab(self.Machine_run_once, "")
-        
-        # ShimCache Tab
-        self.ShimCache_tab = QtWidgets.QWidget()
-        self.ShimCache_tab.setObjectName("ShimCache_tab")
-        self.verticalLayout_shimcache = QtWidgets.QVBoxLayout(self.ShimCache_tab)
-        self.verticalLayout_shimcache.setObjectName("verticalLayout_shimcache")
-        self.ShimCache_table = QtWidgets.QTableWidget(self.ShimCache_tab)
-        self.setup_standard_table(self.ShimCache_table, 6, True, 300, 190)
-        self.ShimCache_table.setObjectName("ShimCache_table")
-        self.verticalLayout_shimcache.addWidget(self.ShimCache_table)
-        self.Registry_widget.addTab(self.ShimCache_tab, "")
-        
+
+        # ShimCache Tab - Removed as per user request
+        # self.ShimCache_tab = QtWidgets.QWidget()
+        # self.ShimCache_tab.setObjectName("ShimCache_tab")
+        # self.verticalLayout_shimcache = QtWidgets.QVBoxLayout(self.ShimCache_tab)
+        # self.verticalLayout_shimcache.setContentsMargins(0, 0, 0, 0)
+        # self.verticalLayout_shimcache.setSpacing(0)
+        # self.verticalLayout_shimcache.setObjectName("verticalLayout_shimcache")
+        # self.ShimCache_table = QtWidgets.QTableWidget(self.ShimCache_tab)
+        # self.setup_standard_table(self.ShimCache_table, 6, True, 300, 190)
+        # self.ShimCache_table.setObjectName("ShimCache_table")
+        # self.verticalLayout_shimcache.addWidget(self.ShimCache_table)
+        # self.Registry_widget.addTab(self.ShimCache_tab, "")
+
         self.User_run = QtWidgets.QWidget()
         self.User_run.setObjectName("User_run")
         self.verticalLayout_13 = QtWidgets.QVBoxLayout(self.User_run)
@@ -3137,10 +3229,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.verticalLayout_17.addLayout(self.horizontalLayout_5)
         self.filesActivityTab_tables = QtWidgets.QTabWidget(self.filesActivity_tab)
         self.filesActivityTab_tables.setObjectName("filesActivityTab_tables")
-        CrowEyeStyles.apply_tab_styles(self.filesActivityTab_tables, style_name="sub")
+        CrowEyeStyles.apply_tab_styles(self.filesActivityTab_tables)
         # Apply standard tab configuration with unified sub-tab styling
-        self.setup_standard_tab_widget(self.filesActivityTab_tables, style_sheet=CrowEyeStyles.SUB_TAB_WIDGET)
-        self.apply_custom_tab_style(self.filesActivityTab_tables, "sub")
+        self.setup_standard_tab_widget(self.filesActivityTab_tables, style_sheet=CrowEyeStyles.UNIFIED_TAB_STYLE)
+        self.apply_custom_tab_style(self.filesActivityTab_tables)
         self.Recent_docs_tab = QtWidgets.QWidget()
         self.Recent_docs_tab.setObjectName("Recent_docs_tab")
         self.verticalLayout_19 = QtWidgets.QVBoxLayout(self.Recent_docs_tab)
@@ -3214,7 +3306,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.verticalLayout_32 = QtWidgets.QVBoxLayout(self.Installed_sowftare)
         self.verticalLayout_32.setObjectName("verticalLayout_32")
         self.tableWidget = QtWidgets.QTableWidget(self.Installed_sowftare)
-        self.setup_standard_table(self.tableWidget, 7, True, 300, 190)
+        self.setup_standard_table(self.tableWidget, 7, True, 400, 190)
         self.tableWidget.setObjectName("tableWidget")
         self.verticalLayout_32.addWidget(self.tableWidget)
         self.filesActivityTab_tables.addTab(self.Installed_sowftare, "")
@@ -3247,7 +3339,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Create subtab widget for LNK and Jump Lists
         self.lnk_jl_subtabs = QtWidgets.QTabWidget(self.LNK_JL_Tab)
         self.lnk_jl_subtabs.setObjectName("lnk_jl_subtabs")
-        CrowEyeStyles.apply_tab_styles(self.lnk_jl_subtabs, style_name="sub")
+        CrowEyeStyles.apply_tab_styles(self.lnk_jl_subtabs)
         self.setup_standard_tab_widget(self.lnk_jl_subtabs, style_sheet=CrowEyeStyles.UNIFIED_TAB_STYLE)
         self.apply_custom_tab_style(self.lnk_jl_subtabs)
         self.setup_standard_tab_background(self.lnk_jl_subtabs)
@@ -3298,7 +3390,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Create and configure the tab widget
         self.tabWidget = QtWidgets.QTabWidget(self.Logs_tab)
         self.tabWidget.setObjectName("tabWidget")
-        CrowEyeStyles.apply_tab_styles(self.tabWidget, style_name="sub")
+        CrowEyeStyles.apply_tab_styles(self.tabWidget)
         
         # Apply standard configuration with unified tab style
         self.setup_standard_tab_widget(self.tabWidget, style_sheet=CrowEyeStyles.UNIFIED_TAB_STYLE)
@@ -3372,9 +3464,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.Amcache_tab_widget = QtWidgets.QTabWidget(self.Amcache_main_tab)
         self.Amcache_tab_widget.setObjectName("Amcache_tab_widget")
         
-        # Apply cyberpunk style to the tab widget
+        # Apply unified style to the tab widget
         from styles import CrowEyeStyles
-        self.Amcache_tab_widget.setStyleSheet(CrowEyeStyles.CYBERPUNK_TAB_STYLE)
+        self.Amcache_tab_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TAB_STYLE)
         
         # Create tabs for each Amcache table
         self.create_amcache_table_tabs()
@@ -4735,8 +4827,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # Get the database path
             db_path = self.get_lnk_db_path()
             
-            # Run the LNK and Jump List collector
-            A_CJL_LNK_Claw(case_path=case_root, db_path=db_path, offline_mode=False)
+            # Run the LNK and Jump List collector with direct parsing enabled
+            A_CJL_LNK_Claw(case_path=case_root, offline_mode=False, direct_parse=True)
             
             print("[LNK] LNK and Jump Lists collected successfully")
             
@@ -4881,11 +4973,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Parse offline LNK files and Jump Lists using the offline module"""
         try:
             print("[Offline LNK] Starting offline LNK and Jump Lists analysis...")
-            from Artifacts_Collectors.offlineACJL import A_CJL_LNK_Claw
+            from Artifacts_Collectors.A_CJL_LNK_Claw import A_CJL_LNK_Claw
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
             
-            # Call the offline LNK analysis function with case_root
-            A_CJL_LNK_Claw(case_root=case_root)
+            # Call the offline LNK analysis function with case_root and direct parsing
+            A_CJL_LNK_Claw(case_path=case_root, offline_mode=True, direct_parse=True)
             print("[Offline LNK] Offline LNK and Jump Lists analyzed successfully")
             
             # Load the data into the UI
@@ -4966,10 +5058,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 dialog.update_step(1, "🔗 COLLECTING LNK FILES AND JUMP LISTS")
                 QtWidgets.QApplication.processEvents()  # Force GUI update
                 try:
-                    # Import and call the LNK collection function
+                    # Import and call the LNK collection function with direct parsing
                     from Artifacts_Collectors.A_CJL_LNK_Claw import A_CJL_LNK_Claw
                     case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                    A_CJL_LNK_Claw(case_path=case_root, offline_mode=False)
+                    A_CJL_LNK_Claw(case_path=case_root, offline_mode=False, direct_parse=True)
                     print("[LNK] LNK and Jump Lists collected successfully")
                 except Exception as e:
                     print(f"[LNK Error] {str(e)}")
@@ -5118,7 +5210,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print("[LNK] Collecting LNK and Jump Lists...")
                 from Artifacts_Collectors.A_CJL_LNK_Claw import A_CJL_LNK_Claw
                 case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                A_CJL_LNK_Claw(case_path=case_root, offline_mode=False)
+                A_CJL_LNK_Claw(case_path=case_root, offline_mode=False, direct_parse=True)
             except Exception as e:
                 print(f"[LNK Error] {str(e)}")
             try:
@@ -5660,78 +5752,257 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             )
 
                     
+    def setup_search_ui(self):
+        """Set up the search UI with filtering options"""
+        # Create a layout for the search filter options
+        self.search_filter_layout = QHBoxLayout()
+        
+        # Create a dropdown for table selection mode
+        self.search_mode_combo = QComboBox()
+        self.search_mode_combo.addItem("Search All Tables", "all")
+        self.search_mode_combo.addItem("Search Selected Tables", "include")
+        self.search_mode_combo.addItem("Search All Except Selected", "exclude")
+        self.search_mode_combo.setToolTip("Select which tables to search in")
+        self.search_mode_combo.currentIndexChanged.connect(self.update_search_table_selection)
+        
+        # Create a dropdown for table selection
+        self.search_tables_combo = QComboBox()
+        self.search_tables_combo.setEnabled(False)  # Initially disabled when "Search All Tables" is selected
+        self.search_tables_combo.setToolTip("Select tables to include/exclude from search")
+        
+        # Add a button to add the selected table to the list
+        self.add_table_button = QtWidgets.QPushButton("+")
+        self.add_table_button.setEnabled(False)  # Initially disabled
+        self.add_table_button.setToolTip("Add selected table to filter list")
+        self.add_table_button.clicked.connect(self.add_table_to_filter)
+        
+        # Create a layout for the selected tables
+        self.selected_tables_layout = QVBoxLayout()
+        self.selected_tables_frame = QFrame()
+        self.selected_tables_frame.setLayout(self.selected_tables_layout)
+        self.selected_tables_frame.setVisible(False)  # Initially hidden
+        
+        # Add the widgets to the search filter layout
+        self.search_filter_layout.addWidget(self.search_mode_combo)
+        self.search_filter_layout.addWidget(self.search_tables_combo)
+        self.search_filter_layout.addWidget(self.add_table_button)
+        
+        # Add the search filter layout to the main search layout
+        self.search_layout.insertLayout(1, self.search_filter_layout)
+        self.search_layout.insertWidget(2, self.selected_tables_frame)
+        
+        # Populate the tables dropdown
+        self.populate_tables_dropdown()
+    
+    def populate_tables_dropdown(self):
+        """Populate the tables dropdown with all available tables"""
+        self.search_tables_combo.clear()
+        table_names = SearchUtils.get_table_names(self)
+        for table_name in sorted(table_names):
+            self.search_tables_combo.addItem(table_name)
+    
+    def update_search_table_selection(self):
+        """Update the UI based on the selected search mode"""
+        mode = self.search_mode_combo.currentData()
+        if mode == "all":
+            self.search_tables_combo.setEnabled(False)
+            self.add_table_button.setEnabled(False)
+            self.selected_tables_frame.setVisible(False)
+        else:  # "include" or "exclude"
+            self.search_tables_combo.setEnabled(True)
+            self.add_table_button.setEnabled(True)
+            self.selected_tables_frame.setVisible(True)
+    
+    def add_table_to_filter(self):
+        """Add the selected table to the filter list"""
+        table_name = self.search_tables_combo.currentText()
+        if not table_name:
+            return
+            
+        # Check if this table is already in the list
+        for i in range(self.selected_tables_layout.count()):
+            widget = self.selected_tables_layout.itemAt(i).widget()
+            if isinstance(widget, QHBoxLayout):
+                label = widget.itemAt(0).widget()
+                if label.text() == table_name:
+                    return  # Table already in the list
+        
+        # Create a layout for this table entry
+        table_layout = QHBoxLayout()
+        
+        # Add a label with the table name
+        label = QLabel(table_name)
+        
+        # Add a remove button
+        remove_button = QtWidgets.QPushButton("X")
+        remove_button.setMaximumWidth(30)
+        remove_button.clicked.connect(lambda: self.remove_table_from_filter(table_layout))
+        
+        # Add the widgets to the layout
+        table_layout.addWidget(label)
+        table_layout.addWidget(remove_button)
+        
+        # Create a widget to hold this layout
+        table_widget = QWidget()
+        table_widget.setLayout(table_layout)
+        
+        # Add the widget to the selected tables layout
+        self.selected_tables_layout.addWidget(table_widget)
+    
+    def remove_table_from_filter(self, layout):
+        """Remove a table from the filter list"""
+        # Find the widget that contains this layout
+        for i in range(self.selected_tables_layout.count()):
+            widget = self.selected_tables_layout.itemAt(i).widget()
+            if widget.layout() == layout:
+                # Remove the widget from the layout
+                self.selected_tables_layout.removeWidget(widget)
+                # Delete the widget
+                widget.deleteLater()
+                break
+    
+    def get_filtered_tables(self):
+        """Get the list of tables to include or exclude based on the filter settings"""
+        try:
+            # Check if search_mode_combo exists
+            if hasattr(self, 'search_mode_combo'):
+                mode = self.search_mode_combo.currentData()
+            else:
+                print("DEBUG: search_mode_combo not found, defaulting to 'all' mode")
+                return None, None  # Default to searching all tables
+                
+            if mode == "all":
+                return None, None  # No filtering
+            
+            # Get the list of selected tables
+            selected_tables = []
+            if hasattr(self, 'selected_tables_layout'):
+                for i in range(self.selected_tables_layout.count()):
+                    widget = self.selected_tables_layout.itemAt(i).widget()
+                    if widget:
+                        label = widget.layout().itemAt(0).widget()
+                        selected_tables.append(label.text())
+            else:
+                print("DEBUG: selected_tables_layout not found")
+                return None, None  # Default to searching all tables
+            
+            if mode == "include":
+                return selected_tables, None  # Include only these tables
+            else:  # mode == "exclude":
+                return None, selected_tables  # Exclude these tables
+        except Exception as e:
+            print(f"ERROR in get_filtered_tables: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None, None  # Default to searching all tables
+    
     def search_tables(self):
-        search_text = self.search_input.text().strip()
-        print(f"DEBUG: search_tables called with search_text: '{search_text}'")
-        if not search_text:
-            QMessageBox.information(self.main_window, "Search", "Please enter text to search for.")
+        """Search for text in tables with filtering options"""
+        try:
+            search_text = self.search_input.text().strip()
+            print(f"DEBUG: search_tables called with search_text: '{search_text}'")
+            if not search_text:
+                QMessageBox.information(self.main_window, "Search", "Please enter text to search for.")
+                return
+
+            self.loading_label.show()
+            self.loading_movie.start()
+            self.clear_search_results()
+
+            # Get tables and filter settings
+            tables = SearchUtils.find_all_table_widgets(self)
+            include_tables, exclude_tables = self.get_filtered_tables()
+            
+            print(f"DEBUG: Found {len(tables)} tables to search.")
+            if include_tables:
+                print(f"DEBUG: Including only these tables: {include_tables}")
+            if exclude_tables:
+                print(f"DEBUG: Excluding these tables: {exclude_tables}")
+
+            # Ensure highlight_queue exists
+            if not hasattr(self, 'highlight_queue'):
+                self.highlight_queue = collections.deque()
+                
+            # Ensure is_processing_highlight flag exists
+            if not hasattr(self, 'is_processing_highlight'):
+                self.is_processing_highlight = False
+
+            self.thread = QtCore.QThread()
+            # Import SearchWorker from utils.search_utils
+            from utils.search_utils import SearchWorker
+            self.worker = SearchWorker(tables, search_text, include_tables, exclude_tables)
+            self.worker.moveToThread(self.thread)
+            self.thread.started.connect(self.worker.run)
+            self.worker.finished.connect(self.on_search_finished)
+            self.worker.finished.connect(self.thread.quit)
+            self.worker.finished.connect(self.worker.deleteLater)
+            self.thread.finished.connect(self.thread.deleteLater)
+            self.thread.start()
+        except Exception as e:
+            print(f"ERROR in search_tables: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            self.loading_movie.stop()
+            self.loading_label.hide()
+            QMessageBox.critical(self.main_window, "Search Error", f"An error occurred during search: {str(e)}")
             return
 
-        self.loading_label.show()
-        self.loading_movie.start()
-        self.clear_search_results()
-
-        tables = self.find_all_table_widgets()
-        print(f"DEBUG: Found {len(tables)} tables to search.")
-
-        self.thread = QThread()
-        self.worker = SearchWorker(tables, search_text)
-        self.worker.moveToThread(self.thread)
-        self.thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self.on_search_finished)
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.start()
-
     def on_search_finished(self, results):
-        self.search_results = results
-        print(f"DEBUG: on_search_finished called with {len(self.search_results)} results.")
-        self.loading_movie.stop()
-        self.loading_label.hide()
+        try:
+            self.search_results = results
+            print(f"DEBUG: on_search_finished called with {len(self.search_results)} results.")
+            self.loading_movie.stop()
+            self.loading_label.hide()
 
-        # Clear any existing highlights and queue
-        self.highlight_queue.clear()
-        
-        if self.search_results:
-            # Initialize the current result index
-            self.current_result_index = 0
-            print(f"DEBUG: Initial current_result_index: {self.current_result_index}")
+            # Ensure highlight_queue exists
+            if not hasattr(self, 'highlight_queue'):
+                self.highlight_queue = collections.deque()
+            else:
+                # Clear any existing highlights and queue
+                self.highlight_queue.clear()
             
-            # Update the search result label
-            self.update_search_result_label()
-            
-            # Enable navigation buttons
-            self.prev_result_button.setEnabled(len(self.search_results) > 1)
-            self.next_result_button.setEnabled(len(self.search_results) > 1)
-            if hasattr(self, '_search_button'):
-                self._search_button.setEnabled(True)
+            if self.search_results:
+                # Initialize the current result index
+                self.current_result_index = 0
+                print(f"DEBUG: Initial current_result_index: {self.current_result_index}")
                 
-            # Trigger highlighting of the first result
-            self.highlight_current_result()
-            
-            # Show message after highlighting is queued
-            QMessageBox.information(self.main_window, "Search Results",
-                                  f"Found {len(self.search_results)} matches.")
-        else:
-            # No results found
-            self.search_label.setText("Search:")
-            QMessageBox.information(self.main_window, "Search Results", "No matches found.")
-            self.prev_result_button.setEnabled(False)
-            self.next_result_button.setEnabled(False)
-            if hasattr(self, '_search_button'):
-                self._search_button.setEnabled(False)
+                # Update the search result label
+                self.update_search_result_label()
+                
+                # Enable navigation buttons
+                self.prev_result_button.setEnabled(len(self.search_results) > 1)
+                self.next_result_button.setEnabled(len(self.search_results) > 1)
+                if hasattr(self, '_search_button'):
+                    self._search_button.setEnabled(True)
+                    
+                # Trigger highlighting of the first result
+                self.highlight_current_result()
+                
+                # Show message after highlighting is queued
+                QMessageBox.information(self.main_window, "Search Results",
+                                      f"Found {len(self.search_results)} matches.")
+            else:
+                # No results found
+                self.search_label.setText("Search:")
+                QMessageBox.information(self.main_window, "Search Results", "No matches found.")
+                self.prev_result_button.setEnabled(False)
+                self.next_result_button.setEnabled(False)
+                if hasattr(self, '_search_button'):
+                    self._search_button.setEnabled(False)
+        except Exception as e:
+            print(f"ERROR in on_search_finished: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            self.loading_movie.stop()
+            self.loading_label.hide()
+            QMessageBox.critical(self.main_window, "Search Error", f"An error occurred while processing search results: {str(e)}")
+            return
 
     
     def find_all_table_widgets(self):
         """Find all QTableWidget instances in the application"""
-        tables = []
-        # Find all attributes that are table widgets
-        for attr_name in dir(self):
-            attr = getattr(self, attr_name)
-            if isinstance(attr, QtWidgets.QTableWidget):
-                tables.append(attr)
-        return tables
+        # Use the SearchUtils class to find all table widgets
+        return SearchUtils.find_all_table_widgets(self)
         
     def enable_sorting_for_all_tables(self):
         """Enable sorting for all table widgets in the application"""
@@ -5776,22 +6047,55 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         Returns:
             bool: True if a highlight request was added to the queue, False otherwise.
         """
-        if 0 <= self.current_result_index < len(self.search_results):
-            # Clear the queue to avoid backlog of highlights
-            self.highlight_queue.clear()
-            self.highlight_queue.append(self.current_result_index)
-            
-            # Process immediately if requested
-            if process_immediately:
-                print(f"DEBUG: Processing highlight immediately for result {self.current_result_index}")
-                self.process_highlight_queue(force=True)
-                return True
+        try:
+            # Check if search_results exists and is valid
+            if not hasattr(self, 'search_results') or not self.search_results:
+                print("DEBUG: No search results available for highlighting")
+                return False
                 
-            # Otherwise ensure the timer is running
-            if not self.highlight_timer.isActive():
-                self.highlight_timer.start()
-            return True
-        return False
+            # Check if current_result_index exists and is valid
+            if not hasattr(self, 'current_result_index'):
+                print("DEBUG: current_result_index not found")
+                return False
+                
+            # Check if we have valid search results
+            if 0 <= self.current_result_index < len(self.search_results):
+                result = self.search_results[self.current_result_index]
+                
+                # Validate result format
+                if not isinstance(result, tuple) or len(result) not in [2, 3]:  # Accept both (table, row) and (table, row, col)
+                    print(f"DEBUG: Invalid result format: {result}")
+                    return False
+                
+                # Handle both new (table, row) and old (table, row, col) formats
+                if len(result) == 2:
+                    table, row = result
+                else:  # len(result) == 3
+                    table, row, _ = result  # Ignore column
+                
+                # Add to queue if not processing immediately
+                if not process_immediately:
+                    # Ensure highlight_queue exists
+                    if not hasattr(self, 'highlight_queue'):
+                        self.highlight_queue = collections.deque()
+                    
+                    # Add to queue
+                    self.highlight_queue.append((table, row))
+                    return True
+                else:
+                    # Process immediately
+                    result = SearchUtils.highlight_search_result(self, table, row, process_immediately)
+                    # Update the search result counter display
+                    self.update_search_result_label()
+                    return result
+            else:
+                print(f"DEBUG: current_result_index {self.current_result_index} out of range for search_results length {len(self.search_results)}")
+            return False
+        except Exception as e:
+            print(f"ERROR in highlight_current_result: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     def process_highlight_queue(self, force=False):
         """Processes one highlight request from the queue.
@@ -5799,343 +6103,47 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         Args:
             force (bool): If True, process the queue even if is_processing_highlight is True.
         """
-        if (self.is_processing_highlight and not force) or not self.highlight_queue:
-            return
-
-        self.is_processing_highlight = True
         try:
-            result_index = self.highlight_queue.popleft()
-            if not (0 <= result_index < len(self.search_results)):
-                return
-
-            # Set current_result_index to the index we're processing
-            self.current_result_index = result_index
-            
-            table, row, _ = self.search_results[result_index]
-            if not table or not isinstance(table, QtWidgets.QTableWidget):
-                return
-
-            print(f"DEBUG: Processing highlight for table {table.objectName()}, row {row}")
-            
-            # For all tables, use the enhanced make_table_visible method
-            self.make_table_visible(table)
-            
-            # Process events to ensure UI updates
-            QtWidgets.QApplication.processEvents()
-            
-            # Wait for the table to become visible with a timeout
-            start_time = QtCore.QTime.currentTime()
-            max_wait_time = 2000  # Increase timeout to 2 seconds for complex nested tabs
-            while not table.isVisible() and start_time.msecsTo(QtCore.QTime.currentTime()) < max_wait_time:
-                QtWidgets.QApplication.processEvents()
-                QtCore.QThread.msleep(50)
-            
-            # Ensure the table is actually visible before proceeding
-            if not table.isVisible():
-                print(f"WARNING: Table {table.objectName()} is still not visible after waiting")
-                
-                # Special handling for LNK_table
-                if table.objectName() == "LNK_table" and hasattr(self, 'main_tab') and hasattr(self, 'LNK_JL_Tab'):
-                    print(f"DEBUG: Special retry for LNK_table")
-                    # Force the main tab to show LNK_JL_Tab
-                    for i in range(self.main_tab.count()):
-                        if self.main_tab.widget(i) is self.LNK_JL_Tab:
-                            self.main_tab.setCurrentIndex(i)
-                            self.main_tab.update()
-                            self.main_tab.repaint()
-                            break
-                    
-                    # Force application to process all pending events
-                    QtWidgets.QApplication.processEvents()
-                    QtCore.QThread.msleep(500)  # Much longer delay
-                    QtWidgets.QApplication.processEvents()
-                    
-                    # Try to force focus and visibility
-                    self.LNK_JL_Tab.show()
-                    self.LNK_JL_Tab.raise_()
-                    self.LNK_JL_Tab.setFocus()
-                    self.LNK_JL_Tab.update()
-                    self.LNK_JL_Tab.repaint()
-                    
-                    # Also make sure the LNK subtab is selected
-                    if hasattr(self, 'lnk_jl_subtabs') and hasattr(self, 'LNK_subtab'):
-                        for j in range(self.lnk_jl_subtabs.count()):
-                            if self.lnk_jl_subtabs.widget(j) is self.LNK_subtab:
-                                self.lnk_jl_subtabs.setCurrentIndex(j)
-                                break
-                    QtWidgets.QApplication.processEvents()
-                    
-                    table.show()
-                    table.raise_()
-                    table.setFocus()
-                    table.update()
-                    table.repaint()
-                    QtWidgets.QApplication.processEvents()
-                
-                # Try to force focus on the table's parent
-                parent = table.parentWidget()
-                if parent:
-                    parent.show()
-                    parent.raise_()
-                    parent.setFocus()
-                    parent.update()
-                    parent.repaint()
-                    QtWidgets.QApplication.processEvents()
-                    QtCore.QThread.msleep(200)
-                
-                # If still not visible, try again with a longer delay
-                if not table.isVisible():
-                    print(f"ERROR: Table {table.objectName()} could not be made visible, retrying...")
-                    # Use a longer delay and try again
-                    QtCore.QTimer.singleShot(500, lambda: self.highlight_current_result(True))
-                    return
-
-            print(f"DEBUG: Table {table.objectName()} is now visible, proceeding with highlighting")
-            
-            # Clear previous selection and highlights
-            table.clearSelection()
-
-            # Scroll to and select the item
-            item = table.item(row, 0)
-            if item:
-                # First ensure the table has focus
-                table.setFocus()
-                QtWidgets.QApplication.processEvents()
-                
-                # Scroll the item into view
-                table.scrollToItem(item, QtWidgets.QAbstractItemView.ScrollHint.PositionAtCenter)
-                QtWidgets.QApplication.processEvents()
-                
-                # Select the row
-                table.selectRow(row)
-                QtWidgets.QApplication.processEvents()
-                
-                print(f"DEBUG: Scrolled to and selected row {row} in table {table.objectName()}")
-                
-                # Update the search result label
-                self.update_search_result_label()
-                
-                # Enable navigation buttons
-                self.prev_result_button.setEnabled(len(self.search_results) > 1)
-                self.next_result_button.setEnabled(len(self.search_results) > 1)
-                if hasattr(self, '_search_button'):
-                    self._search_button.setEnabled(True)
-            else:
-                print(f"WARNING: Could not find item at row {row}, column 0 in table {table.objectName()}")
-
-        finally:
-            self.is_processing_highlight = False
+            # Use SearchUtils to process the highlight queue
+            SearchUtils.process_highlight_queue(self, force)
+        except Exception as e:
+            print(f"ERROR in process_highlight_queue: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Reset processing flag if it exists
+            if hasattr(self, 'is_processing_highlight'):
+                self.is_processing_highlight = False
 
     def update_search_result_label(self):
-        if self.search_results:
-            self.search_label.setText(f"Result {self.current_result_index + 1} of {len(self.search_results)}")
-        else:
+        try:
+            # Check if search_results exists
+            if not hasattr(self, 'search_results'):
+                print("DEBUG: search_results not found in update_search_result_label")
+                self.search_label.setText("Search:")
+                return
+                
+            if self.search_results:
+                # Check if current_result_index exists
+                if not hasattr(self, 'current_result_index'):
+                    print("DEBUG: current_result_index not found in update_search_result_label")
+                    self.search_label.setText(f"Found {len(self.search_results)} results")
+                    return
+                    
+                self.search_label.setText(f"Result {self.current_result_index + 1} of {len(self.search_results)}")
+            else:
+                self.search_label.setText("Search:")
+        except Exception as e:
+            print(f"ERROR in update_search_result_label: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Set a safe default
             self.search_label.setText("Search:")
+            return
     
     def make_table_visible(self, table):
         """Make the table visible by switching to its tab, handling nested tabs."""
-        print(f"DEBUG: make_table_visible called for table: {table.objectName()}")
-        
-        # Store the original table to check if it's visible at the end
-        original_table = table
-        
-        # Find the direct parent widget of the table
-        direct_parent = table.parentWidget()
-        print(f"DEBUG: Direct parent of {table.objectName()} is {direct_parent.objectName()}")
-        
-        # Special handling for LNK_table, AJL_table, and Clj_table
-        if table.objectName() == "LNK_table" or table.objectName() == "AJL_table" or table.objectName() == "Clj_table":
-            # Make sure we're on the LNK_JL_Tab in the main_tab
-            if hasattr(self, 'main_tab') and hasattr(self, 'LNK_JL_Tab'):
-                # First, ensure main_tab is visible and has focus
-                self.main_tab.show()
-                self.main_tab.setFocus()
-                QtWidgets.QApplication.processEvents()
-                
-                # Find and select the LNK_JL_Tab in main_tab
-                for i in range(self.main_tab.count()):
-                    if self.main_tab.widget(i) is self.LNK_JL_Tab:
-                        print(f"DEBUG: Setting main_tab to LNK_JL_Tab (index {i})")
-                        self.main_tab.setCurrentIndex(i)
-                        QtWidgets.QApplication.processEvents()
-                        QtCore.QThread.msleep(200)  # Longer delay for tab switching
-                        QtWidgets.QApplication.processEvents()
-                        break
-            
-            # Force focus on the LNK_JL_Tab and then the table
-            if hasattr(self, 'LNK_JL_Tab'):
-                self.LNK_JL_Tab.show()
-                self.LNK_JL_Tab.raise_()
-                self.LNK_JL_Tab.setFocus()
-                QtWidgets.QApplication.processEvents()
-                QtCore.QThread.msleep(100)
-                
-                # Select the appropriate subtab based on the table
-                if hasattr(self, 'lnk_jl_subtabs'):
-                    if table.objectName() == "LNK_table" and hasattr(self, 'LNK_subtab'):
-                        for j in range(self.lnk_jl_subtabs.count()):
-                            if self.lnk_jl_subtabs.widget(j) is self.LNK_subtab:
-                                self.lnk_jl_subtabs.setCurrentIndex(j)
-                                break
-                    elif table.objectName() == "AJL_table" and hasattr(self, 'AJL_subtab'):
-                        for j in range(self.lnk_jl_subtabs.count()):
-                            if self.lnk_jl_subtabs.widget(j) is self.AJL_subtab:
-                                self.lnk_jl_subtabs.setCurrentIndex(j)
-                                break
-                    elif table.objectName() == "Clj_table" and hasattr(self, 'CJL_subtab'):
-                        for j in range(self.lnk_jl_subtabs.count()):
-                            if self.lnk_jl_subtabs.widget(j) is self.CJL_subtab:
-                                self.lnk_jl_subtabs.setCurrentIndex(j)
-                                break
-                
-                # Now focus on the table itself
-                table.show()
-                table.raise_()
-                table.setFocus()
-                QtWidgets.QApplication.processEvents()
-            
-            # Wait for the table to become visible with a timeout
-            start_time = QtCore.QTime.currentTime()
-            timeout_ms = 2000  # Increase timeout to 2 seconds for complex tab structures
-            while not table.isVisible() and start_time.msecsTo(QtCore.QTime.currentTime()) < timeout_ms:
-                QtWidgets.QApplication.processEvents()
-                QtCore.QThread.msleep(50)
-            
-            # If still not visible, try more aggressive approach
-            if not table.isVisible():
-                print(f"DEBUG: Trying more aggressive approach for {table.objectName()}")
-                # Try to force the main window to update
-                if hasattr(self, 'main_tab'):
-                    self.main_tab.update()
-                if hasattr(self, 'LNK_JL_Tab'):
-                    self.LNK_JL_Tab.update()
-                table.update()
-                QtWidgets.QApplication.processEvents()
-                QtCore.QThread.msleep(200)
-                
-                # Last resort - try to force repaint
-                if hasattr(self, 'main_tab'):
-                    self.main_tab.repaint()
-                if hasattr(self, 'LNK_JL_Tab'):
-                    self.LNK_JL_Tab.repaint()
-                table.repaint()
-                QtWidgets.QApplication.processEvents()
-            
-            return
-        
-        # Special handling for the AppLogs_table which seems to have issues
-        if table.objectName() == "AppLogs_table":
-            # Make sure we're on the Logs tab in the main_tab
-            if hasattr(self, 'main_tab') and hasattr(self, 'Logs_tab'):
-                # First, ensure main_tab is visible and has focus
-                self.main_tab.show()
-                self.main_tab.setFocus()
-                QtWidgets.QApplication.processEvents()
-                
-                # Find and select the Logs tab in main_tab
-                for i in range(self.main_tab.count()):
-                    if self.main_tab.widget(i) is self.Logs_tab:
-                        print(f"DEBUG: Setting main_tab to Logs_tab (index {i})")
-                        self.main_tab.setCurrentIndex(i)
-                        QtWidgets.QApplication.processEvents()
-                        QtCore.QThread.msleep(200)  # Longer delay for tab switching
-                        QtWidgets.QApplication.processEvents()
-                        break
-            
-            # Make sure we're on the AppLogs_tab in the tabWidget
-            if hasattr(self, 'tabWidget') and hasattr(self, 'AppLogs_tab'):
-                # Ensure tabWidget is visible and has focus
-                self.tabWidget.show()
-                self.tabWidget.setFocus()
-                QtWidgets.QApplication.processEvents()
-                
-                # Find and select the AppLogs_tab in tabWidget
-                for i in range(self.tabWidget.count()):
-                    if self.tabWidget.widget(i) is self.AppLogs_tab:
-                        print(f"DEBUG: Setting tabWidget to AppLogs_tab (index {i})")
-                        self.tabWidget.setCurrentIndex(i)
-                        QtWidgets.QApplication.processEvents()
-                        QtCore.QThread.msleep(200)  # Longer delay for tab switching
-                        QtWidgets.QApplication.processEvents()
-                        break
-            
-            return
-        
-        # Find all tab widgets in the hierarchy for other tables
-        tab_hierarchy = []
-        current_widget = direct_parent
-        while current_widget is not None:
-            parent_widget = current_widget.parentWidget()
-            if parent_widget is not None and isinstance(parent_widget, QtWidgets.QTabWidget):
-                tab_hierarchy.append((parent_widget, current_widget))
-                print(f"DEBUG: Found tab widget: {parent_widget.objectName()} containing {current_widget.objectName()}")
-            current_widget = parent_widget
-        
-        # Reverse the hierarchy to start from the outermost tab widget
-        tab_hierarchy.reverse()
-        
-        # Set each tab widget to the correct index
-        for tab_widget, tab_content in tab_hierarchy:
-            # Ensure the tab widget is visible and has focus
-            tab_widget.show()
-            tab_widget.setFocus()
-            QtWidgets.QApplication.processEvents()
-            
-            for i in range(tab_widget.count()):
-                if tab_widget.widget(i) is tab_content:
-                    print(f"DEBUG: Setting {tab_widget.objectName()} to index {i} ({tab_content.objectName()})")
-                    tab_widget.setCurrentIndex(i)
-                    # Process events after each tab change to ensure UI updates
-                    QtWidgets.QApplication.processEvents()
-                    # Add a longer delay to allow the UI to update
-                    QtCore.QThread.msleep(200)  # Increased delay for better reliability
-                    QtWidgets.QApplication.processEvents()
-                    break
-        
-        # Process Qt events to ensure UI updates before continuing
-        QtWidgets.QApplication.processEvents()
-        
-        # Wait for the table to become visible with a timeout
-        start_time = QtCore.QTime.currentTime()
-        timeout_ms = 2000  # Increase timeout to 2 seconds for complex tab structures
-        while not original_table.isVisible() and start_time.msecsTo(QtCore.QTime.currentTime()) < timeout_ms:
-            QtWidgets.QApplication.processEvents()
-            QtCore.QThread.msleep(50)
-        
-        # Verify the table is now visible
-        if original_table.isVisible():
-            print(f"DEBUG: Table {original_table.objectName()} is now visible")
-        else:
-            print(f"WARNING: Table {original_table.objectName()} is still not visible after tab changes")
-            # Try more aggressive approach
-            print(f"DEBUG: Trying more aggressive approach for {original_table.objectName()}")
-            
-            # Force update on the entire hierarchy
-            for tab_widget, tab_content in tab_hierarchy:
-                tab_widget.update()
-                tab_content.update()
-            
-            if direct_parent:
-                direct_parent.show()
-                direct_parent.raise_()
-                direct_parent.setFocus()
-                direct_parent.update()
-                QtWidgets.QApplication.processEvents()
-                QtCore.QThread.msleep(200)
-            
-            original_table.show()
-            original_table.raise_()
-            original_table.setFocus()
-            original_table.update()
-            QtWidgets.QApplication.processEvents()
-                
-            # Final check
-            if original_table.isVisible():
-                print(f"DEBUG: Table {original_table.objectName()} is now visible after additional attempts")
-            else:
-                print(f"ERROR: Table {original_table.objectName()} could not be made visible")
-                # Last resort - try again with a longer delay
-                QtCore.QTimer.singleShot(300, lambda: self._check_table_visibility(original_table))
+        # Use the SearchUtils class to make the table visible
+        return SearchUtils.make_table_visible(self, table)
     
     def _check_table_visibility(self, table):
         """Check if a table is visible after a delay and log the result."""
@@ -6151,6 +6159,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print(f"DEBUG: go_to_next_result - new index: {self.current_result_index}")
             # Process the highlight immediately
             self.highlight_current_result(process_immediately=True)
+            # Update the search result counter display
+            self.update_search_result_label()
     
     def go_to_previous_result(self):
         """Navigate to the previous search result"""
@@ -6159,18 +6169,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print(f"DEBUG: go_to_previous_result - new index: {self.current_result_index}")
             # Process the highlight immediately
             self.highlight_current_result(process_immediately=True)
+            # Update the search result counter display
+            self.update_search_result_label()
     
     def clear_search_results(self):
         """Clear all search results and highlighting"""
         print("DEBUG: Clearing all search results")
         
-        # Clear the highlight queue and stop processing
-        self.highlight_queue.clear()
-        self.is_processing_highlight = False
-        
-        # Clear selection from all tables
-        for table in self.find_all_table_widgets():
-            table.clearSelection()
+        # Use SearchUtils to clear search results
+        SearchUtils.clear_search_results(self)
         
         # Reset search results
         self.search_results = []

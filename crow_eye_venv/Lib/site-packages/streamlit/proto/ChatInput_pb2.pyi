@@ -59,11 +59,13 @@ class ChatInput(google.protobuf.message.Message):
         NONE: ChatInput._AcceptFile.ValueType  # 0
         SINGLE: ChatInput._AcceptFile.ValueType  # 1
         MULTIPLE: ChatInput._AcceptFile.ValueType  # 2
+        DIRECTORY: ChatInput._AcceptFile.ValueType  # 3
 
     class AcceptFile(_AcceptFile, metaclass=_AcceptFileEnumTypeWrapper): ...
     NONE: ChatInput.AcceptFile.ValueType  # 0
     SINGLE: ChatInput.AcceptFile.ValueType  # 1
     MULTIPLE: ChatInput.AcceptFile.ValueType  # 2
+    DIRECTORY: ChatInput.AcceptFile.ValueType  # 3
 
     ID_FIELD_NUMBER: builtins.int
     PLACEHOLDER_FIELD_NUMBER: builtins.int

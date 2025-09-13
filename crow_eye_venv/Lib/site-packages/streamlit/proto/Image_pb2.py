@@ -14,7 +14,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1bstreamlit/proto/Image.proto\"A\n\x05Image\x12\x0b\n\x03url\x18\x03 \x01(\t\x12\x0f\n\x07\x63\x61ption\x18\x02 \x01(\t\x12\x0e\n\x06markup\x18\x04 \x01(\tJ\x04\x08\x01\x10\x02R\x04\x64\x61ta\"0\n\tImageList\x12\x14\n\x04imgs\x18\x01 \x03(\x0b\x32\x06.Image\x12\r\n\x05width\x18\x02 \x01(\x05\x42*\n\x1c\x63om.snowflake.apps.streamlitB\nImageProtob\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1bstreamlit/proto/Image.proto\"A\n\x05Image\x12\x0b\n\x03url\x18\x03 \x01(\t\x12\x0f\n\x07\x63\x61ption\x18\x02 \x01(\t\x12\x0e\n\x06markup\x18\x04 \x01(\tJ\x04\x08\x01\x10\x02R\x04\x64\x61ta\"4\n\tImageList\x12\x14\n\x04imgs\x18\x01 \x03(\x0b\x32\x06.Image\x12\x11\n\x05width\x18\x02 \x01(\x05\x42\x02\x18\x01\x42*\n\x1c\x63om.snowflake.apps.streamlitB\nImageProtob\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -22,8 +22,10 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'streamlit.proto.Image_pb2',
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\034com.snowflake.apps.streamlitB\nImageProto'
+  _globals['_IMAGELIST'].fields_by_name['width']._loaded_options = None
+  _globals['_IMAGELIST'].fields_by_name['width']._serialized_options = b'\030\001'
   _globals['_IMAGE']._serialized_start=31
   _globals['_IMAGE']._serialized_end=96
   _globals['_IMAGELIST']._serialized_start=98
-  _globals['_IMAGELIST']._serialized_end=146
+  _globals['_IMAGELIST']._serialized_end=150
 # @@protoc_insertion_point(module_scope)

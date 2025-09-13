@@ -233,10 +233,12 @@ class Block(google.protobuf.message.Message):
             DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
             SMALL: Block.Dialog._DialogWidth.ValueType  # 0
             LARGE: Block.Dialog._DialogWidth.ValueType  # 1
+            MEDIUM: Block.Dialog._DialogWidth.ValueType  # 2
 
         class DialogWidth(_DialogWidth, metaclass=_DialogWidthEnumTypeWrapper): ...
         SMALL: Block.Dialog.DialogWidth.ValueType  # 0
         LARGE: Block.Dialog.DialogWidth.ValueType  # 1
+        MEDIUM: Block.Dialog.DialogWidth.ValueType  # 2
 
         TITLE_FIELD_NUMBER: builtins.int
         DISMISSIBLE_FIELD_NUMBER: builtins.int
