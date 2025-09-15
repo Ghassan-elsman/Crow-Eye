@@ -424,7 +424,8 @@ class AmcacheParser:
         if self._check_entry_exists(table_name, entry_id, data_json):
             return  # Skip if identical entry exists
         fields = AMCACHE_SCHEMAS[table_name]
-        parsed_at = datetime.now(timezone.utc).isoformat()  # UTC timestamp
+        # Format as YYYY-MM-DD HH:MM:SS without timezone
+        parsed_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         
         # Handle DeviceCensus: store all data as JSON in 'data' column
         if table_name == "DeviceCensus":

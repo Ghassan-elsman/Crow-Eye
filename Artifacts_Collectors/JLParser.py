@@ -317,9 +317,15 @@ class JL:
 
         if timestamp > 0:
             dt = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=timestamp/10)
-            return dt.isoformat()
+            # Check if datetime object has timezone info and format accordingly
+            if dt.tzinfo is not None:
+                # Timezone-aware datetime: use strftime to format without timezone
+                return dt.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                # Timezone-naive datetime: convert to string and remove milliseconds
+                return str(dt).split('.')[0]
         else:
-            return "1700-01-01T00:00:00"
+            return "1700-01-01 00:00:00"
 
 
 
@@ -696,16 +702,18 @@ class JL:
             f.close()
         
     def CE_dec(self):
-       return eval(CE_output)
-
-
-    
-
-    
-   
-
-
-
+       # Fix: Replace unsafe eval() with proper JSON parsing
+       try:
+           if CE_output and isinstance(CE_output, str) and CE_output.strip():
+               return json.loads(CE_output)
+           else:
+               return []
+       except json.JSONDecodeError as e:
+           print(f"Error parsing JSON output: {e}")
+           return []
+       except Exception as e:
+           print(f"Unexpected error in CE_dec: {e}")
+           return []
 
 
     
@@ -735,7 +743,6 @@ def Claw(filename):
     print()
 
     return jumplist
-
 
 
 

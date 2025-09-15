@@ -88,7 +88,13 @@ class ShimCacheEntry:
     def format_timestamp(self):
         """Format timestamp to human-readable format."""
         if self.last_modified:
-            self.last_modified_readable = self.last_modified.strftime('%Y-%m-%d %H:%M:%S UTC')
+            # Check if datetime object has timezone info and format accordingly
+            if self.last_modified.tzinfo is not None:
+                # Timezone-aware datetime: use strftime to format without timezone
+                self.last_modified_readable = self.last_modified.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                # Timezone-naive datetime: convert to string and remove milliseconds
+                self.last_modified_readable = str(self.last_modified).split('.')[0]
         else:
             self.last_modified_readable = "Unknown"
 
@@ -525,8 +531,16 @@ class ShimCacheParser:
             
             # Insert new entry
             try:
-                # Convert datetime to string to avoid deprecation warning
-                last_modified_str = entry.last_modified.isoformat() if entry.last_modified else None
+                # Format datetime consistently without timezone info and milliseconds
+                if entry.last_modified:
+                    if entry.last_modified.tzinfo is not None:
+                        # Timezone-aware datetime: use strftime to format without timezone
+                        last_modified_str = entry.last_modified.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        # Timezone-naive datetime: convert to string and remove milliseconds
+                        last_modified_str = str(entry.last_modified).split('.')[0]
+                else:
+                    last_modified_str = None
                 
                 cursor.execute('''
                     INSERT INTO shimcache_entries 

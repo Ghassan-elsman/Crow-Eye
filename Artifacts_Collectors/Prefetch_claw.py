@@ -913,17 +913,27 @@ class PrefetchFile:
                             drive_letters[volume_id] = drive_letter
 
             volumes_data = []
+            for i, vol in enumerate(self.volume_information, 1):
+                drive_letter = drive_letters.get(vol.device_name)
+                vol_id = f"{drive_letter}:" if drive_letter else f"Volume{i}"
+                # Format volume creation time without timezone information and milliseconds
+                creation_time_str = None
+                if vol.creation_time:
+                    if vol.creation_time.tzinfo is not None:
+                        creation_time_str = vol.creation_time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        # Remove milliseconds from string representation
+                        creation_time_str = str(vol.creation_time).split('.')[0]
+                volumes_data.append({
+                    "volume_id": vol_id,
+                    "device_name": vol.device_name,
+                    "creation_time": creation_time_str,
+                    "serial_number": vol.serial_number
+                })
             directories_data = []
             for i, vol in enumerate(self.volume_information, 1):
                 drive_letter = drive_letters.get(vol.device_name)
                 vol_id = f"{drive_letter}:" if drive_letter else f"Volume{i}"
-                volumes_data.append({
-                    "volume_id": vol_id,
-                    "device_name": vol.device_name,
-                    "creation_time": str(vol.creation_time) if vol.creation_time else None,
-                    "serial_number": vol.serial_number
-                })
-                
                 formatted_dirs = []
                 for dir_name in vol.directory_names:
                     formatted_dir = dir_name
@@ -953,7 +963,15 @@ class PrefetchFile:
                         formatted_name = f"{drive_letter}:\\{rest_of_path}"
                 formatted_resources.append(formatted_name)
 
-            run_times_data = [str(t) for t in sorted([t for t in self.last_run_times if t is not None], reverse=True)]
+            # Format run times without timezone information and milliseconds
+            run_times_data = []
+            for t in sorted([t for t in self.last_run_times if t is not None], reverse=True):
+                if t.tzinfo is not None:
+                    # Remove timezone info and milliseconds for display
+                    run_times_data.append(t.strftime("%Y-%m-%d %H:%M:%S"))
+                else:
+                    # Remove milliseconds from string representation
+                    run_times_data.append(str(t).split('.')[0])
 
             # Check for existing record with the same filename and hash
             cursor.execute("""
@@ -975,14 +993,16 @@ class PrefetchFile:
                 self.header.executable_filename,
                 self.header.hash,
                 display_run_count,
-                most_recent,
+                # Format most_recent without timezone information and milliseconds
+                most_recent.strftime("%Y-%m-%d %H:%M:%S") if most_recent and most_recent.tzinfo is not None else (str(most_recent).split('.')[0] if most_recent else most_recent),
                 json.dumps(run_times_data),
                 json.dumps(volumes_data),
                 json.dumps(directories_data),
                 json.dumps(formatted_resources),
-                self.source_created_on,
-                self.source_modified_on,
-                self.source_accessed_on
+                # Format source timestamps to remove milliseconds
+                str(self.source_created_on).split('.')[0] if self.source_created_on else self.source_created_on,
+                str(self.source_modified_on).split('.')[0] if self.source_modified_on else self.source_modified_on,
+                str(self.source_accessed_on).split('.')[0] if self.source_accessed_on else self.source_accessed_on
             ))
 
             conn.commit()
@@ -1011,13 +1031,25 @@ class PrefetchFile:
         if self.last_run_times and len(self.last_run_times) > 0:
             most_recent = max([t for t in self.last_run_times if t is not None], default=None)
             if most_recent:
-                result.append(f"Last Executed: {most_recent}")
+                # Format without timezone for display and remove milliseconds
+                if most_recent.tzinfo is not None:
+                    formatted_time = most_recent.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    # Remove milliseconds from string representation
+                    formatted_time = str(most_recent).split('.')[0]
+                result.append(f"Last Executed: {formatted_time}")
         
             valid_times = [t for t in self.last_run_times if t is not None]
             if len(valid_times) > 1:
                 result.append("Execution Timeline:")
                 for i, time in enumerate(sorted(valid_times, reverse=True), 1):
-                    result.append(f"  {i}. {time}")
+                    # Format without timezone for display and remove milliseconds
+                    if time.tzinfo is not None:
+                        formatted_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        # Remove milliseconds from string representation
+                        formatted_time = str(time).split('.')[0]
+                    result.append(f"  {i}. {formatted_time}")
 
         if self.volume_information:
             result.append("Volume Information:")
@@ -1041,7 +1073,16 @@ class PrefetchFile:
                 vol_id = f"{drive_letter}:" if drive_letter else f"Volume{i}"
                 result.append(f"Volume {vol_id}:")
                 result.append(f"  Device Name: {vol.device_name}")
-                result.append(f"  Creation Date: {vol.creation_time}")
+                # Format volume creation time without timezone
+                if vol.creation_time:
+                    if vol.creation_time.tzinfo is not None:
+                        formatted_time = vol.creation_time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        # Remove milliseconds from string representation
+                        formatted_time = str(vol.creation_time).split('.')[0]
+                    result.append(f"  Creation Date: {formatted_time}")
+                else:
+                    result.append(f"  Creation Date: {vol.creation_time}")
                 result.append(f"  Serial Number: {vol.serial_number}")
             
                 if vol.directory_names:

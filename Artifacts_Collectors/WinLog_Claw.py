@@ -1,6 +1,12 @@
 import win32evtlog
 import sqlite3
 import os
+import sys
+from datetime import datetime
+
+# Add the parent directory to sys.path to import utils
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.time_utils import ensure_utc, format_timestamp
 
 # Create the database and tables
 def create_database(case_path=None):
@@ -16,13 +22,13 @@ def create_database(case_path=None):
     cursor.execute('DROP TABLE IF EXISTS SystemLogs')
     cursor.execute('DROP TABLE IF EXISTS ApplicationLogs')
     cursor.execute('DROP TABLE IF EXISTS SecurityLogs')
-    # Create tables for System, Application, and Security logs
+    # Create tables for System, Application, and Security logs with UTC timestamps
     cursor.execute('''CREATE TABLE IF NOT EXISTS SystemLogs (
                         EventID INTEGER,
                         Source TEXT,
                         EventType TEXT,
                         Category TEXT,
-                        TimeGenerated TEXT,
+                        EventTimestampUTC TEXT,  -- Stored in YYYY-MM-DD HH:MM:SS format (UTC)
                         ComputerName TEXT,
                         User TEXT,
                         Keywords TEXT,
@@ -33,7 +39,7 @@ def create_database(case_path=None):
                         Source TEXT,
                         EventType TEXT,
                         Category TEXT,
-                        TimeGenerated TEXT,
+                        EventTimestampUTC TEXT,  -- Stored in YYYY-MM-DD HH:MM:SS format (UTC)
                         ComputerName TEXT,
                         User TEXT,
                         Keywords TEXT,
@@ -44,7 +50,7 @@ def create_database(case_path=None):
                         Source TEXT,
                         EventType TEXT,
                         Category TEXT,
-                        TimeGenerated TEXT,
+                        EventTimestampUTC TEXT,  -- Stored in YYYY-MM-DD HH:MM:SS format (UTC)
                         ComputerName TEXT,
                         User TEXT,
                         Keywords TEXT,
@@ -178,42 +184,86 @@ def read_event_logs(log_type, cursor):
             break
 
         for event in events:
-            event_id = event.EventID & 0xFFFF
-            source = event.SourceName
-            event_type = get_event_type(event.EventType)
-            category = get_event_category(event.EventCategory)
-            time_generated = event.TimeGenerated.Format()
-            computer = event.ComputerName
-            user = "N/A"
-            keywords = "N/A"
-            event_description = get_event_description(event_id)
-            
-            if log_type == 'Security':
-                if event.StringInserts:
-                    user = event.StringInserts[1] if len(event.StringInserts) > 1 else "N/A"
-                    keywords = ",".join(event.StringInserts)
-                task_category = event.EventCategory
+            try:
+                event_id = event.EventID & 0xFFFF
+                source = event.SourceName
+                event_type = get_event_type(event.EventType)
+                category = get_event_category(event.EventCategory)
+                
+                # Get the original time string
+                original_time = event.TimeGenerated.Format()
+                
+                # Convert to datetime and ensure it's in UTC
+                try:
+                    # Try multiple possible formats
+                    formats_to_try = [
+                        "%a %b %d %H:%M:%S %Y",  # 'Fri Sep  5 17:10:02 2025'
+                        "%Y-%m-%d %H:%M:%S",     # '2023-01-01 12:00:00'
+                        "%Y/%m/%d %H:%M:%S",     # '2023/01/01 12:00:00'
+                        "%d/%m/%Y %H:%M:%S"      # '01/01/2023 12:00:00'
+                    ]
+                    
+                    dt = None
+                    for fmt in formats_to_try:
+                        try:
+                            dt = datetime.strptime(original_time.strip(), fmt)
+                            break
+                        except ValueError:
+                            continue
+                    
+                    if dt is None:
+                        raise ValueError(f"Time format not recognized: {original_time}")
+                        
+                    # Convert to UTC and format as YYYY-MM-DD HH:MM:SS
+                    utc_dt = ensure_utc(dt)
+                    utc_time = utc_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    
+                except Exception as e:
+                    # If conversion fails, use current UTC time and log the error
+                    print(f"Error converting time '{original_time}': {str(e)}")
+                    utc_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                
+                computer = event.ComputerName
+                user = "N/A"
+                keywords = "N/A"
+                event_description = get_event_description(event_id)
+                
+                if log_type == 'Security':
+                    if event.StringInserts:
+                        user = event.StringInserts[1] if len(event.StringInserts) > 1 else "N/A"
+                        keywords = ",".join(event.StringInserts)
+                    task_category = event.EventCategory
 
-            elif log_type == 'Application':
-                if event.StringInserts:
-                    user = event.StringInserts[1] if len(event.StringInserts) > 1 else "N/A"
-                    keywords = ",".join(event.StringInserts)
-            elif log_type == 'System':
-                if event.StringInserts:
-                    user = event.StringInserts[1] if len(event.StringInserts) > 1 else "N/A"
-                    keywords = ",".join(event.StringInserts)
+                    cursor.execute('''INSERT INTO SecurityLogs 
+                                    (EventID, Source, EventType, Category, EventTimestampUTC, 
+                                     ComputerName, User, Keywords, TaskCategory, EventDescription)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                 (event_id, source, event_type, category, utc_time,
+                                  computer, user, keywords, task_category, event_description))
+                
+                elif log_type == 'Application':
+                    if event.StringInserts:
+                        user = event.StringInserts[1] if len(event.StringInserts) > 1 else "N/A"
+                        keywords = ",".join(event.StringInserts)
 
-
-            # Insert into the respective table
-            if log_type == 'System':
-                cursor.execute("INSERT INTO SystemLogs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
-                               (event_id, source, event_type, category, time_generated, computer, user, keywords, event_description))
-            elif log_type == 'Application':
-                cursor.execute("INSERT INTO ApplicationLogs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
-                               (event_id, source, event_type, category, time_generated, computer, user, keywords, event_description))
-            elif log_type == 'Security':
-                cursor.execute("INSERT INTO SecurityLogs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
-                               (event_id, source, event_type, category, time_generated, computer, user, keywords, task_category, event_description))
+                    cursor.execute('''INSERT INTO ApplicationLogs 
+                                    (EventID, Source, EventType, Category, EventTimestampUTC, 
+                                     ComputerName, User, Keywords, EventDescription)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                 (event_id, source, event_type, category, utc_time,
+                                  computer, user, keywords, event_description))
+                
+                else:  # System logs
+                    cursor.execute('''INSERT INTO SystemLogs 
+                                    (EventID, Source, EventType, Category, EventTimestampUTC, 
+                                     ComputerName, User, Keywords, EventDescription)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                 (event_id, source, event_type, category, utc_time,
+                                  computer, user, keywords, event_description))
+                                 
+            except Exception as e:
+                print(f"Error processing event: {str(e)}")
+                continue
     
     win32evtlog.CloseEventLog(log_handle)
 
