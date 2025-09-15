@@ -1,8 +1,14 @@
 """Performance monitoring utilities for Crow Eye."""
 
 import time
-import psutil
 import threading
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    print("Warning: psutil not available. System monitoring will be limited.")
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
@@ -72,8 +78,12 @@ class PerformanceMonitor:
     def _record_system_metrics(self):
         """Record current system metrics."""
         try:
-            memory_mb = psutil.virtual_memory().used / (1024 * 1024)
-            cpu_percent = psutil.cpu_percent()
+            if PSUTIL_AVAILABLE:
+                memory_mb = psutil.virtual_memory().used / (1024 * 1024)
+                cpu_percent = psutil.cpu_percent()
+            else:
+                memory_mb = 0
+                cpu_percent = 0
             
             metric = PerformanceMetrics(
                 timestamp=datetime.now(),
@@ -228,8 +238,12 @@ class OperationTimer:
         duration_ms = (end_time - self.start_time) * 1000
         
         try:
-            memory_mb = psutil.virtual_memory().used / (1024 * 1024)
-            cpu_percent = psutil.cpu_percent()
+            if PSUTIL_AVAILABLE:
+                memory_mb = psutil.virtual_memory().used / (1024 * 1024)
+                cpu_percent = psutil.cpu_percent()
+            else:
+                memory_mb = 0
+                cpu_percent = 0
         except:
             memory_mb = 0
             cpu_percent = 0
@@ -257,21 +271,35 @@ def get_system_info() -> Dict[str, Any]:
         Dictionary containing system information
     """
     try:
-        memory = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
-        
-        return {
-            "system": {
-                "cpu_count": psutil.cpu_count(),
-                "cpu_count_logical": psutil.cpu_count(logical=True),
-                "memory_total_gb": memory.total / (1024**3),
-                "memory_available_gb": memory.available / (1024**3),
-                "disk_total_gb": disk.total / (1024**3),
-                "disk_free_gb": disk.free / (1024**3),
-                "platform": psutil.platform.system()
-            },
-            "performance_recommendations": _get_performance_recommendations(memory, disk)
-        }
+        if PSUTIL_AVAILABLE:
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            
+            return {
+                "system": {
+                    "cpu_count": psutil.cpu_count(),
+                    "cpu_count_logical": psutil.cpu_count(logical=True),
+                    "memory_total_gb": memory.total / (1024**3),
+                    "memory_available_gb": memory.available / (1024**3),
+                    "disk_total_gb": disk.total / (1024**3),
+                    "disk_free_gb": disk.free / (1024**3),
+                    "platform": psutil.platform.system()
+                },
+                "performance_recommendations": _get_performance_recommendations(memory, disk)
+            }
+        else:
+            return {
+                "system": {
+                    "cpu_count": "unknown",
+                    "cpu_count_logical": "unknown", 
+                    "memory_total_gb": "unknown",
+                    "memory_available_gb": "unknown",
+                    "disk_total_gb": "unknown",
+                    "disk_free_gb": "unknown",
+                    "platform": "unknown"
+                },
+                "performance_recommendations": ["Install psutil for detailed system monitoring"]
+            }
     except Exception as e:
         return {"error": f"Could not gather system info: {e}"}
 

@@ -9,8 +9,14 @@ from datetime import datetime, timedelta
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from PyQt5.QtCore import QObject, pyqtSignal, QThread
 import logging
+
+try:
+    from PyQt5.QtCore import QObject, pyqtSignal, QThread
+    PYQT5_AVAILABLE = True
+except ImportError:
+    PYQT5_AVAILABLE = False
+    print("Warning: PyQt5 not available. UI threading features will be limited.")
 
 
 @dataclass
@@ -579,42 +585,55 @@ class FilterEngine:
             return True
 
 
-class SearchWorkerThread(QThread):
-    """Worker thread for performing searches without blocking the UI."""
-    
-    search_completed = pyqtSignal(list)  # Emitted when search completes
-    search_progress = pyqtSignal(int, int)  # Emitted for progress updates
-    search_error = pyqtSignal(str)  # Emitted when search fails
-    
-    def __init__(self, search_engine: AdvancedSearchEngine, criteria: SearchCriteria):
-        """Initialize the search worker thread.
+if PYQT5_AVAILABLE:
+    class SearchWorkerThread(QThread):
+        """Worker thread for performing searches without blocking the UI."""
         
-        Args:
-            search_engine: The search engine to use
-            criteria: Search criteria
-        """
-        super().__init__()
-        self.search_engine = search_engine
-        self.criteria = criteria
-        self.logger = logging.getLogger(__name__)
-    
-    def run(self):
-        """Run the search in a separate thread."""
-        try:
-            def progress_callback(current: int, total: int):
-                self.search_progress.emit(current, total)
+        search_completed = pyqtSignal(list)  # Emitted when search completes
+        search_progress = pyqtSignal(int, int)  # Emitted for progress updates
+        search_error = pyqtSignal(str)  # Emitted when search fails
+        
+        def __init__(self, search_engine: AdvancedSearchEngine, criteria: SearchCriteria):
+            """Initialize the search worker thread.
             
-            results = self.search_engine.search(
-                self.criteria,
-                progress_callback=progress_callback
-            )
+            Args:
+                search_engine: The search engine to use
+                criteria: Search criteria
+            """
+            super().__init__()
+            self.search_engine = search_engine
+            self.criteria = criteria
+            self.logger = logging.getLogger(__name__)
+        
+        def run(self):
+            """Run the search in a separate thread."""
+            try:
+                def progress_callback(current: int, total: int):
+                    self.search_progress.emit(current, total)
+                
+                results = self.search_engine.search(
+                    self.criteria,
+                    progress_callback=progress_callback
+                )
+                
+                self.search_completed.emit(results)
+                
+            except Exception as e:
+                error_msg = f"Search failed: {str(e)}"
+                self.logger.error(error_msg)
+                self.search_error.emit(error_msg)
+else:
+    class SearchWorkerThread:
+        """Fallback search worker when PyQt5 is not available."""
+        
+        def __init__(self, search_engine: AdvancedSearchEngine, criteria: SearchCriteria):
+            self.search_engine = search_engine
+            self.criteria = criteria
+            self.logger = logging.getLogger(__name__)
             
-            self.search_completed.emit(results)
-            
-        except Exception as e:
-            error_msg = f"Search failed: {str(e)}"
-            self.logger.error(error_msg)
-            self.search_error.emit(error_msg)
+        def run_sync(self):
+            """Run search synchronously."""
+            return self.search_engine.search(self.criteria)
 
 
 # Utility functions for common search operations
