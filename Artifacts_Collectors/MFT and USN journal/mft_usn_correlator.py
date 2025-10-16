@@ -1276,50 +1276,6 @@ class MFTUSNCorrelator:
             import traceback
             logger.error(f"Error details: {traceback.format_exc()}")
             return False
-        
-        logger.info(f"MFT database exists: {mft_exists}")
-        logger.info(f"USN database exists: {usn_exists}")
-        
-        # Step 1: Run parsers if databases don't exist
-        if not mft_exists or not usn_exists:
-            logger.info("Source databases not found, running parsers...")
-            if not self.run_parsers():
-                logger.error("Failed to run parsers")
-                
-                # Check if databases were created despite errors
-                mft_exists_now = os.path.exists(self.mft_db)
-                usn_exists_now = os.path.exists(self.usn_db)
-                
-                if mft_exists_now and usn_exists_now:
-                    logger.info("Databases were created successfully, continuing with correlation")
-                else:
-                    logger.error("Cannot proceed without both databases")
-                    return False
-        
-        # Step 2: Create correlated database
-        self.create_correlated_database()
-        
-        # Step 3: Track filename changes from MFT database
-        try:
-            mft_conn = sqlite3.connect(self.mft_db)
-            filename_changes_count = self.track_filename_changes(mft_conn)
-            logger.info(f"Tracked {filename_changes_count} file name changes")
-            
-            # Step 3.5: Update forensic analysis fields now that filename_changes table exists
-            corr_conn = sqlite3.connect(self.correlated_db)
-            corr_cursor = corr_conn.cursor()
-            self._update_forensic_analysis_fields(corr_cursor)
-            corr_conn.close()
-            
-            mft_conn.close()
-        except Exception as e:
-            logger.error(f"Error tracking filename changes: {e}")
-        
-        # Step 4: Generate forensic report
-        self.generate_forensic_report()
-        
-        logger.info("Correlation analysis completed successfully")
-        return True
     
     def generate_forensic_report(self):
         """Generate a comprehensive forensic report"""
