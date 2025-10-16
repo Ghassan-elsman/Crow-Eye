@@ -223,33 +223,56 @@ check_and_install_requirements()
 
 # Handle pywin32 post-install if needed
 def handle_pywin32_postinstall():
-    """Run pywin32 post-install script if win32 modules are not accessible."""
-    try:
-        import win32evtlog  # Test if win32 modules are accessible
-        print(Fore.GREEN + "win32 modules are accessible" + Fore.RESET)
-        return True
-    except ImportError:
-        print(Fore.YELLOW + "win32 modules not accessible, running pywin32 post-install..." + Fore.RESET)
+    """Run pywin32 post-install script if win32 modules are not accessible with automatic retry."""
+    max_retries = 2
+    
+    for attempt in range(max_retries):
         try:
-            # Find and run pywin32 post-install script
-            scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crow_eye_venv', 'Scripts')
-            postinstall_script = os.path.join(scripts_dir, 'pywin32_postinstall.py')
-            
-            if os.path.exists(postinstall_script):
-                result = subprocess.run([sys.executable, postinstall_script, '-install'], 
-                                      capture_output=True, text=True, cwd=scripts_dir)
-                if result.returncode == 0:
-                    print(Fore.GREEN + "pywin32 post-install completed successfully" + Fore.RESET)
-                    return True
-                else:
-                    print(Fore.RED + f"pywin32 post-install failed: {result.stderr}" + Fore.RESET)
-                    return False
+            import win32evtlog  # Test if win32 modules are accessible
+            print(Fore.GREEN + "win32 modules are accessible" + Fore.RESET)
+            return True
+        except ImportError:
+            if attempt == 0:
+                print(Fore.YELLOW + "win32 modules not accessible, running pywin32 post-install..." + Fore.RESET)
             else:
-                print(Fore.YELLOW + "pywin32 post-install script not found" + Fore.RESET)
-                return False
-        except Exception as e:
-            print(Fore.RED + f"Failed to run pywin32 post-install: {str(e)}" + Fore.RESET)
-            return False
+                print(Fore.YELLOW + "win32 modules still not accessible, retrying pywin32 post-install..." + Fore.RESET)
+            
+            try:
+                # Find and run pywin32 post-install script
+                scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crow_eye_venv', 'Scripts')
+                postinstall_script = os.path.join(scripts_dir, 'pywin32_postinstall.py')
+                
+                if os.path.exists(postinstall_script):
+                    result = subprocess.run([sys.executable, postinstall_script, '-install'], 
+                                          capture_output=True, text=True, cwd=scripts_dir)
+                    if result.returncode == 0:
+                        print(Fore.GREEN + "pywin32 post-install completed successfully" + Fore.RESET)
+                        
+                        # Give the system a moment to register the DLLs
+                        import time
+                        time.sleep(1)
+                        
+                        # Try to import again after post-install
+                        try:
+                            import win32evtlog
+                            print(Fore.GREEN + "win32 modules now accessible after post-install" + Fore.RESET)
+                            return True
+                        except ImportError:
+                            continue  # Try one more time if still failing
+                    else:
+                        print(Fore.RED + f"pywin32 post-install failed: {result.stderr}" + Fore.RESET)
+                        if attempt == max_retries - 1:
+                            return False
+                else:
+                    print(Fore.YELLOW + "pywin32 post-install script not found" + Fore.RESET)
+                    if attempt == max_retries - 1:
+                        return False
+            except Exception as e:
+                print(Fore.RED + f"Failed to run pywin32 post-install: {str(e)}" + Fore.RESET)
+                if attempt == max_retries - 1:
+                    return False
+    
+    return False
 
 # Ensure pywin32 modules are accessible
 handle_pywin32_postinstall()
@@ -388,9 +411,9 @@ except ImportError as e:
     SearchUtils = None
     SearchWorker = None
 
-# Comprehensive dependency validation
+# Comprehensive dependency validation with automatic recovery
 def validate_dependencies():
-    """Validate that all critical dependencies are working properly."""
+    """Validate that all critical dependencies are working properly with automatic recovery for win32evtlog."""
     print(Fore.CYAN + "\n=== Validating Dependencies ===" + Fore.RESET)
     
     critical_deps = [
@@ -403,20 +426,42 @@ def validate_dependencies():
     ]
     
     all_ok = True
+    win32evtlog_fixed = False
     
     for dep, purpose in critical_deps:
         try:
             if dep == 'win32evtlog':
                 import win32evtlog
+                print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
             elif dep == 'sqlite3':
                 import sqlite3
+                print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
             elif dep == 'PyQt5':
                 from PyQt5 import QtCore
+                print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
             else:
                 __import__(dep)
-            print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
+                print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
         except ImportError:
-            print(Fore.RED + f"✗ {dep}: MISSING ({purpose})" + Fore.RESET)
+            if dep == 'win32evtlog':
+                print(Fore.RED + f"✗ {dep}: MISSING ({purpose})" + Fore.RESET)
+                print(Fore.YELLOW + "   Attempting automatic recovery for win32evtlog..." + Fore.RESET)
+                
+                # Try to automatically fix win32evtlog
+                if handle_pywin32_postinstall():
+                    # Retry the import after successful post-install
+                    try:
+                        import win32evtlog
+                        print(Fore.GREEN + f"✓ {dep}: RECOVERED ({purpose})" + Fore.RESET)
+                        win32evtlog_fixed = True
+                        continue  # Skip the error flag for this dependency
+                    except ImportError:
+                        print(Fore.RED + f"✗ {dep}: AUTOMATIC RECOVERY FAILED ({purpose})" + Fore.RESET)
+                else:
+                    print(Fore.RED + f"✗ {dep}: AUTOMATIC RECOVERY UNAVAILABLE ({purpose})" + Fore.RESET)
+            else:
+                print(Fore.RED + f"✗ {dep}: MISSING ({purpose})" + Fore.RESET)
+            
             all_ok = False
         except Exception as e:
             print(Fore.YELLOW + f"⚠ {dep}: ERROR - {str(e)} ({purpose})" + Fore.RESET)
@@ -424,7 +469,10 @@ def validate_dependencies():
     
     if not all_ok:
         print(Fore.YELLOW + "\n⚠ Some dependencies have issues. The application may not function fully." + Fore.RESET)
-        print(Fore.YELLOW + "   Try running: python -m pip install --upgrade -r requirements.txt" + Fore.RESET)
+        if not win32evtlog_fixed:
+            print(Fore.YELLOW + "   For win32evtlog issues, try running the pywin32 post-install script manually:" + Fore.RESET)
+            print(Fore.YELLOW + "   python crow_eye_venv\\Scripts\\pywin32_postinstall.py -install" + Fore.RESET)
+        print(Fore.YELLOW + "   Or run: python -m pip install --upgrade -r requirements.txt" + Fore.RESET)
     else:
         print(Fore.GREEN + "\n✓ All critical dependencies are working properly!" + Fore.RESET)
     
