@@ -797,57 +797,102 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.Clj_table.resizeColumnsToContents()
 
         def load_data_from_SystemLogs(self):
-            conn = sqlite3.connect('Log_Claw.db')
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM SystemLogs")
-            rows = cursor.fetchall()
-            # Populate the table widget with data from the database
-            self.tableWidget_22.setRowCount(0)
-            for row in rows:
-                row_index = self.tableWidget_22.rowCount()
-                self.tableWidget_22.insertRow(row_index)
-                for col_index, value in enumerate(row):
-                    item = QtWidgets.QTableWidgetItem(str(value))
-                    self.tableWidget_22.setItem(row_index, col_index, item)
+            try:
+                db_path = self.get_log_db_path()
+                print(f"[System Logs] Loading from database: {db_path}")
+                
+                # Check if database exists
+                if not os.path.exists(db_path):
+                    print(f"[System Logs Error] Database file not found: {db_path}")
+                    return
+                
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM SystemLogs")
+                rows = cursor.fetchall()
+                # Populate the table widget with data from the database
+                self.tableWidget_22.setRowCount(0)
+                for row in rows:
+                    row_index = self.tableWidget_22.rowCount()
+                    self.tableWidget_22.insertRow(row_index)
+                    for col_index, value in enumerate(row):
+                        item = QtWidgets.QTableWidgetItem(str(value))
+                        self.tableWidget_22.setItem(row_index, col_index, item)
 
-            conn.close()
-            # Resize columns to fit content
-            self.tableWidget_22.resizeColumnsToContents()
+                conn.close()
+                # Resize columns to fit content
+                self.tableWidget_22.resizeColumnsToContents()
+                print(f"[System Logs] Successfully loaded {len(rows)} records")
+                
+            except Exception as e:
+                print(f"[System Logs] Error loading data: {str(e)}")
+                import traceback
+                traceback.print_exc()
         
         def load_data_from_appsLogs(self):
-            conn = sqlite3.connect('Log_Claw.db')
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM ApplicationLogs")
-            rows = cursor.fetchall()
-            # Populate the table widget with data from the database
-            self.AppLogs_table.setRowCount(0)
-            for row in rows:
-                row_index = self.AppLogs_table.rowCount()
-                self.AppLogs_table.insertRow(row_index)
-                for col_index, value in enumerate(row):
-                    item = QtWidgets.QTableWidgetItem(str(value))
-                    self.AppLogs_table.setItem(row_index, col_index, item)
+            try:
+                db_path = self.get_log_db_path()
+                print(f"[Application Logs] Loading from database: {db_path}")
+                
+                # Check if database exists
+                if not os.path.exists(db_path):
+                    print(f"[Application Logs Error] Database file not found: {db_path}")
+                    return
+                
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM ApplicationLogs")
+                rows = cursor.fetchall()
+                # Populate the table widget with data from the database
+                self.AppLogs_table.setRowCount(0)
+                for row in rows:
+                    row_index = self.AppLogs_table.rowCount()
+                    self.AppLogs_table.insertRow(row_index)
+                    for col_index, value in enumerate(row):
+                        item = QtWidgets.QTableWidgetItem(str(value))
+                        self.AppLogs_table.setItem(row_index, col_index, item)
 
-            conn.close()
-            # Resize columns to fit content
-            self.AppLogs_table.resizeColumnsToContents()
+                conn.close()
+                # Resize columns to fit content
+                self.AppLogs_table.resizeColumnsToContents()
+                print(f"[Application Logs] Successfully loaded {len(rows)} records")
+                
+            except Exception as e:
+                print(f"[Application Logs] Error loading data: {str(e)}")
+                import traceback
+                traceback.print_exc()
         def load_data_from_SecurityLogs(self):
-            conn = sqlite3.connect('Log_Claw.db')
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM SecurityLogs")
-            rows = cursor.fetchall()
-            # Populate the table widget with data from the database
-            self.SecurityLogs_table.setRowCount(0)
-            for row in rows:
-                row_index = self.SecurityLogs_table.rowCount()
-                self.SecurityLogs_table.insertRow(row_index)
-                for col_index, value in enumerate(row):
-                    item = QtWidgets.QTableWidgetItem(str(value))
-                    self.SecurityLogs_table.setItem(row_index, col_index, item)
+            try:
+                db_path = self.get_log_db_path()
+                print(f"[Security Logs] Loading from database: {db_path}")
+                
+                # Check if database exists
+                if not os.path.exists(db_path):
+                    print(f"[Security Logs Error] Database file not found: {db_path}")
+                    return
+                
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM SecurityLogs")
+                rows = cursor.fetchall()
+                # Populate the table widget with data from the database
+                self.SecurityLogs_table.setRowCount(0)
+                for row in rows:
+                    row_index = self.SecurityLogs_table.rowCount()
+                    self.SecurityLogs_table.insertRow(row_index)
+                    for col_index, value in enumerate(row):
+                        item = QtWidgets.QTableWidgetItem(str(value))
+                        self.SecurityLogs_table.setItem(row_index, col_index, item)
 
-            conn.close()
-            # Resize columns to fit content
-            self.SecurityLogs_table.resizeColumnsToContents()
+                conn.close()
+                # Resize columns to fit content
+                self.SecurityLogs_table.resizeColumnsToContents()
+                print(f"[Security Logs] Successfully loaded {len(rows)} records")
+                
+            except Exception as e:
+                print(f"[Security Logs] Error loading data: {str(e)}")
+                import traceback
+                traceback.print_exc()
             
         def load_allReg_data(self):
             self.load_data_from_database_NetworkLists()
