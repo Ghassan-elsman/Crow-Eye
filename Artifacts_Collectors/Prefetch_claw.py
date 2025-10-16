@@ -1,3 +1,23 @@
+"""
+Prefetch File Parser for Windows Forensic Analysis
+
+This module provides functionality to parse Windows Prefetch files (.pf), which are 
+critical forensic artifacts that track program execution history on Windows systems.
+
+Key Features:
+- Supports all Windows Prefetch file formats (XP/2003, Vista/7, 8/8.1/2012, 10/11)
+- Handles compressed Windows 10/11 prefetch files using native Windows API
+- Extracts execution timestamps, run counts, and accessed files
+- Preserves file references and volume information
+- Exports parsed data to SQLite database and JSON for analysis
+
+
+
+Author: Ghassan Elsman
+Version: 1.0
+
+"""
+
 import os
 import struct
 import datetime
@@ -11,14 +31,40 @@ import re
 from ctypes import windll, wintypes
 
 class Version(enum.IntEnum):
-    WIN_XP_OR_2003 = 17
-    VISTA_OR_WIN7 = 23
-    WIN8X_OR_WIN2012X = 26
-    WIN10_OR_WIN11 = 30
-    WIN11 = 31
+    """Enum representing Windows Prefetch file format versions.
+    
+    Each Windows version uses a specific prefetch file format version number.
+    This enum maps those version numbers to their corresponding Windows OS versions,
+    which is critical for proper forensic parsing as the format structure varies.
+    
+    Format differences include:
+    - Number of last execution timestamps stored (1 vs 8)
+    - Presence of MFT information
+    - Compression (Windows 10/11)
+    - Section layouts and sizes
+    """
+    WIN_XP_OR_2003 = 17     # Windows XP and Server 2003 (single last run time)
+    VISTA_OR_WIN7 = 23      # Windows Vista and Windows 7 (8 last run times)
+    WIN8X_OR_WIN2012X = 26  # Windows 8, 8.1 and Server 2012/R2
+    WIN10_OR_WIN11 = 30     # Windows 10 and early Windows 11 (compressed)
+    WIN11 = 31              # Later Windows 11 versions (compressed)
 
 @dataclass
 class Header:
+    """Represents the header section of a Windows Prefetch file.
+    
+    The header contains critical forensic information including the format version,
+    signature ('SCCA'), file size, the name of the executable that was run, and a hash
+    value derived from the executable path. This hash is used in the prefetch filename
+    (e.g., NOTEPAD.EXE-AF43252D.pf where AF43252D is the hash).
+    
+    Attributes:
+        version (Version): The prefetch format version (indicates Windows version)
+        signature (str): The signature string, should be 'SCCA'
+        file_size (int): The size of the prefetch file in bytes
+        executable_filename (str): The name of the executed program
+        hash (str): The hash value derived from the executable path
+    """
     version: Version
     signature: str
     file_size: int
@@ -27,35 +73,90 @@ class Header:
 
     @classmethod
     def from_bytes(cls, data: bytes) -> 'Header':
+        """Parse prefetch header from binary data.
+        
+        Args:
+            data (bytes): Raw binary data from the prefetch file
+            
+        Returns:
+            Header: Parsed header object with all fields populated
+        """
         version = Version(struct.unpack_from("<I", data, 0)[0])
-        signature = data[4:8].decode('ascii')
+        signature = data[4:8].decode('ascii')  # Should be 'SCCA'
         file_size = struct.unpack_from("<I", data, 12)[0]
         
+        # Executable name is stored as UTF-16LE string (60 bytes, null-terminated)
         exe_filename_bytes = data[16:76]
         exe_filename = exe_filename_bytes.decode('utf-16le').split('\x00')[0].strip()
         
+        # Hash is a 32-bit value derived from the executable path
         hash_val = hex(struct.unpack_from("<I", data, 76)[0])[2:].upper()
         
         return cls(version, signature, file_size, exe_filename, hash_val)
 
 @dataclass
 class MFTInformation:
+    """Represents a Master File Table (MFT) entry reference in Windows NTFS.
+    
+    MFT references in prefetch files provide crucial forensic linkage between
+    the executed program and the actual files on disk. Each reference consists of
+    an entry number and sequence number that uniquely identifies a file in the
+    NTFS file system's Master File Table.
+    
+    Attributes:
+        mft_entry (int): The MFT entry number (file identifier)
+        sequence_number (int): The sequence number (prevents reuse confusion)
+    """
     mft_entry: int
     sequence_number: int
     
     @classmethod
     def from_bytes(cls, data: bytes) -> 'MFTInformation':
-        entry_seq = struct.unpack("<Q", data)[0]
-        mft_entry = entry_seq & 0xFFFFFFFFFFFF
-        sequence_number = entry_seq >> 48
+        """Parse MFT information from binary data.
+        
+        The MFT reference is stored as a 64-bit value where the lower 48 bits
+        represent the entry number and the upper 16 bits represent the sequence number.
+        
+        Args:
+            data (bytes): Raw binary data containing the MFT reference
+            
+        Returns:
+            MFTInformation: Parsed MFT reference object
+        """
+        entry_seq = struct.unpack("<Q", data)[0]  # 64-bit unsigned integer
+        mft_entry = entry_seq & 0xFFFFFFFFFFFF   # Lower 48 bits = entry number
+        sequence_number = entry_seq >> 48        # Upper 16 bits = sequence number
         
         return cls(mft_entry, sequence_number)
     
     def __str__(self) -> str:
+        """Return the standard MFT reference string format.
+        
+        Returns:
+            str: MFT reference in the format 'entry-sequence'
+        """
         return f"{self.mft_entry}-{self.sequence_number}"
 
 @dataclass
 class FileMetric:
+    """Represents information about a file referenced in a prefetch file.
+    
+    FileMetric objects store information about files accessed during program execution,
+    including offsets to the filename string and MFT information. This provides forensic
+    evidence of which files were accessed when a program was launched.
+    
+    The structure varies between Windows versions, with newer versions (Vista and later)
+    including MFT information that links to the actual file on disk.
+    
+    Attributes:
+        unknown0 (int): Unknown metric value (possibly flags or timestamps)
+        unknown1 (int): Unknown metric value (possibly flags or timestamps)
+        unknown2 (int): Unknown metric value (possibly flags or timestamps)
+        unknown3 (int): Unknown metric value (possibly flags or timestamps)
+        filename_string_offset (int): Offset to the filename string in the strings section
+        filename_string_size (int): Size of the filename string in bytes
+        mft_info (Optional[MFTInformation]): MFT reference (not present in Windows XP/2003)
+    """
     unknown0: int = 0
     unknown1: int = 0
     unknown2: int = 0
@@ -66,7 +167,21 @@ class FileMetric:
     
     @classmethod
     def from_bytes(cls, data: bytes, is_version17: bool) -> 'FileMetric':
+        """Parse file metric information from binary data.
+        
+        The structure differs between Windows XP/2003 (version 17) and later versions.
+        Windows XP/2003 has a simpler structure without MFT information, while later
+        versions include MFT references that link to the actual files on disk.
+        
+        Args:
+            data (bytes): Raw binary data containing the file metric
+            is_version17 (bool): True if parsing Windows XP/2003 format (version 17)
+            
+        Returns:
+            FileMetric: Parsed file metric object
+        """
         if is_version17:
+            # Windows XP/2003 format (version 17) - 20 bytes, no MFT information
             unknown0 = struct.unpack_from("<I", data, 0)[0]
             unknown1 = struct.unpack_from("<I", data, 4)[0]
             filename_offset = struct.unpack_from("<I", data, 8)[0]
@@ -81,6 +196,7 @@ class FileMetric:
                 unknown2=unknown2
             )
         else:
+            # Windows Vista and later format - 32 bytes, includes MFT information
             unknown0 = struct.unpack_from("<I", data, 0)[0]
             unknown1 = struct.unpack_from("<I", data, 4)[0]
             unknown2 = struct.unpack_from("<I", data, 8)[0]
@@ -88,6 +204,7 @@ class FileMetric:
             filename_size = struct.unpack_from("<I", data, 16)[0]
             unknown3 = struct.unpack_from("<I", data, 20)[0]
             
+            # Parse MFT reference (8 bytes at offset 24)
             mft_info = MFTInformation.from_bytes(data[24:32])
             
             return cls(
@@ -102,6 +219,21 @@ class FileMetric:
 
 @dataclass
 class TraceChain:
+    """Represents a trace chain entry in a prefetch file.
+    
+    Trace chains in prefetch files track the execution flow of a program, including
+    information about disk block access patterns. This data is used by Windows to
+    optimize future program launches by preloading necessary resources.
+    
+    From a forensic perspective, trace chains provide evidence of program execution
+    patterns and can help establish how a program interacted with the system.
+    
+    Attributes:
+        next_array_entry_index (int): Index of the next entry in the trace chain array
+        total_block_load_count (int): Total number of disk blocks that need to be loaded
+        unknown0 (int): Unknown value (possibly flags or additional metrics)
+        loaded_block_count (int): Number of blocks actually loaded during execution
+    """
     next_array_entry_index: int
     total_block_load_count: int
     unknown0: int = 0
@@ -109,19 +241,51 @@ class TraceChain:
     
     @classmethod
     def from_bytes(cls, data: bytes, has_loaded_count: bool) -> 'TraceChain':
-        next_index = struct.unpack_from("<I", data, 0)[0]
-        total_count = struct.unpack_from("<I", data, 4)[0]
+        """Parse trace chain information from binary data.
+        
+        The structure varies between Windows versions. Some versions include a
+        loaded block count field, while others don't.
+        
+        Args:
+            data (bytes): Raw binary data containing the trace chain entry
+            has_loaded_count (bool): Whether the format includes a loaded block count field
+            
+        Returns:
+            TraceChain: Parsed trace chain object
+        """
+        next_index = struct.unpack_from("<I", data, 0)[0]  # Index to next entry
+        total_count = struct.unpack_from("<I", data, 4)[0]  # Total blocks to load
         
         if has_loaded_count:
+            # Format with separate loaded count (2-byte values)
             unknown = struct.unpack_from("<H", data, 8)[0]
-            loaded_count = struct.unpack_from("<H", data, 10)[0]
+            loaded_count = struct.unpack_from("<H", data, 10)[0]  # Actual blocks loaded
             return cls(next_index, total_count, unknown, loaded_count)
         else:
+            # Format without loaded count (just a 4-byte unknown value)
             unknown = struct.unpack_from("<I", data, 8)[0]
             return cls(next_index, total_count, unknown)
 
 @dataclass
 class VolumeInfo:
+    """Represents volume information stored in a prefetch file.
+    
+    Prefetch files contain information about the volumes (drives) accessed during
+    program execution, including device names, volume serial numbers, and creation times.
+    This provides forensic evidence of which volumes were accessed and when they were
+    created.
+    
+    From a forensic perspective, this can help identify external drives that were
+    connected during program execution and establish timeline correlations.
+    
+    Attributes:
+        device_name_offset (int): Offset to the device name string in the strings section
+        creation_time (datetime.datetime): Volume creation timestamp
+        serial_number (str): Volume serial number in hexadecimal format
+        device_name (str): Name of the device (e.g., \\Device\\HarddiskVolume1)
+        file_references (List[MFTInformation]): MFT references to files on this volume
+        directory_names (List[str]): Directory paths accessed on this volume
+    """
     device_name_offset: int
     creation_time: datetime.datetime
     serial_number: str
@@ -130,15 +294,37 @@ class VolumeInfo:
     directory_names: List[str] = field(default_factory=list)
 
 class PrefetchFile:
-    SIGNATURE = 0x41434353  # 'SCCA' in little-endian
+    """Main class for parsing and analyzing Windows prefetch files.
+    
+    Windows prefetch files (.pf) are created by the Windows operating system to speed up
+    application startup. They contain valuable forensic artifacts including:
+    - Executable name and path
+    - Last execution times (up to 8 timestamps in Windows 10/11)
+    - Run count (number of times the program was executed)
+    - Files and directories accessed during program execution
+    - Volume information including serial numbers
+    
+    This class supports parsing prefetch files from Windows XP through Windows 11,
+    handling the various format changes and compression methods used across versions.
+    
+    Forensic Value:
+    - Evidence of program execution (what, when, how many times)
+    - File and directory access patterns
+    - Timeline reconstruction and correlation with other artifacts
+    - Identification of connected volumes (including removable media)
+    """
+    SIGNATURE = 0x41434353  # 'SCCA' in little-endian (ASCII 'SCCA')
     
     def __init__(self):
+        """Initialize an empty PrefetchFile object."""
+        # Source file metadata
         self.raw_bytes = None
         self.source_filename = ""
         self.source_created_on = None
         self.source_modified_on = None
         self.source_accessed_on = None
         
+        # Prefetch file structure information
         self.header = None
         self.file_metrics_offset = 0
         self.file_metrics_count = 0
@@ -149,31 +335,71 @@ class PrefetchFile:
         self.volumes_info_size = 0
         self.total_directory_count = -1
         
-        self.last_run_times = []
-        self.volume_information = []
-        self.run_count = 0
+        # Key forensic artifacts
+        self.last_run_times = []  # Timestamps of program execution
+        self.volume_information = []  # Information about accessed volumes
+        self.run_count = 0  # Number of times the program was executed
         self.parsing_error = False
         
-        self.filenames = []
-        self.file_metrics = []
+        # Parsed file and directory references
+        self.filenames = []  # List of files accessed during execution
+        self.file_metrics = []  # Detailed metrics about accessed files
 
     @classmethod
     def open(cls, file_path: str) -> 'PrefetchFile':
+        """Open and parse a prefetch file from disk.
+        
+        This is the primary method for loading prefetch files for forensic analysis.
+        It reads the raw file bytes and passes them to from_bytes() for parsing.
+        
+        Args:
+            file_path (str): Path to the prefetch file (.pf)
+            
+        Returns:
+            PrefetchFile: Parsed prefetch file object
+            
+        Raises:
+            Various exceptions if the file cannot be read or parsed
+        """
         with open(file_path, 'rb') as f:
             raw_bytes = f.read()
             return cls.from_bytes(raw_bytes, file_path)
     
     @staticmethod
     def _decompress_win10_prefetch(data: bytes) -> bytes:
+        """Decompress Windows 10/11 prefetch files.
+        
+        Starting with Windows 10, prefetch files are compressed using the Windows
+        XPRESS_HUFF compression algorithm. This method detects compressed prefetch
+        files by checking for the 'MAM' signature and decompresses them using the
+        Windows native API functions.
+        
+        Forensic Note: The compression does not alter the forensic value of the data,
+        but is an important consideration when parsing Windows 10/11 prefetch files.
+        
+        Args:
+            data (bytes): Raw prefetch file data
+            
+        Returns:
+            bytes: Decompressed prefetch data if compressed, otherwise original data
+            
+        Raises:
+            NotImplementedError: If running on a non-Windows system
+            Exception: If decompression fails
+        """
+        # Check for Windows 10/11 compressed prefetch signature ('MAM')
         if data[:3] == b'MAM':
             try:
+                # Get the decompressed size from the header
                 size = struct.unpack("<I", data[4:8])[0]
                 compressed_data = data[8:]
                 
                 if os.name == 'nt':
+                    # Windows 10/11 uses XPRESS_HUFF compression
                     COMPRESSION_FORMAT_XPRESS_HUFF = 4
                     ntdll = windll.ntdll
                     
+                    # Get required workspace sizes for decompression
                     compress_workspace_size = wintypes.ULONG()
                     compress_fragment_workspace_size = wintypes.ULONG()
                     
@@ -186,14 +412,17 @@ class PrefetchFile:
                     if status != 0:
                         raise Exception(f"RtlGetCompressionWorkSpaceSize failed with status {status}")
                     
+                    # Allocate buffers for decompression
                     workspace = (ctypes.c_ubyte * compress_fragment_workspace_size.value)()
                     uncompressed_buffer = (ctypes.c_ubyte * size)()
                     final_size = wintypes.ULONG()
                     
+                    # Convert compressed data to ctypes buffer
                     compressed_buffer = (ctypes.c_ubyte * len(compressed_data))()
                     for i, b in enumerate(compressed_data):
                         compressed_buffer[i] = b
                     
+                    # Call Windows API to decompress the data
                     status = ntdll.RtlDecompressBufferEx(
                         COMPRESSION_FORMAT_XPRESS_HUFF,
                         uncompressed_buffer,
@@ -207,6 +436,7 @@ class PrefetchFile:
                     if status != 0:
                         raise Exception(f"RtlDecompressBufferEx failed with status {status}")
                     
+                    # Convert back to Python bytes
                     return bytes(uncompressed_buffer)
                 else:
                     raise NotImplementedError(
@@ -215,22 +445,53 @@ class PrefetchFile:
             except Exception as e:
                 print(f"Error decompressing Windows 10/11 prefetch: {e}")
                 raise
+        # If not compressed or decompression failed, return original data
         return data
 
     @classmethod
     def from_bytes(cls, data: bytes, source_filename: str = "") -> 'PrefetchFile':
+        """Parse a prefetch file from raw bytes.
+        
+        This method handles the core parsing logic for prefetch files, including:
+        1. Decompressing Windows 10/11 prefetch files if needed
+        2. Validating the signature ('SCCA')
+        3. Determining the Windows version format
+        4. Parsing the appropriate format version
+        5. Collecting file metadata if a source filename is provided
+        
+        Forensic Value:
+        - Supports all Windows versions (XP through Windows 11)
+        - Handles format differences between versions
+        - Extracts key artifacts like execution times and run counts
+        
+        Args:
+            data (bytes): Raw prefetch file data
+            source_filename (str, optional): Original file path for metadata collection
+            
+        Returns:
+            PrefetchFile: Parsed prefetch file object
+            
+        Raises:
+            ValueError: If the signature is invalid or version is unknown
+            Various exceptions if parsing fails
+        """
+        # Handle Windows 10/11 compression
         data = cls._decompress_win10_prefetch(data)
         
+        # Validate signature ('SCCA' in little-endian)
         signature = struct.unpack_from("<I", data, 4)[0]
         if signature != cls.SIGNATURE:
             raise ValueError(f"Invalid signature: {signature:08X}, expected 'SCCA' (0x{cls.SIGNATURE:08X})")
         
+        # Get Windows version format
         version = struct.unpack_from("<I", data, 0)[0]
         
+        # Create and initialize instance
         instance = cls()
         instance.raw_bytes = data
         instance.source_filename = source_filename
         
+        # Collect file metadata if source filename provided
         if source_filename:
             try:
                 stat_info = os.stat(source_filename)
@@ -238,21 +499,22 @@ class PrefetchFile:
                 instance.source_modified_on = datetime.datetime.fromtimestamp(stat_info.st_mtime)
                 instance.source_accessed_on = datetime.datetime.fromtimestamp(stat_info.st_atime)
             except Exception:
-                pass
+                pass  # Silently continue if metadata collection fails
         
         try:
+            # Parse based on Windows version format
             if version == Version.WIN_XP_OR_2003:
-                instance._parse_version17()
+                instance._parse_version17()  # Windows XP/2003 format
             elif version == Version.VISTA_OR_WIN7:
-                instance._parse_version23()
+                instance._parse_version23()  # Windows Vista/7 format
             elif version == Version.WIN8X_OR_WIN2012X:
-                instance._parse_version26()
+                instance._parse_version26()  # Windows 8/8.1/2012 format
             elif version == Version.WIN10_OR_WIN11 or version == Version.WIN11:
-                instance._parse_version30or31()
+                instance._parse_version30or31()  # Windows 10/11 format
             else:
                 raise ValueError(f"Unknown version: {version}")
             
-            # Check for unusually high run count and adjust silently
+            # Sanity check: Fix unreasonably high run counts (possible corruption)
             if instance.run_count > 1000000:
                 instance.run_count = len([t for t in instance.last_run_times if t is not None]) or 0
             
@@ -651,17 +913,27 @@ class PrefetchFile:
                             drive_letters[volume_id] = drive_letter
 
             volumes_data = []
+            for i, vol in enumerate(self.volume_information, 1):
+                drive_letter = drive_letters.get(vol.device_name)
+                vol_id = f"{drive_letter}:" if drive_letter else f"Volume{i}"
+                # Format volume creation time without timezone information and milliseconds
+                creation_time_str = None
+                if vol.creation_time:
+                    if vol.creation_time.tzinfo is not None:
+                        creation_time_str = vol.creation_time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        # Remove milliseconds from string representation
+                        creation_time_str = str(vol.creation_time).split('.')[0]
+                volumes_data.append({
+                    "volume_id": vol_id,
+                    "device_name": vol.device_name,
+                    "creation_time": creation_time_str,
+                    "serial_number": vol.serial_number
+                })
             directories_data = []
             for i, vol in enumerate(self.volume_information, 1):
                 drive_letter = drive_letters.get(vol.device_name)
                 vol_id = f"{drive_letter}:" if drive_letter else f"Volume{i}"
-                volumes_data.append({
-                    "volume_id": vol_id,
-                    "device_name": vol.device_name,
-                    "creation_time": str(vol.creation_time) if vol.creation_time else None,
-                    "serial_number": vol.serial_number
-                })
-                
                 formatted_dirs = []
                 for dir_name in vol.directory_names:
                     formatted_dir = dir_name
@@ -691,7 +963,15 @@ class PrefetchFile:
                         formatted_name = f"{drive_letter}:\\{rest_of_path}"
                 formatted_resources.append(formatted_name)
 
-            run_times_data = [str(t) for t in sorted([t for t in self.last_run_times if t is not None], reverse=True)]
+            # Format run times without timezone information and milliseconds
+            run_times_data = []
+            for t in sorted([t for t in self.last_run_times if t is not None], reverse=True):
+                if t.tzinfo is not None:
+                    # Remove timezone info and milliseconds for display
+                    run_times_data.append(t.strftime("%Y-%m-%d %H:%M:%S"))
+                else:
+                    # Remove milliseconds from string representation
+                    run_times_data.append(str(t).split('.')[0])
 
             # Check for existing record with the same filename and hash
             cursor.execute("""
@@ -713,14 +993,16 @@ class PrefetchFile:
                 self.header.executable_filename,
                 self.header.hash,
                 display_run_count,
-                most_recent,
+                # Format most_recent without timezone information and milliseconds
+                most_recent.strftime("%Y-%m-%d %H:%M:%S") if most_recent and most_recent.tzinfo is not None else (str(most_recent).split('.')[0] if most_recent else most_recent),
                 json.dumps(run_times_data),
                 json.dumps(volumes_data),
                 json.dumps(directories_data),
                 json.dumps(formatted_resources),
-                self.source_created_on,
-                self.source_modified_on,
-                self.source_accessed_on
+                # Format source timestamps to remove milliseconds
+                str(self.source_created_on).split('.')[0] if self.source_created_on else self.source_created_on,
+                str(self.source_modified_on).split('.')[0] if self.source_modified_on else self.source_modified_on,
+                str(self.source_accessed_on).split('.')[0] if self.source_accessed_on else self.source_accessed_on
             ))
 
             conn.commit()
@@ -749,13 +1031,25 @@ class PrefetchFile:
         if self.last_run_times and len(self.last_run_times) > 0:
             most_recent = max([t for t in self.last_run_times if t is not None], default=None)
             if most_recent:
-                result.append(f"Last Executed: {most_recent}")
+                # Format without timezone for display and remove milliseconds
+                if most_recent.tzinfo is not None:
+                    formatted_time = most_recent.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    # Remove milliseconds from string representation
+                    formatted_time = str(most_recent).split('.')[0]
+                result.append(f"Last Executed: {formatted_time}")
         
             valid_times = [t for t in self.last_run_times if t is not None]
             if len(valid_times) > 1:
                 result.append("Execution Timeline:")
                 for i, time in enumerate(sorted(valid_times, reverse=True), 1):
-                    result.append(f"  {i}. {time}")
+                    # Format without timezone for display and remove milliseconds
+                    if time.tzinfo is not None:
+                        formatted_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        # Remove milliseconds from string representation
+                        formatted_time = str(time).split('.')[0]
+                    result.append(f"  {i}. {formatted_time}")
 
         if self.volume_information:
             result.append("Volume Information:")
@@ -779,7 +1073,16 @@ class PrefetchFile:
                 vol_id = f"{drive_letter}:" if drive_letter else f"Volume{i}"
                 result.append(f"Volume {vol_id}:")
                 result.append(f"  Device Name: {vol.device_name}")
-                result.append(f"  Creation Date: {vol.creation_time}")
+                # Format volume creation time without timezone
+                if vol.creation_time:
+                    if vol.creation_time.tzinfo is not None:
+                        formatted_time = vol.creation_time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        # Remove milliseconds from string representation
+                        formatted_time = str(vol.creation_time).split('.')[0]
+                    result.append(f"  Creation Date: {formatted_time}")
+                else:
+                    result.append(f"  Creation Date: {vol.creation_time}")
                 result.append(f"  Serial Number: {vol.serial_number}")
             
                 if vol.directory_names:

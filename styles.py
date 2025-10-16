@@ -54,8 +54,8 @@ class CrowEyeStyles:
         header = table_widget.horizontalHeader()
         if header:
             header.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE)
-            header.setDefaultSectionSize(300)
-            header.setMinimumSectionSize(150)
+            header.setDefaultSectionSize(200)
+            header.setMinimumSectionSize(100)
             header.setSectionsClickable(True)
             header.setHighlightSections(True)
             header.setSortIndicatorShown(True)
@@ -69,9 +69,8 @@ class CrowEyeStyles:
         # Configure vertical header
         vertical = table_widget.verticalHeader()
         if vertical:
-
-            vertical.setDefaultSectionSize(40)
-            vertical.setMinimumSectionSize(30)
+            vertical.setDefaultSectionSize(30)
+            vertical.setMinimumSectionSize(24)
             vertical.setAttribute(Qt.WA_StyledBackground, True)
             vertical.style().unpolish(vertical)
             vertical.style().polish(vertical)
@@ -84,23 +83,9 @@ class CrowEyeStyles:
         table_widget.update()
     
     @staticmethod
-    def apply_tab_styles(tab_widget, style_name="main"):
-        if style_name == "main":
-            style = CrowEyeStyles.MAIN_TAB_WIDGET
-            button_style = CrowEyeStyles.TOP_TAB_BUTTON_STYLE
-        elif style_name == "sub":
-            style = CrowEyeStyles.SUB_TAB_WIDGET
-            button_style = ""  # Sub-tab style is self-contained
-        else:
-            style = CrowEyeStyles.UNIFIED_TAB_STYLE
-            button_style = CrowEyeStyles.TAB_BUTTON_STYLE
-
-        # Apply the main tab widget style
-        tab_widget.setStyleSheet(style)
-        
-        # Apply the tab bar button style specifically
-        if button_style:
-            tab_widget.tabBar().setStyleSheet(button_style)
+    def apply_tab_styles(tab_widget, style_name=None):
+        # All tab styles now use UNIFIED_TAB_STYLE
+        tab_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TAB_STYLE)
         
         # Force a style refresh to ensure styles are applied immediately
         tab_widget.style().unpolish(tab_widget)
@@ -129,7 +114,7 @@ class CrowEyeStyles:
             padding: 12px 24px;
             font-weight: 600;
             font-size: 13px;
-            font-family: 'Segoe UI', sans-serif;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             min-width: 120px;
         }
         
@@ -150,23 +135,26 @@ class CrowEyeStyles:
     # Modern Flat Green Button with Cyberpunk Glow
     GREEN_BUTTON = """
         QPushButton {
-            background-color: #10B981;
+            background-color: #22C55E;
             color: #FFFFFF;
             border: none;
-            border-radius: 8px;
-            padding: 12px 24px;
+            border-radius: 6px;
+            padding: 8px 16px;
             font-weight: 600;
-            font-size: 13px;
-            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            min-width: 120px;
+            min-width: 100px;
+            max-height: 32px;
         }
         QPushButton:hover {
-            background-color: #34D399;
+            background-color: #4ADE80;
+            border: 1px solid rgba(0, 255, 255, 0.4);
         }
         QPushButton:pressed {
-            background-color: #047857;
+            background-color: #16A34A;
+            border: 1px solid rgba(0, 255, 255, 0.3);
         }
         QPushButton:disabled {
             background-color: #64748B;
@@ -184,7 +172,7 @@ class CrowEyeStyles:
             padding: 8px 16px;
             font-weight: 600;
             font-size: 12px;
-            font-family: 'Segoe UI', sans-serif;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             min-width: 100px;
@@ -213,7 +201,7 @@ class CrowEyeStyles:
             padding: 12px 24px;
             font-weight: 600;
             font-size: 13px;
-            font-family: 'Segoe UI', sans-serif;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
@@ -229,7 +217,49 @@ class CrowEyeStyles:
         }
         QPushButton:disabled {
             background-color: #64748B;
-            color: #94A3B8;
+        }
+    """
+    
+    # Checkbox Style with Cyberpunk Accents
+    CHECKBOX_STYLE = """
+        QCheckBox {
+            color: #E2E8F0;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            font-size: 13px;
+            spacing: 8px;
+            padding: 4px;
+        }
+        
+        QCheckBox::indicator {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            border: 1px solid #475569;
+            background-color: #1E293B;
+        }
+        
+        QCheckBox::indicator:unchecked:hover {
+            border: 1px solid #00FFFF;
+        }
+        
+        QCheckBox::indicator:checked {
+            background-color: #3B82F6;
+            border: 1px solid #3B82F6;
+            image: url(:/Icons/icons/check.svg);
+        }
+        
+        QCheckBox::indicator:checked:hover {
+            background-color: #60A5FA;
+            border: 1px solid #00FFFF;
+        }
+        
+        QCheckBox:disabled {
+            color: #64748B;
+        }
+        
+        QCheckBox::indicator:disabled {
+            background-color: #334155;
+            border: 1px solid #475569;
         }
     """
 
@@ -243,7 +273,7 @@ class CrowEyeStyles:
             padding: 12px 24px;
             font-weight: 600;
             font-size: 13px;
-            font-family: 'Segoe UI', sans-serif;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
@@ -273,7 +303,7 @@ class CrowEyeStyles:
             padding: 12px 24px;
             font-weight: 600;
             font-size: 13px;
-            font-family: 'Segoe UI', sans-serif;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
@@ -286,6 +316,66 @@ class CrowEyeStyles:
         QPushButton:disabled {
             background-color: #64748B;
             color: #94A3B8;
+        }
+    """
+    
+    # Modern Flat Orange Button with Cyberpunk Glow
+    ORANGE_BUTTON = """
+        QPushButton {
+            background-color: #FF5F1F;
+            color: #FFFFFF;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-weight: 600;
+            font-size: 12px;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        QPushButton:hover {
+            background-color: #FF8C42;
+            border: 1px solid rgba(255, 255, 255, 0.4);
+        }
+        QPushButton:pressed {
+            background-color: #E64A19;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        QPushButton:disabled {
+            background-color: #64748B;
+            color: #94A3B8;
+        }
+    """
+    
+    # Dialog Style with Cyberpunk Theme
+    DIALOG_STYLE = """
+        QDialog {
+            background-color: #0F172A;
+            color: #E2E8F0;
+            border: 2px solid #334155;
+            border-radius: 10px;
+        }
+    """
+    
+    # Group Box Style with Cyberpunk Theme
+    GROUP_BOX = """
+        QGroupBox {
+            background-color: #1E293B;
+            color: #E2E8F0;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-weight: 600;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            padding: 5px 10px;
+            background-color: #0F172A;
+            color: #00FFFF;
+            border: 1px solid #334155;
+            border-radius: 4px;
         }
     """
     
@@ -322,8 +412,8 @@ class CrowEyeStyles:
             padding: 15px 30px;
             font-weight: 600;
             font-size: 16px;
-            font-family: 'Segoe UI', sans-serif;
-            min-width: 180px;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            min-width: 120px;
             min-height: 45px;
             margin: 15px;
             text-transform: uppercase;
@@ -349,35 +439,44 @@ class CrowEyeStyles:
     # UNIFIED TAB WIDGET STYLES
     # ============================================================================
     
-    # Modern Flat Tab Style with Cyberpunk Accents
+    # Modern Flat Tab Style with Cyberpunk Accents - Smaller Size
     UNIFIED_TAB_STYLE = """
         QTabWidget::pane {
             border: 1px solid #334155;
             border-radius: 8px;
-            background-color: #0B1220;
-            padding: 16px;
-            margin-top: 0;
+            background: #1E293B;
+            margin: 0px;
+            padding: 0px;
         }
         QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 14px 28px;
-            min-width: 140px;
-            border: none;
-            border-bottom: 3px solid transparent;
-            margin-right: 4px;
+            background: #1E293B;
+            color: #94A3B8;
+            border: 1px solid #334155;
+            border-bottom: none;
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+            padding: 6px 14px; 
+            margin: 0px 3px 0px 3px;
+            min-width: 130px;   
+            max-width: 220px;   
+            min-height: 18px;
+        }
+        QTabBar::tab {
             font-weight: 600;
             font-family: 'Segoe UI', sans-serif;
-            font-size: 13px;
-            letter-spacing: 0.8px;
+            font-size: 11px;
+            letter-spacing: 0.5px;
             text-transform: uppercase;
+            qproperty-wordWrap: false;
+            qproperty-textElideMode: 2;  /* 2 = ElideRight */
+            padding-top: 6px;
+            padding-bottom: 6px;
         }
         QTabBar::tab:selected {
             background-color: #0B1220;
             color: #00FFFF;
-            border-bottom: 3px solid #00FFFF;
+            border-bottom: 2px solid #00FFFF;
             font-weight: bold;
-
         }
         QTabBar::tab:hover:!selected {
             background-color: #334155;
@@ -388,12 +487,12 @@ class CrowEyeStyles:
             background-color: #64748B;
         }
         QTabBar::scroller {
-            width: 30px;
+            width: 24px;
         }
         QTabBar QToolButton {
             background-color: #1E293B;
             border: 1px solid #334155;
-            border-radius: 4px;
+            border-radius: 3px;
         }
         QTabBar QToolButton:hover {
             background-color: #334155;
@@ -443,25 +542,25 @@ class CrowEyeStyles:
     
 
     
-    # Unified Modern Table Style with Dark Slate Background and Cyberpunk Elements
+    # Unified Modern Table Style with Dark Slate Background and Cyberpunk Elements - Smaller Headers
     UNIFIED_TABLE_STYLE = """
         QHeaderView::section {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563EB, stop:1 #1E40AF);
             color: #FFFFFF;
-            padding: 12px 16px;
+            padding: 8px 12px;
             border: none;
             border-right: 1px solid #334155;
-            font-weight: 700;
-            font-size: 14px;
+            font-weight: 600;
+            font-size: 12px;
             font-family: 'Segoe UI', sans-serif;
             text-transform: uppercase;
-            letter-spacing: 0.8px;
+            letter-spacing: 0.5px;
         }
         QHeaderView::section:first {
-            border-top-left-radius: 8px;
+            border-top-left-radius: 6px;
         }
         QHeaderView::section:last {
-            border-top-right-radius: 8px;
+            border-top-right-radius: 6px;
         }
         QHeaderView::section:hover {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
@@ -477,13 +576,13 @@ class CrowEyeStyles:
         QHeaderView::section:vertical {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0F172A, stop:1 #020617);
             color: #94A3B8;
-            padding: 8px 12px;
+            padding: 6px 8px;
             border: none;
             border-bottom: 1px solid #334155;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 11px;
             font-family: 'Segoe UI', sans-serif;
-            min-width: 40px;
+            min-width: 30px;
             text-align: center;
         }
         QHeaderView::section:vertical:hover {
@@ -499,7 +598,7 @@ class CrowEyeStyles:
             border-radius: 8px;
             gridline-color: #334155;
             outline: 0;
-            selection-background-color: #3B82F6;
+            selection-background-color: #10B981;  /* emerald green */
             selection-color: #FFFFFF;
             alternate-background-color: #162032;   /* softer alt rows */
             color: #E2E8F0;
@@ -508,26 +607,33 @@ class CrowEyeStyles:
             font-family: 'Segoe UI', sans-serif;
         }
 
-        /* Table cells */
+        /* Table cells - Enhanced for forensic readability */
         QTableWidget::item {
-            padding: 14px 18px;
+            padding: 8px 12px;
             border-bottom: 1px solid #334155;
             border-right: 1px solid #334155;
-            font-size: 13px;
+            font-size: 14px;
+            font-weight: 700;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            color: #F8FAFC;
+            letter-spacing: 0.2px;
         }
         QTableWidget::item:selected {
-            background-color: #2563EB;  /* deeper blue */
+            background-color: #059669;  /* enhanced emerald green */
             color: #FFFFFF;
-            font-weight: 600;
-            border-left: 2px solid #00FFFF;
+            font-weight: 800;
+            border: 2px solid #10B981;
+            border-radius: 3px;
+            padding: 3px;
         }
         QTableWidget::item:hover {
-            background-color: rgba(0, 255, 255, 0.12);
+            background-color: rgba(0, 255, 255, 0.15);
             color: #00FFFF;
-            font-weight: 500;
+            font-weight: 700;
         }
         QTableWidget::item:alternate {
             background-color: #1E293B;
+            color: #F1F5F9;
         }
 
         /* Corner button */
@@ -714,77 +820,11 @@ class CrowEyeStyles:
 
 
 
-    # Enhanced Cyberpunk Tab Style with Neon Glow
-    CYBERPUNK_TAB_STYLE = """
-        QTabWidget::pane {
-            border: 2px solid #00FFFF;
-            border-radius: 8px;
-            background-color: #0B1220;
-            padding: 16px;
-        }
-        QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 12px 24px;
-            min-width: 120px;
-            border: none;
-            border-bottom: 3px solid transparent;
-            margin-right: 6px;
-            font-weight: 600;
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 3px solid #00FFFF;
-            font-weight: bold;
-        }
-        QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #00FFFF;
-        }
-        QTabBar::tab:disabled {
-            color: #64748B;
-            background-color: #64748B;
-        }
-    """
+    # Enhanced Cyberpunk Tab Style with Neon Glow - Redirects to UNIFIED_TAB_STYLE
+    CYBERPUNK_TAB_STYLE = UNIFIED_TAB_STYLE
 
-    # Modern Main Tab Widget Style
-    MAIN_TAB_WIDGET = """
-        QTabWidget#main_tab::pane {
-            border: 1px solid #334155;
-            border-radius: 8px;
-            background-color: #0B1220;
-            padding: 16px;
-        }
-        QTabWidget#main_tab QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 14px 28px;
-            min-width: 140px;
-            border: none;
-            border-bottom: 3px solid transparent;
-            margin-right: 4px;
-            font-weight: 600;
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-        }
-        QTabWidget#main_tab QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 3px solid #00FFFF;
-            font-weight: bold;
-        }
-        QTabWidget#main_tab QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #FFFFFF;
-        }
-    """
+    # Modern Main Tab Widget Style - Redirects to UNIFIED_TAB_STYLE
+    MAIN_TAB_WIDGET = UNIFIED_TAB_STYLE
 
     # Modern Tab Background
     TAB_BACKGROUND = """
@@ -1228,7 +1268,7 @@ class CrowEyeStyles:
         QFrame#top_frame {
             background-color: #1E293B;
             border-bottom: 1px solid #334155;
-            padding: 8px;
+            padding: 4px;
         }
     """
 
@@ -1262,13 +1302,13 @@ class CrowEyeStyles:
     MAIN_LABEL = """
         QLabel {
             color: #00FFFF;
-            font-size: 18px;
+            font-size: 16px;
             font-weight: bold;
-            letter-spacing: 1.0px;
+            letter-spacing: 0.8px;
             text-align: center;
-            padding: 6px 12px;
+            padding: 4px 10px;
             background-color: rgba(15,23,42,0.7);
-            border-radius: 7px;
+            border-radius: 6px;
             border: 1px solid rgba(0,255,255,0.4);
             text-transform: uppercase;
             max-width: 300px;
@@ -1303,9 +1343,9 @@ class CrowEyeStyles:
         QFrame#search_frame {
             background-color: rgba(255,255,255,0.04);
             border: 2px solid rgba(59,130,246,0.3);
-            border-radius: 10px;
-            padding: 8px 12px;
-            margin: 8px 12px;
+            border-radius: 8px;
+            padding: 6px 10px;
+            margin: 6px 10px;
             /* box-shadow removed - not supported in Qt stylesheets */
         }
     """
@@ -1317,6 +1357,17 @@ class CrowEyeStyles:
             font-weight: 600;
             padding: 0 10px;
             margin-right: 4px;
+        }
+    """
+
+    # General label style for form labels
+    LABEL_STYLE = """
+        QLabel {
+            color: #E2E8F0;
+            font-weight: 600;
+            font-size: 13px;
+            padding: 4px 8px;
+            margin: 2px 4px;
         }
     """
 
@@ -1405,6 +1456,34 @@ class CrowEyeStyles:
         }
     """
 
+    # Filter Button Style - Cyberpunk themed filter button
+    FILTER_BUTTON = """
+        QPushButton {
+            background-color: #8B5CF6;
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 600;
+            font-size: 12px;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 80px;
+        }
+        QPushButton:hover {
+            background-color: #A78BFA;
+            border: 1px solid rgba(0, 255, 255, 0.4);
+        }
+        QPushButton:pressed {
+            background-color: #6D28D9;
+        }
+        QPushButton:disabled {
+            background-color: #475569;
+            color: #94A3B8;
+        }
+    """
+
 
 
     # ============================================================================
@@ -1473,8 +1552,83 @@ class CrowEyeStyles:
             border: 2px solid #475569;
         }
     """
-    
 
+    # DateTime Edit style for time pickers
+    DATE_TIME_EDIT = """
+        QDateTimeEdit {
+            background-color: #1E293B;
+            color: #E2E8F0;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 6px 8px;
+            font-size: 12px;
+            font-family: 'Segoe UI', sans-serif;
+            selection-background-color: #3B82F6;
+        }
+        QDateTimeEdit:hover {
+            border: 1px solid #475569;
+        }
+        QDateTimeEdit:focus {
+            border: 2px solid #00FFFF;
+            background-color: #0F172A;
+        }
+    """
+
+    # Primary button style for important actions
+    PRIMARY_BUTTON = """
+        QPushButton {
+            background-color: #3B82F6;
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 600;
+            font-size: 13px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 100px;
+        }
+        QPushButton:hover {
+            background-color: #60A5FA;
+            border: 1px solid rgba(0, 255, 255, 0.4);
+        }
+        QPushButton:pressed {
+            background-color: #1E40AF;
+        }
+        QPushButton:disabled {
+            background-color: #64748B;
+            color: #94A3B8;
+        }
+    """
+
+    # Secondary button style for less important actions
+    SECONDARY_BUTTON = """
+        QPushButton {
+            background-color: #64748B;
+            color: #FFFFFF;
+            border: 1px solid #475569;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 600;
+            font-size: 13px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 100px;
+        }
+        QPushButton:hover {
+            background-color: #94A3B8;
+            border: 1px solid rgba(0, 255, 255, 0.3);
+        }
+        QPushButton:pressed {
+            background-color: #334155;
+        }
+        QPushButton:disabled {
+            background-color: #475569;
+            color: #94A3B8;
+        }
+    """
 
     # ============================================================================
     # DARK CYBERPUNK LOADING DIALOG STYLES
@@ -1703,43 +1857,8 @@ class CrowEyeStyles:
         }
     """
 
-    # Sub Tab Widget Style
-    SUB_TAB_WIDGET = """
-        QTabWidget::pane {
-            border: 1px solid #334155;
-            border-radius: 6px;
-            background-color: #0B1220;
-            padding: 12px;
-        }
-        QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 10px 20px;
-            min-width: 100px;
-            border: none;
-            border-bottom: 2px solid transparent;
-            margin-right: 3px;
-            font-weight: 600;
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.6px;
-        }
-        QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 2px solid #00FFFF;
-            font-weight: bold;
-        }
-        QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #FFFFFF;
-        }
-        QTabBar::tab:disabled {
-            color: #64748B;
-            background-color: #64748B;
-        }
-    """
+    # Sub Tab Widget Style - Redirects to UNIFIED_TAB_STYLE
+    SUB_TAB_WIDGET = UNIFIED_TAB_STYLE
 
     # Modern Top Tab Button Style with Flat Design
     TOP_TAB_BUTTON_STYLE = """
