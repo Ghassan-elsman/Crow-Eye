@@ -546,10 +546,8 @@ class RowDetailDialog(QtWidgets.QDialog):
             # Add the other grid to the layout
             other_layout.addLayout(other_grid)
             
-            # Create collapsible section for other fields
-            other_section = self._create_collapsible_section("Other Info")
-            other_section.setContentWidget(other_widget)
-            self.content_layout.addWidget(other_section)
+            # Add the content directly without a collapsible section
+            self.content_layout.addWidget(other_widget)
 
     def _create_collapsible_section(self, title):
         """Create a collapsible section with the given title."""
