@@ -195,10 +195,13 @@ To analyze custom artifacts:
 - Some artifacts require special handling due to Windows file locking mechanisms
 
 ## Screenshots
-![Screenshot 1](https://github.com/user-attachments/assets/a768a871-b9aa-4e9b-a8d8-3d12b0439865)
-![Screenshot 2](https://github.com/user-attachments/assets/a937f1ca-4b2d-4365-809e-4dc71ae2650d)
-![Screenshot 3](https://github.com/user-attachments/assets/c63ebbcc-a88d-468e-81ea-1c610b5e3345)
-![Screenshot 4](https://github.com/user-attachments/assets/532ff85e-ae66-4434-ae01-79a8ea151f48)
+<img width="1920" height="1020" alt="Screenshot 2025-10-30 064143" src="https://github.com/user-attachments/assets/f400d4b3-e8f6-4c57-a59e-7f24107bc9e7" />
+<img width="1920" height="1020" alt="Screenshot 2025-10-30 064155" src="https://github.com/user-attachments/assets/20878078-742c-4d7c-b51c-571ba6640f90" />
+<img width="1920" height="1020" alt="Screenshot 2025-10-30 064205" src="https://github.com/user-attachments/assets/f23752e6-6a2b-4617-b665-c139a23676e8" />
+<img width="1920" height="1020" alt="Screenshot 2025-10-30 064219" src="https://github.com/user-attachments/assets/9079a99e-bc42-4690-bec0-ee3c5bffa41c" />
+<img width="1920" height="1080" alt="Screenshot 2025-10-30 064237" src="https://github.com/user-attachments/assets/bcdb9f14-6f13-45f4-a3d8-92871f73ab83" />
+<img width="1920" height="1020" alt="Screenshot 2025-10-30 064403" src="https://github.com/user-attachments/assets/b3f113f5-4cd8-482d-86dd-b0b18ff650a0" />
+
 
 ## 🌐 Official Website
 Visit our official website: [https://croweye.pages.dev/](https://croweye.pages.dev/)
