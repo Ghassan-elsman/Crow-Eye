@@ -208,7 +208,7 @@ For additional resources, documentation, and updates, check out our dedicated we
 ## 🚀 Coming Soon Features
 
 - 🗑️ **Recycle Bin Parser**
-- - 🧠 **Enhanced Binary Parsing** for RecentDocs, MRU, and ShellBags  
+- 🧠 **Enhanced Binary Parsing** for RecentDocs, MRU, and ShellBags  
 - ⚡ **SRUM Parser** (System Resource Usage Monitor analysis)
 - 🔍 **Timeline Visualization**  
 - 📊 **Advanced GUI Views and Reports**
