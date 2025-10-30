@@ -185,6 +185,10 @@ To analyze custom artifacts:
 - Original file name
 - Program ID
 
+### MFT Data
+
+### USN Journal Data
+
 ## Technical Notes
 - The tool incorporates a modified version of the JumpList_Lnk_Parser Python module
 - Registry parsing requires complete registry hive files
@@ -202,11 +206,14 @@ Visit our official website: [https://croweye.pages.dev/](https://croweye.pages.d
 For additional resources, documentation, and updates, check out our dedicated website.
 
 ## 🚀 Coming Soon Features
-- 📁 MFT Parser
-- 🔐 Registry Binary Data Parsing
-- 🗂️ File Explorer for Artifact Paths
-- 🔎 Enhanced Search Functionality
-- 🔍 Timeline Correlation View
+
+- 🗑️ **Recycle Bin Parser**
+- - 🧠 **Enhanced Binary Parsing** for RecentDocs, MRU, and ShellBags  
+- ⚡ **SRUM Parser** (System Resource Usage Monitor analysis)
+- 🔍 **Timeline Visualization**  
+- 📊 **Advanced GUI Views and Reports**
+- 🧩 **Correlation Engine** (linking MFT, USN, Prefetch, and LNK)  
+
 
 If you're interested in contributing to these features or have suggestions for additional forensic artifacts, please feel free to:
 
