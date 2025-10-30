@@ -196,10 +196,15 @@ To analyze custom artifacts:
 
 ## Screenshots
 <img width="1920" height="1020" alt="Screenshot 2025-10-30 064143" src="https://github.com/user-attachments/assets/f400d4b3-e8f6-4c57-a59e-7f24107bc9e7" />
+
 <img width="1920" height="1020" alt="Screenshot 2025-10-30 064155" src="https://github.com/user-attachments/assets/20878078-742c-4d7c-b51c-571ba6640f90" />
+
 <img width="1920" height="1020" alt="Screenshot 2025-10-30 064205" src="https://github.com/user-attachments/assets/f23752e6-6a2b-4617-b665-c139a23676e8" />
+
 <img width="1920" height="1020" alt="Screenshot 2025-10-30 064219" src="https://github.com/user-attachments/assets/9079a99e-bc42-4690-bec0-ee3c5bffa41c" />
+
 <img width="1920" height="1080" alt="Screenshot 2025-10-30 064237" src="https://github.com/user-attachments/assets/bcdb9f14-6f13-45f4-a3d8-92871f73ab83" />
+
 <img width="1920" height="1020" alt="Screenshot 2025-10-30 064403" src="https://github.com/user-attachments/assets/b3f113f5-4cd8-482d-86dd-b0b18ff650a0" />
 
 
