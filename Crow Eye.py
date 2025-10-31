@@ -19,6 +19,9 @@ Key Features:
   * Shimcache (AppCompatCache)
   * Registry hives
   * Event logs
+  * MFT
+  * USN
+  * Recycle bin
   
   * And more
 
@@ -32,7 +35,7 @@ Forensic Value:
 - Supports both live system analysis and offline forensic image examination
 
 Author: Ghassan Elsman
-Version: 0.2
+Version: 0.3
 License: GPL-3.0
 """
 
@@ -4074,6 +4077,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.setup_parse_button(self.logbutton, True, True, False)
         self.logbutton.setObjectName("logbutton")
         self.verticalLayout_3.addWidget(self.logbutton)
+        
+        self.RecycleBinButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.RecycleBinButton, True, True, True)
+        self.RecycleBinButton.setObjectName("RecycleBinButton")
+        self.verticalLayout_3.addWidget(self.RecycleBinButton)
+        
         spacerItem3 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
         self.verticalLayout_3.addItem(spacerItem3)
         self.Offline_analysis = QtWidgets.QLabel(self.side_fram)
@@ -4200,18 +4209,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.verticalLayout_12.addWidget(self.MachineRunOnce_tabel)
         self.Registry_widget.addTab(self.Machine_run_once, "")
 
-        # ShimCache Tab - Removed as per user request
-        # self.ShimCache_tab = QtWidgets.QWidget()
-        # self.ShimCache_tab.setObjectName("ShimCache_tab")
-        # self.verticalLayout_shimcache = QtWidgets.QVBoxLayout(self.ShimCache_tab)
-        # self.verticalLayout_shimcache.setContentsMargins(0, 0, 0, 0)
-        # self.verticalLayout_shimcache.setSpacing(0)
-        # self.verticalLayout_shimcache.setObjectName("verticalLayout_shimcache")
-        # self.ShimCache_table = QtWidgets.QTableWidget(self.ShimCache_tab)
-        # self.setup_standard_table(self.ShimCache_table, 6, True, 300, 190)
-        # self.ShimCache_table.setObjectName("ShimCache_table")
-        # self.verticalLayout_shimcache.addWidget(self.ShimCache_table)
-        # self.Registry_widget.addTab(self.ShimCache_tab, "")
+
 
         self.User_run = QtWidgets.QWidget()
         self.User_run.setObjectName("User_run")
@@ -4598,6 +4596,22 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.verticalLayout_mft_usn_main.addWidget(self.MFT_USN_tab_widget)
         self.main_tab.addTab(self.MFT_USN_main_tab, "")
         
+        # Create RecycleBin main tab
+        self.RecycleBin_main_tab = QtWidgets.QWidget()
+        self.RecycleBin_main_tab.setObjectName("RecycleBin_main_tab")
+        self.verticalLayout_recyclebin_main = QtWidgets.QVBoxLayout(self.RecycleBin_main_tab)
+        self.verticalLayout_recyclebin_main.setObjectName("verticalLayout_recyclebin_main")
+        
+        # Create RecycleBin table
+        self.RecycleBin_main_table = QtWidgets.QTableWidget(self.RecycleBin_main_tab)
+        self.RecycleBin_main_table.setMinimumSize(QtCore.QSize(2, 2))
+        self.setup_standard_table(self.RecycleBin_main_table, 12, False, 300, 190)
+        self.RecycleBin_main_table.setObjectName("RecycleBin_main_table")
+        self.verticalLayout_recyclebin_main.addWidget(self.RecycleBin_main_table)
+        
+        # Add RecycleBin tab to main tab widget
+        self.main_tab.addTab(self.RecycleBin_main_tab, "")
+        
         self.verticalLayout.addWidget(self.main_tab)
         self.horizontalLayout_2.addWidget(self.info_frame)
         # Give all stretch to content and none to sidebar
@@ -4650,6 +4664,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.AmcacheButton.setText(_translate("Crow_Eye", "Amcache"))
         self.MFT_USN_CorrelateButton.setText(_translate("Crow_Eye", "MFT and USN"))
         self.logbutton.setText(_translate("Crow_Eye", "Event Logs"))
+        self.RecycleBinButton.setText(_translate("Crow_Eye", "Recycle Bin"))
         self.Offline_analysis.setText(_translate("Crow_Eye", "offline analysis"))
         self.registry_offline.setText(_translate("Crow_Eye", "Registry offline"))
         self.offline_LNK_JL.setText(_translate("Crow_Eye", "Lnk and JL offline"))
@@ -4818,6 +4833,24 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.main_tab.setTabText(
                 self.main_tab.indexOf(self.MFT_USN_main_tab),
                 _translate("Crow_Eye", "MFT/USN")
+            )
+            
+        # Initialize RecycleBin_main_table headers for main tab
+        if hasattr(self, 'RecycleBin_main_table'):
+            self.RecycleBin_main_table.setColumnCount(12)
+            headers = ["Original Filename", "Original Path", "Deletion Time", "File Size", 
+                      "User SID", "Recycle Bin Path", "R File Path", "I Filename", 
+                      "R Filename", "File Signature", "Recovery Status", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.RecycleBin_main_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        
+        # Set tab text for RecycleBin main tab
+        if hasattr(self, 'RecycleBin_main_tab') and hasattr(self, 'main_tab'):
+            self.main_tab.setTabText(
+                self.main_tab.indexOf(self.RecycleBin_main_tab),
+                _translate("Crow_Eye", "Recycle Bin")
             )
             
         # Set tab text for ShimCache tab (in Registry widget)
@@ -5358,6 +5391,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.ShimCacheButton.clicked.connect(self.run_shimcache_analysis)
         self.AmcacheButton.clicked.connect(self.run_amcache_analysis)
         self.MFT_USN_CorrelateButton.clicked.connect(self.run_mft_usn_correlation)
+        self.RecycleBinButton.clicked.connect(self.run_recyclebin_analysis)
         self.exprot_json_CSV.clicked.connect(self.export_all_tables)    
         self.Creat_case.clicked.connect(self.create_directory)
         self.open_case_btn.clicked.connect(self.open_existing_case)
@@ -5455,6 +5489,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'prefetch': os.path.join(artifacts_dir, 'prefetch_data.db'),
                     'shimcache': os.path.join(artifacts_dir, 'shimcache.db'),
                     'amcache': os.path.join(artifacts_dir, 'amcache.db'),
+                    'recyclebin': os.path.join(artifacts_dir, 'recyclebin_analysis.db'),
                     'mft': os.path.join(artifacts_dir, 'mft_claw_analysis.db'),
                     'usn': os.path.join(artifacts_dir, 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(artifacts_dir, 'mft_usn_correlated_analysis.db')
@@ -5479,6 +5514,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch_data.db'),
                     'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db'),
                     'amcache': os.path.join(self.case_paths['artifacts_dir'], 'amcache.db'),
+                    'recyclebin': os.path.join(self.case_paths['artifacts_dir'], 'recyclebin_analysis.db'),
                     'mft': os.path.join(self.case_paths['artifacts_dir'], 'mft_claw_analysis.db'),
                     'usn': os.path.join(self.case_paths['artifacts_dir'], 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(self.case_paths['artifacts_dir'], 'mft_usn_correlated_analysis.db')
@@ -6039,6 +6075,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Switch to the MFT/USN main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.MFT_USN_main_tab))
     
+    def run_recyclebin_analysis(self):
+        """Run RecycleBin analysis with loading screen and switch to RecycleBin tab"""
+        self.run_analysis_with_loading("Running Recycle Bin Analysis...", self.parse_recyclebin)
+        # Switch to the RecycleBin main tab
+        self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.RecycleBin_main_tab))
+    
     def parse_LNK_files(self):
         """Parse LNK files and Jump Lists"""
         try:
@@ -6320,6 +6362,91 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             traceback.print_exc()
             raise
     
+    def parse_recyclebin(self):
+        """Parse RecycleBin data with loading dialog"""
+        def _parse_recyclebin_internal():
+            try:
+                print("[RecycleBin] Starting RecycleBin collection...")
+                from Artifacts_Collectors.recyclebin_claw import parse_recycle_bin
+                case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                
+                # Run the RecycleBin parser with case path
+                if case_root:
+                    # For case-based analysis, pass the case root path
+                    db_path = parse_recycle_bin(case_path=case_root)
+                else:
+                    # For live system analysis
+                    db_path = parse_recycle_bin()
+                    
+                print(f"[RecycleBin] RecycleBin data collected successfully, database: {db_path}")
+                
+                # Load the data into the UI
+                self.load_recyclebin_data()
+            except Exception as e:
+                print(f"[RecycleBin Error] {str(e)}")
+                import traceback
+                traceback.print_exc()
+                raise
+        
+        # Use the loading dialog system
+        self.show_loading_screen_with_function(
+            "Collecting RecycleBin Data",
+            _parse_recyclebin_internal
+        )
+    
+    def load_recyclebin_data(self):
+        """Load RecycleBin data from the recyclebin database"""
+        try:
+            # Get the database path from case configuration
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                return
+                
+            case_root = self.case_paths.get('case_root')
+            if not case_root:
+                return
+                
+            # RecycleBin database is created in case_root/Target_Artifacts/
+            artifacts_dir = os.path.join(case_root, 'Target_Artifacts')
+            db_path = os.path.join(artifacts_dir, 'recyclebin_analysis.db')
+            
+            # Check if database exists
+            if not os.path.exists(db_path):
+                print(f"[RecycleBin] Database not found at: {db_path}")
+                print(f"[RecycleBin] Please run RecycleBin analysis first to create the database")
+                return
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Check if recycle_bin_entries table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='recycle_bin_entries'")
+            if not cursor.fetchone():
+                print(f"[RecycleBin] recycle_bin_entries table not found in database: {db_path}")
+                conn.close()
+                return
+                
+            cursor.execute("SELECT * FROM recycle_bin_entries")
+            rows = cursor.fetchall()
+            
+            if hasattr(self, 'RecycleBin_main_table'):
+                self.RecycleBin_main_table.setRowCount(0)
+                for row in rows:
+                    row_index = self.RecycleBin_main_table.rowCount()
+                    self.RecycleBin_main_table.insertRow(row_index)
+                    for col_index, value in enumerate(row):
+                        item = QtWidgets.QTableWidgetItem(str(value))
+                        self.RecycleBin_main_table.setItem(row_index, col_index, item)
+                print(f"[RecycleBin] Successfully loaded {len(rows)} records from {db_path}")
+                # Resize columns to fit content
+                self.RecycleBin_main_table.resizeColumnsToContents()
+                # Apply styles
+                self.apply_table_styles(self.RecycleBin_main_table)
+            conn.close()
+        except Exception as e:
+            print(f"[RecycleBin] Error loading data: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
     def parse_offline_lnk_files(self):
         """Parse offline LNK files and Jump Lists using the offline module"""
         try:
@@ -6390,6 +6517,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "Collecting Event Logs",
                 "Collecting ShimCache data",
                 "Collecting Amcache data",
+                "Collecting RecycleBin data",
+                "Collecting MFT & USN Journal data",
                 "Loading data into GUI"
             ]
             
@@ -6500,8 +6629,29 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 except Exception as e:
                     print(f"[Amcache Error] {str(e)}")
                 
-                # Step 8: MFT and USN Journal data
-                dialog.update_step(7, "🗂️ COLLECTING MFT & USN JOURNAL DATA")
+                # Step 8: RecycleBin data
+                dialog.update_step(7, "🗑️ COLLECTING RECYCLEBIN DATA")
+                QtWidgets.QApplication.processEvents()  # Force GUI update
+                try:
+                    print("[RecycleBin] Collecting RecycleBin data...")
+                    # Import and call the RecycleBin collection function
+                    from Artifacts_Collectors.recyclebin_claw import parse_recycle_bin
+                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                    
+                    # Run the RecycleBin parser with case path
+                    if case_root:
+                        # For case-based analysis, pass the case root path
+                        db_path = parse_recycle_bin(case_path=case_root)
+                    else:
+                        # For live system analysis
+                        db_path = parse_recycle_bin()
+                        
+                    print(f"[RecycleBin] RecycleBin data collected successfully, database: {db_path}")
+                except Exception as e:
+                    print(f"[RecycleBin Error] {str(e)}")
+                
+                # Step 9: MFT and USN Journal data
+                dialog.update_step(8, "🗂️ COLLECTING MFT & USN JOURNAL DATA")
                 QtWidgets.QApplication.processEvents()  # Force GUI update
                 try:
                     print("[MFT-USN] Collecting MFT and USN Journal data...")
@@ -6513,8 +6663,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 
                 print("[Open Case] Artifact collection finished. Loading data into UI...")
                 
-                # Step 9: Load data into GUI
-                dialog.update_step(8, "📊 LOADING DATA INTO GUI")
+                # Step 10: Load data into GUI
+                dialog.update_step(9, "📊 LOADING DATA INTO GUI")
                 QtWidgets.QApplication.processEvents()  # Force GUI update
                 try:
                     self.load_all_data_internal()
@@ -6656,8 +6806,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "Loading ShimCache data",
                 "Loading Registry Database",
                 "Loading Amcache data",
+                "Loading RecycleBin data",
                 "Loading MFT data",
-                "Loading USN Journal data"
+                "Loading USN Journal data",
+                "Loading Correlated MFT-USN data"
             ]
             
             dialog.set_steps(steps)
@@ -6708,25 +6860,31 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print("[Registry] Completed loading Registry Database")
                 
                 # Step 9: Loading Amcache data
-                dialog.update_step(7, "📦 LOADING AMCACHE DATA")
+                dialog.update_step(8, "📦 LOADING AMCACHE DATA")
                 print("[Amcache] Starting to load Amcache Data...")
                 self.load_amcache_data()
                 print("[Amcache] Completed loading Amcache Data")
                 
-                # Step 10: Loading MFT data
-                dialog.update_step(8, "🗂️ LOADING MFT DATA")
+                # Step 10: Loading RecycleBin data
+                dialog.update_step(9, "🗑️ LOADING RECYCLEBIN DATA")
+                print("[RecycleBin] Starting to load RecycleBin Data...")
+                self.load_recyclebin_data()
+                print("[RecycleBin] Completed loading RecycleBin Data")
+                
+                # Step 11: Loading MFT data
+                dialog.update_step(10, "🗂️ LOADING MFT DATA")
                 print("[MFT] Starting to load MFT Data...")
                 self.load_mft_data(dialog.add_log_message)
                 print("[MFT] Completed loading MFT Data")
                 
-                # Step 11: Loading USN data
-                dialog.update_step(9, "📝 LOADING USN JOURNAL DATA")
+                # Step 12: Loading USN data
+                dialog.update_step(11, "📝 LOADING USN JOURNAL DATA")
                 print("[USN] Starting to load USN Journal Data...")
                 self.load_usn_data(dialog.add_log_message)
                 print("[USN] Completed loading USN Journal Data")
                 
-                # Step 12: Loading Correlated data
-                dialog.update_step(10, "🔗 LOADING CORRELATED MFT-USN DATA")
+                # Step 13: Loading Correlated data
+                dialog.update_step(12, "🔗 LOADING CORRELATED MFT-USN DATA")
                 print("[Correlated] Starting to load Correlated MFT-USN Data...")
                 self.load_correlated_data(dialog.add_log_message)
                 print("[Correlated] Completed loading Correlated MFT-USN Data")
@@ -6799,6 +6957,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.load_amcache_data()
         except Exception as e:
             print(f"[Amcache Error] Couldn't load Amcache data: {str(e)}")
+        
+        try:
+            self.load_recyclebin_data()
+        except Exception as e:
+            print(f"[RecycleBin Error] Couldn't load RecycleBin data: {str(e)}")
+            
         try:
             self.load_registry_data_from_db()
         except Exception as e:
@@ -6830,7 +6994,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             "Loading Prefetch data",
             "Loading Event Logs",
             "Loading ShimCache data",
-            "Loading Amcache data"
+            "Loading Amcache data",
+            "Loading RecycleBin data"
         ]
         
         try:
@@ -6877,6 +7042,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print("[Amcache] Starting to load Amcache Data...")
             self.load_amcache_data()
             print("[Amcache] Completed loading Amcache Data")
+            
+            # Load RecycleBin Data
+            loading_dialog.update_step(7, "🔄 Loading RecycleBin data...")
+            print("[RecycleBin] Starting to load RecycleBin Data...")
+            self.load_recyclebin_data()
+            print("[RecycleBin] Completed loading RecycleBin Data")
             
             # Load Registry Data from DB
             loading_dialog.status_label.setText("Loading Registry Database...")
