@@ -1,4 +1,4 @@
-# Crow Eye - Windows Forensics Tool
+# Crow Eye - Windows Forensics Engine 
 
 <p align="center">
   <img src="GUI Resources/CrowEye.jpg" alt="Crow Eye Logo" width="200"/>
