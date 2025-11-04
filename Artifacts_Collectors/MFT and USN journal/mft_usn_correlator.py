@@ -263,7 +263,9 @@ class MFTUSNCorrelator:
                 if result.returncode == 0:
                     logger.info("USN parser completed successfully")
                 else:
-                    logger.warning("USN parser may have failed due to privilege requirements or missing dependencies")
+                    # Only warn if the database wasn't created
+                    if not os.path.exists(self.usn_db):
+                        logger.warning("USN parser may have failed due to privilege requirements or missing dependencies")
             
             # Check if database was created despite any errors
             if not os.path.exists(self.usn_db):
@@ -1225,7 +1227,11 @@ class MFTUSNCorrelator:
         # Step 2: Create correlated database
         correlation_success = self.create_correlated_database()
         if not correlation_success:
-            logger.warning("Correlated database creation failed or database is locked. Using existing database if available.")
+            # Only warn if the database wasn't created and we're not just using an existing one
+            if not os.path.exists(self.correlated_db):
+                logger.warning("Correlated database creation failed. Using existing database if available.")
+            else:
+                logger.info("Using existing correlated database")
             
         # Step 3: Track filename changes from MFT database
         try:
