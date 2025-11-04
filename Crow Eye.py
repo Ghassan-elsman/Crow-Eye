@@ -216,8 +216,20 @@ def check_and_install_requirements():
 
     if missing_packages:
         print('\nInstalling missing packages...')
+        packages_installed = False
         for package in missing_packages:
-            install_package(package)
+            if install_package(package):
+                packages_installed = True
+        
+        # If packages were installed, restart the application to ensure proper loading
+        if packages_installed:
+            print(Fore.YELLOW + '\nPackages installed. Restarting application to ensure proper module registration...' + Fore.RESET)
+            # Cross-platform restart mechanism
+            if os.name == 'nt':  # Windows
+                subprocess.Popen([sys.executable] + sys.argv)
+                sys.exit(0)
+            else:  # Unix/Linux/Mac
+                os.execv(sys.executable, [sys.executable] + sys.argv)
     else:
         print(Fore.GREEN + '\nAll required packages are installed!' + Fore.RESET)
 
