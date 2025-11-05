@@ -1157,14 +1157,14 @@ def main():
     if not is_admin():
         logger.error("This script requires administrator privileges to access USN Journal.")
         logger.error("Please run as administrator (right-click -> 'Run as administrator')")
-        sys.exit(1)
+        return 1  # Return error code instead of exiting
 
     logger.info("Running with administrator privileges")
 
     volumes = get_ntfs_volumes()
     if not volumes:
         logger.error("No NTFS fixed volumes detected. Exiting.")
-        sys.exit(1)
+        return 1  # Return error code instead of exiting
 
     logger.info(f"Found volumes: {', '.join(volumes)}")
 
@@ -1218,6 +1218,7 @@ def main():
             logger.info("  Then re-run this tool to capture file system activity")
 
     logger.info("Done.")
+    return 0  # Success
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
