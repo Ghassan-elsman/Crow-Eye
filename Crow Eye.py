@@ -2921,8 +2921,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Apply appropriate style based on the style parameter
         if style.lower() == 'red':
             button.setStyleSheet(CrowEyeStyles.RED_BUTTON)
-        else:  # Default to green
-            button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
+        else:  # Default to parser button style (Blue)
+            button.setStyleSheet(CrowEyeStyles.PARSER_BUTTON)
             
         button.setCheckable(checkable)
         button.setChecked(checked)
@@ -3873,7 +3873,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Search button - opens database search dialog
         self.search_button = QtWidgets.QPushButton(self.search_frame)
-        self.search_button.setStyleSheet(CrowEyeStyles.ORANGE_BUTTON)
+        self.search_button.setStyleSheet(CrowEyeStyles.SEARCH_BUTTON_MAIN)
         self.search_button.setText("Database Search")
         self.search_button.setObjectName("search_button")
         self.search_button.setToolTip("Open database search dialog (Ctrl+Shift+F)")
@@ -3885,8 +3885,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.horizontalLayout_search.addWidget(self.search_button)
         
         self.timeline_search_button = QtWidgets.QPushButton(self.search_frame)
-        self.timeline_search_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
+        self.timeline_search_button.setStyleSheet(CrowEyeStyles.VISUALIZATION_BUTTON)
         self.timeline_search_button.setText("Timeline Visualization")
+        # Add visualization icon
+        icon_viz = QtGui.QIcon()
+        icon_viz.addPixmap(QtGui.QPixmap("GUI Resources/icons/visualization.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        self.timeline_search_button.setIcon(icon_viz)
+        self.timeline_search_button.setIconSize(QtCore.QSize(16, 16))
         self.timeline_search_button.setObjectName("timeline_search_button")
         self.timeline_search_button.setToolTip("Open timeline visualization")
         self.timeline_search_button.clicked.connect(self.open_timeline_dialog)
@@ -3942,7 +3947,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception:
             pass
         self.exprot_json_CSV = QtWidgets.QPushButton(self.side_fram)
-        self.exprot_json_CSV.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
+        self.exprot_json_CSV.setStyleSheet(CrowEyeStyles.EXPORT_BUTTON)
+        # Add export icon
+        icon_export = QtGui.QIcon()
+        icon_export.addPixmap(QtGui.QPixmap("GUI Resources/icons/export.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        self.exprot_json_CSV.setIcon(icon_export)
+        self.exprot_json_CSV.setIconSize(QtCore.QSize(16, 16))
+        self.exprot_json_CSV.setText("Export Data") # Ensure text is set
         self.exprot_json_CSV.setObjectName("loadData")
         self.verticalLayout_3.addWidget(self.exprot_json_CSV)
         
@@ -4237,7 +4248,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.verticalLayout_36 = QtWidgets.QVBoxLayout(self.USBStorageDevices_tab)
         self.verticalLayout_36.setObjectName("verticalLayout_36")
         self.USBStorageDevices_table = QtWidgets.QTableWidget(self.USBStorageDevices_tab)
-        self.setup_standard_table(self.USBStorageDevices_table, 9, False, 300, 190)
+        self.setup_standard_table(self.USBStorageDevices_table, 10, False, 300, 190)
         self.USBStorageDevices_table.setObjectName("USBStorageDevices_table")
         self.verticalLayout_36.addWidget(self.USBStorageDevices_table)
         self.Registry_widget.addTab(self.USBStorageDevices_tab, "")
@@ -5145,11 +5156,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Initialize USBStorageDevices_table headers if it exists (USB History)
         if hasattr(self, 'USBStorageDevices_table'):
-            self.USBStorageDevices_table.setColumnCount(9)
+            self.USBStorageDevices_table.setColumnCount(10)
             headers = [
                 "Device ID", "Friendly Name", "Serial Number",
                 "Vendor ID", "Product ID", "Revision",
-                "First Connected", "Last connected", "Analyzing Time"
+                "First Connected", "Last connected", "Last Removed", "Analyzing Time"
             ]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
