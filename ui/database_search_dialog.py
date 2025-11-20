@@ -221,39 +221,16 @@ class TimePeriodFilterWidget(QtWidgets.QWidget):
             btn.setStyleSheet(preset_button_style)
         
         self.clear_button.setStyleSheet(preset_button_style)
-        
+    
         # Date/time picker styles
-        datetime_style = f"""
-            QDateTimeEdit {{
-                background-color: {Colors.BG_TABLES};
-                color: {Colors.TEXT_PRIMARY};
-                border: 2px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 9pt;
-            }}
-            QDateTimeEdit:focus {{
-                border-color: {Colors.ACCENT_CYAN};
-            }}
-            QDateTimeEdit:disabled {{
-                background-color: {Colors.BORDER_SUBTLE};
-                color: {Colors.TEXT_MUTED};
-            }}
-            QDateTimeEdit::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QDateTimeEdit::down-arrow {{
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 4px solid {Colors.ACCENT_CYAN};
-                margin-right: 6px;
-            }}
-        """
+        self.start_datetime.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
+        self.end_datetime.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
         
-        self.start_datetime.setStyleSheet(datetime_style)
-        self.end_datetime.setStyleSheet(datetime_style)
+        # Apply calendar styles if calendar popup is enabled
+        if self.start_datetime.calendarWidget():
+            self.start_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
+        if self.end_datetime.calendarWidget():
+            self.end_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
         
         # Group box style
         self.group_box.setStyleSheet(f"""
@@ -615,6 +592,22 @@ class SearchWorker(QObject):
                 print(f"[WORKER] Could not emit error signal - object deleted")
 
 
+
+class UISearchResult:
+    """
+    Static class to hold search result data for the UI.
+    Replaces dynamic type creation to avoid potential crashes.
+    """
+    def __init__(self, database, table, row_id, matched_columns, row_data, match_preview, matched_timestamps):
+        self.database = database
+        self.table = table
+        self.row_id = row_id
+        self.matched_columns = matched_columns
+        self.row_data = row_data
+        self.match_preview = match_preview
+        self.matched_timestamps = matched_timestamps
+
+
 class DatabaseSearchDialog(QtWidgets.QDialog):
     """
     Unified Database Search Dialog for Crow Eye.
@@ -815,8 +808,8 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 11.6, 11.7, 11.8, 13.1, 13.2, 13.3, 13.5, 13.6, 13.8, 13.9
         """
         self.setWindowTitle("⚡ CROW EYE - DATABASE SEARCH ⚡")
-        self.setMinimumSize(1200, 800)
-        self.resize(1400, 900)  # More compact default size
+        self.setMinimumSize(1000, 600)
+        self.resize(1200, 800)  # More compact default size
         
         # Enable window controls: minimize, maximize, restore buttons
         # Requirements: 7.1, 7.2, 7.3, 7.4
@@ -829,8 +822,8 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         
         # Main layout - ultra compact spacing for more data visibility
         main_layout = QtWidgets.QVBoxLayout(self)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(4)
+        main_layout.setContentsMargins(4, 4, 4, 4)
+        main_layout.setSpacing(2)
         
         # Time filter widget - show date/time inputs but hide preset buttons
         self.time_filter_widget = TimePeriodFilterWidget(self)
@@ -943,7 +936,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         
         # History combo box (smaller)
         self.history_combo = QtWidgets.QComboBox()
-        self.history_combo.setMinimumHeight(24)
+        self.history_combo.setMinimumHeight(20)
         self.history_combo.setMaximumWidth(200)
         self.history_combo.setPlaceholderText("Select recent...")
         self.history_combo.addItem("-- Select recent --")
@@ -959,21 +952,21 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self.search_input = QtWidgets.QLineEdit()
         self.search_input.setPlaceholderText("Enter search term and press Enter to search across all databases...")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setMinimumHeight(24)
+        self.search_input.setMinimumHeight(20)
         search_layout.addWidget(self.search_input, stretch=1)
         
         # Search button
         self.search_button = QtWidgets.QPushButton("Search")
-        self.search_button.setMinimumWidth(80)
-        self.search_button.setMinimumHeight(24)
+        self.search_button.setMinimumWidth(60)
+        self.search_button.setMinimumHeight(20)
         self.search_button.setDefault(True)
         self.search_button.setToolTip("Click to search or press Enter in the search box")
         search_layout.addWidget(self.search_button)
         
         # Cancel button (initially hidden)
         self.cancel_button = QtWidgets.QPushButton("Cancel")
-        self.cancel_button.setMinimumWidth(70)
-        self.cancel_button.setMinimumHeight(24)
+        self.cancel_button.setMinimumWidth(60)
+        self.cancel_button.setMinimumHeight(20)
         self.cancel_button.setVisible(False)
         search_layout.addWidget(self.cancel_button)
         
@@ -1035,7 +1028,6 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         separator3.setStyleSheet(f"color: {Colors.BORDER_SUBTLE};")
         layout.addWidget(separator3)
         
-        # Note: "Search as you type" feature removed - search only triggers on button click or Enter key
         
         layout.addStretch()
         
@@ -1052,40 +1044,18 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         group = QtWidgets.QGroupBox("Select Databases to Search:")
         layout = QtWidgets.QVBoxLayout()
         
-        # Selection controls
-        controls_layout = QtWidgets.QHBoxLayout()
+        # Create horizontal layout for tree and buttons side by side
+        main_layout = QtWidgets.QHBoxLayout()
         
-        select_all_btn = QtWidgets.QPushButton("Select All")
-        select_all_btn.setMinimumWidth(100)
-        select_all_btn.setToolTip("Select all available databases and tables")
-        select_all_btn.clicked.connect(self._select_all_databases)
-        controls_layout.addWidget(select_all_btn)
-        
-        deselect_all_btn = QtWidgets.QPushButton("Deselect All")
-        deselect_all_btn.setMinimumWidth(110)
-        deselect_all_btn.setToolTip("Deselect all databases and tables")
-        deselect_all_btn.clicked.connect(self._deselect_all_databases)
-        controls_layout.addWidget(deselect_all_btn)
-        
-        # Add "Select Loaded Only" button
-        select_loaded_btn = QtWidgets.QPushButton("Select Loaded")
-        select_loaded_btn.setMinimumWidth(110)
-        select_loaded_btn.setToolTip("Select only databases with loaded GUI tabs")
-        select_loaded_btn.clicked.connect(self._select_loaded_only)
-        controls_layout.addWidget(select_loaded_btn)
-        
-        controls_layout.addStretch()
-        layout.addLayout(controls_layout)
-        
-        # Database tree widget - compact for more data visibility
+        # Database tree widget - increased height for better visibility
         self.database_tree = QtWidgets.QTreeWidget()
         self.database_tree.setHeaderLabels(["Database / Table", "Status"])
         self.database_tree.setAlternatingRowColors(True)
         self.database_tree.setRootIsDecorated(True)
         self.database_tree.setColumnWidth(0, 280)
         self.database_tree.setColumnWidth(1, 220)
-        self.database_tree.setMinimumHeight(120)  # More compact
-        self.database_tree.setMaximumHeight(200)  # Reduced max height
+        self.database_tree.setMinimumHeight(200)  # Increased from 100
+        self.database_tree.setMaximumHeight(500)  # Increased from 350 for more space
         self.database_tree.setIndentation(20)
         
         # Set header background color programmatically
@@ -1097,14 +1067,43 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 border: none;
                 border-right: 1px solid #334155;
                 border-bottom: 2px solid #00FFFF;
-                padding: 8px 10px;
+                padding: 4px 8px;
                 font-weight: 700;
                 font-size: 10px;
                 font-family: 'Segoe UI', sans-serif;
             }}
         """)
         
-        layout.addWidget(self.database_tree)
+        main_layout.addWidget(self.database_tree)
+        
+        # Selection controls - vertical layout on the right side
+        controls_layout = QtWidgets.QVBoxLayout()
+        
+        select_all_btn = QtWidgets.QPushButton("Select All")
+        select_all_btn.setMinimumWidth(100)
+        select_all_btn.setMaximumWidth(100)
+        select_all_btn.setToolTip("Select all available databases and tables")
+        select_all_btn.clicked.connect(self._select_all_databases)
+        controls_layout.addWidget(select_all_btn)
+        
+        deselect_all_btn = QtWidgets.QPushButton("Deselect All")
+        deselect_all_btn.setMinimumWidth(100)
+        deselect_all_btn.setMaximumWidth(100)
+        deselect_all_btn.setToolTip("Deselect all databases and tables")
+        deselect_all_btn.clicked.connect(self._deselect_all_databases)
+        controls_layout.addWidget(deselect_all_btn)
+        
+        # Add "Select Loaded Only" button
+        select_loaded_btn = QtWidgets.QPushButton("Select Loaded")
+        select_loaded_btn.setMinimumWidth(100)
+        select_loaded_btn.setMaximumWidth(100)
+        select_loaded_btn.setToolTip("Select only databases with loaded GUI tabs")
+        select_loaded_btn.clicked.connect(self._select_loaded_only)
+        controls_layout.addWidget(select_loaded_btn)
+        
+        main_layout.addLayout(controls_layout)
+        
+        layout.addLayout(main_layout)
         
         group.setLayout(layout)
         return group
@@ -1160,7 +1159,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         header.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)  # Preview stretches
         
         # Set row height to be very compact for more data visibility
-        self.results_table.verticalHeader().setDefaultSectionSize(20)
+        self.results_table.verticalHeader().setDefaultSectionSize(18)
         
         # Set header background color programmatically (stylesheet sometimes doesn't apply)
         header.setStyleSheet(f"""
@@ -1170,7 +1169,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 border: none;
                 border-right: 1px solid #334155;
                 border-bottom: 2px solid #00FFFF;
-                padding: 8px 10px;
+                padding: 4px 8px;
                 font-weight: 700;
                 font-size: 10px;
                 font-family: 'Segoe UI', sans-serif;
@@ -1316,7 +1315,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             /* Labels - Neon Cyan Text */
             QLabel {{
                 color: #00FFFF;
-                font-size: 10pt;
+                font-size: 8pt;
                 font-family: 'Segoe UI', sans-serif;
                 font-weight: 600;
             }}
@@ -1352,16 +1351,16 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 color: #00FFFF;
                 border: 2px solid #00FFFF;
                 border-radius: 10px;
-                margin-top: 22px;
-                padding: 15px;
+                margin-top: 12px;
+                padding: 6px;
                 font-weight: 700;
-                font-size: 11pt;
+                font-size: 9pt;
                 font-family: 'Segoe UI', sans-serif;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 6px 14px;
+                padding: 3px 8px;
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #0F172A, stop:0.5 #1E293B, stop:1 #0F172A);
                 color: #00FFFF;
@@ -1449,15 +1448,15 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                     stop:0 #00BFFF, stop:1 #0080FF);
                 color: #000000;
                 border: 2px solid #00FFFF;
-                border-radius: 8px;
-                padding: 8px 18px;
-                font-weight: 700;
-                font-size: 12px;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 9px;
                 font-family: 'Segoe UI', sans-serif;
                 text-transform: uppercase;
-                letter-spacing: 1px;
-                min-width: 90px;
-                min-height: 32px;
+                letter-spacing: 0.5px;
+                min-width: 60px;
+                min-height: 24px;
             }}
             QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -2466,8 +2465,6 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             
             # Update info label with time filter info
             info_text = f"Found {len(results)} results in {search_time:.2f}s"
-            if truncated:
-                info_text += " (Results limited to 1000 per table)"
             
             # Add time filter parameters to summary if active
             if time_filter_active and (start_time or end_time):
@@ -2525,23 +2522,28 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                         preview = ""
                         if hasattr(result, 'match_preview') and result.match_preview:
                             preview = str(result.match_preview)
+                        else:
+                            # If no preview, create one from row_data
+                            if hasattr(result, 'row_data') and result.row_data:
+                                matched_cols = getattr(result, 'matched_columns', [])
+                                preview = self._create_preview_from_data(result.row_data, matched_cols)
                         
                         # Don't truncate preview in table - let it show full text
                         preview_item = QtWidgets.QTableWidgetItem(preview)
                         
                         # Set full preview as tooltip
-                        if hasattr(result, 'match_preview') and result.match_preview:
-                            preview_item.setToolTip(str(result.match_preview))
+                        if preview:
+                            preview_item.setToolTip(preview)
                         
-                        # Column index depends on whether timestamp column is visible
-                        # Preview is always the last column (column 4 with timestamp, column 3 without)
-                        preview_col = 4 if time_filter_active else 3
+                        # Column index is always 4 for Preview
+                        # Even if timestamp column (3) is hidden, the model index remains 4
+                        preview_col = 4
                         self.results_table.setItem(row, preview_col, preview_item)
                         self.logger.debug(f"Set preview: {preview[:50] if preview else '(empty)'}...")
                     except Exception as preview_error:
                         self.logger.error(f"Error setting preview: {preview_error}")
                         # Set empty preview on error
-                        preview_col = 4 if time_filter_active else 3
+                        preview_col = 4
                         self.results_table.setItem(row, preview_col, QtWidgets.QTableWidgetItem(""))
                     
                     self.logger.info(f"Successfully added result {idx} to row {row}")
@@ -2863,7 +2865,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             case_sensitive=case_sensitive,
             exact_match=exact_match,
             use_regex=use_regex,
-            max_results_per_table=1000,
+            max_results_per_table=999999,  # Effectively unlimited
             start_time=start_time,
             end_time=end_time,
             timeout_seconds=60.0
@@ -2910,19 +2912,21 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             Preview string showing matched column values or column names
         """
         try:
-            if not matched_columns:
-                return "No matched columns"
-            
             if not row_data:
-                # Show column names if no data available
-                cols = ", ".join(str(col) for col in matched_columns[:3])
-                if len(matched_columns) > 3:
-                    cols += f" (+{len(matched_columns) - 3} more)"
-                return f"Matched in: {cols}"
+                if matched_columns:
+                    # Show column names if no data available
+                    cols = ", ".join(str(col) for col in matched_columns[:3])
+                    if len(matched_columns) > 3:
+                        cols += f" (+{len(matched_columns) - 3} more)"
+                    return f"Matched in: {cols}"
+                return "No data available"
             
-            # Create preview from first few matched columns with data
+            # If matched_columns is empty, show first few columns with data
+            columns_to_show = matched_columns if matched_columns else list(row_data.keys())
+            
+            # Create preview from first few columns with data
             preview_parts = []
-            for col in matched_columns[:3]:  # Limit to first 3 columns
+            for col in columns_to_show[:3]:  # Limit to first 3 columns
                 if col in row_data and row_data[col] is not None:
                     value = str(row_data[col])
                     # Truncate long values
@@ -2933,11 +2937,13 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             if preview_parts:
                 return " | ".join(preview_parts)
             else:
-                # Data exists but no values in matched columns
-                cols = ", ".join(str(col) for col in matched_columns[:3])
-                if len(matched_columns) > 3:
-                    cols += f" (+{len(matched_columns) - 3} more)"
-                return f"Matched in: {cols}"
+                # Data exists but no values in columns
+                if matched_columns:
+                    cols = ", ".join(str(col) for col in matched_columns[:3])
+                    if len(matched_columns) > 3:
+                        cols += f" (+{len(matched_columns) - 3} more)"
+                    return f"Matched in: {cols}"
+                return "No preview available"
             
         except Exception as e:
             self.logger.error(f"Error creating preview from data: {e}")
@@ -2975,143 +2981,151 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             results: List of SearchResults objects (one per database)
             search_time: Time taken for search in seconds
         """
-        self.logger.info(f"Search completed: {len(results)} SearchResults objects in {search_time:.2f}s")
-        
-        # Flatten results from List[SearchResults] to List[SearchResult]
-        # and convert to the format expected by the UI
-        flat_results = []
-        for idx, search_results in enumerate(results):
-            # Get database name from the SearchResults container
-            database_name = getattr(search_results, 'database_name', 'Unknown')
-            
-            # Get all individual results
-            individual_results = []
-            if hasattr(search_results, 'get_all_results'):
-                individual_results = search_results.get_all_results()
-            elif hasattr(search_results, 'results'):
-                # Fallback: manually flatten the results dict
-                for table_name, table_results in search_results.results.items():
-                    individual_results.extend(table_results)
-            
-            # Convert each result to include database info and create preview
-            for result_idx, result in enumerate(individual_results):
-                # Get row data from result
-                row_data = getattr(result, 'record_data', None)
-                if not row_data:
-                    row_data = getattr(result, 'row_data', {})
-                
-                # Try to extract row_id if not already set
-                row_id = getattr(result, 'row_id', None)
-                if row_id is None and row_data:
-                    # Try common ID column names
-                    for id_col in ['id', 'ID', 'rowid', 'ROWID', '_rowid_', 'Id', 'row_id', 'ROW_ID']:
-                        if id_col in row_data and row_data[id_col] is not None:
-                            row_id = row_data[id_col]
-                            break
-                
-                # Get matched columns
-                matched_columns = getattr(result, 'matched_columns', [])
-                
-                # Create preview from row_data and matched_columns
-                preview = self._create_preview_from_data(row_data, matched_columns)
-                
-                # Get table name - handle both 'table' and 'table_name' attributes
-                table_name = getattr(result, 'table', None)
-                if not table_name:
-                    table_name = getattr(result, 'table_name', 'Unknown')
-                
-                # Get matched timestamps
-                matched_timestamps = getattr(result, 'matched_timestamps', None)
-                
-                if result_idx < 3:  # Log first 3 results for debugging
-                    print(f"[UI]   Converting result {result_idx}: table={table_name}, row_id={row_id}, "
-                          f"matched_cols={len(matched_columns)}, timestamps={len(matched_timestamps) if matched_timestamps else 0}")
-                
-                # Create a converted result with the expected structure
-                converted_result = type('SearchResult', (), {
-                    'database': database_name,
-                    'table': table_name,
-                    'row_id': row_id,
-                    'matched_columns': matched_columns,
-                    'row_data': row_data,
-                    'match_preview': preview,
-                    'matched_timestamps': matched_timestamps
-                })()
-                flat_results.append(converted_result)
-        
-        print(f"[UI] Flattened to {len(flat_results)} individual results")
-        self.logger.info(f"Flattened to {len(flat_results)} individual results")
-        
-        # Store and display results
-        self.current_results = flat_results
-        truncated = len(flat_results) >= 1000  # Simple truncation check
-        
-        # Check if time filtering was active
-        time_filter_active = False
-        start_time = None
-        end_time = None
-        
         try:
-            if hasattr(self, 'time_filter_widget') and self.time_filter_widget:
-                time_filter_active = self.time_filter_widget.is_enabled()
-                if time_filter_active:
-                    start_time, end_time = self.time_filter_widget.get_time_range()
-        except Exception as e:
-            self.logger.warning(f"Error checking time filter status: {e}")
+            self.logger.info(f"Search completed: {len(results)} SearchResults objects in {search_time:.2f}s")
+            
+            # Flatten results from List[SearchResults] to List[SearchResult]
+            # and convert to the format expected by the UI
+            flat_results = []
+            for idx, search_results in enumerate(results):
+                # Get database name from the SearchResults container
+                database_name = getattr(search_results, 'database_name', 'Unknown')
+                
+                # Get all individual results
+                individual_results = []
+                if hasattr(search_results, 'get_all_results'):
+                    individual_results = search_results.get_all_results()
+                elif hasattr(search_results, 'results'):
+                    # Fallback: manually flatten the results dict
+                    for table_name, table_results in search_results.results.items():
+                        individual_results.extend(table_results)
+                
+                # Convert each result to include database info and create preview
+                for result_idx, result in enumerate(individual_results):
+                    # Get row data from result
+                    row_data = getattr(result, 'record_data', None)
+                    if not row_data:
+                        row_data = getattr(result, 'row_data', {})
+                    
+                    # Try to extract row_id if not already set
+                    row_id = getattr(result, 'row_id', None)
+                    if row_id is None and row_data:
+                        # Try common ID column names
+                        for id_col in ['id', 'ID', 'rowid', 'ROWID', '_rowid_', 'Id', 'row_id', 'ROW_ID']:
+                            if id_col in row_data and row_data[id_col] is not None:
+                                row_id = row_data[id_col]
+                                break
+                    
+                    # Get matched columns
+                    matched_columns = getattr(result, 'matched_columns', [])
+                    
+                    # Create preview from row_data and matched_columns
+                    preview = self._create_preview_from_data(row_data, matched_columns)
+                    
+                    # Get table name - handle both 'table' and 'table_name' attributes
+                    table_name = getattr(result, 'table', None)
+                    if not table_name:
+                        table_name = getattr(result, 'table_name', 'Unknown')
+                    
+                    # Get matched timestamps
+                    matched_timestamps = getattr(result, 'matched_timestamps', None)
+                    
+                    if result_idx < 3:  # Log first 3 results for debugging
+                        print(f"[UI]   Converting result {result_idx}: table={table_name}, row_id={row_id}, "
+                              f"matched_cols={len(matched_columns)}, timestamps={len(matched_timestamps) if matched_timestamps else 0}")
+                    
+                    # Create a converted result with the expected structure using static class
+                    converted_result = UISearchResult(
+                        database=database_name,
+                        table=table_name,
+                        row_id=row_id,
+                        matched_columns=matched_columns,
+                        row_data=row_data,
+                        match_preview=preview,
+                        matched_timestamps=matched_timestamps
+                    )
+                    flat_results.append(converted_result)
+            
+            print(f"[UI] Flattened to {len(flat_results)} individual results")
+            self.logger.info(f"Flattened to {len(flat_results)} individual results")
+            
+            # Store and display results
+            self.current_results = flat_results
+            truncated = len(flat_results) >= 1000  # Simple truncation check
+            
+            # Check if time filtering was active
             time_filter_active = False
-        
-        self._populate_results_table(
-            flat_results, 
-            search_time, 
-            truncated,
-            time_filter_active=time_filter_active,
-            start_time=start_time,
-            end_time=end_time
-        )
-        
-        # Add search to history
-        if self.search_engine:
+            start_time = None
+            end_time = None
+            
             try:
-                search_term = self.search_input.text().strip()
-                selected = self._get_selected_databases_and_tables()
-                
-                # Get time filter parameters
-                start_time_str = None
-                end_time_str = None
-                time_preset = None
-                
-                if hasattr(self, 'time_filter_widget') and self.time_filter_widget.is_enabled():
-                    start_time, end_time = self.time_filter_widget.get_time_range()
-                    if start_time:
-                        start_time_str = start_time.isoformat()
-                    if end_time:
-                        end_time_str = end_time.isoformat()
-                    time_preset = self.time_filter_widget.current_preset
-                
-                self.search_engine.history_manager.save_history(
-                    term=search_term,
-                    databases=list(selected.keys()),
-                    tables=selected,
-                    case_sensitive=self.case_sensitive_checkbox.isChecked(),
-                    exact_match=self.exact_match_checkbox.isChecked(),
-                    use_regex=self.regex_checkbox.isChecked(),
-                    start_time=start_time_str,
-                    end_time=end_time_str,
-                    time_preset=time_preset
-                )
-                
-                # Reload history dropdown
-                self._load_search_history()
-                
+                if hasattr(self, 'time_filter_widget') and self.time_filter_widget:
+                    time_filter_active = self.time_filter_widget.is_enabled()
+                    if time_filter_active:
+                        start_time, end_time = self.time_filter_widget.get_time_range()
             except Exception as e:
-                self.logger.error(f"Failed to save search to history: {e}", exc_info=True)
+                self.logger.warning(f"Error checking time filter status: {e}")
+                time_filter_active = False
+            
+            self._populate_results_table(
+                flat_results, 
+                search_time, 
+                truncated,
+                time_filter_active=time_filter_active,
+                start_time=start_time,
+                end_time=end_time
+            )
+            
+            # Add search to history
+            if self.search_engine:
+                try:
+                    search_term = self.search_input.text().strip()
+                    selected = self._get_selected_databases_and_tables()
+                    
+                    # Get time filter parameters
+                    start_time_str = None
+                    end_time_str = None
+                    time_preset = None
+                    
+                    if hasattr(self, 'time_filter_widget') and self.time_filter_widget.is_enabled():
+                        start_time, end_time = self.time_filter_widget.get_time_range()
+                        if start_time:
+                            start_time_str = start_time.isoformat()
+                        if end_time:
+                            end_time_str = end_time.isoformat()
+                        time_preset = self.time_filter_widget.current_preset
+                    
+                    self.search_engine.history_manager.save_history(
+                        term=search_term,
+                        databases=list(selected.keys()),
+                        tables=selected,
+                        case_sensitive=self.case_sensitive_checkbox.isChecked(),
+                        exact_match=self.exact_match_checkbox.isChecked(),
+                        use_regex=self.regex_checkbox.isChecked(),
+                        start_time=start_time_str,
+                        end_time=end_time_str,
+                        time_preset=time_preset
+                    )
+                    
+                    # Reload history dropdown
+                    self._load_search_history()
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to save search to history: {e}", exc_info=True)
 
-        # Restore UI state
-        self.search_in_progress = False
-        self.search_button.setVisible(True)
-        self.cancel_button.setVisible(False)
-        self.search_input.setEnabled(True)
-        self.progress_bar.setVisible(False)
+            # Restore UI state
+            self.search_in_progress = False
+            self.search_button.setVisible(True)
+            self.cancel_button.setVisible(False)
+            self.search_input.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            
+        except BaseException as e:
+            self.logger.error(f"Error in _on_search_complete: {e}", exc_info=True)
+            print(f"[UI] Critical error in _on_search_complete: {e}")
+            import traceback
+            traceback.print_exc()
+            self._on_search_error(f"Error processing results: {str(e)}")
     
     def _on_search_error(self, error_message: str):
         """
