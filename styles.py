@@ -110,12 +110,12 @@ class CrowEyeStyles:
             background-color: #3B82F6;
             color: #FFFFFF;
             border: none;
-            border-radius: 8px;
-            padding: 12px 24px;
+            border-radius: 6px;
+            padding: 6px 12px;
             font-weight: 600;
-            font-size: 13px;
+            font-size: 11px;
             font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            min-width: 120px;
+            min-width: 80px;
         }
         
         QPushButton:hover {
@@ -138,15 +138,15 @@ class CrowEyeStyles:
             background-color: #22C55E;
             color: #FFFFFF;
             border: none;
-            border-radius: 6px;
-            padding: 8px 16px;
+            border-radius: 4px;
+            padding: 4px 10px;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 11px;
             font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            min-width: 100px;
-            max-height: 32px;
+            min-width: 80px;
+            max-height: 28px;
         }
         QPushButton:hover {
             background-color: #4ADE80;
@@ -197,10 +197,10 @@ class CrowEyeStyles:
             background-color: #3B82F6;
             color: #FFFFFF;
             border: none;
-            border-radius: 8px;
-            padding: 12px 24px;
+            border-radius: 6px;
+            padding: 6px 16px;
             font-weight: 600;
-            font-size: 13px;
+            font-size: 11px;
             font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -269,10 +269,10 @@ class CrowEyeStyles:
             background-color: #64748B;
             color: #FFFFFF;
             border: none;
-            border-radius: 8px;
-            padding: 12px 24px;
+            border-radius: 6px;
+            padding: 6px 16px;
             font-weight: 600;
-            font-size: 13px;
+            font-size: 11px;
             font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -363,19 +363,19 @@ class CrowEyeStyles:
             background-color: #1E293B;
             color: #E2E8F0;
             border: 1px solid #334155;
-            border-radius: 8px;
-            margin-top: 20px;
+            border-radius: 6px;
+            margin-top: 10px;
             font-weight: 600;
             font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            padding: 5px 10px;
+            padding: 2px 5px;
             background-color: #0F172A;
             color: #00FFFF;
             border: 1px solid #334155;
-            border-radius: 4px;
+            border-radius: 3px;
         }
     """
     
@@ -675,12 +675,12 @@ class CrowEyeStyles:
         QLineEdit, QTextEdit, QPlainTextEdit {
             background-color: #1E293B;
             color: #F1F5F9;
-            border: 2px solid #334155;
-            border-radius: 8px;
-            padding: 10px 14px;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 4px 8px;
             selection-background-color: #3B82F6;
             selection-color: #FFFFFF;
-            font-size: 14px;
+            font-size: 11px;
         }
         
         QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover {
@@ -689,7 +689,7 @@ class CrowEyeStyles:
         }
         
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
-            border: 2px solid #3B82F6;
+            border: 1px solid #3B82F6;
             background-color: #263449;
         }
         
@@ -705,6 +705,112 @@ class CrowEyeStyles:
         }
     """
     
+    # Modern Date/Time Edit Style
+    DATETIME_STYLE = """
+        QDateTimeEdit {
+            background-color: #1E293B;
+            color: #F1F5F9;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 11px;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        
+        QDateTimeEdit:hover {
+            background-color: #263449;
+            border-color: #475569;
+        }
+        
+        QDateTimeEdit:focus {
+            border: 1px solid #3B82F6;
+            background-color: #263449;
+        }
+        
+        QDateTimeEdit::drop-down {
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 20px;
+            border-left-width: 1px;
+            border-left-color: #334155;
+            border-left-style: solid;
+            border-top-right-radius: 4px;
+            border-bottom-right-radius: 4px;
+            background-color: #0F172A;
+        }
+        
+        QDateTimeEdit::drop-down:hover {
+            background-color: #334155;
+        }
+        
+        QDateTimeEdit::down-arrow {
+            image: none;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid #00FFFF;
+            width: 0;
+            height: 0;
+            margin-top: 2px;
+            margin-right: 2px;
+        }
+        
+        QDateTimeEdit:disabled {
+            background-color: #475569;
+            color: #94A3B8;
+            border-color: #334155;
+        }
+    """
+    
+    # Modern Calendar Widget Style
+    CALENDAR_STYLE = """
+        QCalendarWidget QWidget {
+            background-color: #0F172A;
+            color: #E2E8F0;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 11px;
+        }
+        
+        QCalendarWidget QToolButton {
+            color: #FFFFFF;
+            background-color: #1E293B;
+            border: none;
+            border-radius: 4px;
+            margin: 2px;
+            padding: 2px;
+            font-weight: bold;
+        }
+        
+        QCalendarWidget QToolButton:hover {
+            background-color: #3B82F6;
+        }
+        
+        QCalendarWidget QMenu {
+            background-color: #1E293B;
+            color: #E2E8F0;
+            border: 1px solid #334155;
+        }
+        
+        QCalendarWidget QSpinBox {
+            background-color: #1E293B;
+            color: #E2E8F0;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            margin: 2px;
+        }
+        
+        QCalendarWidget QAbstractItemView:enabled {
+            background-color: #0F172A;
+            color: #E2E8F0;
+            selection-background-color: #3B82F6;
+            selection-color: #FFFFFF;
+            font-size: 11px;
+        }
+        
+        QCalendarWidget QAbstractItemView:disabled {
+            color: #64748B;
+        }
+    """
+    
 
     
     # Unified Modern Table Style with Dark Slate Background and Cyberpunk Elements - Smaller Headers
@@ -712,11 +818,11 @@ class CrowEyeStyles:
         QHeaderView::section {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563EB, stop:1 #1E40AF);
             color: #FFFFFF;
-            padding: 8px 12px;
+            padding: 4px 8px;
             border: none;
             border-right: 1px solid #334155;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 11px;
             font-family: 'Segoe UI', sans-serif;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -774,11 +880,11 @@ class CrowEyeStyles:
 
         /* Table cells - Enhanced for forensic readability */
         QTableWidget::item {
-            padding: 8px 12px;
+            padding: 2px 6px;
             border-bottom: 1px solid #334155;
             border-right: 1px solid #334155;
-            font-size: 14px;
-            font-weight: 700;
+            font-size: 11px;
+            font-weight: 600;
             font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             color: #F8FAFC;
             letter-spacing: 0.2px;
@@ -1428,11 +1534,12 @@ class CrowEyeStyles:
         }
     """
 
-    # Modern Top Frame Style
+    # Modern Top Frame Style with Enhanced Look
     TOP_FRAME = """
         QFrame#top_frame {
-            background-color: #1E293B;
-            border-bottom: 1px solid #334155;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                                      stop:0 #1E293B, stop:1 #0F172A);
+            border-bottom: 1px solid #3B82F6;
             padding: 4px;
         }
     """
@@ -1494,11 +1601,12 @@ class CrowEyeStyles:
         }
     """
 
-    # Modern Sidebar Frame
+    # Modern Sidebar Frame with Blue Effect
     SIDEBAR_FRAME = """
         QFrame#side_fram {
-            background-color: #1E293B;
-            border-right: 1px solid #334155;
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                                      stop:0 #0F172A, stop:1 #1E293B);
+            border-right: 1px solid #3B82F6;
             padding: 8px;
         }
     """
@@ -1645,6 +1753,115 @@ class CrowEyeStyles:
         }
         QPushButton:disabled {
             background-color: #475569;
+            color: #94A3B8;
+        }
+    """
+
+    # Export Button Style (Green)
+    EXPORT_BUTTON = """
+        QPushButton {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #10B981, stop:1 #059669);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 600;
+            font-size: 11px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 120px;
+        }
+        QPushButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #34D399, stop:1 #10B981);
+            border: 1px solid #00FFFF;
+        }
+        QPushButton:pressed {
+            background: #047857;
+        }
+    """
+
+    # Visualization Button Style (Cyan/Indigo)
+    VISUALIZATION_BUTTON = """
+        QPushButton {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #06B6D4, stop:1 #3B82F6);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 600;
+            font-size: 13px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 120px;
+        }
+        QPushButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #22D3EE, stop:1 #60A5FA);
+            border: 1px solid #FFFFFF;
+        }
+        QPushButton:pressed {
+            background: #0E7490;
+        }
+    """
+
+    # Main Search Button Style (Orange/Gold)
+    SEARCH_BUTTON_MAIN = """
+        QPushButton {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #F59E0B, stop:1 #EA580C);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 600;
+            font-size: 13px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 120px;
+        }
+        QPushButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #FBBF24, stop:1 #F97316);
+            border: 1px solid #FFFFFF;
+        }
+        QPushButton:pressed {
+            background: #B45309;
+        }
+    """
+
+    # Parser Button Style (Primary Blue - Standardized)
+    PARSER_BUTTON = """
+        QPushButton {
+            background-color: #3B82F6;
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 600;
+            font-size: 12px;
+            font-family: 'Segoe UI', sans-serif;
+            text-align: left;
+            padding-left: 15px;
+        }
+        QPushButton:hover {
+            background-color: #2563EB;
+            border-left: 3px solid #00FFFF;
+        }
+        QPushButton:pressed {
+            background-color: #1D4ED8;
+        }
+        QPushButton:checked {
+            background-color: #1E40AF;
+            border-left: 3px solid #00FFFF;
+        }
+        QPushButton:disabled {
+            background-color: #64748B;
             color: #94A3B8;
         }
     """
