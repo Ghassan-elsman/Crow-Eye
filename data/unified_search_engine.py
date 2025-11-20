@@ -329,18 +329,46 @@ class UnifiedDatabaseSearchEngine:
         Close any open resources, such as database connections.
         """
         self.logger.info("Closing UnifiedDatabaseSearchEngine resources.")
-        # In the future, this could close any persistently open DB connections.
-        pass
+        
+        if hasattr(self, 'db_manager'):
+            try:
+                self.db_manager.close_all()
+            except Exception as e:
+                self.logger.error(f"Error closing database manager: {e}")
+                
+        if hasattr(self, 'discovery_manager'):
+            try:
+                self.discovery_manager.close()
+            except Exception as e:
+                self.logger.error(f"Error closing discovery manager: {e}")
+
+    def reset_cancellation(self):
+        """
+        Reset the cancellation flag to allow new searches.
+        """
+        self._cancel_event.clear()
+        self.logger.info("Search cancellation flag reset")
 
     def reset_for_search(self):
         """
         Reset database manager state before running a new search.
         """
+        self.logger.info("Resetting search engine state for new search")
+        
+        # Close existing managers
         try:
-            self.db_manager.close_all()
-        except Exception:
-            pass
+            if hasattr(self, 'db_manager'):
+                self.db_manager.close_all()
+            if hasattr(self, 'discovery_manager'):
+                self.discovery_manager.close()
+        except Exception as e:
+            self.logger.error(f"Error closing managers during reset: {e}")
+            
+        # Re-initialize managers to ensure fresh state
+        # This is critical for the time filter bug where connections became stale
         self.db_manager = DatabaseManager(self.case_directory)
+        self.discovery_manager = DatabaseDiscoveryManager(self.case_directory)
+        self.logger.debug("Re-initialized database and discovery managers")
 
     def search(
         self,
@@ -433,6 +461,7 @@ class UnifiedDatabaseSearchEngine:
         if time_filtering_enabled:
             print(f"[INFO] Time filtering enabled - searching {len(enhanced_db_infos)} databases")
             print(f"[INFO] Time range: {start_time} to {end_time}")
+            self.logger.info(f"Starting time-filtered search: {start_time} to {end_time}")
             
             for i, enhanced_db_info in enumerate(enhanced_db_infos):
                 if self._cancel_event.is_set():
