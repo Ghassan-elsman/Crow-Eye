@@ -546,6 +546,15 @@ class DatabaseDiscoveryManager:
             # Check if any table supports time filtering
             return db_info.supports_time_filtering()
 
+    def close(self):
+        """
+        Close all open resources.
+        """
+        if hasattr(self, 'db_manager'):
+            self.db_manager.close_all()
+        self.clear_cache()
+        self.logger.debug("Closed DatabaseDiscoveryManager resources")
+
 
 # Example usage
 if __name__ == "__main__":
