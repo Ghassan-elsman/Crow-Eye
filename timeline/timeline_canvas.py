@@ -15,6 +15,11 @@ from PyQt5.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsLineItem, QG
 from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QPointF, QElapsedTimer
 from PyQt5.QtGui import QPainter, QBrush, QColor, QPen, QFont, QCursor
 from datetime import datetime, timedelta
+import logging
+from collections import OrderedDict
+
+# Configure logger
+logger = logging.getLogger(__name__)
 from timeline.rendering.event_renderer import EventRenderer
 from timeline.rendering.zoom_manager import ZoomManager
 from timeline.rendering.viewport_optimizer import ViewportOptimizer
@@ -126,6 +131,12 @@ class TimelineCanvas(QGraphicsView):
         self.clustering_enabled = False  # Disable clustering by default for cleaner horizontal display
         self.clustering_mode = 'time'  # 'time', 'application', 'path', 'artifact_type'
         
+        # Power events visibility
+        self.show_power_events = False  # Hide power events by default
+        
+        # Force individual display (disable aggregation)
+        self._force_individual = False
+        
         # Event markers storage (for later manipulation)
         self.event_markers = {}  # Maps event_id to marker item
         
@@ -134,6 +145,9 @@ class TimelineCanvas(QGraphicsView):
         # This allows proper cleanup and prevents ID collisions
         self.expanded_clusters = {}  # {cluster_marker: {'marker_ids': [ids], 'cluster_id': 'cluster_X'}}
         
+        # Power event markers tracking
+        self._power_event_markers = []
+        
         # Time axis items
         self.axis_items = []  # List of axis line and label items
         
@@ -141,7 +155,7 @@ class TimelineCanvas(QGraphicsView):
         self._zoom_center_time = None
         
         # Incremental rendering system
-        self._marker_cache = {}  # Cache of rendered markers: event_id -> marker
+        self._marker_cache = OrderedDict()  # Cache of rendered markers: event_id -> marker (LRU)
         self._visible_marker_ids = set()  # Set of currently visible marker IDs
         self._dirty_flags = {
             'events': False,  # Events data changed
@@ -151,6 +165,14 @@ class TimelineCanvas(QGraphicsView):
             'clustering': False  # Clustering settings changed
         }
         self._last_viewport_rect = None  # Track last viewport rect for change detection
+        
+        # Axis marker cache system for consistent rendering
+        # Pre-calculates all time markers for all zoom levels (0-10) during initial load
+        # This ensures 100% consistent marker positions across zoom/pan operations
+        self._axis_marker_cache = {}  # {zoom_level: [(timestamp, label_text), ...]}
+        self._axis_cache_valid = False  # Flag to track if cache needs regeneration
+        self._axis_rendered_start = None
+        self._axis_rendered_end = None
         
         # Setup viewport optimization
         self._setup_viewport()
@@ -250,24 +272,38 @@ class TimelineCanvas(QGraphicsView):
         Args:
             start_time (datetime): Start of time range
             end_time (datetime): End of time range
-        """
-        if not isinstance(start_time, datetime) or not isinstance(end_time, datetime):
-            raise ValueError("start_time and end_time must be datetime objects")
         
+        Raises:
+            TypeError: If start_time or end_time are not datetime objects
+            ValueError: If start_time is not before end_time
+        """
+        # Validate inputs
+        if not isinstance(start_time, datetime):
+            raise TypeError(f"start_time must be datetime object, got {type(start_time).__name__}")
+        if not isinstance(end_time, datetime):
+            raise TypeError(f"end_time must be datetime object, got {type(end_time).__name__}")
         if start_time >= end_time:
-            raise ValueError("start_time must be before end_time")
+            raise ValueError(f"start_time must be before end_time: {start_time} >= {end_time}")
         
         # Check if time range actually changed
         time_range_changed = (self.start_time != start_time or self.end_time != end_time)
         
+        # Store time range
         self.start_time = start_time
         self.end_time = end_time
         
         # Mark events as dirty if time range changed
         if time_range_changed:
             self._dirty_flags['events'] = True
+            
+            # Invalidate axis marker cache since time range changed
+            self._axis_cache_valid = False
+            
+            # Pre-calculate all markers for all zoom levels
+            # This ensures consistent rendering across zoom operations
+            self._pre_calculate_all_markers()
         
-        # Update scene width based on time range
+        # Update scene dimensions based on time range
         self._update_scene_dimensions()
         
         # Emit viewport changed signal
@@ -301,8 +337,8 @@ class TimelineCanvas(QGraphicsView):
             total_height = self.margin_top + self.timeline_height + self.axis_height + self.margin_bottom
             self.scene.setSceneRect(0, 0, scene_width, total_height)
             
-            # Re-render time axis
-            self._render_time_axis()
+            # Note: Time axis is rendered in _render_full() after events are loaded
+    
     
     def set_zoom_level(self, level):
         """
@@ -339,6 +375,11 @@ class TimelineCanvas(QGraphicsView):
     
     def zoom_in(self):
         """Increase zoom level (zoom in)."""
+        # Check if there is data to zoom in on
+        if not self._has_visible_events():
+            logger.debug("Zoom in blocked: No visible data")
+            return
+
         if self.zoom_manager.can_zoom_in():
             self.set_zoom_level(self.zoom_manager.current_zoom + 1)
     
@@ -346,6 +387,74 @@ class TimelineCanvas(QGraphicsView):
         """Decrease zoom level (zoom out)."""
         if self.zoom_manager.can_zoom_out():
             self.set_zoom_level(self.zoom_manager.current_zoom - 1)
+            
+    def set_max_zoom_cap(self, level):
+        """
+        Set maximum zoom level cap.
+        
+        Args:
+            level (int): Maximum zoom level allowed
+        """
+        old_zoom = self.zoom_manager.current_zoom
+        self.zoom_manager.set_max_zoom_cap(level)
+        new_zoom = self.zoom_manager.current_zoom
+        
+        if new_zoom != old_zoom:
+            # Zoom was capped, update canvas
+            self.set_zoom_level(new_zoom)
+
+    def _has_visible_events(self):
+        """
+        Check if there are any events visible in the current viewport.
+        
+        Returns:
+            bool: True if events are visible, False otherwise
+        """
+        try:
+            # Check for required attributes
+            if not self.current_events or not hasattr(self, 'start_time') or not hasattr(self, 'end_time'):
+                return True  # Allow zoom if we can't determine
+                
+            if self.start_time is None or self.end_time is None:
+                return True  # Allow zoom if time range not set yet
+            
+            # Binary search for start_time
+            # self.current_events is sorted by timestamp
+            low = 0
+            high = len(self.current_events) - 1
+            
+            # Find first event >= start_time
+            idx = -1
+            
+            while low <= high:
+                mid = (low + high) // 2
+                event_time = self.current_events[mid].get('timestamp')
+                
+                # Skip events without valid timestamps
+                if event_time is None:
+                    low = mid + 1
+                    continue
+                
+                if event_time < self.start_time:
+                    low = mid + 1
+                else:
+                    idx = mid
+                    high = mid - 1
+            
+            # If we found an event >= start_time (idx != -1)
+            # Check if it is also <= end_time
+            if idx != -1:
+                event_time = self.current_events[idx].get('timestamp')
+                if event_time is not None:
+                    return event_time <= self.end_time
+                
+            # If idx is -1, it means all events are < start_time
+            return False
+            
+        except Exception as e:
+            logger.warning(f"Error in _has_visible_events: {e}", exc_info=True)
+            # Fail safe: allow zoom in case of error
+            return True
     
     def apply_filters(self, filter_config):
         """
@@ -361,6 +470,39 @@ class TimelineCanvas(QGraphicsView):
         
         # TODO: Implement filtering logic in future tasks
         # This will hide/show event markers based on filters
+    
+    def _validate_event(self, event):
+        """
+        Validate event has all required fields with correct types.
+        
+        BUG FIX #3: Comprehensive event validation to prevent crashes.
+        
+        Args:
+            event (dict): Event dictionary to validate
+            
+        Returns:
+            bool: True if event is valid, False otherwise
+        """
+        if not isinstance(event, dict):
+            logger.warning(f"Invalid event type: {type(event)}")
+            return False
+            
+        # Required fields and their allowed types
+        required_fields = {
+            'id': (str, int),
+            'timestamp': (datetime,),
+            'artifact_type': (str,)
+        }
+        
+        for field, types in required_fields.items():
+            if field not in event:
+                logger.warning(f"Event missing required field '{field}': {event}")
+                return False
+            if not isinstance(event[field], types):
+                logger.warning(f"Event field '{field}' has wrong type: {type(event[field])} (expected {types})")
+                return False
+                
+        return True
         pass
     
     def render_events(self, events, show_loading=True, force_individual=False):
@@ -390,21 +532,14 @@ class TimelineCanvas(QGraphicsView):
         validated_events = []
         skipped_count = 0
         for event in events:
-            # Skip events without required fields
-            if not isinstance(event, dict):
+            if self._validate_event(event):
+                validated_events.append(event)
+            else:
                 skipped_count += 1
-                continue
-            if 'id' not in event or 'timestamp' not in event:
-                skipped_count += 1
-                continue
-            if not isinstance(event['timestamp'], datetime):
-                skipped_count += 1
-                continue
-            validated_events.append(event)
         
         # Log warning if events were skipped
         if skipped_count > 0:
-            print(f"Warning: Skipped {skipped_count} invalid events (missing id/timestamp or invalid format)")
+            logger.warning(f"Skipped {skipped_count} invalid events (missing required fields or invalid types)")
         
         # Use validated events
         events = validated_events
@@ -435,13 +570,16 @@ class TimelineCanvas(QGraphicsView):
             # Incremental update - only update visible markers
             self._render_incremental(show_loading)
         
+        # Render power events if enabled
+        self._render_power_events(events)
+        
         # Mark viewport as clean
         self._dirty_flags['viewport'] = False
         
         # PROFILING: Log performance metrics
         elapsed_ms = timer.elapsed()
         if elapsed_ms > 100:  # Log if render took >100ms
-            print(f"Performance: render_events took {elapsed_ms}ms for {len(events)} events "
+            logger.debug(f"Performance: render_events took {elapsed_ms}ms for {len(events)} events "
                   f"({'full' if needs_full_render else 'incremental'})")
     
     def _render_full(self, events, show_loading, force_individual):
@@ -486,10 +624,16 @@ class TimelineCanvas(QGraphicsView):
         # Clear expanded cluster tracking since all markers are being removed
         self.expanded_clusters.clear()
         
+        # Clear power event markers on full render
+        if hasattr(self, '_power_event_markers'):
+            for marker in self._power_event_markers:
+                if marker.scene() == self.scene:
+                    self.scene.removeItem(marker)
+        self._power_event_markers = []
+        
         # Note: We keep _marker_cache intact for potential reuse
-        # Only clear cache if it gets too large (>10000 items)
-        if len(self._marker_cache) > 10000:
-            self._marker_cache.clear()
+        # BUG FIX #5: LRU cache handles eviction, no need to clear all
+        pass
         
         # Check if we should use aggregation mode (>1000 visible events)
         AGGREGATION_THRESHOLD = 1000
@@ -706,6 +850,7 @@ class TimelineCanvas(QGraphicsView):
                     
                     if cache_hit:
                         marker = self._marker_cache[cluster_id]
+                        self._marker_cache.move_to_end(cluster_id)
                     else:
                         # Create new cluster marker
                         marker = self.event_renderer.create_cluster_marker(
@@ -713,9 +858,12 @@ class TimelineCanvas(QGraphicsView):
                             base_y=base_y, lod=lod
                         )
                         self._marker_cache[cluster_id] = marker
+                        if len(self._marker_cache) > self.CACHE_SIZE_LIMIT:
+                            self._marker_cache.popitem(last=False)
                     
-                    # Add to scene (re-adding is safe if already in scene)
-                    self.scene.addItem(marker)
+                    # Add to scene (check if already in scene to avoid warnings)
+                    if marker.scene() != self.scene:
+                        self.scene.addItem(marker)
                     self.event_markers[cluster_id] = marker
             else:
                 # Individual events
@@ -728,6 +876,7 @@ class TimelineCanvas(QGraphicsView):
                         
                         if cache_hit:
                             marker = self._marker_cache[event_id]
+                            self._marker_cache.move_to_end(event_id)
                         else:
                             # Create new marker - no y_offset for individual events
                             marker = self.event_renderer.create_event_marker(
@@ -735,9 +884,12 @@ class TimelineCanvas(QGraphicsView):
                                 base_y=base_y, lod=lod
                             )
                             self._marker_cache[event_id] = marker
+                            if len(self._marker_cache) > self.CACHE_SIZE_LIMIT:
+                                self._marker_cache.popitem(last=False)
                         
-                        # Add to scene (re-adding is safe if already in scene)
-                        self.scene.addItem(marker)
+                        # Add to scene (check if already in scene to avoid warnings)
+                        if marker.scene() != self.scene:
+                            self.scene.addItem(marker)
                         self.event_markers[event_id] = marker
     
     def _render_individual_view(self, visible_events, lod):
@@ -804,7 +956,8 @@ class TimelineCanvas(QGraphicsView):
                         )
                         
                         # Add cluster to scene
-                        self.scene.addItem(cluster_marker)
+                        if cluster_marker.scene() != self.scene:
+                            self.scene.addItem(cluster_marker)
                         
                         # Store cluster reference using first event's ID as key
                         first_event_id = cluster_events[0].get('id')
@@ -824,7 +977,8 @@ class TimelineCanvas(QGraphicsView):
                             )
                             
                             # Add marker to scene
-                            self.scene.addItem(marker)
+                            if marker.scene() != self.scene:
+                                self.scene.addItem(marker)
                             
                             # Store marker reference
                             event_id = event.get('id')
@@ -895,7 +1049,8 @@ class TimelineCanvas(QGraphicsView):
             
             if aggregated_marker:
                 # Add to scene
-                self.scene.addItem(aggregated_marker)
+                if aggregated_marker.scene() != self.scene:
+                    self.scene.addItem(aggregated_marker)
                 
                 # Store marker reference and track as visible
                 bucket_id = f"bucket_{bucket_time.isoformat()}"
@@ -966,6 +1121,10 @@ class TimelineCanvas(QGraphicsView):
         
         # Clear all tracking dictionaries and lists
         self.selected_events = []
+        self._axis_marker_cache = {}
+        self._axis_cache_valid = False
+        self._axis_rendered_start = None
+        self._axis_rendered_end = None
         self.event_markers.clear()
         self.axis_items.clear()
         self.background_items.clear()
@@ -980,10 +1139,11 @@ class TimelineCanvas(QGraphicsView):
     
     def _clear_selection(self):
         """Clear visual selection from all event markers."""
+        current_lod = self.viewport_optimizer.current_lod
         for event_id in self.selected_events:
             marker = self.event_markers.get(event_id)
             if marker:
-                self.event_renderer.apply_selection(marker, selected=False)
+                self.event_renderer.apply_selection(marker, selected=False, lod=current_lod)
     
     def _handle_single_click(self, event_id, marker, event_data):
         """
@@ -1003,7 +1163,7 @@ class TimelineCanvas(QGraphicsView):
         self._last_selected_id = event_id
         
         # Apply visual selection
-        self.event_renderer.apply_selection(marker, selected=True)
+        self.event_renderer.apply_selection(marker, selected=True, lod=self.viewport_optimizer.current_lod)
         
         # Emit signal with selected event data
         self.event_selected.emit([event_data])
@@ -1021,7 +1181,7 @@ class TimelineCanvas(QGraphicsView):
         if event_id in self.selected_events:
             # Remove from selection
             self.selected_events.remove(event_id)
-            self.event_renderer.apply_selection(marker, selected=False)
+            self.event_renderer.apply_selection(marker, selected=False, lod=self.viewport_optimizer.current_lod)
             
             # Update last selected if we removed it
             if self._last_selected_id == event_id:
@@ -1030,7 +1190,7 @@ class TimelineCanvas(QGraphicsView):
             # Add to selection
             self.selected_events.append(event_id)
             self._last_selected_id = event_id
-            self.event_renderer.apply_selection(marker, selected=True)
+            self.event_renderer.apply_selection(marker, selected=True, lod=self.viewport_optimizer.current_lod)
         
         # Emit signal with all selected events
         selected_event_data = self._get_selected_event_data()
@@ -1061,10 +1221,11 @@ class TimelineCanvas(QGraphicsView):
         self.selected_events = range_event_ids
         
         # Apply visual selection to all events in range
+        current_lod = self.viewport_optimizer.current_lod
         for range_event_id in range_event_ids:
             range_marker = self.event_markers.get(range_event_id)
             if range_marker:
-                self.event_renderer.apply_selection(range_marker, selected=True)
+                self.event_renderer.apply_selection(range_marker, selected=True, lod=current_lod)
         
         # Update last selected
         self._last_selected_id = event_id
@@ -1226,7 +1387,7 @@ class TimelineCanvas(QGraphicsView):
         """
         Render timeline background with grid lines and time period shading.
         
-        FIXED: Only draws visible shading/grid lines for performance.
+        Only draws visible shading/grid lines for performance.
         """
         from PyQt5.QtWidgets import QGraphicsRectItem
         
@@ -1247,11 +1408,46 @@ class TimelineCanvas(QGraphicsView):
         timeline_top = self.margin_top
         timeline_bottom = self.margin_top + self.timeline_height
         
-        # FIXED: Calculate time markers (now filtered to viewport)
-        markers = self._calculate_time_markers(time_unit, interval_minutes)
+        # Calculate visible time range with buffer
+        visible_start, visible_end = self.get_visible_time_range()
+        
+        if not visible_start or not visible_end:
+            calc_start = self.start_time
+            calc_end = self.end_time
+        else:
+            # Add buffer (50% of visible duration on each side)
+            duration = visible_end - visible_start
+            buffer = duration * 0.5
+            calc_start = visible_start - buffer
+            calc_end = visible_end + buffer
+            
+            # Clamp to actual timeline bounds
+            calc_start = max(calc_start, self.start_time)
+            calc_end = min(calc_end, self.end_time)
+        
+        # Get time markers for visible range
+        all_markers = self._calculate_time_markers(time_unit, interval_minutes, calc_start, calc_end)
+        
+        # Filter to only VISIBLE markers for background rendering
+        visible_rect = self.mapToScene(self.viewport().rect()).boundingRect()
+        visible_start_x = visible_rect.left()
+        visible_end_x = visible_rect.right()
+        
+        # Add buffer to include items just outside viewport
+        viewport_width = self.viewport().width() if self.viewport() else 1200
+        buffer_pixels = viewport_width * self.VIEWPORT_BUFFER_RATIO
+        visible_start_x -= buffer_pixels
+        visible_end_x += buffer_pixels
+        
+        # Filter markers to visible range
+        visible_markers = []
+        for marker_time, label_text in all_markers:
+            position = self._calculate_position(marker_time)
+            if visible_start_x <= position <= visible_end_x:
+                visible_markers.append((marker_time, label_text))
         
         # Draw alternating time period shading and grid lines (only visible ones)
-        for idx, (marker_time, label_text) in enumerate(markers):
+        for idx, (marker_time, label_text) in enumerate(visible_markers):
             position = self._calculate_position(marker_time)
             
             # Draw subtle vertical grid line
@@ -1263,12 +1459,12 @@ class TimelineCanvas(QGraphicsView):
             )
             grid_line.setPen(QPen(QColor("#334155"), 1, Qt.DotLine))  # Subtle dotted line
             grid_line.setZValue(-100)  # Behind everything
-            self.scene.addItem(grid_line)
+            self._safe_add_to_scene(grid_line)
             self.background_items.append(grid_line)
             
             # Add alternating shading for time periods
-            if idx < len(markers) - 1:
-                next_position = self._calculate_position(markers[idx + 1][0])
+            if idx < len(visible_markers) - 1:
+                next_position = self._calculate_position(visible_markers[idx + 1][0])
                 
                 # Alternate between two shades
                 if idx % 2 == 0:
@@ -1285,7 +1481,7 @@ class TimelineCanvas(QGraphicsView):
                 shading_rect.setBrush(QBrush(shade_color))
                 shading_rect.setPen(QPen(Qt.NoPen))
                 shading_rect.setZValue(-200)  # Behind grid lines
-                self.scene.addItem(shading_rect)
+                self._safe_add_to_scene(shading_rect)
                 self.background_items.append(shading_rect)
         
         # Add visual markers for day/week boundaries (if appropriate for zoom level)
@@ -1320,7 +1516,7 @@ class TimelineCanvas(QGraphicsView):
                 )
                 boundary_line.setPen(QPen(QColor("#475569"), 2, Qt.DashLine))
                 boundary_line.setZValue(-50)  # In front of shading, behind events
-                self.scene.addItem(boundary_line)
+                self._safe_add_to_scene(boundary_line)
                 self.background_items.append(boundary_line)
             
             current_day += timedelta(days=1)
@@ -1352,10 +1548,75 @@ class TimelineCanvas(QGraphicsView):
                 )
                 boundary_line.setPen(QPen(QColor("#64748B"), 2, Qt.DashLine))
                 boundary_line.setZValue(-50)  # In front of shading, behind events
-                self.scene.addItem(boundary_line)
+                self._safe_add_to_scene(boundary_line)
                 self.background_items.append(boundary_line)
             
             current_date += timedelta(weeks=1)
+    
+        
+    def _safe_add_to_scene(self, item):
+        """
+        Safely add an item to the scene only if it's not already added.
+        
+        Args:
+            item: QGraphicsItem to add
+        """
+        if item.scene() != self.scene:
+            self.scene.addItem(item)
+    
+    def _pre_calculate_all_markers(self):
+        """
+        Pre-calculate time markers for all zoom levels.
+        
+        This method is called once when the time range is set or changes.
+        It pre-calculates all marker positions for all 11 zoom levels (0-10),
+        ensuring consistent axis rendering across zoom/pan operations.
+        
+        The user accepted longer loading time at startup for consistency,
+        so this method may take 1-3 seconds for large timelines.
+        """
+        if not self.start_time or not self.end_time:
+            logger.warning("Cannot pre-calculate markers: time range not set")
+            return
+        
+        # Show loading indicator
+        if hasattr(self, 'loading_overlay'):
+            self.loading_overlay.show_loading("Pre-calculating timeline markers...")
+        
+        try:
+            # Get all zoom level configurations from zoom manager
+            zoom_configs = self.zoom_manager.get_all_zoom_configs()
+            
+            # Clear existing cache
+            self._axis_marker_cache.clear()
+            
+            # Pre-calculate markers for each zoom level
+            for zoom_level, config in zoom_configs.items():
+                time_unit = config['unit']
+                interval_minutes = config['interval_minutes']
+                
+                # Calculate markers for this zoom level
+                markers = self._calculate_time_markers(time_unit, interval_minutes)
+                
+                # Store in cache
+                self._axis_marker_cache[zoom_level] = markers
+                
+                logger.debug(f"Pre-calculated {len(markers)} markers for zoom level {zoom_level} ({time_unit})")
+            
+            # Mark cache as valid
+            self._axis_cache_valid = True
+            
+            logger.info(f"Pre-calculated markers for all {len(zoom_configs)} zoom levels")
+        
+        except Exception as e:
+            logger.error(f"Error pre-calculating markers: {e}", exc_info=True)
+            # Mark cache as invalid so it will be recalculated on-demand
+            self._axis_cache_valid = False
+        
+        finally:
+            # Hide loading indicator
+            if hasattr(self, 'loading_overlay'):
+                self.loading_overlay.hide_loading()
     
     def _render_time_axis(self):
         """Render the time axis with improved label readability."""
@@ -1373,7 +1634,49 @@ class TimelineCanvas(QGraphicsView):
         # Render background first
         self._render_background()
         
-        # Get time unit and interval from zoom manager
+        # Get current zoom level
+        current_zoom_level = self.zoom_manager.current_zoom
+        
+        # Calculate visible time range with buffer for axis rendering
+        visible_start, visible_end = self.get_visible_time_range()
+        
+        # If no visible range (e.g. not initialized), use full range
+        if not visible_start or not visible_end:
+            calc_start = self.start_time
+            calc_end = self.end_time
+        else:
+            # Add buffer (50% of visible duration on each side)
+            duration = visible_end - visible_start
+            buffer = duration * 0.5
+            calc_start = visible_start - buffer
+            calc_end = visible_end + buffer
+            
+            # Clamp to actual timeline bounds
+            if self.start_time:
+                calc_start = max(calc_start, self.start_time)
+            if self.end_time:
+                calc_end = min(calc_end, self.end_time)
+                
+            # Store rendered range for dynamic updates
+            self._axis_rendered_start = calc_start
+            self._axis_rendered_end = calc_end
+
+        # FIXED: Retrieve markers from cache instead of recalculating
+        # This ensures 100% consistent marker positions across zoom/pan operations
+        if self._axis_cache_valid and current_zoom_level in self._axis_marker_cache:
+            # Use cached markers (instant, consistent)
+            # Note: Cache contains ALL markers, so we filter them later
+            all_major_markers = self._axis_marker_cache[current_zoom_level]
+            logger.debug(f"Using cached markers for zoom level {current_zoom_level}: {len(all_major_markers)} markers")
+        else:
+            # Fallback: calculate on-demand if cache is invalid
+            # FIXED: Calculate only for visible range + buffer to avoid 5000 marker limit
+            logger.debug(f"Calculating axis markers for range: {calc_start} to {calc_end}")
+            time_unit = self.zoom_manager.get_time_unit()
+            interval_minutes = self.zoom_manager.get_interval_minutes()
+            all_major_markers = self._calculate_time_markers(time_unit, interval_minutes, calc_start, calc_end)
+        
+        # Get time unit for minor markers
         time_unit = self.zoom_manager.get_time_unit()
         interval_minutes = self.zoom_manager.get_interval_minutes()
         
@@ -1386,28 +1689,62 @@ class TimelineCanvas(QGraphicsView):
         axis_background.setBrush(QBrush(QColor(15, 23, 42, 200)))  # Semi-transparent dark background
         axis_background.setPen(QPen(Qt.NoPen))
         axis_background.setZValue(-10)
-        self.scene.addItem(axis_background)
+        
+        # Safety check before adding
+        if axis_background.scene() != self.scene:
+            self._safe_add_to_scene(axis_background)
         self.axis_items.append(axis_background)
         
         # Draw main axis line (thicker and brighter for better visibility)
         axis_line = QGraphicsLineItem(0, axis_y, scene_width, axis_y)
         axis_line.setPen(QPen(QColor("#94A3B8"), 4))  # Brighter and thicker
-        self.scene.addItem(axis_line)
+        
+        # Safety check before adding
+        if axis_line.scene() != self.scene:
+            self._safe_add_to_scene(axis_line)
         self.axis_items.append(axis_line)
         
-        # Calculate major and minor time markers
-        major_markers = self._calculate_time_markers(time_unit, interval_minutes)
-        minor_markers = self._calculate_minor_markers(time_unit, interval_minutes)
+        # Calculate minor time markers (not cached since they're less critical)
+        # FIXED: Calculate only for visible range + buffer
+        minor_markers = self._calculate_minor_markers(time_unit, interval_minutes, calc_start, calc_end)
+        
+        # Filter major markers to visible viewport for label rendering
+        visible_rect = self.mapToScene(self.viewport().rect()).boundingRect()
+        visible_start_x = visible_rect.left()
+        visible_end_x = visible_rect.right()
+        
+        # Add buffer
+        viewport_width = self.viewport().width() if self.viewport() else 1200
+        buffer_pixels = viewport_width * 0.3  # 30% buffer
+        visible_start_x -= buffer_pixels
+        visible_end_x += buffer_pixels
+        
+        # Filter to visible markers
+        major_markers = []
+        for marker_time, label_text in all_major_markers:
+            position = self._calculate_position(marker_time)
+            if visible_start_x <= position <= visible_end_x:
+                major_markers.append((marker_time, label_text))
+        
+        # If no markers are visible, show at least one in center
+        if not major_markers and all_major_markers:
+            # Find marker closest to viewport center
+            viewport_center_x = (visible_start_x + visible_end_x) / 2
+            closest_marker = min(all_major_markers, 
+                               key=lambda m: abs(self._calculate_position(m[0]) - viewport_center_x))
+            major_markers = [closest_marker]
         
         # Draw minor tick marks first (shorter, lighter)
         for marker_time in minor_markers:
             position = self._calculate_position(marker_time)
             
-            # Draw minor tick mark (shorter and lighter)
-            minor_tick = QGraphicsLineItem(position, axis_y, position, axis_y + 6)
-            minor_tick.setPen(QPen(QColor("#475569"), 1))
-            self.scene.addItem(minor_tick)
-            self.axis_items.append(minor_tick)
+            # Only draw if in visible range
+            if visible_start_x <= position <= visible_end_x:
+                # Draw minor tick mark (shorter and lighter)
+                minor_tick = QGraphicsLineItem(position, axis_y, position, axis_y + 6)
+                minor_tick.setPen(QPen(QColor("#475569"), 1))
+                self._safe_add_to_scene(minor_tick)
+                self.axis_items.append(minor_tick)
         
         # Calculate label density to determine if rotation is needed
         label_density = self._calculate_label_density(major_markers)
@@ -1428,7 +1765,7 @@ class TimelineCanvas(QGraphicsView):
             # Draw major tick mark (taller and brighter for better visibility)
             major_tick = QGraphicsLineItem(position, axis_y, position, axis_y + 15)
             major_tick.setPen(QPen(QColor("#CBD5E1"), 3))  # Brighter and thicker
-            self.scene.addItem(major_tick)
+            self._safe_add_to_scene(major_tick)
             self.axis_items.append(major_tick)
             
             # Create label with appropriate font (larger for better visibility)
@@ -1472,12 +1809,12 @@ class TimelineCanvas(QGraphicsView):
                     background.setPen(QPen(QColor("#94A3B8"), 2))
                     background.setRotation(rotation_angle)
                     background.setZValue(-1)
-                    self.scene.addItem(background)
+                    self._safe_add_to_scene(background)
                     self.axis_items.append(background)
                     
                     # Add label to scene
                     label.setZValue(0)
-                    self.scene.addItem(label)
+                    self._safe_add_to_scene(label)
                     self.axis_items.append(label)
                     last_label_end = label_end
             else:
@@ -1498,105 +1835,110 @@ class TimelineCanvas(QGraphicsView):
                     background.setBrush(QBrush(QColor(10, 15, 30, 250)))
                     background.setPen(QPen(QColor("#94A3B8"), 2))
                     background.setZValue(-1)
-                    self.scene.addItem(background)
+                    self._safe_add_to_scene(background)
                     self.axis_items.append(background)
                     
                     # Position label on top of background
                     label.setPos(label_start, axis_y + 16)
                     label.setZValue(0)
-                    self.scene.addItem(label)
+                    self._safe_add_to_scene(label)
                     self.axis_items.append(label)
                     last_label_end = label_end
     
-    def _calculate_time_markers(self, time_unit, interval_minutes):
+    def _calculate_time_markers(self, time_unit, interval_minutes, start_time=None, end_time=None):
         """
-        Calculate time marker positions and labels.
+        Calculate time marker positions and labels using deterministic algorithm.
         
-        FIXED: Always uses interval_minutes from ZoomManager (no hardcoded hourly logic).
-        FIXED: Filters to only visible viewport for performance.
+        FIXED: Uses integer-based iteration to prevent floating-point drift.
+        This ensures identical marker generation across multiple calls.
         
         Args:
             time_unit (str): Time unit name (year, month, day, hour, etc.)
             interval_minutes (int): Interval in minutes
+            start_time (datetime, optional): Start time for calculation (defaults to self.start_time)
+            end_time (datetime, optional): End time for calculation (defaults to self.end_time)
         
         Returns:
-            list: List of (datetime, label_text) tuples (only visible markers)
+            list: List of (datetime, label_text) tuples for all markers
         """
-        # Get visible viewport bounds for filtering
-        visible_rect = self.mapToScene(self.viewport().rect()).boundingRect()
-        visible_start_x = visible_rect.left()
-        visible_end_x = visible_rect.right()
-
-        # Add buffer to include markers just outside viewport for smooth scrolling
-        viewport_width = self.viewport().width() if self.viewport() else 1200
-        buffer_pixels = viewport_width * self.VIEWPORT_BUFFER_RATIO
-        visible_start_x -= buffer_pixels
-        visible_end_x += buffer_pixels
-        
         markers = []
         
-        # Always use the zoom manager's interval (no special case for short ranges)
+        # Use provided range or default to full timeline
+        calc_start = start_time if start_time else self.start_time
+        calc_end = end_time if end_time else self.end_time
+        
+        if not calc_start or not calc_end:
+            return []
+            
+        # Calculate base time (rounded to time unit boundary)
+        # Start slightly before calc_start to ensure we catch the first marker
+        base_time = self._round_time(calc_start, time_unit)
         interval = timedelta(minutes=interval_minutes)
-        current_time = self._round_time(self.start_time, time_unit)
         
-        # Generate markers, but only keep visible ones
-        max_markers = 200  # Safety limit
-        count = 0
+        # Calculate total time range in minutes
+        total_minutes = (calc_end - base_time).total_seconds() / 60.0
         
-        while current_time <= self.end_time and count < max_markers:
-            if current_time >= self.start_time:
-                position = self._calculate_position(current_time)
+        # Calculate how many markers we need
+        # Use integer division to avoid floating-point issues
+        if interval_minutes > 0:
+            max_markers_needed = int(total_minutes / interval_minutes) + 2  # +2 for safety
+        else:
+            max_markers_needed = 1
+        
+        # Cap at safety limit (increased since we now use visible range)
+        max_markers = min(max_markers_needed, 10000)
+        
+        # FIXED: Use integer-based iteration instead of `current_time += interval`
+        # Calculate each marker from base_time: base_time + (i * interval)
+        # This prevents floating-point drift and ensures determinism
+        for i in range(max_markers):
+            # Calculate marker time from base
+            marker_time = base_time + (i * interval)
+            
+            # Stop if beyond end time
+            if marker_time > calc_end:
+                break
+            
+            # Only add if within range
+            if marker_time >= calc_start:
+                label = self._format_time_label(marker_time, time_unit)
+                markers.append((marker_time, label))
 
-                # Only add if within visible range (with buffer)
-                if visible_start_x <= position <= visible_end_x:
-                    label = self._format_time_label(current_time, time_unit)
-                    markers.append((current_time, label))
-                    count += 1
-                elif position > visible_end_x:
-                    # Past visible range, stop generating
-                    break
-
-            current_time += interval
-
-        if not markers:
-            mid_time = self.start_time + (self.end_time - self.start_time) / 2
+        # Fallback: if no markers generated, add one in the middle
+        if not markers and calc_start < calc_end:
+            mid_time = calc_start + (calc_end - calc_start) / 2
             mid_time = self._round_time(mid_time, time_unit)
-            if self.start_time <= mid_time <= self.end_time:
+            if calc_start <= mid_time <= calc_end:
                 markers.append((mid_time, self._format_time_label(mid_time, time_unit)))
 
         return markers
     
-    def _calculate_minor_markers(self, time_unit, interval_minutes):
+    def _calculate_minor_markers(self, time_unit, interval_minutes, start_time=None, end_time=None):
         """
         Calculate minor tick mark positions for better granularity.
         
         Minor ticks are placed between major ticks to provide finer time resolution.
         
-        FIXED: Aligned with major ticks (same base time).
-        FIXED: Filters to only visible viewport for performance.
-        
         Args:
             time_unit (str): Time unit name (year, month, day, hour, etc.)
             interval_minutes (int): Major interval in minutes
+            start_time (datetime, optional): Start time for calculation
+            end_time (datetime, optional): End time for calculation
         
         Returns:
-            list: List of datetime objects for minor tick positions (only visible)
+            list: List of datetime objects for all minor tick positions
         """
-        # Get visible viewport bounds for filtering
-        visible_rect = self.mapToScene(self.viewport().rect()).boundingRect()
-        visible_start_x = visible_rect.left()
-        visible_end_x = visible_rect.right()
-
-        # Add buffer
-        viewport_width = self.viewport().width() if self.viewport() else 1200
-        buffer_pixels = viewport_width * self.VIEWPORT_BUFFER_RATIO
-        visible_start_x -= buffer_pixels
-        visible_end_x += buffer_pixels
-        
         minor_markers = []
         
-        # FIXED: Start from same base as major markers for alignment
-        base_time = self._round_time(self.start_time, time_unit)
+        # Use provided range or default to full timeline
+        calc_start = start_time if start_time else self.start_time
+        calc_end = end_time if end_time else self.end_time
+        
+        if not calc_start or not calc_end:
+            return []
+        
+        # Start from same base as major markers for alignment
+        base_time = self._round_time(calc_start, time_unit)
         
         # Determine minor interval based on time unit
         if time_unit in ['minute', '5min', '15min']:
@@ -1621,22 +1963,15 @@ class TimelineCanvas(QGraphicsView):
             # For year/quarter view, add monthly minor ticks
             minor_interval = timedelta(days=30)
         
-        # Generate minor markers, but only keep visible ones
+        # Generate minor markers for the requested range
         current_time = base_time
-        max_minor_markers = 500  # Safety limit
+        max_minor_markers = 20000  # Increased safety limit
         count = 0
         
-        while current_time <= self.end_time and count < max_minor_markers:
-            if current_time >= self.start_time:
-                position = self._calculate_position(current_time)
-                
-                # Only add if within visible range (with buffer)
-                if visible_start_x <= position <= visible_end_x:
-                    minor_markers.append(current_time)
-                    count += 1
-                elif position > visible_end_x:
-                    # Past visible range, stop generating
-                    break
+        while current_time <= calc_end and count < max_minor_markers:
+            if current_time >= calc_start:
+                minor_markers.append(current_time)
+                count += 1
             
             current_time += minor_interval
         
@@ -1796,6 +2131,12 @@ class TimelineCanvas(QGraphicsView):
         
         # Calculate time range based on visible rect
         scene_width = self.scene.sceneRect().width()
+        
+        # Prevent division by zero
+        if scene_width == 0 or scene_width is None:
+            print("Warning: Scene width is zero, returning full time range")
+            return (self.start_time, self.end_time)
+        
         total_duration = self.end_time - self.start_time
         
         # Calculate start and end times for visible portion
@@ -2005,6 +2346,10 @@ class TimelineCanvas(QGraphicsView):
                     cluster_marker.setVisible(True)
                     cluster_marker.setOpacity(1.0)
                     
+                    # Ensure marker is in scene (might have been removed by incremental render)
+                    if cluster_marker.scene() != self.scene:
+                        self.scene.addItem(cluster_marker)
+                    
                     # Restore cluster marker to tracking
                     if cluster_id:
                         self.event_markers[cluster_id] = cluster_marker
@@ -2145,17 +2490,17 @@ class TimelineCanvas(QGraphicsView):
         if hovered_marker and (not hasattr(self, '_last_hovered') or self._last_hovered != hovered_marker):
             # Remove hover from previous marker
             if hasattr(self, '_last_hovered') and self._last_hovered:
-                self.event_renderer.apply_highlight(self._last_hovered, highlighted=False)
+                self.event_renderer.apply_highlight(self._last_hovered, highlighted=False, lod=self.viewport_optimizer.current_lod)
             
             # Apply hover to current marker
-            self.event_renderer.apply_highlight(hovered_marker, highlighted=True)
+            self.event_renderer.apply_highlight(hovered_marker, highlighted=True, lod=self.viewport_optimizer.current_lod)
             self._last_hovered = hovered_marker
             
             # Change cursor to pointing hand for clickable items
             self.setCursor(Qt.PointingHandCursor)
         elif not hovered_marker and hasattr(self, '_last_hovered') and self._last_hovered:
             # Remove hover when not over any marker
-            self.event_renderer.apply_highlight(self._last_hovered, highlighted=False)
+            self.event_renderer.apply_highlight(self._last_hovered, highlighted=False, lod=self.viewport_optimizer.current_lod)
             self._last_hovered = None
             
             # Restore default cursor (or open hand for draggable area)
@@ -2280,6 +2625,10 @@ class TimelineCanvas(QGraphicsView):
         """
         super().scrollContentsBy(dx, dy)
         
+        # Check if we need to update axis (infinite scrolling)
+        if abs(dx) > 0:
+            self._check_axis_update_needed()
+        
         # Only trigger update for significant horizontal scrolling
         # This avoids excessive re-rendering during small scroll adjustments
         SCROLL_THRESHOLD = 10  # Minimum pixels to trigger update
@@ -2287,6 +2636,38 @@ class TimelineCanvas(QGraphicsView):
         if hasattr(self, '_stored_events') and self._stored_events and abs(dx) >= SCROLL_THRESHOLD:
             self._dirty_flags['viewport'] = True
             self._update_visible_events()
+
+    def _check_axis_update_needed(self):
+        """
+        Check if the visible viewport is approaching the edge of the rendered axis range.
+        If so, trigger a re-render of the axis to ensure continuous scrolling.
+        """
+        if not self._axis_rendered_start or not self._axis_rendered_end:
+            return
+            
+        visible_start, visible_end = self.get_visible_time_range()
+        if not visible_start or not visible_end:
+            return
+            
+        # Calculate buffer threshold (e.g., 10% of visible duration)
+        duration = visible_end - visible_start
+        threshold = duration * 0.1
+        
+        # Check if we are close to the edges
+        near_start = (visible_start - self._axis_rendered_start) < threshold
+        near_end = (self._axis_rendered_end - visible_end) < threshold
+        
+        # Only update if we are near edge AND there is more timeline to show
+        update_needed = False
+        if near_start and self.start_time and visible_start > self.start_time:
+            update_needed = True
+        elif near_end and self.end_time and visible_end < self.end_time:
+            update_needed = True
+            
+        if update_needed:
+            # Trigger axis render (which includes background)
+            # This will recalculate markers with a new buffer centered on current view
+            self._render_time_axis()
     
     def _update_visible_events(self):
         """
@@ -2496,3 +2877,144 @@ class TimelineCanvas(QGraphicsView):
         print(f"Items Removed from Scene: {stats['items_removed_from_scene']}")
         print(f"Estimated Memory Saved: {stats['memory_saved_estimate_mb']:.2f} MB")
         print("===================================\n")
+    
+    def _add_to_marker_cache(self, marker_id, marker):
+        """
+        Add a marker to the cache with LRU eviction if needed.
+        
+        Args:
+            marker_id (str): Unique identifier for the marker
+            marker (QGraphicsItem): The marker item to cache
+        """
+        # Check if cache is full
+        if len(self._marker_cache) >= self.CACHE_SIZE_LIMIT:
+            # Evict 10% of oldest entries (LRU strategy)
+            evict_count = int(self.CACHE_SIZE_LIMIT * 0.1)
+            print(f"Cache full ({len(self._marker_cache)}/{self.CACHE_SIZE_LIMIT}), evicting {evict_count} oldest entries")
+            
+            # Get keys to evict (first N keys, assuming dict maintains insertion order in Python 3.7+)
+            keys_to_evict = list(self._marker_cache.keys())[:evict_count]
+            
+            for key in keys_to_evict:
+                # Remove from cache
+                evicted_marker = self._marker_cache.pop(key, None)
+                
+                # Remove from scene if present
+                if evicted_marker and evicted_marker.scene() == self.scene:
+                    self.scene.removeItem(evicted_marker)
+            
+            print(f"Cache evicted {len(keys_to_evict)} entries, new size: {len(self._marker_cache)}")
+        
+        # Add to cache
+        self._marker_cache[marker_id] = marker
+    
+    def _clear_marker_cache(self):
+        """
+        Clear the entire marker cache.
+        
+        This should be called when doing a full re-render or when
+        the event data changes significantly.
+        """
+        print(f"Clearing marker cache ({len(self._marker_cache)} entries)")
+        
+        # Remove all cached markers from scene
+        for marker_id, marker in self._marker_cache.items():
+            if marker and marker.scene() == self.scene:
+                try:
+                    self.scene.removeItem(marker)
+                except Exception as e:
+                    print(f"Warning: Error removing cached marker {marker_id}: {e}")
+        
+        # Clear cache
+        self._marker_cache.clear()
+    
+    def get_cache_stats(self):
+        """
+        Get statistics about the marker cache.
+        
+        Returns:
+            dict: Cache statistics including size, limit, and usage percentage
+        """
+        return {
+            'cache_size': len(self._marker_cache),
+            'cache_limit': self.CACHE_SIZE_LIMIT,
+            'usage_percent': (len(self._marker_cache) / self.CACHE_SIZE_LIMIT * 100) if self.CACHE_SIZE_LIMIT > 0 else 0,
+            'visible_markers': len(self._visible_marker_ids)
+        }
+    
+    def _render_power_events(self, events):
+        """
+        Render power event markers if enabled.
+        
+        Power events are displayed as vertical lines spanning the timeline height
+        with distinct icons for each event type (startup, shutdown, sleep, wake, hibernate).
+        
+        Args:
+            events (list): List of all events (will filter for power events)
+        """
+        # Clear existing power event markers first
+        if hasattr(self, '_power_event_markers'):
+            for marker in self._power_event_markers:
+                if marker.scene() == self.scene:
+                    self.scene.removeItem(marker)
+        self._power_event_markers = []
+        
+        # If power events are disabled, stop here (markers already cleared)
+        if not self.show_power_events:
+            return
+        
+        # Extract power events from event list
+        # Power events have artifact_type == 'PowerEvent' or 'Logs' with specific event types
+        power_events = []
+        for event in events:
+            artifact_type = event.get('artifact_type', '')
+            event_type = event.get('event_type', '')
+            
+            # Check if this is a power event
+            if artifact_type == 'PowerEvent' or event_type in ['startup', 'shutdown', 'sleep', 'wake', 'hibernate']:
+                power_events.append(event)
+        
+        if not power_events:
+            print(f"No power events found in {len(events)} events")
+            return
+        
+        print(f"Rendering {len(power_events)} power events")
+        
+        # Render each power event
+        for event in power_events:
+            timestamp = event.get('timestamp')
+            if not timestamp:
+                continue
+            
+            # Calculate position
+            position = self._calculate_position(timestamp)
+            
+            # Create power event marker
+            try:
+                marker = self.event_renderer.create_power_event_marker(
+                    event,
+                    position,
+                    timeline_height=self.timeline_height,
+                    top_y=self.margin_top
+                )
+                
+                # Add to scene
+                self.scene.addItem(marker)
+                self._power_event_markers.append(marker)
+                
+            except Exception as e:
+                print(f"Warning: Failed to render power event: {e}")
+                continue
+    
+    def set_show_power_events(self, show: bool):
+        """
+        Set whether to show power event markers (startup/shutdown triangles).
+        
+        Args:
+            show (bool): True to show power events, False to hide them
+        """
+        self.show_power_events = show
+        
+        # Re-render events if they exist to apply the change
+        if hasattr(self, '_stored_events') and self._stored_events:
+            self.render_events(self._stored_events)

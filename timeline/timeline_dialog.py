@@ -6,6 +6,7 @@ integrating all timeline components and coordinating data loading and user inter
 """
 
 import os
+import logging
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, 
     QMessageBox, QSplitter, QProgressDialog
@@ -18,6 +19,9 @@ from timeline.data.timeline_data_manager import TimelineDataManager
 from timeline.data.query_worker import QueryWorker, AggregationWorker, IndexingWorker
 from timeline.event_details_panel import EventDetailsPanel
 from timeline.utils.error_handler import ErrorHandler, create_recovery_options
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 
 class TimelineDialog(QDialog):
@@ -76,8 +80,11 @@ class TimelineDialog(QDialog):
             # Initialize data manager with error handler
             self.data_manager = TimelineDataManager(self.case_paths, self.error_handler)
             
-            # Load initial data
-            self._load_initial_data()
+            # Show configuration dialog before loading data
+            # This allows user to select time range and artifacts
+            from timeline.timeline_config_dialog import TimelineConfigDialog
+            self._show_config_dialog()
+            
         except ValueError as e:
             # User-friendly message for missing case
             self.error_handler.handle_error(
@@ -245,6 +252,10 @@ class TimelineDialog(QDialog):
         self.filter_bar.zoom_changed.connect(self._on_zoom_changed)
         self.filter_bar.search_requested.connect(self._on_search_requested)
         self.filter_bar.srum_show_ids_changed.connect(self._on_srum_show_ids_changed)
+        self.filter_bar.power_events_toggled.connect(self._on_power_events_toggled)
+        self.filter_bar.clustering_toggled.connect(self._on_clustering_toggled)
+        self.filter_bar.grouping_mode_changed.connect(self._on_grouping_mode_changed)
+        self.filter_bar.force_individual_display.connect(self._on_force_individual_changed)
         
         main_layout.addWidget(self.filter_bar)
         
@@ -396,9 +407,32 @@ class TimelineDialog(QDialog):
                 self.event_details_panel.clear()
             return
         
+        # Validate events have required data
+        valid_events = []
+        for event in selected_events:
+            if not isinstance(event, dict):
+                print(f"Warning: Invalid event type: {type(event)}")
+                continue
+            if 'id' not in event or 'timestamp' not in event:
+                print(f"Warning: Event missing required fields. Has: {list(event.keys())}")
+                continue
+            valid_events.append(event)
+        
+        if not valid_events:
+            print("Error: No valid events in selection")
+            if self.event_details_panel:
+                self.event_details_panel.clear()
+            return
+        
         # For single selection, show context information
-        if len(selected_events) == 1 and self.event_details_panel:
-            event = selected_events[0]
+        if len(valid_events) == 1 and self.event_details_panel:
+            event = valid_events[0]
+            
+            # Debug logging
+            print(f"Selected event: {event.get('artifact_type', 'Unknown')} - {event.get('display_name', 'Unknown')}")
+            print(f"Event fields: {list(event.keys())}")
+            if 'details' in event:
+                print(f"Event details: {list(event.get('details', {}).keys())}")
             
             # Find nearby events (within 5 minutes before/after)
             nearby_events = self._find_nearby_events(event, minutes=5)
@@ -411,7 +445,8 @@ class TimelineDialog(QDialog):
         
         # For multi-selection, just display the events
         elif self.event_details_panel:
-            self.event_details_panel.display_events(selected_events)
+            print(f"Displaying {len(valid_events)} selected events")
+            self.event_details_panel.display_events(valid_events)
     
     def _on_filter_changed(self, filter_config):
         """
@@ -482,7 +517,83 @@ class TimelineDialog(QDialog):
             # Reload timeline data to apply the change
             self._load_timeline_data()
     
-    def _load_initial_data(self):
+    def _on_power_events_toggled(self, show_power_events):
+        """
+        Handle power events visibility toggle from filter bar.
+        
+        Args:
+            show_power_events (bool): Whether to show power events
+        """
+        print(f"Power events visibility changed: {show_power_events}")
+        
+        # Update timeline canvas setting
+        if self.timeline_canvas:
+            self.timeline_canvas.set_show_power_events(show_power_events)
+    
+    def _on_clustering_toggled(self, enabled):
+        """
+        Handle clustering toggle from filter bar.
+        
+        Args:
+            enabled (bool): Whether clustering is enabled
+        """
+        print(f"Clustering toggled: {enabled}")
+        
+        # Update timeline canvas setting
+        if self.timeline_canvas:
+            self.timeline_canvas.set_clustering_enabled(enabled)
+    
+    def _on_grouping_mode_changed(self, mode):
+        """
+        Handle grouping mode change from filter bar.
+        
+        Args:
+            mode (str): Grouping mode ('time', 'application', 'path', 'user', 'artifact_type')
+        """
+        print(f"Grouping mode changed: {mode}")
+        
+        # Update timeline canvas setting
+        if self.timeline_canvas:
+            self.timeline_canvas.set_clustering_mode(mode)
+    
+    def _on_force_individual_changed(self, force_individual):
+        """
+        Handle force individual display toggle from filter bar.
+        
+        Args:
+            force_individual (bool): Whether to force individual event display
+        """
+        logger.debug(f"Force individual display changed: {force_individual}")
+        
+        # Update timeline canvas setting
+        if self.timeline_canvas:
+            self.timeline_canvas.set_force_individual_display(force_individual)
+    
+    def _show_config_dialog(self):
+        """
+        Show the timeline configuration dialog.
+        """
+        from timeline.timeline_config_dialog import TimelineConfigDialog
+        
+        dialog = TimelineConfigDialog(self, self.data_manager)
+        if dialog.exec_():
+            config = dialog.get_config()
+            if config:
+                # Apply configuration
+                self._load_initial_data(
+                    start_time=config.get('start_time'),
+                    end_time=config.get('end_time'),
+                    artifact_types=config.get('artifact_types')
+                )
+                
+                # Update filter bar to reflect selection
+                if self.filter_bar and config.get('artifact_types'):
+                    self.filter_bar.set_active_artifact_types(config.get('artifact_types'))
+        else:
+            # User cancelled, close the timeline dialog
+            self.close()
+
+    def _load_initial_data(self, start_time=None, end_time=None, artifact_types=None):
         """
         Load initial timeline data when dialog opens.
         
@@ -503,46 +614,51 @@ class TimelineDialog(QDialog):
             progress.setMinimumDuration(0)
             progress.setValue(10)
             
-            # Get time bounds from all databases
-            progress.setLabelText("Finding time bounds...")
-            progress.setValue(20)
-            
-            try:
-                start_time, end_time = self.data_manager.get_all_time_bounds()
-            except Exception as e:
-                progress.close()
+            # Get time bounds from all databases if not provided
+            if not start_time or not end_time:
+                progress.setLabelText("Finding time bounds...")
+                progress.setValue(20)
                 
-                # Create detailed error message
-                from timeline.utils.error_handler import TimelineError
-                
-                if not isinstance(e, TimelineError):
-                    # Wrap generic exception with better message
-                    error = TimelineError(
-                        message="Unable to find timeline data in case databases",
-                        details=f"Error while scanning databases for time bounds:\n{str(e)}\n\n"
-                                f"Possible causes:\n"
-                                f"1. No artifacts have been collected yet\n"
-                                f"2. Database files are missing or corrupted\n"
-                                f"3. Database files are in an incompatible format\n"
-                                f"4. Insufficient permissions to read database files"
+                try:
+                    found_start, found_end = self.data_manager.get_all_time_bounds()
+                    if not start_time:
+                        start_time = found_start
+                    if not end_time:
+                        end_time = found_end
+                except Exception as e:
+                    progress.close()
+                    
+                    # Create detailed error message
+                    from timeline.utils.error_handler import TimelineError
+                    
+                    if not isinstance(e, TimelineError):
+                        # Wrap generic exception with better message
+                        error = TimelineError(
+                            message="Unable to find timeline data in case databases",
+                            details=f"Error while scanning databases for time bounds:\n{str(e)}\n\n"
+                                    f"Possible causes:\n"
+                                    f"1. No artifacts have been collected yet\n"
+                                    f"2. Database files are missing or corrupted\n"
+                                    f"3. Database files are in an incompatible format\n"
+                                    f"4. Insufficient permissions to read database files"
+                        )
+                    else:
+                        error = e
+                    
+                    # Offer recovery options
+                    selected = self.error_handler.handle_error(
+                        error,
+                        "finding time bounds in databases",
+                        show_dialog=True,
+                        recovery_options=create_recovery_options(
+                            retry_func=lambda: self._load_initial_data(start_time, end_time, artifact_types),
+                            skip_func=lambda: None
+                        )
                     )
-                else:
-                    error = e
-                
-                # Offer recovery options
-                selected = self.error_handler.handle_error(
-                    error,
-                    "finding time bounds in databases",
-                    show_dialog=True,
-                    recovery_options=create_recovery_options(
-                        retry_func=lambda: self._load_initial_data(),
-                        skip_func=lambda: None
-                    )
-                )
-                
-                if selected == "Retry":
-                    return self._load_initial_data()
-                return
+                    
+                    if selected == "Retry":
+                        return self._load_initial_data(start_time, end_time, artifact_types)
+                    return
             
             if not start_time or not end_time:
                 progress.close()
@@ -592,6 +708,28 @@ class TimelineDialog(QDialog):
             # Store time range
             self.current_time_range = (None, None)  # All time mode
             
+            # Load initial events
+            progress.setLabelText(f"Loading events ({start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')})...")
+            progress.setValue(40)
+            
+            try:
+                events = self.data_manager.query_time_range(
+                    start_time, 
+                    end_time,
+                    artifact_types=artifact_types
+                )
+            except Exception as e:
+                progress.close()
+                self.error_handler.handle_error(
+                    e,
+                    "loading timeline events",
+                    show_dialog=True,
+                    recovery_options=create_recovery_options(
+                        retry_func=lambda: self._load_initial_data(start_time, end_time, artifact_types)
+                    )
+                )
+                return
+            
             # Load events
             progress.setLabelText("Loading events...")
             self._load_timeline_data()
@@ -599,8 +737,8 @@ class TimelineDialog(QDialog):
             progress.setValue(100)
             progress.close()
             
-            print(f"Timeline initialized: {start_time} to {end_time}")
-            print(f"Loaded {len(self.current_events)} events")
+            logger.info(f"Timeline initialized: {start_time} to {end_time}")
+            logger.info(f"Loaded {len(self.current_events)} events")
         
         except Exception as e:
             if progress:
@@ -735,10 +873,43 @@ class TimelineDialog(QDialog):
                 db_info['total_estimated_records'] += estimated_records
             
             except Exception as e:
-                print(f"Error getting info for {artifact_type} database: {e}")
+                logger.warning(f"Error getting info for {artifact_type} database: {e}")
                 continue
         
         return db_info
+    
+    def closeEvent(self, event):
+        """
+        Handle dialog close event to cleanup resources.
+        
+        BUG FIX #4: Properly close database connections to prevent resource leaks.
+        
+        Args:
+            event: QCloseEvent
+        """
+        # Cleanup data manager connections
+        if self.data_manager:
+            try:
+                self.data_manager.close_connections()
+                logger.info("Timeline dialog closed - all database connections cleaned up")
+            except Exception as e:
+                logger.error(f"Error closing database connections: {e}")
+        
+        # Cancel any running background workers
+        if self.query_worker and self.query_worker.isRunning():
+            self.query_worker.terminate()
+            self.query_worker.wait(1000)  # Wait up to 1 second
+        
+        if self.aggregation_worker and self.aggregation_worker.isRunning():
+            self.aggregation_worker.terminate()
+            self.aggregation_worker.wait(1000)
+        
+        if self.indexing_worker and self.indexing_worker.isRunning():
+            self.indexing_worker.terminate()
+            self.indexing_worker.wait(1000)
+        
+        # Accept close event
+        super().closeEvent(event)
     
     def _estimate_query_time(self, time_range, artifact_types, db_info):
         """
@@ -935,18 +1106,18 @@ class TimelineDialog(QDialog):
         
         QMessageBox.information(self, "Optimization Suggestions", msg)
     
-    def _load_timeline_data(self, max_events=20000):
+    def _load_timeline_data(self, max_events=80000):
         """
         Load timeline data based on current time range and filters.
         
         This method starts a background query worker thread to query the data
         manager for events within the current time range without blocking the UI.
         
-        Progressive loading: Initially loads up to max_events (default 20,000) for
+        Progressive loading: Initially loads up to max_events (default 80,000) for
         better performance. More events can be loaded on demand when scrolling.
         
         Args:
-            max_events (int): Maximum number of events to load initially (default: 20,000)
+            max_events (int): Maximum number of events to load initially (default: 80,000)
         """
         if not self.data_manager:
             return
@@ -958,7 +1129,7 @@ class TimelineDialog(QDialog):
                 return
             # Cancel any existing query
             if self.query_worker and self.query_worker.isRunning():
-                print("Cancelling previous query...")
+                logger.debug("Cancelling previous query...")
                 self.query_worker.cancel()
                 self.query_worker.wait(1000)  # Wait up to 1 second for cancellation
                 if self.query_worker.isRunning():
@@ -1074,7 +1245,7 @@ class TimelineDialog(QDialog):
         
         try:
             # Limit events for performance (sample if too many)
-            MAX_EVENTS = 5000
+            MAX_EVENTS = 50000  # Increased from 5000 to 50000 (10x) to display more events
             if len(all_events) > MAX_EVENTS:
                 print(f"Too many events ({len(all_events)}), sampling to {MAX_EVENTS}")
                 

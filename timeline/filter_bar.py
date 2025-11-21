@@ -1301,6 +1301,28 @@ class FilterBar(QWidget):
                     active_types.append(artifact_type)
         return active_types
     
+    def set_active_artifact_types(self, artifact_types):
+        """
+        Set which artifact types should be checked.
+        
+        Args:
+            artifact_types (list): List of artifact type names to check
+        """
+        for artifact_type, checkbox_widget in self.artifact_checkboxes.items():
+            should_check = artifact_type in artifact_types
+            
+            # Check if it's a QCheckBox directly or a container
+            if isinstance(checkbox_widget, QCheckBox):
+                checkbox_widget.setChecked(should_check)
+            elif hasattr(checkbox_widget, 'checkbox'):
+                # Container with checkbox attribute
+                checkbox_widget.checkbox.setChecked(should_check)
+            else:
+                # Find the checkbox within the container
+                checkbox = checkbox_widget.findChild(QCheckBox)
+                if checkbox:
+                    checkbox.setChecked(should_check)
+    
     def get_time_range(self):
         """
         Get the current time range selection.
