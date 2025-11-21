@@ -66,7 +66,14 @@ class LoadingSpinner(QWidget):
         if not self.is_spinning:
             return
         
+        # Safety check: ensure widget is valid and visible
+        if not self.isVisible() or self.size == 0:
+            return
+            
         painter = QPainter(self)
+        if not painter.isActive():
+            return
+            
         painter.setRenderHint(QPainter.Antialiasing)
         
         # Draw rotating arcs
@@ -97,6 +104,8 @@ class LoadingSpinner(QWidget):
                 int(x),
                 int(y)
             )
+        
+        painter.end()
 
 
 class LoadingOverlay(QWidget):

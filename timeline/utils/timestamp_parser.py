@@ -51,6 +51,28 @@ class TimestampParser:
     # Minimum reasonable timestamp (year 1980 - before Windows) - timezone-naive
     MIN_TIMESTAMP = datetime.datetime(1980, 1, 1)
     
+    # Track parse failures
+    _parse_failures = []
+    
+    @classmethod
+    def get_parse_failures(cls):
+        """Get list of failed parse attempts."""
+        return list(cls._parse_failures)
+        
+    @classmethod
+    def clear_parse_failures(cls):
+        """Clear parse failure history."""
+        cls._parse_failures.clear()
+        
+    @classmethod
+    def _log_failure(cls, value, error):
+        """Log a parse failure."""
+        cls._parse_failures.append({
+            'value': str(value),
+            'error': str(error),
+            'timestamp': datetime.datetime.now()
+        })
+    
     @staticmethod
     def parse_timestamp(timestamp: Union[str, int, float, datetime.datetime, None]) -> Optional[datetime.datetime]:
         """
@@ -96,11 +118,14 @@ class TimestampParser:
                 return TimestampParser._parse_string_timestamp(timestamp)
             
             # Unknown type
-            logger.warning(f"Unknown timestamp type: {type(timestamp)}")
+            msg = f"Unknown timestamp type: {type(timestamp)}"
+            logger.warning(msg)
+            TimestampParser._log_failure(timestamp, msg)
             return None
         
         except Exception as e:
-            logger.debug(f"Failed to parse timestamp '{timestamp}': {e}")
+            logger.warning(f"Failed to parse timestamp '{timestamp}': {e}")
+            TimestampParser._log_failure(timestamp, e)
             return None
     
     @staticmethod
@@ -171,7 +196,8 @@ class TimestampParser:
             return None
         
         except (ValueError, OSError, OverflowError) as e:
-            logger.debug(f"Failed to parse Unix timestamp {timestamp}: {e}")
+            logger.warning(f"Failed to parse Unix timestamp {timestamp}: {e}")
+            TimestampParser._log_failure(timestamp, e)
             return None
     
     @staticmethod
@@ -199,7 +225,8 @@ class TimestampParser:
             return None
         
         except (ValueError, OverflowError) as e:
-            logger.debug(f"Failed to parse FILETIME {filetime}: {e}")
+            logger.warning(f"Failed to parse FILETIME {filetime}: {e}")
+            TimestampParser._log_failure(filetime, e)
             return None
     
     @staticmethod
@@ -259,7 +286,8 @@ class TimestampParser:
         except ValueError:
             pass
         
-        logger.debug(f"Failed to parse string timestamp: {timestamp_str}")
+        logger.warning(f"Failed to parse string timestamp: {timestamp_str}")
+        TimestampParser._log_failure(timestamp_str, "Unknown string format")
         return None
     
     @staticmethod
