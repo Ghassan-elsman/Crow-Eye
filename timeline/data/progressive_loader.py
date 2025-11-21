@@ -132,6 +132,11 @@ class LoadWorker(QThread):
             if not self._cancelled:
                 logger.error(f"Error loading data for range {self.time_range}: {e}")
                 self.load_error.emit(self.time_range, e)
+        
+        finally:
+            # Clean up database connections for this thread
+            if hasattr(self.data_manager, 'cleanup_thread_connections'):
+                self.data_manager.cleanup_thread_connections()
     
     def cancel(self):
         """Cancel this load operation."""

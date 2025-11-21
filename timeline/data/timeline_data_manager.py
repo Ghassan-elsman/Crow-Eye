@@ -196,7 +196,8 @@ class TimelineDataManager:
         self.error_handler = error_handler
         
         # Connection pool with metadata
-        self._connection_pool: Dict[str, ConnectionPoolEntry] = {}
+        # Key: (thread_id, artifact_type) -> ConnectionPoolEntry
+        self._connection_pool: Dict[Tuple[int, str], ConnectionPoolEntry] = {}
         self._pool_lock = threading.Lock()
         
         # Connection pool configuration
@@ -305,7 +306,7 @@ class TimelineDataManager:
         Get or create database connection for an artifact type with connection pooling.
         
         This method implements connection pooling with:
-        - Thread-safe connection management
+        - Thread-safe connection management (one connection per thread)
         - Automatic health checks
         - Idle connection cleanup
         - Connection reuse statistics
@@ -327,34 +328,31 @@ class TimelineDataManager:
         # Cleanup idle connections periodically
         self._cleanup_idle_connections()
         
+        thread_id = threading.get_ident()
+        pool_key = (thread_id, artifact_type)
+        
         with self._pool_lock:
-            # Check if we have a valid pooled connection
-            if artifact_type in self._connection_pool:
-                pool_entry = self._connection_pool[artifact_type]
+            # Check if we have a valid pooled connection for this thread
+            if pool_key in self._connection_pool:
+                pool_entry = self._connection_pool[pool_key]
                 
-                # Verify connection is from same thread (SQLite requirement)
-                if not pool_entry.is_same_thread():
-                    logger.debug(f"Connection for {artifact_type} is from different thread, creating new connection")
-                    # Don't close here - will be cleaned up by owning thread
-                    del self._connection_pool[artifact_type]
+                # Perform health check
+                if pool_entry.health_check():
+                    # Connection is healthy, reuse it
+                    pool_entry.mark_used()
+                    self._connection_stats['total_reused'] += 1
+                    # logger.debug(f"Reusing connection for {artifact_type} (thread {thread_id})")
+                    return pool_entry.connection
                 else:
-                    # Perform health check
-                    if pool_entry.health_check():
-                        # Connection is healthy, reuse it
-                        pool_entry.mark_used()
-                        self._connection_stats['total_reused'] += 1
-                        logger.debug(f"Reusing connection for {artifact_type} (used {pool_entry.use_count} times)")
-                        return pool_entry.connection
-                    else:
-                        # Connection failed health check
-                        logger.warning(f"Connection for {artifact_type} failed health check, creating new connection")
-                        self._connection_stats['total_health_failures'] += 1
-                        try:
-                            pool_entry.connection.close()
-                            self._connection_stats['total_closed'] += 1
-                        except:
-                            pass
-                        del self._connection_pool[artifact_type]
+                    # Connection failed health check
+                    logger.warning(f"Connection for {artifact_type} failed health check, creating new connection")
+                    self._connection_stats['total_health_failures'] += 1
+                    try:
+                        pool_entry.connection.close()
+                        self._connection_stats['total_closed'] += 1
+                    except Exception as e:
+                        logger.debug(f"Error closing connection for {artifact_type}: {e}")
+                    del self._connection_pool[pool_key]
         
         # Get database path
         db_filename = self.ARTIFACT_DB_MAPPING.get(artifact_type)
@@ -391,10 +389,12 @@ class TimelineDataManager:
         
         # Create new connection with timeout and error handling
         try:
+            # BUG FIX #1: Removed check_same_thread=False for thread safety
+            # SQLite connections must only be used in the thread that created them
+            # to prevent database corruption
             conn = sqlite3.connect(
                 db_path,
-                timeout=30.0,  # 30 second timeout
-                check_same_thread=False  # Allow connection to be used across threads (with caution)
+                timeout=30.0  # 30 second timeout
             )
             conn.row_factory = sqlite3.Row  # Enable column access by name
             
@@ -405,10 +405,10 @@ class TimelineDataManager:
             with self._pool_lock:
                 pool_entry = ConnectionPoolEntry(conn, artifact_type)
                 pool_entry.mark_used()
-                self._connection_pool[artifact_type] = pool_entry
+                self._connection_pool[pool_key] = pool_entry
                 self._connection_stats['total_created'] += 1
             
-            logger.debug(f"Created new database connection for {artifact_type}")
+            logger.debug(f"Created new database connection for {artifact_type} (thread {thread_id})")
             return conn
         
         except sqlite3.Error as e:
@@ -469,37 +469,51 @@ class TimelineDataManager:
         self._last_cleanup = current_time
         
         with self._pool_lock:
-            idle_connections = []
+            idle_keys = []
             
             # Find idle connections
-            for artifact_type, pool_entry in self._connection_pool.items():
+            for key, pool_entry in self._connection_pool.items():
                 if pool_entry.is_idle(self._idle_timeout):
-                    idle_connections.append(artifact_type)
+                    idle_keys.append(key)
             
             # Close and remove idle connections
-            for artifact_type in idle_connections:
-                pool_entry = self._connection_pool[artifact_type]
-                try:
-                    pool_entry.connection.close()
-                    self._connection_stats['total_closed'] += 1
-                    self._connection_stats['idle_timeouts'] += 1
-                    logger.debug(f"Closed idle connection for {artifact_type} (idle for {current_time - pool_entry.last_used:.1f}s)")
-                except Exception as e:
-                    logger.debug(f"Error closing idle connection for {artifact_type}: {e}")
+            for key in idle_keys:
+                pool_entry = self._connection_pool[key]
                 
-                del self._connection_pool[artifact_type]
+                # Only close if it's the current thread (SQLite requirement)
+                # If it's another thread, we can't close it safely here
+                # But we can remove it from the pool and let GC handle it eventually
+                if pool_entry.is_same_thread():
+                    try:
+                        pool_entry.connection.close()
+                        self._connection_stats['total_closed'] += 1
+                        self._connection_stats['idle_timeouts'] += 1
+                        logger.debug(f"Closed idle connection for {pool_entry.artifact_type} (idle for {current_time - pool_entry.last_used:.1f}s)")
+                    except Exception as e:
+                        logger.debug(f"Error closing idle connection: {e}")
+                else:
+                    logger.debug(f"Dropping idle connection for {pool_entry.artifact_type} from another thread (GC will close)")
+                
+                del self._connection_pool[key]
     
     def perform_health_checks(self) -> Dict[str, bool]:
         """
-        Perform health checks on all pooled connections.
+        Perform health checks on all pooled connections for the CURRENT thread.
         
         Returns:
             Dict[str, bool]: Dictionary mapping artifact types to health status
         """
         health_status = {}
+        thread_id = threading.get_ident()
         
         with self._pool_lock:
-            for artifact_type, pool_entry in list(self._connection_pool.items()):
+            # Only check connections for the current thread
+            keys_to_check = [k for k in self._connection_pool.keys() if k[0] == thread_id]
+            
+            for key in keys_to_check:
+                pool_entry = self._connection_pool[key]
+                artifact_type = key[1]
+                
                 self._connection_stats['total_health_checks'] += 1
                 is_healthy = pool_entry.health_check()
                 health_status[artifact_type] = is_healthy
@@ -511,42 +525,70 @@ class TimelineDataManager:
                     try:
                         pool_entry.connection.close()
                         self._connection_stats['total_closed'] += 1
-                    except:
-                        pass
-                    del self._connection_pool[artifact_type]
+                    except Exception as e:
+                        logger.debug(f"Error closing unhealthy connection for {artifact_type}: {e}")
+                    del self._connection_pool[key]
         
         return health_status
     
+    def cleanup_thread_connections(self, thread_id: Optional[int] = None):
+        """
+        Close and remove all connections belonging to a specific thread.
+        
+        This should be called when a worker thread finishes to prevent
+        connection leaks in the pool.
+        
+        Args:
+            thread_id: ID of the thread to cleanup (defaults to current thread)
+        """
+        if thread_id is None:
+            thread_id = threading.get_ident()
+            
+        with self._pool_lock:
+            # Find keys to remove
+            keys_to_remove = []
+            for key, entry in self._connection_pool.items():
+                if key[0] == thread_id:
+                    keys_to_remove.append(key)
+            
+            # Close and remove
+            for key in keys_to_remove:
+                entry = self._connection_pool.pop(key)
+                try:
+                    entry.connection.close()
+                    logger.debug(f"Closed connection for {key[1]} (thread {thread_id})")
+                except Exception as e:
+                    logger.warning(f"Error closing connection for {key[1]}: {e}")
+                    
+            if keys_to_remove:
+                logger.info(f"Cleaned up {len(keys_to_remove)} connections for thread {thread_id}")
+
     def get_connection_stats(self) -> Dict:
         """
-        Get connection pool statistics.
+        Get statistics about the connection pool.
         
         Returns:
-            Dict: Dictionary with connection statistics including:
-                - total_created: Total connections created
-                - total_closed: Total connections closed
-                - total_reused: Total connection reuses
-                - total_health_checks: Total health checks performed
-                - total_health_failures: Total health check failures
-                - idle_timeouts: Total idle timeout closures
-                - active_connections: Current number of active connections
-                - connections_by_type: Active connections per artifact type
+            Dict: Pool statistics
         """
         with self._pool_lock:
             stats = self._connection_stats.copy()
             stats['active_connections'] = len(self._connection_pool)
-            stats['connections_by_type'] = {
-                artifact_type: {
+            stats['unique_threads'] = len(set(k[0] for k in self._connection_pool.keys()))
+            stats['unique_artifacts'] = len(set(k[1] for k in self._connection_pool.keys()))
+            
+            # Add detailed connection info
+            stats['connections'] = [
+                {
+                    'thread_id': thread_id,
+                    'artifact_type': artifact_type,
                     'use_count': entry.use_count,
                     'age_seconds': time.time() - entry.created_at,
-                    'idle_seconds': time.time() - entry.last_used,
-                    'thread_id': entry.thread_id,
-                    'is_valid': entry.is_valid
+                    'idle_seconds': time.time() - entry.last_used
                 }
-                for artifact_type, entry in self._connection_pool.items()
-            }
-        
-        return stats
+                for (thread_id, artifact_type), entry in self._connection_pool.items()
+            ]
+            
+            return stats
     
     def set_idle_timeout(self, timeout_seconds: float):
         """
@@ -776,11 +818,6 @@ class TimelineDataManager:
                     
                     self.error_handler.handle_error(
                         db_error,
-                        f"querying {artifact_type} database",
-                        show_dialog=False
-                    )
-                    self.error_handler.handle_error(
-                        e,
                         f"querying {artifact_type} database",
                         show_dialog=False
                     )

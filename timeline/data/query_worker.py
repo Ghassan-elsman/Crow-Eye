@@ -191,6 +191,11 @@ class QueryWorker(QThread):
             # Unexpected error during query
             logger.error(f"QueryWorker error: {e}", exc_info=True)
             self.error.emit(e, f"Failed to query timeline data: {str(e)}")
+        
+        finally:
+            # Clean up database connections for this thread
+            if hasattr(self.data_manager, 'cleanup_thread_connections'):
+                self.data_manager.cleanup_thread_connections()
     
     def cancel(self):
         """
@@ -311,6 +316,11 @@ class AggregationWorker(QThread):
         except Exception as e:
             logger.error(f"AggregationWorker error: {e}", exc_info=True)
             self.error.emit(e, f"Failed to aggregate events: {str(e)}")
+            
+        finally:
+            # Clean up database connections for this thread
+            if hasattr(self.data_manager, 'cleanup_thread_connections'):
+                self.data_manager.cleanup_thread_connections()
     
     def cancel(self):
         """Cancel the aggregation operation."""
