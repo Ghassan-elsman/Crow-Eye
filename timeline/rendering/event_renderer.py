@@ -152,7 +152,7 @@ class EventRenderer:
         
         return tooltip
     
-    def apply_highlight(self, marker_item, highlighted=True):
+    def apply_highlight(self, marker_item, highlighted=True, lod=0):
         """
         Apply or remove highlight effect from a marker with enhanced visibility.
         
@@ -162,6 +162,7 @@ class EventRenderer:
         Args:
             marker_item (QGraphicsItem): Marker to highlight
             highlighted (bool): True to highlight, False to remove highlight
+            lod (int): Level of detail (0=high, 1=medium, 2=low)
         """
         from PyQt5.QtWidgets import QGraphicsDropShadowEffect, QGraphicsItemGroup
         
@@ -188,11 +189,15 @@ class EventRenderer:
                 marker_item.setGraphicsEffect(glow)
             else:
                 marker_item.setZValue(0)
-                shadow = QGraphicsDropShadowEffect()
-                shadow.setBlurRadius(8)
-                shadow.setColor(QColor(0, 0, 0, 100))
-                shadow.setOffset(0, 2)
-                marker_item.setGraphicsEffect(shadow)
+                # Only apply shadow in high detail mode
+                if lod == 0:
+                    shadow = QGraphicsDropShadowEffect()
+                    shadow.setBlurRadius(8)
+                    shadow.setColor(QColor(0, 0, 0, 100))
+                    shadow.setOffset(0, 2)
+                    marker_item.setGraphicsEffect(shadow)
+                else:
+                    marker_item.setGraphicsEffect(None)
         else:
             # Individual marker
             if highlighted:
@@ -214,16 +219,19 @@ class EventRenderer:
                 marker_item.setPen(QPen(QColor("#FFFFFF"), 2))
                 marker_item.setZValue(0)
                 
-                # Restore subtle shadow
-                shadow = QGraphicsDropShadowEffect()
-                shadow.setBlurRadius(8)
-                shadow.setColor(QColor(0, 0, 0, 100))
-                shadow.setOffset(0, 2)
-                marker_item.setGraphicsEffect(shadow)
+                # Restore subtle shadow only in high detail
+                if lod == 0:
+                    shadow = QGraphicsDropShadowEffect()
+                    shadow.setBlurRadius(8)
+                    shadow.setColor(QColor(0, 0, 0, 100))
+                    shadow.setOffset(0, 2)
+                    marker_item.setGraphicsEffect(shadow)
+                else:
+                    marker_item.setGraphicsEffect(None)
                 
                 marker_item.setOpacity(1.0)
     
-    def apply_selection(self, marker_item, selected=True):
+    def apply_selection(self, marker_item, selected=True, lod=0):
         """
         Apply or remove selection effect from a marker with distinct visual indicator.
         
@@ -233,6 +241,7 @@ class EventRenderer:
         Args:
             marker_item (QGraphicsItem): Marker to select
             selected (bool): True to select, False to deselect
+            lod (int): Level of detail (0=high, 1=medium, 2=low)
         """
         from PyQt5.QtWidgets import QGraphicsDropShadowEffect, QGraphicsItemGroup
         
@@ -261,11 +270,15 @@ class EventRenderer:
                 marker_item.setGraphicsEffect(glow)
             else:
                 marker_item.setZValue(0)
-                shadow = QGraphicsDropShadowEffect()
-                shadow.setBlurRadius(8)
-                shadow.setColor(QColor(0, 0, 0, 100))
-                shadow.setOffset(0, 2)
-                marker_item.setGraphicsEffect(shadow)
+                # Only apply shadow in high detail mode
+                if lod == 0:
+                    shadow = QGraphicsDropShadowEffect()
+                    shadow.setBlurRadius(8)
+                    shadow.setColor(QColor(0, 0, 0, 100))
+                    shadow.setOffset(0, 2)
+                    marker_item.setGraphicsEffect(shadow)
+                else:
+                    marker_item.setGraphicsEffect(None)
         else:
             # Individual marker
             if selected:
@@ -287,12 +300,15 @@ class EventRenderer:
                 marker_item.setPen(QPen(QColor("#FFFFFF"), 2))
                 marker_item.setZValue(0)
                 
-                # Restore subtle shadow
-                shadow = QGraphicsDropShadowEffect()
-                shadow.setBlurRadius(8)
-                shadow.setColor(QColor(0, 0, 0, 100))
-                shadow.setOffset(0, 2)
-                marker_item.setGraphicsEffect(shadow)
+                # Restore subtle shadow only in high detail
+                if lod == 0:
+                    shadow = QGraphicsDropShadowEffect()
+                    shadow.setBlurRadius(8)
+                    shadow.setColor(QColor(0, 0, 0, 100))
+                    shadow.setOffset(0, 2)
+                    marker_item.setGraphicsEffect(shadow)
+                else:
+                    marker_item.setGraphicsEffect(None)
                 
                 marker_item.setOpacity(1.0)
     
@@ -620,12 +636,12 @@ class EventRenderer:
             timeline_height
         )
         
-        # Style the line with dashed pattern for visual distinction
+        # Style the line with solid pattern (changed from dashed to prevent artifacts)
         line.setBrush(QBrush(QColor(color)))
         pen = QPen(QColor(color), 0)  # No border
-        pen.setStyle(Qt.DashLine)
+        pen.setStyle(Qt.SolidLine)  # Use solid line instead of dashed
         line.setPen(pen)
-        line.setOpacity(0.7)  # Semi-transparent
+        line.setOpacity(0.6)  # Slightly more transparent for subtlety
         
         # Add line to group
         group.addToGroup(line)

@@ -66,6 +66,7 @@ class ZoomManager:
             )
         
         self._current_zoom = initial_zoom
+        self._max_zoom_cap = self.MAX_ZOOM  # Default to absolute max
     
     @property
     def current_zoom(self):
@@ -84,7 +85,7 @@ class ZoomManager:
         Returns:
             bool: True if zoom level changed, False if already at maximum
         """
-        if self._current_zoom < self.MAX_ZOOM:
+        if self._current_zoom < self._max_zoom_cap:
             self._current_zoom += 1
             return True
         return False
@@ -118,6 +119,25 @@ class ZoomManager:
             )
         
         self._current_zoom = level
+    
+    def set_max_zoom_cap(self, level):
+        """
+        Set a dynamic maximum zoom limit.
+        
+        Args:
+            level (int): Maximum zoom level allowed (must be <= MAX_ZOOM)
+        """
+        if not self.MIN_ZOOM <= level <= self.MAX_ZOOM:
+            raise ValueError(
+                f"Max zoom cap must be between {self.MIN_ZOOM} and {self.MAX_ZOOM}, "
+                f"got {level}"
+            )
+        
+        self._max_zoom_cap = level
+        
+        # Adjust current zoom if it exceeds new cap
+        if self._current_zoom > self._max_zoom_cap:
+            self._current_zoom = self._max_zoom_cap
     
     def get_time_unit(self):
         """
@@ -219,6 +239,9 @@ class ZoomManager:
         
         return (start_time, end_time)
     
+    # Target pixels per interval for consistent visual density
+    TARGET_PIXEL_SPACING = 150
+    
     def get_scale_factor(self):
         """
         Get the scale factor for the current zoom level.
@@ -229,9 +252,10 @@ class ZoomManager:
         Returns:
             float: Scale factor (pixels per minute)
         """
-        # At zoom level 10, 1 pixel = 1 minute (scale = 1.0)
-        # At zoom level 0, 1 pixel = 1024 minutes (scale = 1/1024)
-        return 2 ** (self._current_zoom - 10)
+        # Calculate scale to ensure consistent visual spacing between grid lines
+        # Scale = pixels / minutes
+        interval_minutes = self.get_interval_minutes()
+        return self.TARGET_PIXEL_SPACING / interval_minutes
     
     def can_zoom_in(self):
         """
@@ -240,7 +264,7 @@ class ZoomManager:
         Returns:
             bool: True if can zoom in, False if at maximum zoom
         """
-        return self._current_zoom < self.MAX_ZOOM
+        return self._current_zoom < self._max_zoom_cap
     
     def can_zoom_out(self):
         """
@@ -260,6 +284,20 @@ class ZoomManager:
         """
         interval_minutes = self.get_interval_minutes()
         return timedelta(minutes=interval_minutes)
+    
+    def get_all_zoom_configs(self):
+        """
+        Get all zoom level configurations for pre-calculation purposes.
+        
+        This method returns the complete zoom level configuration dictionary,
+        which is used by the marker cache system to pre-calculate markers
+        for all zoom levels during initial load.
+        
+        Returns:
+            dict: Dictionary mapping zoom levels (0-10) to their configurations
+                  Each configuration contains: unit, interval_minutes, label
+        """
+        return self.ZOOM_LEVELS.copy()
     
     def __repr__(self):
         """
