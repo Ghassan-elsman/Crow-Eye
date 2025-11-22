@@ -14,10 +14,6 @@ I’ve stepped away from contract work to build the Windows forensics tool I alw
 
 Every star, issue, and future sponsor keeps me in the chair writing parsers instead of taking side gigs.
 
-<a href="https://github.com/sponsors/Ghassan-elsman">
-  <img src="https://img.shields.io/badge/Sponsor-Crow%20Eye-ff007f?style=for-the-badge&logo=githubsponsors" />
-</a>
-
 <a href="https://www.paypal.com/paypalme/CrowEyeDev">
   <img src="https://img.shields.io/badge/PayPal-Support-00d4ff?style=for-the-badge&logo=paypal" />
 </a>
