@@ -6,19 +6,6 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-<div align="center">
-
-**Crow Eye is my full-time mission right now**
-
-I’ve stepped away from contract work to build the Windows forensics tool I always wished existed.
-
-Every star, issue, and future sponsor keeps me in the chair writing parsers instead of taking side gigs.
-
-<a href="https://www.paypal.com/paypalme/CrowEyeDev">
-  <img src="https://img.shields.io/badge/PayPal-Support-00d4ff?style=for-the-badge&logo=paypal" />
-</a>
-
-</div>
 
 ## Table of Contents
 - [Overview](#overview)
@@ -30,7 +17,7 @@ Every star, issue, and future sponsor keeps me in the chair writing parsers inst
 - [Custom Artifact Analysis](#custom-artifact-analysis)
 - [Search and Export Features](#search-and-export-features)
 - [Supported Artifacts and Functionality](#supported-artifacts-and-functionality)
-
+- [Documentation & Contribution](#documentation--contribution)
 - [Technical Notes](#technical-notes)
 - [Screenshots](#screenshots)
 - [Official Website](#-official-website)
@@ -43,6 +30,65 @@ Crow Eye is a comprehensive Windows forensics tool designed to collect, parse, a
 
 ## Created by
 Ghassan Elsman
+
+## Vision: Forensics for Everyone
+
+### Our Mission
+
+Crow-Eye's mission is to put the truth of what happened on a computer into the hands of every person — not just experts. We believe digital forensics should be accessible to everyone, regardless of technical background.
+
+**Empowering Everyone**
+
+Whether you're a parent worried about what your teen downloaded, a senior who thinks they might have been scammed, or just someone wondering why their PC feels "off," Crow-Eye analyzes your PC, understands the deep forensic traces Windows leaves behind, and explains them in plain, trustworthy language.
+
+**The Future: Crow-Eye Assistant ("Eye")**
+
+Soon you'll simply ask Crow-Eye Assistant (we call it "Eye"):
+- *"Was anyone using my laptop while I was away last weekend?"*
+- *"Which program has been secretly connecting to the internet?"*
+
+Eye answers instantly, shows you the proof, and never sends your data anywhere.
+
+### For Digital Forensics Professionals
+
+**Faster, Smarter DFIR**
+- Advanced parsing of Windows artifacts
+- Detection of evasion techniques
+- Proof-of-execution and file activity tracing
+- One-click proof-of-execution
+- Raw artifact views + correlated views
+- Plugin system for custom parsers, correlation rules, and workflow extensions
+
+Crow-Eye lets investigators skip repetitive manual work, focus on complex reasoning, and achieve faster, more accurate results.
+
+### For Business
+
+**Multi-Machine Forensics at Scale**
+
+Crow-Eye goes beyond single-machine analysis with a scalable multi-machine processing engine.
+
+Businesses can:
+- Parse and store artifacts from multiple machines
+- Maintain historical forensic data (even after Windows deletes it)
+- Access device activity anytime during an incident
+- Reduce dependency on high-cost forensic solutions
+- Gain continuous visibility without enterprise-level budgets
+
+Small and medium businesses finally get the investigative power that only large corporations could afford before. Crow-Eye delivers daily or weekly micro-forensics, giving real security insight without heavy infrastructure.
+
+### Research Platform
+
+**Advancing Windows Forensics**
+
+Crow-Eye is more than software — it's an open research platform accelerating the entire field of Windows forensics.
+
+The project focuses on:
+- Publishing detailed documentation on internal artifact structures
+- Sharing correlation logic and methodologies
+- Enabling peer review, transparency, and academic collaboration
+- Contributing to the forensics community's collective knowledge
+
+
 
 ## Supported Artifacts (Live Analysis)
 | Artifact          | Live | Data Extracted                          |
@@ -187,6 +233,15 @@ To analyze custom artifacts:
 - Parses USN (Update Sequence Number) Journal for file change events.
 - Tracks file creations, deletions, modifications with timestamps.
 - Correlates with other artifacts for timeline reconstruction.
+
+## Documentation & Contribution
+
+- **[README.md](README.md)**: Project overview, vision, features, and usage guide (this document)
+- **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)**: Complete technical documentation including architecture, components, and development guide
+- **[CONTRIBUTING.md](CONTRIBUTING.md)**: Contribution guidelines, coding standards, and development workflows
+- **[timeline/ARCHITECTURE.md](timeline/ARCHITECTURE.md)**: Detailed timeline module architecture
+
+For developers and contributors, please review the technical documentation and contribution guide before submitting pull requests.
 
 ## Technical Notes
 - The tool incorporates a modified version of the JumpList_Lnk_Parser Python module.
