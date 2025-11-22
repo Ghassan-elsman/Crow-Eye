@@ -35,7 +35,7 @@ Ghassan Elsman
 
 ### Our Mission
 
-Crow-Eye's mission is to put the truth of what happened on a computer into the hands of every person — not just experts. We believe digital forensics should be accessible to everyone, regardless of technical background.
+Crow-Eye mission is to put the truth of what happened on a computer into the hands of every person — not just experts. We believe digital forensics should be accessible to everyone, regardless of technical background.
 
 **Empowering Everyone**
 
