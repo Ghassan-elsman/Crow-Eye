@@ -109,13 +109,15 @@ class RowDetailDialog(QtWidgets.QDialog):
     # Keep track of open dialogs to manage positioning
     open_dialogs = []
     
-    def __init__(self, data, title, parent=None):
+    def __init__(self, data, title, row_name="Unknown", row_number=0, parent=None):
         """
         Initialize the dialog with row data
         
         Args:
             data (dict): Dictionary of row data (header: value)
-            title (str): Dialog title
+            title (str): Dialog title (Table Name)
+            row_name (str): Name/Identifier of the row
+            row_number (int): Row number
             parent: Parent widget
         """
         super(RowDetailDialog, self).__init__(parent)
@@ -126,6 +128,8 @@ class RowDetailDialog(QtWidgets.QDialog):
         # Store data and title
         self.row_data = data
         self.table_name = title
+        self.row_name = row_name
+        self.row_number = row_number
         
         # Track if dialog is maximized
         self.is_maximized = False
@@ -167,7 +171,17 @@ class RowDetailDialog(QtWidgets.QDialog):
         title_bar_layout.setContentsMargins(15, 12, 15, 12)
         
         # Add title label
-        title_label = QtWidgets.QLabel("Forensic Data Analysis")
+        header_text = f"{self.table_name}"
+        
+        # Only append row name if it's valid and not "Unknown"
+        if self.row_name and str(self.row_name).lower() not in ["unknown", "none", "n/a", ""]:
+            header_text += f" - {self.row_name}"
+            
+        # Only append row number if it's valid
+        if self.row_number > 0:
+            header_text += f" #{self.row_number}"
+            
+        title_label = QtWidgets.QLabel(header_text)
         title_label.setStyleSheet("""
             color: #00FF7F;
             font-size: 18px;

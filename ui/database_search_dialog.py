@@ -3277,10 +3277,32 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             db_name = getattr(result, 'database', 'Unknown')
             table_name = getattr(result, 'table', 'Unknown')
             row_id = getattr(result, 'row_id', 'N/A')
-            title = f"{db_name} / {table_name} / Row {row_id}"
+            title = f"{db_name} / {table_name}"
+            
+            # Determine row name from common identifying columns
+            row_name = "Unknown"
+            name_keys = ["Name", "name", "Filename", "filename", "Process Name", "process_name", "Executable", "executable"]
+            
+            for key in name_keys:
+                if key in enhanced_data and enhanced_data[key]:
+                    row_name = str(enhanced_data[key])
+                    break
+            
+            # If still unknown, try the first few keys that might be relevant
+            if row_name == "Unknown":
+                for key, value in enhanced_data.items():
+                    if key.lower() in ["id", "uuid", "guid", "hash", "sha256", "md5"]:
+                        row_name = str(value)
+                        break
+            
+            # Extract row number
+            try:
+                row_number = int(row_id)
+            except (ValueError, TypeError):
+                row_number = 0
             
             # Show the detail dialog
-            detail_dialog = RowDetailDialog(enhanced_data, title, self)
+            detail_dialog = RowDetailDialog(enhanced_data, title, row_name, row_number, self)
             detail_dialog.show()
             
             self.logger.info(f"Opened detail dialog for: {title}")

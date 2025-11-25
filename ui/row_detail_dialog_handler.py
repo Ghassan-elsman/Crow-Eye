@@ -63,14 +63,41 @@ def handle_table_double_click(main_window, item):
         
         # Get table name for the dialog title
         table_object_name = table.objectName()
-        # Use the mapping if available, otherwise use a generic name
+        # Use the mapping if available, otherwise try to format the object name
         if table_object_name in TABLE_NAME_MAPPING:
             table_name = TABLE_NAME_MAPPING[table_object_name]
+        elif table_object_name:
+            # Try to make a friendly name from the object name
+            # Remove common suffixes
+            name = table_object_name.replace("_table", "").replace("tableWidget_", "")
+            # Replace underscores with spaces and title case
+            table_name = name.replace("_", " ").title()
         else:
             table_name = "Forensic Data"
+            
+        # Determine Row Name (heuristic)
+        row_name = "Unknown Row"
+        # Priority keys to look for
+        name_keys = ["Name", "Filename", "Executable Name", "Process Name", "Service Name", "Device Name", "User", "Key"]
+        
+        # Try to find a matching key
+        for key in name_keys:
+            if key in data and data[key]:
+                row_name = data[key]
+                break
+        
+        # Fallback: use the first available value if no priority key found
+        if row_name == "Unknown Row" and data:
+            # Get the first value from the data dictionary
+            first_value = next(iter(data.values()))
+            if first_value:
+                row_name = first_value
+                
+        # Get Row Number (1-based)
+        row_number = row + 1
         
         # Create and show the detail dialog
-        dialog = RowDetailDialog(data, table_name, main_window)
+        dialog = RowDetailDialog(data, table_name, row_name, row_number, main_window)
         dialog.show()
         
     except Exception as e:

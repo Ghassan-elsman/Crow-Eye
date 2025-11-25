@@ -591,8 +591,36 @@ class VirtualTableWidget(QTableWidget):
                     self.logger.warning(f"No data found for row {row}")
                     return
             
+            # Determine Row Name (heuristic)
+            row_name = "Unknown Row"
+            # Priority keys to look for
+            name_keys = ["Name", "Filename", "Executable Name", "Process Name", "Service Name", "Device Name", "User", "Key", "app_name", "folder_name"]
+            
+            # Try to find a matching key
+            for key in name_keys:
+                # Check case-insensitive
+                for data_key in row_data.keys():
+                    if data_key.lower() == key.lower() and row_data[data_key]:
+                        row_name = str(row_data[data_key])
+                        break
+                if row_name != "Unknown Row":
+                    break
+            
+            # Fallback: use the first available value if no priority key found
+            if row_name == "Unknown Row" and row_data:
+                # Get the first value from the data dictionary
+                first_value = next(iter(row_data.values()))
+                if first_value:
+                    row_name = str(first_value)
+            
+            # Get Row Number (1-based)
+            row_number = row + 1
+            
+            # Format table name for display
+            display_name = self.table_name.replace('_', ' ').title()
+            
             # Create and show the detail dialog
-            dialog = RowDetailDialog(row_data, self.table_name, self.parent())
+            dialog = RowDetailDialog(row_data, display_name, row_name, row_number, self.parent())
             dialog.show()
             
         except Exception as e:
