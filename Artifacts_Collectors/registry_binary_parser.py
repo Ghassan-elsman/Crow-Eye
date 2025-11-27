@@ -1573,3 +1573,220 @@ def _categorize_search_term(search_term: str) -> str:
     except Exception as e:
         logger.error(f"Error categorizing search term: {e}")
         return 'General'
+
+
+def parse_user_account_v_value(binary_data: bytes) -> dict:
+    r"""
+    Parse SAM V value structure containing user account metadata.
+    
+    The V value in SAM\SAM\Domains\Account\Users\<RID> contains comprehensive
+    user account information including timestamps, login counts, and account flags.
+    
+    Structure (offsets are approximate and may vary by Windows version):
+    - 0x00-0x0C: Header information
+    - 0x0C-0x10: Username offset
+    - 0x10-0x14: Username length
+    - 0x18-0x20: Last login timestamp (FILETIME)
+    - 0x20-0x28: Password last set timestamp (FILETIME)
+    - 0x28-0x30: Account expires timestamp (FILETIME)
+    - 0x30-0x38: Last incorrect password timestamp (FILETIME)
+    - 0x38-0x3C: User account control flags
+    - 0x40-0x44: Login count
+    - 0x44-0x48: Bad password count
+    
+    Args:
+        binary_data: Binary data from SAM V value
+    
+    Returns:
+        Dictionary containing:
+            - 'username': Account username
+            - 'last_login': Last successful login timestamp
+            - 'password_last_set': Last password change timestamp
+            - 'account_expires': Account expiration timestamp
+            - 'last_bad_password': Last failed login timestamp
+            - 'login_count': Number of successful logins
+            - 'bad_password_count': Number of failed login attempts
+            - 'account_disabled': Account disabled flag
+            - 'account_locked': Account locked flag
+    """
+    try:
+        if not binary_data or len(binary_data) < 0x50:
+            logger.warning(f"Invalid SAM V value data: expected at least 80 bytes, got {len(binary_data) if binary_data else 0}")
+            return {
+                'username': '',
+                'last_login': '',
+                'password_last_set': '',
+                'account_expires': '',
+                'last_bad_password': '',
+                'login_count': 0,
+                'bad_password_count': 0,
+                'account_disabled': 0,
+                'account_locked': 0
+            }
+        
+        result = {}
+        
+        # Extract username
+        # Username offset and length are at specific positions
+        try:
+            username_offset = struct.unpack('<I', binary_data[0x0C:0x10])[0]
+            username_length = struct.unpack('<I', binary_data[0x10:0x14])[0]
+            
+            if username_offset > 0 and username_length > 0:
+                # Add offset to base (0xCC is common base offset)
+                actual_offset = username_offset + 0xCC
+                if actual_offset + username_length <= len(binary_data):
+                    username_bytes = binary_data[actual_offset:actual_offset + username_length]
+                    result['username'] = username_bytes.decode('utf-16-le', errors='ignore').strip('\x00')
+                else:
+                    result['username'] = ''
+            else:
+                result['username'] = ''
+        except Exception as e:
+            logger.debug(f"Error extracting username from SAM V value: {e}")
+            result['username'] = ''
+        
+        # Extract timestamps
+        # Last login (offset 0x08 in newer versions, 0x18 in older)
+        try:
+            if len(binary_data) >= 0x20:
+                last_login_bytes = binary_data[0x08:0x10]
+                result['last_login'] = parse_filetime(last_login_bytes)
+        except Exception as e:
+            logger.debug(f"Error parsing last login timestamp: {e}")
+            result['last_login'] = ''
+        
+        # Password last set (offset varies, typically around 0x18-0x20)
+        try:
+            if len(binary_data) >= 0x28:
+                pwd_set_bytes = binary_data[0x18:0x20]
+                result['password_last_set'] = parse_filetime(pwd_set_bytes)
+        except Exception as e:
+            logger.debug(f"Error parsing password last set timestamp: {e}")
+            result['password_last_set'] = ''
+        
+        # Account expires
+        try:
+            if len(binary_data) >= 0x30:
+                expires_bytes = binary_data[0x20:0x28]
+                result['account_expires'] = parse_filetime(expires_bytes)
+        except Exception as e:
+            logger.debug(f"Error parsing account expires timestamp: {e}")
+            result['account_expires'] = ''
+        
+        # Last bad password
+        try:
+            if len(binary_data) >= 0x38:
+                bad_pwd_bytes = binary_data[0x28:0x30]
+                result['last_bad_password'] = parse_filetime(bad_pwd_bytes)
+        except Exception as e:
+            logger.debug(f"Error parsing last bad password timestamp: {e}")
+            result['last_bad_password'] = ''
+        
+        # Login count
+        try:
+            if len(binary_data) >= 0x44:
+                login_count = struct.unpack('<I', binary_data[0x40:0x44])[0]
+                result['login_count'] = login_count
+        except Exception as e:
+            logger.debug(f"Error parsing login count: {e}")
+            result['login_count'] = 0
+        
+        # Bad password count
+        try:
+            if len(binary_data) >= 0x48:
+                bad_pwd_count = struct.unpack('<I', binary_data[0x44:0x48])[0]
+                result['bad_password_count'] = bad_pwd_count
+        except Exception as e:
+            logger.debug(f"Error parsing bad password count: {e}")
+            result['bad_password_count'] = 0
+        
+        # Account control flags (offset varies, typically around 0x38)
+        try:
+            if len(binary_data) >= 0x3C:
+                flags = struct.unpack('<I', binary_data[0x38:0x3C])[0]
+                # Common flags:
+                # 0x0001 = Account disabled
+                # 0x0010 = Account locked
+                result['account_disabled'] = 1 if (flags & 0x0001) else 0
+                result['account_locked'] = 1 if (flags & 0x0010) else 0
+        except Exception as e:
+            logger.debug(f"Error parsing account flags: {e}")
+            result['account_disabled'] = 0
+            result['account_locked'] = 0
+        
+        logger.debug(f"Parsed SAM V value: username={result.get('username', '')}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error parsing SAM V value: {e}")
+        return {
+            'username': '',
+            'last_login': '',
+            'password_last_set': '',
+            'account_expires': '',
+            'last_bad_password': '',
+            'login_count': 0,
+            'bad_password_count': 0,
+            'account_disabled': 0,
+            'account_locked': 0
+        }
+
+
+def parse_user_account_f_value(binary_data: bytes) -> dict:
+    r"""
+    Parse SAM F value structure containing additional user account data.
+    
+    The F value in SAM\SAM\Domains\Account\Users\<RID> contains supplementary
+    account information including account creation time and additional flags.
+    
+    Structure (offsets are approximate):
+    - 0x00-0x08: Account creation timestamp (FILETIME)
+    - 0x08-0x10: Last logoff timestamp (FILETIME)
+    - Various other metadata fields
+    
+    Args:
+        binary_data: Binary data from SAM F value
+    
+    Returns:
+        Dictionary containing:
+            - 'account_created': Account creation timestamp
+            - 'last_logoff': Last logoff timestamp
+    """
+    try:
+        if not binary_data or len(binary_data) < 0x10:
+            logger.warning(f"Invalid SAM F value data: expected at least 16 bytes, got {len(binary_data) if binary_data else 0}")
+            return {
+                'account_created': '',
+                'last_logoff': ''
+            }
+        
+        result = {}
+        
+        # Extract account creation timestamp
+        try:
+            if len(binary_data) >= 0x08:
+                created_bytes = binary_data[0x00:0x08]
+                result['account_created'] = parse_filetime(created_bytes)
+        except Exception as e:
+            logger.debug(f"Error parsing account creation timestamp: {e}")
+            result['account_created'] = ''
+        
+        # Extract last logoff timestamp
+        try:
+            if len(binary_data) >= 0x10:
+                logoff_bytes = binary_data[0x08:0x10]
+                result['last_logoff'] = parse_filetime(logoff_bytes)
+        except Exception as e:
+            logger.debug(f"Error parsing last logoff timestamp: {e}")
+            result['last_logoff'] = ''
+        
+        logger.debug(f"Parsed SAM F value: created={result.get('account_created', '')}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error parsing SAM F value: {e}")
+        return {
+            'account_created': '',
+            'last_logoff': ''
+        }

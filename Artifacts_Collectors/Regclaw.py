@@ -24,13 +24,29 @@ def _configure_logging():
         logging.basicConfig(filename='regclaw_errors.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 _configure_logging()
 def check_admin_privileges():
-    """Check if the script is running with administrative privileges."""
+    """Check if the script is running with administrative privileges.
+    
+    Returns:
+        bool: True if running as admin, False otherwise
+    """
+    if platform.system() != "Windows":
+        return False
+    return bool(ctypes.windll.shell32.IsUserAnAdmin())
+
+def require_admin_privileges():
+    """Require administrative privileges or exit.
+    
+    This function should be called by operations that absolutely require admin access.
+    For operations that can work with degraded functionality, use check_admin_privileges() instead.
+    """
     if platform.system() != "Windows":
         print("Error: This script is designed for Windows systems only.")
         exit(1)
     if not ctypes.windll.shell32.IsUserAnAdmin():
         print("Error: This script requires administrative privileges.")
+        print("Please run as Administrator to access all registry data.")
         exit(1)
+
 def check_exists(cursor, table_name, conditions, values):
     """Check if a record exists in the specified table based on conditions.
    
@@ -60,8 +76,20 @@ def parse_live_registry(case_root=None, db_path=None):
     Returns:
         str: Path to the created database file.
     """
-    # Check administrative privileges
-    check_admin_privileges()
+    # Check administrative privileges (but don't require them)
+    is_admin = check_admin_privileges()
+    
+    if not is_admin:
+        print("=" * 80)
+        print("WARNING: Not running with administrative privileges")
+        print("=" * 80)
+        print("Some registry data will not be accessible:")
+        print("  - SAM user account data (login times, password changes, etc.)")
+        print("  - Some system-level registry keys")
+        print("\nBasic user profile information will still be collected.")
+        print("For complete data, run as Administrator.")
+        print("=" * 80)
+        print()
    
     # Set the database filename based on the provided db_path or use default
     if db_path:
@@ -172,8 +200,8 @@ def main_live_reg(db_filename='registry_data.db'):
     paths = {
         "machine_run": (HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
         "machine_run_once": (HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
-        "user_run": (HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
-        "user_run_once": (HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
+        "user_run": (HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
+        "user_run_once": (HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
         "dam": (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\dam\\UserSettings"),
         "bam": (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings")
     }
@@ -203,8 +231,7 @@ def main_live_reg(db_filename='registry_data.db'):
             ("computer_Name", "name TEXT, data TEXT, type TEXT"),
             ("time_zone", "name TEXT, data TEXT, type TEXT"),
             ("network_interfaces", "subkey TEXT, name TEXT, data TEXT, type TEXT"),
-            ("shutdown_information", "name TEXT, data TEXT, type TEXT"),
-            ("Search_Explorer_bar", "name TEXT, data TEXT, type TEXT")
+            ("shutdown_information", "name TEXT, data TEXT, type TEXT")
         ]
         for table_name, schema in tables:
             cursor.execute(f'CREATE TABLE IF NOT EXISTS {table_name} ({schema})')
@@ -472,6 +499,16 @@ def main_live_reg(db_filename='registry_data.db'):
             folder_path TEXT,
             application TEXT,
             access_date TEXT
+        )''')
+        # User Profiles table for user account information from ProfileList
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS UserProfiles (
+            user_sid TEXT PRIMARY KEY,
+            username TEXT,
+            profile_path TEXT,
+            profile_image_path TEXT,
+            profile_loaded INTEGER,
+            timestamp TEXT
         )''')
         # Insert data into the respective tables
         for table_name, (hive, key) in paths.items():
@@ -2010,6 +2047,69 @@ def main_live_reg(db_filename='registry_data.db'):
             print("USB devices information inserted into database successfully.")
         except Exception as e:
             logging.error(f"Error accessing USB devices: {e}")
+        
+        # Collect user profile information
+        try:
+            print("Collecting user profile information...")
+            
+            # Get user profiles from ProfileList
+            # This registry key is accessible with standard admin privileges
+            profile_list_path = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList"
+            profile_subkeys = get_subkeys_live(HKEY_LOCAL_MACHINE, profile_list_path)
+            
+            user_count = 0
+            
+            for sid, profile_values in profile_subkeys.items():
+                try:
+                    # Skip system profiles (those without S-1-5-21 prefix)
+                    # S-1-5-21 prefix indicates domain/local user accounts
+                    if not sid.startswith('S-1-5-21'):
+                        continue
+                    
+                    # Extract profile information from ProfileList
+                    profile_path = ""
+                    profile_image_path = ""
+                    profile_loaded = 0
+                    
+                    for name, (data, value_type) in profile_values.items():
+                        if name.lower() == "profileimagepath":
+                            profile_image_path = str(data)
+                            # Extract just the profile directory name (username)
+                            if '\\' in profile_image_path:
+                                profile_path = profile_image_path.split('\\')[-1]
+                        elif name.lower() == "state":
+                            # State 0 = loaded, 256 = unloaded
+                            try:
+                                state = int(data)
+                                profile_loaded = 1 if state == 0 else 0
+                            except:
+                                pass
+                    
+                    # Use profile directory name as username
+                    username = profile_path if profile_path else "Unknown"
+                    
+                    # Insert user profile data into database
+                    cursor.execute('''
+                    INSERT OR REPLACE INTO UserProfiles
+                    (user_sid, username, profile_path, profile_image_path, profile_loaded, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)''',
+                    (sid, username, profile_path, profile_image_path, profile_loaded, 
+                     datetime.datetime.now().isoformat()))
+                    
+                    user_count += 1
+                    
+                except Exception as e:
+                    logging.error(f"Error processing user profile {sid}: {e}")
+                    continue
+            
+            # Report collection results
+            print(f"User profile information collected successfully. Total users: {user_count}")
+            print(f"  ✓ Collected: User SIDs, usernames, profile paths, and load status")
+            
+        except Exception as e:
+            logging.error(f"Error collecting user profile information: {e}")
+            print(f"Warning: Could not collect complete user profile information: {e}")
+        
         # Commit the transaction
         conn.commit()
         print(f"Registry data collection complete. Data saved to {db_filename}")
