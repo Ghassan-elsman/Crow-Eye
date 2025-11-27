@@ -523,6 +523,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.load_data_from_database_UserRun()
         self.load_data_from_database_UserRunOnce()
         self.load_data_from_database_RunMRU()
+        self.load_data_from_database_UserProfiles()
         print("[Registry] All registry data loaded")
     
     # ============================================================================
@@ -1290,6 +1291,79 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"[SecurityLogs] Error loading data: {str(e)}")
     
+    def load_data_from_database_UserProfiles(self):
+        """Load User Profiles data from registry database"""
+        try:
+            db_path = self.get_registry_db_path()
+            if not os.path.exists(db_path):
+                print(f"[UserProfiles] Database not found at: {db_path}")
+                return
+
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Check if UserProfiles table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='UserProfiles'")
+            if not cursor.fetchone():
+                print(f"[UserProfiles] UserProfiles table not found in database: {db_path}")
+                conn.close()
+                return
+
+            cursor.execute("SELECT * FROM UserProfiles")
+            rows = cursor.fetchall()
+            
+            if hasattr(self, 'UserProfiles_table'):
+                self.UserProfiles_table.setRowCount(0)
+                
+                # Set headers if not already set (assuming 7 columns based on setup)
+                headers = ["Username", "SID", "Profile Path", "Date Created", "Last Login", "Last Logout", "Login Count"]
+                self.UserProfiles_table.setColumnCount(len(headers))
+                self.UserProfiles_table.setHorizontalHeaderLabels(headers)
+                
+                for row in rows:
+                    row_index = self.UserProfiles_table.rowCount()
+                    self.UserProfiles_table.insertRow(row_index)
+                    for col_index, value in enumerate(row):
+                        item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                        self.UserProfiles_table.setItem(row_index, col_index, item)
+                        
+                print(f"[UserProfiles] Successfully loaded {len(rows)} records")
+                
+            conn.close()
+        except Exception as e:
+            print(f"[UserProfiles] Error loading data: {str(e)}")
+
+    def load_files_activity(self):
+        """Load all file activity data into their respective tables"""
+        try:
+            print("[File Activity] Loading Recent Docs...")
+            self.load_data_from_database_RecentDocs()
+            print("[File Activity] Loading Search Explorer Bar...")
+            self.load_data_from_database_search_explorer_bar()
+            print("[File Activity] Loading Open/Save MRU...")
+            self.load_data_from_database_OpenSaveMRU()
+            print("[File Activity] Loading Last Save MRU...")
+            self.load_data_from_database_LastSaveMRU()
+            print("[File Activity] Loading Typed Paths...")
+            self.load_data_from_database_TypedPathes()
+            print("[File Activity] Loading BAM...")
+            self.load_data_from_database_BAM()
+            print("[File Activity] Loading DAM...")
+            self.load_data_from_database_DAM()
+            print("[File Activity] Loading UserAssist...")
+            self.load_data_from_database_UserAssist()
+            print("[File Activity] Loading Shellbags...")
+            self.load_data_from_database_Shellbags()
+            print("[File Activity] Loading MUICache...")
+            self.load_data_from_database_MUICache()
+            print("[File Activity] Loading WordWheelQuery...")
+            self.load_data_from_database_WordWheelQuery()
+            print("[File Activity] All file activity data loaded")
+        except Exception as e:
+            print(f"[File Activity] Error loading data: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
     def create_amcache_table_tabs(self):
         """Create table tabs for each Amcache table based on the schema"""
         # Import the schema from amcacheparser.py
@@ -2528,6 +2602,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.load_data_from_database_UserRun()
             print("[Registry] Loading User Run Once...")
             self.load_data_from_database_UserRunOnce()
+            print("[Registry] Loading User Profiles...")
+            self.load_data_from_database_UserProfiles()
             print("[Registry] All registry data loaded successfully")
         
         # Use cyberpunk loading dialog
@@ -4104,6 +4180,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.TimeZone_table.setObjectName("TimeZone_table")
         self.verticalLayout_7.addWidget(self.TimeZone_table)
         self.Registry_widget.addTab(self.Time_Zone, "")
+        self.UserProfiles_tab = QtWidgets.QWidget()
+        self.UserProfiles_tab.setObjectName("UserProfiles_tab")
+        self.verticalLayout_UserProfiles = QtWidgets.QVBoxLayout(self.UserProfiles_tab)
+        self.verticalLayout_UserProfiles.setObjectName("verticalLayout_UserProfiles")
+        self.UserProfiles_table = QtWidgets.QTableWidget(self.UserProfiles_tab)
+        self.setup_standard_table(self.UserProfiles_table, 7, False, 300, 190)
+        self.UserProfiles_table.setObjectName("UserProfiles_table")
+        self.verticalLayout_UserProfiles.addWidget(self.UserProfiles_table)
+        self.Registry_widget.addTab(self.UserProfiles_tab, "")
         self.NetworkInterfaces_tab = QtWidgets.QWidget()
         self.NetworkInterfaces_tab.setObjectName("NetworkInterfaces_tab")
         self.verticalLayout_8 = QtWidgets.QVBoxLayout(self.NetworkInterfaces_tab)
@@ -4796,6 +4881,22 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.Registry_widget.setTabText(
                 self.Registry_widget.indexOf(self.Networklists),
                 _translate("Crow_Eye", "Network Lists")
+            )
+            
+        # Initialize UserProfiles_table headers
+        if hasattr(self, 'UserProfiles_table'):
+            self.UserProfiles_table.setColumnCount(7)
+            headers = ["Username", "SID", "Profile Path", "Date Created", "Last Login", "Last Logout", "Login Count"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.UserProfiles_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+                
+        # Set tab text for User Profiles tab
+        if hasattr(self, 'UserProfiles_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.UserProfiles_tab),
+                _translate("Crow_Eye", "User Profiles")
             )
             
         # Initialize SystemServices_table headers if it exists
@@ -5928,42 +6029,39 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             return None
 
     def clear_all_tables(self):
-        """Clear all table widgets in the GUI"""
-        # Clear all tables in the GUI
-        tables_to_clear = [
-            # Registry tables
-            self.computerName_table, self.TimeZone_table, self.NetworkInterface_table,
-            self.NetworkLists_table, self.MachineRun_table, self.UserRun_table,
-            self.UserRunOnce_table, self.LastUpdate_table, self.LastUpdateInfo_table,
-            self.ShutDown_table, self.Browser_history_table,
-            # Files activity tables
-            self.RecentDocs_table, self.SearchViaExplorer_table, self.OpenSaveMRU_table,
-            self.LastSaveMRU_table, self.TypedPath_table, self.Bam_table, self.Dam_table,
-            # Prefetch table
-            self.Prefetch_table,
-            # LNK and JL tables
-            self.LNK_table, self.Clj_table,
-            # Logs table
-            self.AppLogs_table,
-            # MFT-related tables
-            getattr(self, 'MFT_table', None),
-            getattr(self, 'MFT_standard_info_table', None),
-            getattr(self, 'MFT_file_names_table', None),
-            getattr(self, 'MFT_data_attributes_table', None),
-            # USN and Correlated tables
-            getattr(self, 'USN_table', None),
-            getattr(self, 'Correlated_table', None)
-        ]
-        
-        for table in tables_to_clear:
-            try:
-                if table is not None:
+        """Clear all data from all tables in the application"""
+        try:
+            print("[System] Clearing all application data...")
+            
+            # 1. Clear search results first
+            self.clear_search_results()
+            
+            # 2. Find all tables and clear them
+            tables = self.find_all_table_widgets()
+            for table in tables:
+                try:
+                    # Clear contents
                     table.setRowCount(0)
-            except Exception:
-                # Skip tables that may not be initialized yet
-                pass
-        
-        self.clear_search_results()
+                    # Reset sorting if needed
+                    table.clearSpans()
+                except Exception as e:
+                    print(f"[Warning] Failed to clear table {table.objectName()}: {str(e)}")
+            
+            # 3. Reset internal state variables
+            self.case_paths = None
+            self.search_results = []
+            self.current_result_index = -1
+            
+            # 4. Reset UI labels
+            if hasattr(self, 'label'):
+                self.label.setText("Case: None")
+            
+            print("[System] All tables cleared and state reset")
+            
+        except Exception as e:
+            print(f"[Error] Failed to clear tables: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def hide_loading_screen(self):
         """Hide the loading screen"""
