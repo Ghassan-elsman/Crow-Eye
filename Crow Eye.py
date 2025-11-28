@@ -1296,7 +1296,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         try:
             db_path = self.get_registry_db_path()
             if not os.path.exists(db_path):
-                print(f"[UserProfiles] Database not found at: {db_path}")
+                print(f"[UserProfiles] Database not found at {db_path}")
                 return
 
             conn = sqlite3.connect(db_path)
@@ -1315,17 +1315,29 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             if hasattr(self, 'UserProfiles_table'):
                 self.UserProfiles_table.setRowCount(0)
                 
-                # Set headers if not already set (assuming 7 columns based on setup)
-                headers = ["Username", "SID", "Profile Path", "Date Created", "Last Login", "Last Logout", "Login Count"]
+                # Set headers based on user request and DB schema
+                # DB Schema: user_sid, username, profile_path, profile_image_path, profile_loaded, timestamp
+                headers = ["Username", "SID", "Profile Image Path", "Profiles Loaded", "Parsed Timestamp"]
                 self.UserProfiles_table.setColumnCount(len(headers))
                 self.UserProfiles_table.setHorizontalHeaderLabels(headers)
                 
                 for row in rows:
                     row_index = self.UserProfiles_table.rowCount()
                     self.UserProfiles_table.insertRow(row_index)
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
-                        self.UserProfiles_table.setItem(row_index, col_index, item)
+                    
+                    # Map DB columns to GUI columns
+                    # row[0]=sid, row[1]=username, row[2]=profile_path, row[3]=profile_image_path, row[4]=loaded, row[5]=timestamp
+                    
+                    # Username
+                    self.UserProfiles_table.setItem(row_index, 0, QtWidgets.QTableWidgetItem(str(row[1]) if row[1] is not None else ""))
+                    # SID
+                    self.UserProfiles_table.setItem(row_index, 1, QtWidgets.QTableWidgetItem(str(row[0]) if row[0] is not None else ""))
+                    # Profile Image Path
+                    self.UserProfiles_table.setItem(row_index, 2, QtWidgets.QTableWidgetItem(str(row[3]) if row[3] is not None else ""))
+                    # Profiles Loaded
+                    self.UserProfiles_table.setItem(row_index, 3, QtWidgets.QTableWidgetItem(str(row[4]) if row[4] is not None else ""))
+                    # Parsed Timestamp
+                    self.UserProfiles_table.setItem(row_index, 4, QtWidgets.QTableWidgetItem(str(row[5]) if row[5] is not None else ""))
                         
                 print(f"[UserProfiles] Successfully loaded {len(rows)} records")
                 
