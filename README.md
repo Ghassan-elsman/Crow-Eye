@@ -91,20 +91,22 @@ The project focuses on:
 
 
 ## Supported Artifacts (Live Analysis)
-| Artifact          | Live | Data Extracted                          |
-|-------------------|------|-----------------------------------------|
-| Prefetch          | Yes  | Execution history, run count, timestamps |
-| Registry          | Yes  | Auto-run, UserAssist, ShimCache, BAM, networks, time zone |
-| Jump Lists & LNK  | Yes  | File access, paths, timestamps, metadata |
-| Event Logs        | Yes  | System, Security, Application events    |
-| Amcache           | Yes  | App execution, install time, SHA1, file paths |
-| ShimCache         | Yes  | Executed apps, last modified, size      |
-| ShellBags         | Yes  | Folder views, access history, timestamps |
-| MRU & RecentDocs  | Yes  | Typed paths, Open/Save history, recent files |
-| MFT Parser        | Yes  | File metadata, deleted files, timestamps |
-| USN Journal       | Yes  | File changes (create/modify/delete)     |
-| Recycle Bin       | Yes  | Deleted file names, paths, deletion time |
-| SRUM              | Yes  | App resource usage, network, energy, execution |
+
+| Artifact                  | Live | Data Extracted                                                                 |
+|---------------------------|------|--------------------------------------------------------------------------------|
+| Prefetch                  | Yes  | Execution history, run count, timestamps                                       |
+| Registry                  | Yes  | Auto-run, UserAssist, ShimCache, BAM, networks, time zone                     |
+| Jump Lists & LNK          | Yes  | File access, paths, timestamps, metadata                                       |
+| Event Logs                | Yes  | System, Security, Application events                                           |
+| Amcache                   | Yes  | App execution, install time, SHA1, file paths                                  |
+| ShimCache                 | Yes  | Executed apps, last modified, size                                             |
+| ShellBags                 | Yes  | Folder views, access history, timestamps                                       |
+| MRU & RecentDocs          | Yes  | Typed paths, Open/Save history, recent files                                   |
+| MFT Parser                | Yes  | File metadata, deleted files, timestamps                                       |
+| USN Journal               | Yes  | File changes (create/modify/delete)                                            |
+| Recycle Bin               | Yes  | Deleted file names, paths, deletion time                                       |
+| SRUM                      | Yes  | App resource usage, network, energy, execution                                 |
+| Disks & Partitions    | Yes | Physical disks, partition layout, hidden/unmounted partitions, EFI/Recovery/MSR     |
 
 **Note:** Not all artifacts support offline analysis; it is still under development.
 
