@@ -426,6 +426,14 @@ except ImportError as e:
     SearchUtils = None
     SearchWorker = None
 
+try:
+    from ui.partition_window import PartitionWindow
+    print(Fore.GREEN + "✓ Successfully imported PartitionWindow" + Fore.RESET)
+except ImportError as e:
+    print(Fore.RED + f"✗ Failed to import PartitionWindow: {str(e)}" + Fore.RESET)
+    PartitionWindow = None
+
+
 # Comprehensive dependency validation with automatic recovery
 def validate_dependencies():
     """Validate that all critical dependencies are working properly with automatic recovery for win32evtlog."""
@@ -3049,6 +3057,71 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         return button
     
+    def open_partition_window(self):
+        """Open the Partition and Volume Analysis window"""
+        try:
+            if PartitionWindow is None:
+                QMessageBox.warning(
+                    self.main_window if hasattr(self, 'main_window') else None,
+                    "Module Not Available",
+                    "The Partition Analysis module could not be loaded. Please check the installation."
+                )
+                return
+            
+            # Determine database path - save in Target_Artifacts folder
+            db_path = None
+            print(f"[open_partition_window] hasattr case_paths: {hasattr(self, 'case_paths')}")
+            if hasattr(self, 'case_paths'):
+                print(f"[open_partition_window] case_paths: {self.case_paths}")
+                
+            if hasattr(self, 'case_paths') and self.case_paths:
+                # First try: Use artifacts_dir directly (this is Target_Artifacts)
+                target_artifacts = self.case_paths.get('artifacts_dir')
+                print(f"[open_partition_window] artifacts_dir from case_paths: {target_artifacts}")
+                
+                # Second try: Get target_artifacts_dir
+                if not target_artifacts:
+                    target_artifacts = self.case_paths.get('target_artifacts_dir')
+                    print(f"[open_partition_window] target_artifacts_dir from case_paths: {target_artifacts}")
+                
+                # Third try: Construct from case_dir or case_root
+                if not target_artifacts:
+                    case_dir = self.case_paths.get('case_dir') or self.case_paths.get('case_root')
+                    print(f"[open_partition_window] case_dir/case_root: {case_dir}")
+                    if case_dir:
+                        target_artifacts = os.path.join(case_dir, 'Target_Artifacts')
+                        print(f"[open_partition_window] Constructed target_artifacts: {target_artifacts}")
+                        # Create directory if it doesn't exist
+                        if not os.path.exists(target_artifacts):
+                            print(f"[open_partition_window] Creating directory: {target_artifacts}")
+                            os.makedirs(target_artifacts, exist_ok=True)
+                        else:
+                            print(f"[open_partition_window] Directory already exists: {target_artifacts}")
+                
+                if target_artifacts:
+                    db_path = os.path.join(target_artifacts, 'partition_data.db')
+                    print(f"[open_partition_window] Final db_path: {db_path}")
+                else:
+                    print("[open_partition_window] Could not determine target_artifacts directory")
+            else:
+                print("[open_partition_window] No case_paths available")
+            
+            # Create and show the partition window
+            print(f"[open_partition_window] Creating PartitionWindow with db_path: {db_path}")
+            partition_window = PartitionWindow(db_path, self.main_window if hasattr(self, 'main_window') else None)
+            partition_window.exec_()
+            
+        except Exception as e:
+            print(f"[Partition Analysis] Error opening window: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window if hasattr(self, 'main_window') else None,
+                "Error",
+                f"Failed to open Partition Analysis window:\n{str(e)}"
+            )
+
+    
     def refresh_all_tables(self):
         """Refresh all tables in the application with current styles"""
         try:
@@ -4111,6 +4184,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.setup_parse_button(self.SRUMButton, True, True, True)
         self.SRUMButton.setObjectName("SRUMButton")
         self.verticalLayout_3.addWidget(self.SRUMButton)
+
+        self.PartitionButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.PartitionButton, True, True, True)
+        self.PartitionButton.setObjectName("PartitionButton")
+        self.PartitionButton.setText("Partition Analyzer")
+        self.PartitionButton.clicked.connect(self.open_partition_window)
+        self.verticalLayout_3.addWidget(self.PartitionButton)
         
         spacerItem3 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
         self.verticalLayout_3.addItem(spacerItem3)
@@ -4148,6 +4228,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.info_frame.setSizePolicy(sp2)
         except Exception:
             pass
+        self.disk_viz_container = QtWidgets.QWidget()
+        self.disk_viz_container.setStyleSheet("""
+            QWidget {
+                background-color: #0F172A;
+            }
+        """)
+        self.disk_viz_layout = QtWidgets.QVBoxLayout(self.disk_viz_container)
+        self.disk_viz_layout.setSpacing(15)
         self.verticalLayout = QtWidgets.QVBoxLayout(self.info_frame)
         self.verticalLayout.setObjectName("verticalLayout")
         self.main_tab = QtWidgets.QTabWidget(self.info_frame)
