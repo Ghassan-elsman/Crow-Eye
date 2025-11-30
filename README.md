@@ -239,6 +239,12 @@ To analyze custom artifacts:
 - Tracks file creations, deletions, modifications with timestamps.
 - Correlates with other artifacts for timeline reconstruction.
 
+  ### Storage Forensics Analyzer
+- Complete tree view of every physical disk and its partitions
+- Color-coded partition types (EFI=blue, Linux=purple, Recovery=orange, Hidden=swap/red, etc.)
+- Warnings for bootable USBs, hidden Linux roots, and Intel Rapid Start
+- Raw sector magic scanning fallback 
+
 ## Documentation & Contribution
 
 - **[README.md](README.md)**: Project overview, vision, features, and usage guide (this document)
