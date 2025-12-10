@@ -78,6 +78,40 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from file_signature_detector import FileSignatureDetector, get_detector
 
+# Helper function to run PowerShell without showing window
+def run_powershell_hidden(command: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run PowerShell command without showing console window.
+    
+    Args:
+        command: PowerShell command to execute
+        timeout: Command timeout in seconds
+        
+    Returns:
+        CompletedProcess object with command results
+    """
+    if os.name == 'nt':
+        # Windows-specific: Use STARTUPINFO to hide window
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        
+        return subprocess.run(
+            ['powershell', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            startupinfo=startupinfo,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+    else:
+        # Non-Windows fallback
+        return subprocess.run(
+            ['powershell', '-NoProfile', '-Command', command],
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+
 @dataclass
 class RecycleBinEntry:
     """Represents a parsed Recycle Bin entry from $I metadata files.
@@ -239,6 +273,114 @@ class RecycleBinParser:
             except Exception as e:
                 logger.warning(f"Failed to initialize Windows API: {e}")
     
+    def _get_logical_drives_native(self) -> List[str]:
+        """Get all logical drives using Windows API without spawning PowerShell.
+        
+        This method uses the Windows API GetLogicalDrives() function to enumerate
+        all available drive letters on the system. This eliminates PowerShell window
+        flashing and improves performance significantly.
+        
+        Returns:
+            List[str]: List of drive root paths with trailing backslashes (e.g., ['C:\\', 'D:\\', 'E:\\'])
+                      Returns system drive only if API call fails.
+        
+        Technical Details:
+            - Uses kernel32.GetLogicalDrives() which returns a 32-bit bitmask
+            - Each bit represents a drive letter (bit 0 = A:, bit 1 = B:, etc.)
+            - Only returns drives that are currently mounted and accessible
+        """
+        try:
+            # Call Windows API to get drive bitmask
+            bitmask = self.kernel32.GetLogicalDrives()
+            
+            if bitmask == 0:
+                # API call failed, fall back to system drive
+                logger.warning("GetLogicalDrives() returned 0, falling back to system drive")
+                system_drive = os.environ.get('SystemDrive', 'C:')
+                if not system_drive.endswith('\\'):
+                    system_drive += '\\'
+                return [system_drive]
+            
+            # Process bitmask to extract drive letters
+            drives = []
+            for i in range(26):  # A-Z (0-25)
+                if bitmask & (1 << i):  # Check if bit is set
+                    drive_letter = chr(ord('A') + i)
+                    drive_path = f"{drive_letter}:\\"
+                    drives.append(drive_path)
+            
+            if not drives:
+                # No drives found in bitmask, fall back to system drive
+                logger.warning("No drives found in bitmask, falling back to system drive")
+                system_drive = os.environ.get('SystemDrive', 'C:')
+                if not system_drive.endswith('\\'):
+                    system_drive += '\\'
+                return [system_drive]
+            
+            logger.info(f"Native API enumerated {len(drives)} drives: {', '.join(drives)}")
+            return drives
+            
+        except Exception as e:
+            # Handle any exceptions and fall back to system drive
+            logger.warning(f"Drive enumeration via Windows API failed: {e}")
+            logger.info("Falling back to system drive only")
+            system_drive = os.environ.get('SystemDrive', 'C:')
+            if not system_drive.endswith('\\'):
+                system_drive += '\\'
+            return [system_drive]
+    
+    def _get_file_owner_sid(self, file_path: str) -> str:
+        """Get the owner SID of a file using Windows API.
+        
+        Args:
+            file_path (str): Path to the file
+            
+        Returns:
+            str: Owner SID or "Unknown" if failed
+        """
+        try:
+            import win32security
+            import pywintypes
+            
+            # Get the security descriptor for the file
+            sd = win32security.GetFileSecurity(file_path, win32security.OWNER_SECURITY_INFORMATION)
+            
+            # Get the owner SID
+            owner_sid = sd.GetSecurityDescriptorOwner()
+            
+            # Convert SID to string
+            sid_string = win32security.ConvertSidToStringSid(owner_sid)
+            
+            return sid_string
+            
+        except ImportError:
+            # win32security not available, try alternative method
+            try:
+                # Use PowerShell as fallback (but this is slower)
+                import subprocess
+                result = subprocess.run(
+                    ['powershell', '-NoProfile', '-Command', 
+                     f'(Get-Acl "{file_path}").Owner'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                
+                if result.returncode == 0:
+                    owner = result.stdout.strip()
+                    # Try to extract SID from owner string
+                    # Owner format is usually "DOMAIN\Username"
+                    return f"Owner: {owner}"
+                else:
+                    return "Unknown"
+                    
+            except Exception:
+                return "Unknown"
+                
+        except Exception as e:
+            logger.debug(f"Failed to get file owner SID: {e}")
+            return "Unknown"
+    
     def _get_recycle_bin_path_windows_api(self) -> Optional[str]:
         """Get Recycle Bin path using Windows API."""
         try:
@@ -301,45 +443,38 @@ class RecycleBinParser:
             
             print(f"[RecycleBin] Parsing Recycle Bin directory: {recycle_bin_path}")
             
-            # Use PowerShell to list directories with Force flag to show hidden items
-            ps_command = f"Get-ChildItem -Path '{recycle_bin_path}' -Directory -Force | Where-Object {{ $_.Name.Length -gt 8 }} | Select-Object -ExpandProperty FullName"
-            result = subprocess.run(['powershell', '-NoProfile', '-Command', ps_command], 
-                                   capture_output=True, text=True, timeout=30)
+            # Use native Python glob to enumerate user SID directories (no PowerShell needed)
+            # This eliminates PowerShell window flashing and improves performance
+            import glob
             
-            if result.returncode != 0:
-                print(f"[RecycleBin] Failed to access Recycle Bin at {recycle_bin_path}: {result.stderr}")
+            try:
+                # Find all directories starting with 'S-' (SID pattern) with length > 8
+                user_dirs = glob.glob(os.path.join(recycle_bin_path, 'S-*'))
+                user_dirs = [d for d in user_dirs if os.path.isdir(d) and len(os.path.basename(d)) > 8]
+            except Exception as e:
+                print(f"[RecycleBin] Failed to access Recycle Bin at {recycle_bin_path}: {e}")
                 print("[RecycleBin] This is a hidden system folder that may require Administrator privileges.")
                 print("[RecycleBin] Try running Crow Eye as Administrator to access Recycle Bin data.")
                 return entries
-                
-            # Parse PowerShell output to get user SID directories
-            user_dirs = [line.strip() for line in result.stdout.splitlines() if line.strip()]
             
             # Debug output
             print(f"[RecycleBin Debug] Found {len(user_dirs)} user directories in {recycle_bin_path}")
             
-            if not user_dirs:
-                print(f"[RecycleBin] No user directories found in Recycle Bin at {recycle_bin_path}")
-                return entries
-            
-            # Parse each user's Recycle Bin directory
+            # Parse each user's Recycle Bin directory (modern Windows format)
             for user_dir in user_dirs:
                 user_sid = os.path.basename(user_dir)
                 
-                # Use PowerShell to list $I files with Force flag to show hidden items
-                ps_command = f"Get-ChildItem -Path '{user_dir}' -File -Force | Where-Object {{ $_.Name -like '$I*' -and $_.Name -notlike '*.info' }} | Select-Object -ExpandProperty FullName"
-                result = subprocess.run(['powershell', '-NoProfile', '-Command', ps_command], 
-                                       capture_output=True, text=True, timeout=30)
-                
-                # Debug output
-                print(f"[RecycleBin Debug] Processing user directory: {user_sid}")
-                
-                if result.returncode != 0:
-                    print(f"[RecycleBin] Failed to access user directory {user_sid}: {result.stderr}")
+                # Use native Python glob to list $I files (no PowerShell needed)
+                try:
+                    i_files = glob.glob(os.path.join(user_dir, '$I*'))
+                    # Filter out .info files and ensure they are files, not directories
+                    i_files = [f for f in i_files if os.path.isfile(f) and not f.endswith('.info')]
+                except Exception as e:
+                    print(f"[RecycleBin] Failed to access user directory {user_sid}: {e}")
                     continue
                 
-                # Parse PowerShell output to get $I files
-                i_files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                # Debug output
+                print(f"[RecycleBin Debug] Processing user directory: {user_sid} ({len(i_files)} $I files)")
                 
                 for i_path in i_files:
                     try:
@@ -349,6 +484,53 @@ class RecycleBinParser:
                             entries.append(entry)
                     except Exception as e:
                         logger.error(f"Failed to parse $I file {os.path.basename(i_path)}: {e}")
+            
+            # Also check for $I files directly in the Recycle Bin root (older Windows format or alternative structure)
+            try:
+                root_i_files = glob.glob(os.path.join(recycle_bin_path, '$I*'))
+                # Filter out .info files and ensure they are files, not directories
+                root_i_files = [f for f in root_i_files if os.path.isfile(f) and not f.endswith('.info')]
+                
+                if root_i_files:
+                    print(f"[RecycleBin Debug] Found {len(root_i_files)} $I files in root directory (older format)")
+                    
+                    # Try to get owner SID from the Recycle Bin directory itself
+                    root_user_sid = "System-Wide"  # Default for root-level files
+                    try:
+                        dir_owner_sid = self._get_file_owner_sid(recycle_bin_path)
+                        # Check if it's a valid user SID (not system SIDs like S-1-1-0, S-1-5-18, etc.)
+                        if dir_owner_sid and dir_owner_sid.startswith("S-1-5-21-"):
+                            root_user_sid = dir_owner_sid
+                            print(f"[RecycleBin Debug] Detected owner SID from directory: {root_user_sid}")
+                        else:
+                            # Try from first file
+                            file_owner_sid = self._get_file_owner_sid(root_i_files[0])
+                            if file_owner_sid and file_owner_sid.startswith("S-1-5-21-"):
+                                root_user_sid = file_owner_sid
+                                print(f"[RecycleBin Debug] Detected owner SID from file: {root_user_sid}")
+                            else:
+                                # Use the detected SID even if it's a system SID, or keep default
+                                if dir_owner_sid and dir_owner_sid != "Unknown":
+                                    root_user_sid = dir_owner_sid
+                                    print(f"[RecycleBin Debug] Using system SID: {root_user_sid}")
+                                else:
+                                    print(f"[RecycleBin Debug] Could not determine SID, using 'System-Wide'")
+                    except Exception as e:
+                        logger.debug(f"Failed to detect owner SID: {e}")
+                    
+                    for i_path in root_i_files:
+                        try:
+                            # Parse the $I file with detected or default SID
+                            entry = self.parse_i_file(i_path, root_user_sid)
+                            if entry:
+                                entries.append(entry)
+                        except Exception as e:
+                            logger.error(f"Failed to parse root $I file {os.path.basename(i_path)}: {e}")
+            except Exception as e:
+                print(f"[RecycleBin] Failed to check root directory for $I files: {e}")
+            
+            if not entries:
+                print(f"[RecycleBin] No Recycle Bin entries found at {recycle_bin_path}")
                     
         except Exception as e:
             logger.error(f"Error parsing Recycle Bin directory: {e}")
@@ -488,9 +670,9 @@ class RecycleBinParser:
             random_i_filename = i_file_name
             random_r_filename = r_file_name
             
-            # Analyze file signature if $R file exists
+            # Analyze file signature and recovery status
             file_signature = ""
-            recovery_status = "Unknown"
+            recovery_status = "❌ Not found - permanently deleted"
             
             if os.path.exists(r_file_path):
                 signature_desc, signature_ext = self.detect_file_signature(r_file_path)
@@ -625,17 +807,48 @@ class RecycleBinParser:
         """Enhanced assessment of file recovery possibility.
         
         Args:
-            file_path (str): Path to the $R file
+            file_path (str): Path to the $R file or directory
             original_size (int): Original file size from $I metadata
             
         Returns:
             str: Detailed recovery assessment
         """
         try:
-            # Check if $R file exists
+            # Check if $R file/directory exists
             if not os.path.exists(file_path):
-                return "❌ File not found - likely permanently deleted"
+                return "❌ Not found - permanently deleted"
             
+            # Check if it's a directory (deleted folder)
+            if os.path.isdir(file_path):
+                # Calculate total size of directory contents
+                total_size = 0
+                file_count = 0
+                try:
+                    for dirpath, dirnames, filenames in os.walk(file_path):
+                        for filename in filenames:
+                            filepath = os.path.join(dirpath, filename)
+                            try:
+                                total_size += os.path.getsize(filepath)
+                                file_count += 1
+                            except:
+                                pass
+                    
+                    if file_count == 0:
+                        return "📁 Empty folder - can be restored"
+                    elif original_size > 0:
+                        recovery_percentage = (total_size / original_size) * 100
+                        if recovery_percentage >= 95:
+                            return f"✅ Folder intact ({file_count} files) - full recovery possible"
+                        elif recovery_percentage >= 50:
+                            return f"⚠️ Folder partial ({file_count} files, {recovery_percentage:.1f}%)"
+                        else:
+                            return f"⚠️ Folder incomplete ({file_count} files, {recovery_percentage:.1f}%)"
+                    else:
+                        return f"✅ Folder available ({file_count} files) - can be restored"
+                except Exception as e:
+                    return f"📁 Folder exists - recovery possible (scan error)"
+            
+            # It's a file - check size
             current_size = os.path.getsize(file_path)
             
             # Calculate recovery percentage
@@ -644,7 +857,7 @@ class RecycleBinParser:
             else:
                 recovery_percentage = 0
             
-            # Enhanced status assessment
+            # Enhanced status assessment for files
             if current_size == 0:
                 return "❌ Zero bytes - overwritten/corrupted"
             elif current_size == original_size:
@@ -760,14 +973,23 @@ class RecycleBinParser:
             )
         """)
         
-        # Insert entries
+        # Insert entries with duplicate checking
+        inserted_count = 0
+        skipped_count = 0
+        
         for entry in entries:
+            # Check if entry already exists (excluding parsed_at timestamp)
             cursor.execute("""
-                INSERT INTO recycle_bin_entries 
-                (original_filename, original_path, deletion_time, formatted_file_size,
-                 user_sid, recycle_bin_path, r_file_path, random_i_filename, random_r_filename,
-                 file_signature, recovery_status, parsed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT COUNT(*) FROM recycle_bin_entries 
+                WHERE original_filename = ? 
+                AND original_path = ? 
+                AND deletion_time = ? 
+                AND formatted_file_size = ?
+                AND user_sid = ?
+                AND recycle_bin_path = ?
+                AND r_file_path = ?
+                AND random_i_filename = ?
+                AND random_r_filename = ?
             """, (
                 entry.original_filename,
                 entry.original_path,
@@ -777,11 +999,39 @@ class RecycleBinParser:
                 entry.recycle_bin_path,
                 entry.r_file_path,
                 entry.random_i_filename,
-                entry.random_r_filename,
-                entry.file_signature,
-                entry.recovery_status,
-                datetime.datetime.now().isoformat()
+                entry.random_r_filename
             ))
+            
+            exists = cursor.fetchone()[0] > 0
+            
+            if not exists:
+                # Insert new entry
+                cursor.execute("""
+                    INSERT INTO recycle_bin_entries 
+                    (original_filename, original_path, deletion_time, formatted_file_size,
+                     user_sid, recycle_bin_path, r_file_path, random_i_filename, random_r_filename,
+                     file_signature, recovery_status, parsed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    entry.original_filename,
+                    entry.original_path,
+                    entry.deletion_time.isoformat() if entry.deletion_time else None,
+                    entry.formatted_file_size,
+                    entry.user_sid,
+                    entry.recycle_bin_path,
+                    entry.r_file_path,
+                    entry.random_i_filename,
+                    entry.random_r_filename,
+                    entry.file_signature,
+                    entry.recovery_status,
+                    datetime.datetime.now().isoformat()
+                ))
+                inserted_count += 1
+            else:
+                skipped_count += 1
+                logger.debug(f"Skipping duplicate entry: {entry.original_filename}")
+        
+        logger.info(f"Database update: {inserted_count} new entries added, {skipped_count} duplicates skipped")
         
         conn.commit()
         conn.close()
@@ -849,55 +1099,27 @@ def parse_recycle_bin(case_path: Optional[str] = None, offline_mode: bool = Fals
     else:
         # Parse live system Recycle Bin from all available drives
         try:
-            # Use PowerShell to get all drives
-            ps_command = "Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Root"
-            result = subprocess.run(['powershell', '-NoProfile', '-Command', ps_command], 
-                                  capture_output=True, text=True, timeout=30)
+            # Use native Windows API to enumerate drives (no PowerShell window flashing)
+            drives = parser._get_logical_drives_native()
             
-            if result.returncode == 0:
-                drives = [drive.strip() for drive in result.stdout.splitlines() if drive.strip()]
+            print(f"[RecycleBin] Found {len(drives)} drives to check for Recycle Bin")
+            
+            # Parse Recycle Bin on each drive
+            for drive in drives:
+                if not drive.endswith('\\'):
+                    drive += '\\'
                 
-                if not drives:
-                    # Fallback to system drive if no drives found
-                    system_drive = os.environ.get('SystemDrive', 'C:')
-                    if not system_drive.endswith('\\'):
-                        system_drive += '\\'
-                    drives = [system_drive]
-                    
-                print(f"[RecycleBin] Found {len(drives)} drives to check for Recycle Bin")
+                recycle_bin_path = f"{drive}$Recycle.Bin"
+                print(f"[RecycleBin] Checking for Recycle Bin at: {recycle_bin_path}")
                 
-                # Parse Recycle Bin on each drive
-                for drive in drives:
-                    if not drive.endswith('\\'):
-                        drive += '\\'
-                    
-                    recycle_bin_path = f"{drive}$Recycle.Bin"
-                    print(f"[RecycleBin] Checking for Recycle Bin at: {recycle_bin_path}")
-                    
-                    try:
-                        if os.path.exists(recycle_bin_path):
-                            print(f"[RecycleBin] Parsing Recycle Bin on drive {drive}: {recycle_bin_path}")
-                            entries.extend(parser.parse_recycle_bin_directory(recycle_bin_path))
-                        else:
-                            print(f"[RecycleBin] No Recycle Bin found at: {recycle_bin_path}")
-                    except Exception as e:
-                        print(f"[RecycleBin] Error accessing Recycle Bin at {recycle_bin_path}: {e}")
-            else:
-                # Fallback to system drive if PowerShell command fails
-                system_drive = os.environ.get('SystemDrive', 'C:')
-                if not system_drive.endswith('\\'):
-                    system_drive += '\\'
-                
-                recycle_bin_path = f"{system_drive}$Recycle.Bin"
                 try:
                     if os.path.exists(recycle_bin_path):
-                        print(f"[RecycleBin] Parsing Recycle Bin (PowerShell fallback): {recycle_bin_path}")
+                        print(f"[RecycleBin] Parsing Recycle Bin on drive {drive}: {recycle_bin_path}")
                         entries.extend(parser.parse_recycle_bin_directory(recycle_bin_path))
                     else:
                         print(f"[RecycleBin] No Recycle Bin found at: {recycle_bin_path}")
                 except Exception as e:
-                    print(f"[RecycleBin] Error accessing Recycle Bin: {e}")
-                    print("[RecycleBin] Try running Crow Eye as Administrator for Recycle Bin access")
+                    print(f"[RecycleBin] Error accessing Recycle Bin at {recycle_bin_path}: {e}")
                 
         except Exception as e:
             # Fallback to system drive if any error occurs

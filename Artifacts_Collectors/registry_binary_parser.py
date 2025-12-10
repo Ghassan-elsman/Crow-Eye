@@ -145,20 +145,29 @@ def parse_mru_list_ex(binary_data: bytes) -> list:
 
 def parse_shell_item_id(binary_data: bytes) -> dict:
     """
-    Parse Shell Item ID structure and extract file path information.
+    Parse Shell Item ID to extract file/folder name and metadata.
+    
+    Note: This function extracts file/folder names from individual Shell Items
+    but does NOT reconstruct full paths. Full path reconstruction will be
+    handled through MFT correlation in a future enhancement.
     
     Shell Item IDs are variable-length binary structures used by Windows Explorer
-    to represent file system objects. This function extracts path components
-    and reconstructs full paths from these structures.
+    to represent file system objects. This enhanced version focuses on extracting
+    metadata for forensic analysis.
     
     Args:
         binary_data: Binary data containing Shell Item ID structure(s)
     
     Returns:
         Dictionary containing:
-            - 'path': Reconstructed file path
-            - 'items': List of individual path components
-            - 'type': Type of shell item (file, folder, network, etc.)
+            - 'file_name': Primary file/folder name (long name preferred)
+            - 'short_name': 8.3 format name (if available)
+            - 'long_name': Unicode long name (if available)
+            - 'type': Type of shell item (filesystem, network, drive, etc.)
+            - 'drive_letter': Drive letter (if applicable)
+            - 'special_folder': Special folder name (if applicable)
+            - 'mft_record': NTFS MFT record number (if available)
+            - 'extension_blocks': Additional metadata from extension blocks
         
     Raises:
         ValueError: If binary data is invalid
@@ -166,89 +175,127 @@ def parse_shell_item_id(binary_data: bytes) -> dict:
     try:
         if not binary_data or len(binary_data) < 2:
             logger.warning(f"Invalid Shell Item ID data: expected at least 2 bytes, got {len(binary_data) if binary_data else 0}")
-            return {'path': '', 'items': [], 'type': 'unknown'}
+            return {
+                'file_name': '',
+                'short_name': '',
+                'long_name': '',
+                'type': 'unknown',
+                'drive_letter': '',
+                'special_folder': '',
+                'mft_record': 0,
+                'extension_blocks': {}
+            }
         
-        path_components = []
-        offset = 0
-        shell_type = 'unknown'
-        
-        while offset < len(binary_data) - 1:
-            # Read size of this Shell Item ID (2 bytes, little-endian)
-            if offset + 2 > len(binary_data):
-                break
-                
-            size = struct.unpack('<H', binary_data[offset:offset + 2])[0]
-            
-            # Size of 0 indicates end of list
-            if size == 0:
-                break
-            
-            # Ensure we don't read beyond buffer
-            if offset + size > len(binary_data):
-                break
-            
-            # Extract this Shell Item ID
-            item_data = binary_data[offset:offset + size]
-            
-            # Parse the item based on type indicator (byte at offset 2)
-            if len(item_data) > 2:
-                type_indicator = item_data[2]
-                
-                # Skip special GUID items (0x1F) - these represent special folders like
-                # "My Computer", "Desktop", etc. and don't contain useful path information
-                if type_indicator == 0x1F:
-                    pass  # Skip this item
-                
-                # File system object (0x30-0x3F range)
-                elif 0x30 <= type_indicator <= 0x3F:
-                    shell_type = 'filesystem'
-                    path_component = _extract_filesystem_path(item_data)
-                    if path_component:
-                        path_components.append(path_component)
-                
-                # Network location (0x40-0x4F range)
-                elif 0x40 <= type_indicator <= 0x4F:
-                    shell_type = 'network'
-                    path_component = _extract_network_path(item_data)
-                    if path_component:
-                        path_components.append(path_component)
-                
-                # Drive letter (0x20-0x2F range)
-                elif 0x20 <= type_indicator <= 0x2F:
-                    shell_type = 'drive'
-                    path_component = _extract_drive_path(item_data)
-                    if path_component:
-                        path_components.append(path_component)
-                
-                # Try to extract any readable string from other types
-                else:
-                    path_component = _extract_generic_path(item_data)
-                    if path_component:
-                        path_components.append(path_component)
-            
-            # Move to next Shell Item ID
-            offset += size
-        
-        # Reconstruct full path
-        if path_components:
-            full_path = '\\'.join(path_components)
-        else:
-            full_path = ''
-        
-        return {
-            'path': full_path,
-            'items': path_components,
-            'type': shell_type
+        # Initialize result dictionary
+        result = {
+            'file_name': '',
+            'short_name': '',
+            'long_name': '',
+            'type': 'unknown',
+            'drive_letter': '',
+            'special_folder': '',
+            'mft_record': 0,
+            'extension_blocks': {}
         }
+        
+        # Process only the FIRST Shell Item (not full path reconstruction)
+        offset = 0
+        
+        # Read size of first Shell Item ID (2 bytes, little-endian)
+        if offset + 2 > len(binary_data):
+            return result
+            
+        size = struct.unpack('<H', binary_data[offset:offset + 2])[0]
+        
+        # Size of 0 indicates end of list
+        if size == 0:
+            return result
+        
+        # Ensure we don't read beyond buffer
+        if offset + size > len(binary_data):
+            return result
+        
+        # Extract this Shell Item ID
+        item_data = binary_data[offset:offset + size]
+        
+        # Parse the item based on type indicator (byte at offset 2)
+        if len(item_data) > 2:
+            type_indicator = item_data[2]
+            
+            # Special folder (GUID-based) - type 0x1F
+            # Decode GUID and map to special folder name
+            if type_indicator == 0x1F:
+                result['type'] = 'special_folder'
+                if len(item_data) >= 20:
+                    guid_bytes = item_data[4:20]
+                    guid_str = _format_guid(guid_bytes)
+                    special_folder_name = _SPECIAL_FOLDER_GUIDS.get(guid_str, '')
+                    result['special_folder'] = special_folder_name
+                    result['file_name'] = special_folder_name  # Use special folder name as file_name
+            
+            # File system object (0x30-0x3F range)
+            elif 0x30 <= type_indicator <= 0x3F:
+                result['type'] = 'filesystem'
+                # Extract both short and long names
+                names = _extract_filesystem_names(item_data)
+                result['short_name'] = names.get('short_name', '')
+                result['long_name'] = names.get('long_name', '')
+                # Prioritize long name over short name
+                result['file_name'] = result['long_name'] if result['long_name'] else result['short_name']
+                
+                # Extract extension blocks if present
+                if len(item_data) > 0x4E:
+                    ext_blocks = _extract_extension_blocks(item_data)
+                    result['extension_blocks'] = ext_blocks
+                    result['mft_record'] = ext_blocks.get('mft_record', 0)
+            
+            # Network location (0x40-0x4F range)
+            elif 0x40 <= type_indicator <= 0x4F:
+                result['type'] = 'network'
+                network_info = _parse_network_location(item_data)
+                result['file_name'] = network_info.get('share_name', '')
+                # Store full network path in extension_blocks for reference
+                result['extension_blocks'] = {
+                    'network_path': network_info.get('network_path', ''),
+                    'server_name': network_info.get('server_name', ''),
+                    'share_name': network_info.get('share_name', '')
+                }
+            
+            # Drive letter (0x20-0x2F range)
+            elif 0x20 <= type_indicator <= 0x2F:
+                result['type'] = 'drive'
+                drive_letter = _extract_drive_path(item_data)
+                result['drive_letter'] = drive_letter
+                result['file_name'] = drive_letter  # Use drive letter as file_name
+            
+            # Try to extract any readable string from other types
+            else:
+                generic_name = _extract_generic_path(item_data)
+                if generic_name:
+                    result['file_name'] = generic_name
+        
+        return result
         
     except Exception as e:
         logger.error(f"Error parsing Shell Item ID: {e}")
-        return {'path': '', 'items': [], 'type': 'unknown'}
+        return {
+            'file_name': '',
+            'short_name': '',
+            'long_name': '',
+            'type': 'unknown',
+            'drive_letter': '',
+            'special_folder': '',
+            'mft_record': 0,
+            'extension_blocks': {}
+        }
 
 
 def _extract_filesystem_path(item_data: bytes) -> str:
     """
     Extract path component from filesystem Shell Item ID.
+    
+    DEPRECATED: Use _extract_filesystem_names() instead for enhanced metadata.
+    This function is kept for backward compatibility.
     
     Args:
         item_data: Binary data for a single Shell Item ID
@@ -257,10 +304,33 @@ def _extract_filesystem_path(item_data: bytes) -> str:
         Path component string or empty string
     """
     try:
+        names = _extract_filesystem_names(item_data)
+        # Return long name if available, otherwise short name
+        return names.get('long_name', '') or names.get('short_name', '')
+    except Exception as e:
+        logger.error(f"Error extracting filesystem path: {e}")
+        return ""
+
+
+def _extract_filesystem_names(item_data: bytes) -> dict:
+    """
+    Extract both short and long names from filesystem Shell Item ID.
+    
+    Args:
+        item_data: Binary data for a single Shell Item ID
+    
+    Returns:
+        Dictionary containing:
+            - 'short_name': 8.3 format name (if available)
+            - 'long_name': Unicode long name (if available)
+    """
+    try:
+        result = {'short_name': '', 'long_name': ''}
+        
         # File system items typically have name at offset 0x04 or later
         # Structure: [size:2][type:1][flags:1][...metadata...][short_name][...][long_name]
         
-        # Look for short name (8.3 format) - usually ASCII at offset 0x0E
+        # Extract short name (8.3 format) - usually ASCII at offset 0x0E
         short_name = ""
         if len(item_data) > 0x10:
             # Try to extract short name at offset 0x0E (common location)
@@ -270,6 +340,9 @@ def _extract_filesystem_path(item_data: bytes) -> str:
                     break
                 if 0x20 <= item_data[i] <= 0x7E:  # Printable ASCII
                     short_name += chr(item_data[i])
+        
+        if short_name and len(short_name) > 1:
+            result['short_name'] = short_name.strip()
         
         # Try to find long name (Unicode) - usually after offset 0x40
         # The long name is typically preceded by a size marker
@@ -331,19 +404,15 @@ def _extract_filesystem_path(item_data: bytes) -> str:
                             best_score = score
                             best_unicode = unicode_str
         
-        # Return the best match
+        # Store the best Unicode match as long name
         if best_unicode and best_score > 10:
-            return best_unicode
+            result['long_name'] = best_unicode.strip()
         
-        # Fallback to short name if we found one
-        if short_name and len(short_name) > 1:
-            return short_name
-        
-        return ""
+        return result
         
     except Exception as e:
-        logger.error(f"Error extracting filesystem path: {e}")
-        return ""
+        logger.error(f"Error extracting filesystem names: {e}")
+        return {'short_name': '', 'long_name': ''}
 
 
 def _extract_network_path(item_data: bytes) -> str:
@@ -385,6 +454,12 @@ def _extract_drive_path(item_data: bytes) -> str:
     """
     Extract drive letter from drive Shell Item ID.
     
+    Drive Shell Items (type 0x20-0x2F) contain drive letter information.
+    Common patterns:
+    - ASCII "C:\" at various offsets
+    - Drive letter followed by colon (0x3A)
+    - Sometimes in Unicode format
+    
     Args:
         item_data: Binary data for a single Shell Item ID
     
@@ -392,15 +467,57 @@ def _extract_drive_path(item_data: bytes) -> str:
         Drive letter (e.g., "C:") or empty string
     """
     try:
-        # Drive items typically have drive letter at a fixed offset
-        # Look for pattern like "C:\" in ASCII
-        for offset in range(0x03, min(len(item_data) - 2, 0x20)):
+        if len(item_data) < 4:
+            return ""
+        
+        # Method 1: Look for ASCII drive letter pattern "X:" anywhere in the first 32 bytes
+        for offset in range(0x03, min(len(item_data) - 1, 0x30)):
             if (0x41 <= item_data[offset] <= 0x5A or  # A-Z
                 0x61 <= item_data[offset] <= 0x7A):    # a-z
                 if offset + 1 < len(item_data) and item_data[offset + 1] == 0x3A:  # ':'
                     drive_letter = chr(item_data[offset]).upper() + ":"
+                    logger.debug(f"Found drive letter at offset {offset}: {drive_letter}")
                     return drive_letter
         
+        # Method 2: Check common fixed offsets for drive letters
+        # Offset 0x03 is common for drive Shell Items
+        common_offsets = [0x03, 0x04, 0x05, 0x06, 0x0E, 0x0F]
+        for offset in common_offsets:
+            if offset < len(item_data):
+                byte_val = item_data[offset]
+                if 0x41 <= byte_val <= 0x5A or 0x61 <= byte_val <= 0x7A:  # A-Z or a-z
+                    # Check if next byte is colon or if this looks like a drive letter
+                    if offset + 1 < len(item_data) and item_data[offset + 1] == 0x3A:
+                        drive_letter = chr(byte_val).upper() + ":"
+                        logger.debug(f"Found drive letter at fixed offset {offset}: {drive_letter}")
+                        return drive_letter
+        
+        # Method 3: Try to decode as string and look for drive pattern
+        try:
+            # Try ASCII decode
+            ascii_str = item_data[3:min(len(item_data), 20)].decode('ascii', errors='ignore')
+            for i, char in enumerate(ascii_str):
+                if char.isalpha() and i + 1 < len(ascii_str) and ascii_str[i + 1] == ':':
+                    drive_letter = char.upper() + ":"
+                    logger.debug(f"Found drive letter in ASCII string: {drive_letter}")
+                    return drive_letter
+        except:
+            pass
+        
+        # Method 4: Check for Unicode drive letter (UTF-16-LE)
+        try:
+            for offset in range(0x03, min(len(item_data) - 3, 0x20), 2):
+                if item_data[offset + 1] == 0:  # High byte is 0 (ASCII in UTF-16-LE)
+                    byte_val = item_data[offset]
+                    if 0x41 <= byte_val <= 0x5A or 0x61 <= byte_val <= 0x7A:
+                        if offset + 2 < len(item_data) and item_data[offset + 2] == 0x3A and item_data[offset + 3] == 0:
+                            drive_letter = chr(byte_val).upper() + ":"
+                            logger.debug(f"Found Unicode drive letter at offset {offset}: {drive_letter}")
+                            return drive_letter
+        except:
+            pass
+        
+        logger.debug(f"No drive letter found in Shell Item (size={len(item_data)}, type={item_data[2] if len(item_data) > 2 else 'N/A'})")
         return ""
         
     except Exception as e:
@@ -448,157 +565,6 @@ def _extract_generic_path(item_data: bytes) -> str:
     except Exception as e:
         logger.error(f"Error extracting generic path: {e}")
         return ""
-
-
-def parse_opensavemru_entry(binary_data: bytes) -> dict:
-    """
-    Parse OpenSaveMRU binary entry to extract file path and metadata.
-    
-    OpenSaveMRU entries contain PIDL (Pointer to Item IDentifier List) structures
-    that encode file paths accessed through common Open/Save dialogs.
-    
-    Args:
-        binary_data: Binary data from OpenSaveMRU registry value
-    
-    Returns:
-        Dictionary containing:
-            - 'file_path': Full file path extracted from PIDL
-            - 'extension': File extension (if available)
-            - 'access_date': Last access date (if available)
-            - 'raw_data': Original binary data (for fallback)
-        
-    Raises:
-        ValueError: If binary data is invalid
-    """
-    try:
-        if not binary_data:
-            logger.warning("Empty binary data provided to parse_opensavemru_entry")
-            return {
-                'file_path': '',
-                'extension': '',
-                'access_date': '',
-                'raw_data': binary_data
-            }
-        
-        # Parse the PIDL structure to extract file path
-        shell_item_result = parse_shell_item_id(binary_data)
-        file_path = shell_item_result.get('path', '')
-        
-        # Extract file extension from the path
-        extension = ''
-        if file_path and '.' in file_path:
-            # Get the last component after the last backslash
-            filename = file_path.split('\\')[-1]
-            if '.' in filename:
-                extension = filename.split('.')[-1].lower()
-        
-        # Try to extract timestamp if present in the binary data
-        # Some OpenSaveMRU entries may contain FILETIME at the end
-        access_date = ''
-        if len(binary_data) >= 8:
-            # Check last 8 bytes for potential FILETIME
-            # FILETIME values are typically very large numbers
-            try:
-                potential_filetime = binary_data[-8:]
-                filetime_value = struct.unpack('<Q', potential_filetime)[0]
-                
-                # Validate that it looks like a reasonable FILETIME
-                # (between year 1980 and 2100)
-                if 119600064000000000 < filetime_value < 159017088000000000:
-                    access_date = parse_filetime(potential_filetime)
-            except:
-                pass  # Not a valid timestamp, ignore
-        
-        result = {
-            'file_path': file_path,
-            'extension': extension,
-            'access_date': access_date,
-            'raw_data': binary_data
-        }
-        
-        logger.debug(f"Parsed OpenSaveMRU entry: path={file_path}, ext={extension}")
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error parsing OpenSaveMRU entry: {e}")
-        return {
-            'file_path': '',
-            'extension': '',
-            'access_date': '',
-            'raw_data': binary_data
-        }
-
-
-def parse_lastsavemru_entry(binary_data: bytes) -> dict:
-    """
-    Parse LastVisitedPidlMRU binary entry to extract application and folder path.
-    
-    LastVisitedPidlMRU entries contain:
-    1. Application executable name (null-terminated Unicode string at the beginning)
-    2. PIDL structure containing the folder path
-    
-    Args:
-        binary_data: Binary data from LastVisitedPidlMRU registry value
-    
-    Returns:
-        Dictionary containing:
-            - 'application': Application executable name
-            - 'folder_path': Folder path extracted from PIDL
-            - 'raw_data': Original binary data (for fallback)
-        
-    Raises:
-        ValueError: If binary data is invalid
-    """
-    try:
-        if not binary_data:
-            logger.warning("Empty binary data provided to parse_lastsavemru_entry")
-            return {
-                'application': '',
-                'folder_path': '',
-                'raw_data': binary_data
-            }
-        
-        # Extract application name from the beginning (null-terminated Unicode)
-        application = extract_unicode_string(binary_data, offset=0)
-        
-        # Calculate offset to PIDL structure
-        # The PIDL starts after the null-terminated Unicode string
-        # Each Unicode character is 2 bytes, plus 2 bytes for null terminator
-        pidl_offset = 0
-        if application:
-            # Find the end of the null-terminated string
-            # Unicode strings are UTF-16-LE, so null terminator is 0x0000 (2 bytes)
-            while pidl_offset < len(binary_data) - 1:
-                if binary_data[pidl_offset] == 0 and binary_data[pidl_offset + 1] == 0:
-                    pidl_offset += 2  # Skip past the null terminator
-                    break
-                pidl_offset += 2
-        
-        # Extract folder path from PIDL structure
-        folder_path = ''
-        if pidl_offset < len(binary_data):
-            pidl_data = binary_data[pidl_offset:]
-            
-            # Parse the PIDL structure
-            shell_item_result = parse_shell_item_id(pidl_data)
-            folder_path = shell_item_result.get('path', '')
-        
-        result = {
-            'application': application,
-            'folder_path': folder_path,
-            'raw_data': binary_data
-        }
-        
-        logger.debug(f"Parsed LastSaveMRU entry: app={application}, folder={folder_path}")
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error parsing LastSaveMRU entry: {e}")
-        return {
-            'application': '',
-            'folder_path': '',
-            'raw_data': binary_data
-        }
 
 
 def parse_bam_entry(value_name: str, binary_data: bytes) -> dict:
@@ -925,14 +891,29 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
     UserAssist entries track program execution with timestamps and run counts.
     The value name is ROT13-encoded and the binary data contains execution metadata.
     
-    Binary Structure (Windows 7+, Version 5):
+    Binary Structure (Windows 7/8, Version 5):
         Offset  Size  Description
         ------  ----  -----------
         0x00    4     Version number (0x00000005)
-        0x04    4     Run count
+        0x04    4     Run count (raw value, subtract 5 if > 5 for actual count)
         0x08    4     Application focus count
         0x0C    4     Application focus time (milliseconds)
-        0x10    8     Last execution time (FILETIME)
+        0x10    48    Reserved/padding
+        0x3C    8     Last execution time (FILETIME) - offset 60
+        
+        Total: 72 bytes (0x48)
+    
+    Binary Structure (Windows 10/11, Version 63):
+        Offset  Size  Description
+        ------  ----  -----------
+        0x00    4     Version number (0x0000003F / 63)
+        0x04    4     Run count (direct value, no adjustment needed)
+        0x08    4     Application focus count
+        0x0C    4     Application focus time (milliseconds)
+        0x10    44    Reserved/padding (contains float values)
+        0x3C    8     Last execution time (FILETIME) - offset 60
+        
+        Total: 72 bytes (0x48)
     
     Binary Structure (Windows XP/Vista, Version 3):
         Offset  Size  Description
@@ -971,29 +952,63 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
         
         # Validate binary data
         if not binary_data or len(binary_data) < 16:
-            logger.warning(f"Invalid UserAssist binary data: expected at least 16 bytes, got {len(binary_data) if binary_data else 0}")
+            logger.warning(f"Invalid UserAssist binary data for {program_path}: expected at least 16 bytes, got {len(binary_data) if binary_data else 0}")
             return result
         
         # Parse version number (first 4 bytes)
         version = struct.unpack('<I', binary_data[0:4])[0]
         
+        # Log full binary data for debugging
+        logger.info(f"UserAssist entry {program_path}: version={version}, data_length={len(binary_data)}")
+        logger.info(f"  First 72 bytes (hex): {binary_data[:72].hex() if len(binary_data) >= 72 else binary_data.hex()}")
+        
         if version == 5:
-            # Windows 7/8/10/11 format
-            if len(binary_data) >= 24:
-                result['run_count'] = struct.unpack('<I', binary_data[4:8])[0]
+            # Windows 7/8/10/11 format (72 bytes total)
+            # The actual structure for Version 5 is more complex
+            if len(binary_data) >= 72:
+                # Offsets for Version 5 (based on actual Windows structure)
+                raw_run_count = struct.unpack('<I', binary_data[4:8])[0]
                 result['focus_count'] = struct.unpack('<I', binary_data[8:12])[0]
                 result['focus_time'] = struct.unpack('<I', binary_data[12:16])[0]
-                result['last_execution'] = parse_filetime(binary_data[16:24])
+                
+                # For Version 5, run count needs adjustment (subtract 5 if > 5)
+                result['run_count'] = max(0, raw_run_count - 5) if raw_run_count > 5 else raw_run_count
+                
+                # Last execution time is at offset 60 (0x3C) for Version 5, not offset 16
+                result['last_execution'] = parse_filetime(binary_data[60:68])
+                
+                logger.info(f"  Parsed V5: raw_count={raw_run_count}, adjusted_count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
             else:
-                logger.warning(f"UserAssist Version 5 data too short: expected 24 bytes, got {len(binary_data)}")
+                logger.warning(f"UserAssist Version 5 data too short: expected 72 bytes, got {len(binary_data)}")
         
         elif version == 3:
-            # Windows XP/Vista format
+            # Windows XP/Vista format (16 bytes)
             if len(binary_data) >= 16:
                 result['run_count'] = struct.unpack('<I', binary_data[4:8])[0]
                 result['last_execution'] = parse_filetime(binary_data[8:16])
+                logger.info(f"  Parsed V3: count={result['run_count']}, last_exec={result['last_execution']}")
             else:
                 logger.warning(f"UserAssist Version 3 data too short: expected 16 bytes, got {len(binary_data)}")
+        
+        elif version == 63 or version == 0x3F:
+            # Windows 10/11 format (72 bytes) - Version 63 (0x3F)
+            # This is the newer format used in Windows 10 and later
+            if len(binary_data) >= 68:
+                # Parse run count at offset 4
+                result['run_count'] = struct.unpack('<I', binary_data[4:8])[0]
+                
+                # Parse focus count at offset 8
+                result['focus_count'] = struct.unpack('<I', binary_data[8:12])[0]
+                
+                # Parse focus time at offset 12
+                result['focus_time'] = struct.unpack('<I', binary_data[12:16])[0]
+                
+                # Last execution time is at offset 60 (0x3C) for Version 63
+                result['last_execution'] = parse_filetime(binary_data[60:68])
+                
+                logger.info(f"  Parsed V63: count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
+            else:
+                logger.warning(f"UserAssist Version 63 data too short: expected 68 bytes, got {len(binary_data)}")
         
         else:
             logger.warning(f"Unknown UserAssist version: {version}")
@@ -1032,7 +1047,7 @@ def _convert_dos_datetime(dos_time: int) -> str:
         ISO 8601 formatted datetime string
     """
     try:
-        if dos_time == 0:
+        if dos_time == 0 or dos_time == 0xFFFFFFFF:
             return ""
         
         date = dos_time & 0xFFFF
@@ -1046,17 +1061,199 @@ def _convert_dos_datetime(dos_time: int) -> str:
         minutes = (time >> 5) & 0x3F
         hours = (time >> 11) & 0x1F
         
-        # Validate values
+        # Validate values - basic range check
         if not (1 <= day <= 31 and 1 <= month <= 12 and 1980 <= year <= 2100):
             return ""
         if not (0 <= hours <= 23 and 0 <= minutes <= 59 and 0 <= seconds <= 59):
             return ""
         
+        # Additional validation: Reject dates that are clearly garbage
+        # Check if the date/time components make sense together
+        # Reject if day=0 or month=0 (invalid)
+        if day == 0 or month == 0:
+            logger.debug(f"Rejecting invalid DOS datetime: day={day}, month={month}")
+            return ""
+        
+        # Reject dates beyond 2035 as likely garbage (allows some future dates but not too far)
+        if year > 2035:
+            logger.debug(f"Rejecting suspicious DOS datetime: year={year} (likely garbage data)")
+            return ""
+        
+        # Validate the date is actually valid (e.g., not Feb 30)
         dt = datetime(year, month, day, hours, minutes, seconds)
         return dt.strftime('%Y-%m-%d %H:%M:%S')
         
-    except Exception:
+    except Exception as e:
+        # Invalid date (e.g., Feb 30) or other error
+        logger.debug(f"DOS datetime conversion failed: {e}")
         return ""
+
+
+def _extract_extension_blocks(item_data: bytes) -> dict:
+    """
+    Extract metadata from Shell Item extension blocks.
+    
+    Extension blocks contain additional timestamps and NTFS metadata.
+    They are present when the Shell Item size is greater than 0x4E bytes.
+    
+    Args:
+        item_data: Shell Item binary data
+    
+    Returns:
+        dict: {
+            'creation_time': str,      # FILETIME at offset 0x18
+            'access_time': str,        # FILETIME at offset 0x20
+            'write_time': str,         # FILETIME at offset 0x28
+            'mft_record': int,         # NTFS file reference
+            'mft_sequence': int        # NTFS sequence number
+        }
+    """
+    try:
+        result = {
+            'creation_time': '',
+            'access_time': '',
+            'write_time': '',
+            'mft_record': 0,
+            'mft_sequence': 0
+        }
+        
+        # Check if extension blocks are present (size > 0x4E)
+        if len(item_data) <= 0x4E:
+            return result
+        
+        # Extract FILETIME timestamps at known offsets
+        # NOTE: Only extract from documented Shell Item extension block offsets
+        # Validation: 1980-2100 range (reasonable for forensic analysis)
+        # FILETIME for 1980-01-01: 119600064000000000
+        # FILETIME for 2100-12-31: 159017088000000000
+        
+        # Offset 0x18: Creation time (8 bytes, FILETIME format)
+        if len(item_data) >= 0x20:
+            try:
+                filetime_value = struct.unpack('<Q', item_data[0x18:0x20])[0]
+                # Validate timestamp is reasonable (between 1980 and 2100)
+                # Also check it's not zero or 0xFFFFFFFFFFFFFFFF (invalid markers)
+                if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
+                    if 119600064000000000 < filetime_value < 159017088000000000:
+                        result['creation_time'] = parse_filetime(item_data[0x18:0x20])
+            except:
+                pass
+        
+        # Offset 0x20: Access time (8 bytes, FILETIME format)
+        if len(item_data) >= 0x28:
+            try:
+                filetime_value = struct.unpack('<Q', item_data[0x20:0x28])[0]
+                # Validate timestamp is reasonable
+                if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
+                    if 119600064000000000 < filetime_value < 159017088000000000:
+                        result['access_time'] = parse_filetime(item_data[0x20:0x28])
+            except:
+                pass
+        
+        # Offset 0x28: Write time (8 bytes, FILETIME format)
+        if len(item_data) >= 0x30:
+            try:
+                filetime_value = struct.unpack('<Q', item_data[0x28:0x30])[0]
+                # Validate timestamp is reasonable
+                if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
+                    if 119600064000000000 < filetime_value < 159017088000000000:
+                        result['write_time'] = parse_filetime(item_data[0x28:0x30])
+            except:
+                pass
+        
+        # Extract NTFS file reference (8 bytes: 6 bytes record number + 2 bytes sequence)
+        # Offset 0x30: NTFS file reference
+        if len(item_data) >= 0x38:
+            try:
+                # Extract 6-byte MFT record number (little-endian)
+                mft_record_bytes = item_data[0x30:0x36] + b'\x00\x00'  # Pad to 8 bytes
+                mft_record = struct.unpack('<Q', mft_record_bytes)[0]
+                result['mft_record'] = mft_record
+                
+                # Extract 2-byte sequence number
+                mft_sequence = struct.unpack('<H', item_data[0x36:0x38])[0]
+                result['mft_sequence'] = mft_sequence
+            except:
+                pass
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error extracting extension blocks: {e}")
+        return {
+            'creation_time': '',
+            'access_time': '',
+            'write_time': '',
+            'mft_record': 0,
+            'mft_sequence': 0
+        }
+
+
+def _parse_network_location(item_data: bytes) -> dict:
+    """
+    Parse network location Shell Item to extract UNC path components.
+    
+    Args:
+        item_data: Network Shell Item binary data (type 0x40-0x4F)
+    
+    Returns:
+        dict: {
+            'network_path': str,   # Full UNC path (\\server\share)
+            'server_name': str,    # Server name
+            'share_name': str      # Share name
+        }
+    """
+    try:
+        result = {
+            'network_path': '',
+            'server_name': '',
+            'share_name': ''
+        }
+        
+        # Network items typically contain UNC paths
+        # Try to extract readable ASCII strings
+        strings_found = []
+        
+        for offset in range(0x04, len(item_data) - 2):
+            # Look for null-terminated ASCII strings
+            if 0x20 <= item_data[offset] <= 0x7E:
+                ascii_str = ""
+                for i in range(offset, len(item_data)):
+                    if item_data[i] == 0:
+                        break
+                    if 0x20 <= item_data[i] <= 0x7E:
+                        ascii_str += chr(item_data[i])
+                    else:
+                        break
+                
+                if len(ascii_str) > 2:
+                    strings_found.append(ascii_str)
+        
+        # Parse UNC path format (\\server\share)
+        if strings_found:
+            # First string is often the server name
+            if len(strings_found) >= 1:
+                result['server_name'] = strings_found[0]
+            
+            # Second string is often the share name
+            if len(strings_found) >= 2:
+                result['share_name'] = strings_found[1]
+            
+            # Reconstruct full UNC path
+            if result['server_name'] and result['share_name']:
+                result['network_path'] = f"\\\\{result['server_name']}\\{result['share_name']}"
+            elif result['server_name']:
+                result['network_path'] = f"\\\\{result['server_name']}"
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error parsing network location: {e}")
+        return {
+            'network_path': '',
+            'server_name': '',
+            'share_name': ''
+        }
 
 
 def _extract_folder_attributes(binary_data: bytes) -> dict:
@@ -1086,6 +1283,11 @@ def _extract_folder_attributes(binary_data: bytes) -> dict:
             attributes.append('directory')
         if attr_flags & 0x20:
             attributes.append('archive')
+        # Add compressed and encrypted flags
+        if attr_flags & 0x40:
+            attributes.append('compressed')
+        if attr_flags & 0x80:
+            attributes.append('encrypted')
         
         return {'flags': attr_flags, 'attributes': attributes}
         
@@ -1144,8 +1346,8 @@ def parse_shellbag_entry(binary_data: bytes) -> dict:
     
     Returns:
         Dictionary containing:
-            - 'folder_path': Full folder path extracted from Shell Item ID
-            - 'folder_name': Last component of the folder path (folder name)
+            - 'file_name': Primary file/folder name
+            - 'short_name': 8.3 format name
             - 'shell_item_type': Type of shell item (filesystem, network, drive, etc.)
             - 'created_date': Creation timestamp (if available)
             - 'modified_date': Modification timestamp (if available)
@@ -1154,6 +1356,10 @@ def parse_shellbag_entry(binary_data: bytes) -> dict:
             - 'file_size': File/folder size in bytes
             - 'special_folder': Special folder name (My Computer, etc.)
             - 'network_share': Network share path (if applicable)
+            - 'server_name': Network server name (if applicable)
+            - 'share_name': Network share name (if applicable)
+            - 'drive_letter': Drive letter (if applicable)
+            - 'mft_record_number': NTFS MFT record number for correlation
     
     Raises:
         ValueError: If binary data is invalid
@@ -1162,8 +1368,8 @@ def parse_shellbag_entry(binary_data: bytes) -> dict:
         if not binary_data:
             logger.warning("Empty binary data provided to parse_shellbag_entry")
             return {
-                'folder_path': '',
-                'folder_name': '',
+                'file_name': '',
+                'short_name': '',
                 'shell_item_type': 'unknown',
                 'created_date': '',
                 'modified_date': '',
@@ -1171,22 +1377,22 @@ def parse_shellbag_entry(binary_data: bytes) -> dict:
                 'attributes': '',
                 'file_size': 0,
                 'special_folder': '',
-                'network_share': ''
+                'network_share': '',
+                'server_name': '',
+                'share_name': '',
+                'drive_letter': '',
+                'mft_record_number': 0
             }
         
-        # Parse the Shell Item ID structure to extract folder information
+        # Parse the Shell Item ID structure to extract file/folder information
         shell_item_result = parse_shell_item_id(binary_data)
         
-        folder_path = shell_item_result.get('path', '')
+        file_name = shell_item_result.get('file_name', '')
+        short_name = shell_item_result.get('short_name', '')
         shell_item_type = shell_item_result.get('type', 'unknown')
-        
-        # Extract folder name from the full path
-        folder_name = ''
-        if folder_path:
-            if '\\' in folder_path:
-                folder_name = folder_path.split('\\')[-1]
-            else:
-                folder_name = folder_path
+        special_folder = shell_item_result.get('special_folder', '')
+        drive_letter = shell_item_result.get('drive_letter', '')
+        mft_record_number = shell_item_result.get('mft_record', 0)
         
         # Initialize enhanced metadata
         created_date = ''
@@ -1194,10 +1400,26 @@ def parse_shellbag_entry(binary_data: bytes) -> dict:
         accessed_date = ''
         attributes = []
         file_size = 0
-        special_folder = ''
         network_share = ''
+        server_name = ''
+        share_name = ''
         
-        # Process first Shell Item for enhanced metadata
+        # Extract network information from extension_blocks if present
+        ext_blocks = shell_item_result.get('extension_blocks', {})
+        if ext_blocks:
+            network_share = ext_blocks.get('network_path', '')
+            server_name = ext_blocks.get('server_name', '')
+            share_name = ext_blocks.get('share_name', '')
+            
+            # Extract timestamps from extension blocks
+            if ext_blocks.get('creation_time'):
+                created_date = ext_blocks['creation_time']
+            if ext_blocks.get('access_time'):
+                accessed_date = ext_blocks['access_time']
+            if ext_blocks.get('write_time') and not modified_date:
+                modified_date = ext_blocks['write_time']
+        
+        # Process first Shell Item for additional metadata
         if len(binary_data) >= 2:
             size = struct.unpack('<H', binary_data[0:2])[0]
             if size > 2 and len(binary_data) >= size:
@@ -1206,66 +1428,77 @@ def parse_shellbag_entry(binary_data: bytes) -> dict:
                 if len(item_data) > 2:
                     type_indicator = item_data[2]
                     
-                    # Special folder (GUID-based)
-                    if type_indicator == 0x1F and len(item_data) >= 20:
-                        guid_bytes = item_data[4:20]
-                        guid_str = _format_guid(guid_bytes)
-                        special_folder = _SPECIAL_FOLDER_GUIDS.get(guid_str, '')
-                    
-                    # Filesystem object
-                    elif 0x30 <= type_indicator <= 0x3F:
-                        # Extract attributes
+                    # Filesystem object - extract attributes, timestamps, and file size
+                    if 0x30 <= type_indicator <= 0x3F:
+                        # Extract attributes (offset 0x04)
+                        # Decode all attribute flags: readonly, hidden, system, directory, archive, compressed, encrypted
                         attr_info = _extract_folder_attributes(item_data)
                         attributes = attr_info['attributes']
                         
                         # Extract DOS timestamp (modified time at offset 0x08)
+                        # DOS datetime format: 32-bit value with day, month, year, time
                         if len(item_data) >= 12:
                             dos_time = struct.unpack('<I', item_data[8:12])[0]
-                            modified_date = _convert_dos_datetime(dos_time)
+                            dos_modified = _convert_dos_datetime(dos_time)
+                            # Only use DOS datetime if we don't have FILETIME
+                            if dos_modified and not modified_date:
+                                modified_date = dos_modified
                         
                         # Extract file size (at offset 0x0C)
                         if len(item_data) >= 16:
                             file_size = struct.unpack('<I', item_data[12:16])[0]
                         
-                        # Try to extract FILETIME timestamps from extension blocks
+                        # Prioritize FILETIME timestamps over DOS datetime for accuracy
+                        # FILETIME format: 64-bit value representing 100-nanosecond intervals since 1601
+                        # Common offsets: 0x18 (creation), 0x20 (access), 0x28 (write)
                         if len(item_data) >= 0x50:
-                            for ts_offset in [0x18, 0x20, 0x28, 0x30, 0x38]:
-                                if ts_offset + 8 <= len(item_data):
-                                    try:
-                                        filetime_value = struct.unpack('<Q', item_data[ts_offset:ts_offset + 8])[0]
+                            # Try to extract FILETIME timestamps from extension blocks
+                            # Offset 0x18: Creation time
+                            # NOTE: Only extract from documented extension block offsets
+                            # Validation: 1980-2100 range (reasonable for forensic analysis)
+                            if not created_date and len(item_data) >= 0x20:
+                                try:
+                                    filetime_value = struct.unpack('<Q', item_data[0x18:0x20])[0]
+                                    # Validate: not zero, not 0xFFFFFFFFFFFFFFFF, and in reasonable range
+                                    if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
                                         if 119600064000000000 < filetime_value < 159017088000000000:
-                                            timestamp = parse_filetime(item_data[ts_offset:ts_offset + 8])
-                                            if timestamp and not created_date:
-                                                created_date = timestamp
-                                            elif timestamp and not accessed_date:
-                                                accessed_date = timestamp
-                                    except:
-                                        continue
-                    
-                    # Network location
-                    elif 0x40 <= type_indicator <= 0x4F:
-                        # Extract network share path
-                        if folder_path and ('\\\\' in folder_path or folder_path.startswith('\\\\')):
-                            network_share = folder_path
+                                            created_date = parse_filetime(item_data[0x18:0x20])
+                                            logger.debug(f"Extracted creation time from offset 0x18: {created_date}")
+                                except:
+                                    pass
+                            
+                            # Offset 0x20: Access time
+                            if not accessed_date and len(item_data) >= 0x28:
+                                try:
+                                    filetime_value = struct.unpack('<Q', item_data[0x20:0x28])[0]
+                                    # Validate: not zero, not 0xFFFFFFFFFFFFFFFF, and in reasonable range
+                                    if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
+                                        if 119600064000000000 < filetime_value < 159017088000000000:
+                                            accessed_date = parse_filetime(item_data[0x20:0x28])
+                                            logger.debug(f"Extracted access time from offset 0x20: {accessed_date}")
+                                except:
+                                    pass
+                            
+                            # Offset 0x28: Write/modification time
+                            if not modified_date and len(item_data) >= 0x30:
+                                try:
+                                    filetime_value = struct.unpack('<Q', item_data[0x28:0x30])[0]
+                                    # Validate: not zero, not 0xFFFFFFFFFFFFFFFF, and in reasonable range
+                                    if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
+                                        if 119600064000000000 < filetime_value < 159017088000000000:
+                                            modified_date = parse_filetime(item_data[0x28:0x30])
+                                            logger.debug(f"Extracted modification time from offset 0x28: {modified_date}")
+                                except:
+                                    pass
         
-        # Fallback: Try to find FILETIME values in the entire binary data
-        if not modified_date and not accessed_date and len(binary_data) >= 16:
-            for offset in [8, 16, 24, 32, 40]:
-                if offset + 8 <= len(binary_data):
-                    try:
-                        filetime_value = struct.unpack('<Q', binary_data[offset:offset + 8])[0]
-                        if 119600064000000000 < filetime_value < 159017088000000000:
-                            timestamp = parse_filetime(binary_data[offset:offset + 8])
-                            if timestamp and not modified_date:
-                                modified_date = timestamp
-                            elif timestamp and not accessed_date:
-                                accessed_date = timestamp
-                    except:
-                        continue
+        # NOTE: Removed fallback timestamp extraction as it causes false positives
+        # Shellbags typically only have timestamps in extension blocks (offset 0x18, 0x20, 0x28)
+        # or DOS datetime at offset 0x08. Random scanning picks up garbage data.
+        # Most Shellbags don't actually contain access/creation times - this is normal.
         
         result = {
-            'folder_path': folder_path,
-            'folder_name': folder_name,
+            'file_name': file_name,
+            'short_name': short_name,
             'shell_item_type': shell_item_type,
             'created_date': created_date,
             'modified_date': modified_date,
@@ -1273,21 +1506,35 @@ def parse_shellbag_entry(binary_data: bytes) -> dict:
             'attributes': ', '.join(attributes) if attributes else '',
             'file_size': file_size,
             'special_folder': special_folder,
-            'network_share': network_share
+            'network_share': network_share,
+            'server_name': server_name,
+            'share_name': share_name,
+            'drive_letter': drive_letter,
+            'mft_record_number': mft_record_number
         }
         
-        logger.debug(f"Parsed Shellbag entry: path={folder_path}, name={folder_name}, type={shell_item_type}")
+        logger.debug(f"Parsed Shellbag entry: name={file_name}, type={shell_item_type}, mft_record={mft_record_number}")
         return result
         
     except Exception as e:
         logger.error(f"Error parsing Shellbag entry: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
         return {
-            'folder_path': '',
-            'folder_name': '',
+            'file_name': '',
+            'short_name': '',
             'shell_item_type': 'unknown',
             'created_date': '',
             'modified_date': '',
-            'accessed_date': ''
+            'accessed_date': '',
+            'attributes': '',
+            'file_size': 0,
+            'special_folder': '',
+            'network_share': '',
+            'server_name': '',
+            'share_name': '',
+            'drive_letter': '',
+            'mft_record_number': 0
         }
 
 
@@ -1790,3 +2037,297 @@ def parse_user_account_f_value(binary_data: bytes) -> dict:
             'account_created': '',
             'last_logoff': ''
         }
+
+
+def _reconstruct_pidl_path(binary_data: bytes) -> dict:
+    """
+    Reconstruct full path from PIDL (Pointer to Item IDentifier List) by traversing all Shell Items.
+    
+    Args:
+        binary_data: Binary PIDL data containing multiple Shell Items
+    
+    Returns:
+        Dictionary containing:
+        - path: Full reconstructed path
+        - drive_letter: Drive letter (if found)
+        - components: List of path components
+    """
+    result = {
+        'path': '',
+        'drive_letter': '',
+        'components': []
+    }
+    
+    try:
+        if not binary_data or len(binary_data) < 2:
+            return result
+        
+        offset = 0
+        path_components = []
+        first_item = True
+        
+        # Traverse all Shell Items in the PIDL
+        while offset < len(binary_data) - 1:
+            # Read size of Shell Item (2 bytes, little-endian)
+            if offset + 2 > len(binary_data):
+                break
+            
+            size = struct.unpack('<H', binary_data[offset:offset + 2])[0]
+            
+            # Size of 0 indicates end of list
+            if size == 0:
+                break
+            
+            # Ensure we don't read beyond buffer
+            if offset + size > len(binary_data):
+                break
+            
+            # Extract this Shell Item
+            item_data = binary_data[offset:offset + size]
+            
+            # Parse the item
+            if len(item_data) > 2:
+                type_indicator = item_data[2]
+                
+                logger.debug(f"Processing Shell Item at offset {offset}: type=0x{type_indicator:02X}, size={size}")
+                
+                # For the first item, always try to extract drive letter aggressively
+                if first_item and not result['drive_letter']:
+                    drive = _extract_drive_path(item_data)
+                    if drive:
+                        result['drive_letter'] = drive
+                        logger.debug(f"Extracted drive from first item: {drive}")
+                    first_item = False
+                
+                # Drive letter (0x20-0x2F range)
+                if 0x20 <= type_indicator <= 0x2F:
+                    drive = _extract_drive_path(item_data)
+                    if drive:
+                        result['drive_letter'] = drive
+                        path_components.append(drive)
+                        logger.debug(f"Added drive component: {drive}")
+                
+                # File system object (0x30-0x3F range)
+                elif 0x30 <= type_indicator <= 0x3F:
+                    names = _extract_filesystem_names(item_data)
+                    # Prefer long name over short name
+                    name = names.get('long_name') or names.get('short_name', '')
+                    if name:
+                        path_components.append(name)
+                        logger.debug(f"Added filesystem component: {name}")
+                    
+                    # If no drive letter found yet, try to extract from this item
+                    # Sometimes drive info is embedded in filesystem items
+                    if not result['drive_letter']:
+                        drive = _extract_drive_path(item_data)
+                        if drive:
+                            result['drive_letter'] = drive
+                            logger.debug(f"Found embedded drive letter: {drive}")
+                
+                # Network location (0x40-0x4F range)
+                elif 0x40 <= type_indicator <= 0x4F:
+                    network_path = _extract_network_path(item_data)
+                    if network_path:
+                        path_components.append(network_path)
+                        logger.debug(f"Added network component: {network_path}")
+                
+                # Unknown type - try generic extraction
+                else:
+                    generic_path = _extract_generic_path(item_data)
+                    if generic_path and len(generic_path) > 1:
+                        # Check if it contains a drive letter
+                        if len(generic_path) >= 2 and generic_path[1] == ':' and generic_path[0].isalpha():
+                            result['drive_letter'] = generic_path[:2].upper()
+                            path_components.append(result['drive_letter'])
+                            if len(generic_path) > 3:  # Has more than just "C:\"
+                                remaining = generic_path[3:] if generic_path[2] == '\\' else generic_path[2:]
+                                if remaining:
+                                    path_components.append(remaining)
+                            logger.debug(f"Extracted from generic: drive={result['drive_letter']}, path={generic_path}")
+                        elif generic_path:
+                            path_components.append(generic_path)
+                            logger.debug(f"Added generic component: {generic_path}")
+            
+            # Move to next Shell Item
+            offset += size
+        
+        # Clean up path components - remove invalid entries
+        cleaned_components = []
+        for component in path_components:
+            # Skip empty components
+            if not component or len(component) == 0:
+                continue
+            
+            # Skip components that are just special characters or numbers
+            # Valid components should have at least one letter or be a drive letter
+            if component and len(component) >= 2:
+                # Allow drive letters (C:, D:, etc.)
+                if len(component) == 2 and component[1] == ':' and component[0].isalpha():
+                    cleaned_components.append(component)
+                    continue
+                
+                # Skip components that look like garbage (e.g., "+00", "++", etc.)
+                # Valid path components should contain letters or be meaningful
+                has_letter = any(c.isalpha() for c in component)
+                has_digit = any(c.isdigit() for c in component)
+                special_only = all(not c.isalnum() for c in component)
+                
+                # Skip if it's only special characters or looks like binary data
+                if special_only or (not has_letter and len(component) < 3):
+                    logger.debug(f"Skipping invalid component: {component}")
+                    continue
+                
+                # Skip components that start with non-alphanumeric (except drive letters)
+                if component[0] not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789':
+                    logger.debug(f"Skipping component with invalid start: {component}")
+                    continue
+                
+                cleaned_components.append(component)
+        
+        # Build the full path from cleaned components
+        if cleaned_components:
+            result['path'] = '\\'.join(cleaned_components)
+            result['components'] = cleaned_components
+            logger.debug(f"Reconstructed path: {result['path']}, drive: {result['drive_letter']}")
+        else:
+            logger.debug("No valid path components found in PIDL")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error reconstructing PIDL path: {e}")
+        return result
+
+
+def parse_opensavemru_entry(binary_data: bytes) -> dict:
+    """
+    Parse OpenSavePidlMRU registry entry containing Shell Item ID (PIDL) data.
+    
+    OpenSavePidlMRU stores file paths accessed through Open/Save dialogs.
+    The binary data contains Shell Item IDs that encode file system paths.
+    
+    Args:
+        binary_data: Binary data from OpenSavePidlMRU registry value
+    
+    Returns:
+        Dictionary containing:
+        - file_path: Full file path extracted from Shell Item
+        - file_name: File or folder name
+        - extension: File extension (if available)
+        - access_date: Access timestamp (if available)
+        - drive_letter: Drive letter (if available)
+    """
+    result = {
+        'file_path': '',
+        'file_name': '',
+        'extension': '',
+        'access_date': '',
+        'drive_letter': ''
+    }
+    
+    try:
+        if not binary_data or len(binary_data) < 4:
+            return result
+        
+        # Reconstruct full path from PIDL
+        pidl_data = _reconstruct_pidl_path(binary_data)
+        
+        if pidl_data['path']:
+            result['file_path'] = pidl_data['path']
+            result['drive_letter'] = pidl_data['drive_letter']
+            
+            # Extract file name (last component)
+            if pidl_data['components']:
+                result['file_name'] = pidl_data['components'][-1]
+                
+                # Extract extension from file name
+                if '.' in result['file_name']:
+                    result['extension'] = result['file_name'].split('.')[-1]
+        
+        # Parse first Shell Item for timestamps
+        shell_item_data = parse_shell_item_id(binary_data)
+        if shell_item_data.get('extension_blocks'):
+            ext_blocks = shell_item_data['extension_blocks']
+            if ext_blocks.get('write_time'):
+                result['access_date'] = ext_blocks['write_time']
+            elif ext_blocks.get('creation_time'):
+                result['access_date'] = ext_blocks['creation_time']
+        
+        logger.debug(f"Parsed OpenSaveMRU entry: path={result['file_path']}, name={result['file_name']}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error parsing OpenSaveMRU entry: {e}")
+        return result
+
+
+def parse_lastsavemru_entry(binary_data: bytes) -> dict:
+    """
+    Parse LastVisitedPidlMRU registry entry containing application and folder path.
+    
+    LastVisitedPidlMRU stores the last folder visited by each application.
+    Format: [Application Name (UTF-16-LE)][NULL][Shell Item ID (PIDL)]
+    
+    Args:
+        binary_data: Binary data from LastVisitedPidlMRU registry value
+    
+    Returns:
+        Dictionary containing:
+        - application: Application executable name (e.g., "notepad.exe")
+        - folder_path: Last folder path accessed by the application
+        - file_name: Folder name
+        - drive_letter: Drive letter (if available)
+    """
+    result = {
+        'application': '',
+        'folder_path': '',
+        'file_name': '',
+        'drive_letter': ''
+    }
+    
+    try:
+        if not binary_data or len(binary_data) < 4:
+            return result
+        
+        # Find the null terminator that separates application name from PIDL
+        # Application name is UTF-16-LE, so null terminator is 0x0000
+        null_pos = -1
+        for i in range(0, len(binary_data) - 1, 2):
+            if binary_data[i] == 0 and binary_data[i + 1] == 0:
+                null_pos = i
+                break
+        
+        if null_pos == -1:
+            logger.warning("Could not find null terminator in LastSaveMRU entry")
+            return result
+        
+        # Extract application name (UTF-16-LE before null terminator)
+        try:
+            app_name_bytes = binary_data[:null_pos]
+            result['application'] = app_name_bytes.decode('utf-16-le', errors='ignore').strip()
+            logger.debug(f"Extracted application name: {result['application']}")
+        except Exception as e:
+            logger.error(f"Error decoding application name: {e}")
+        
+        # Extract PIDL data (after null terminator)
+        pidl_offset = null_pos + 2  # Skip the null terminator (2 bytes)
+        if pidl_offset < len(binary_data):
+            pidl_binary = binary_data[pidl_offset:]
+            
+            # Reconstruct full path from PIDL
+            pidl_data = _reconstruct_pidl_path(pidl_binary)
+            
+            if pidl_data['path']:
+                result['folder_path'] = pidl_data['path']
+                result['drive_letter'] = pidl_data['drive_letter']
+                
+                # Extract folder name (last component)
+                if pidl_data['components']:
+                    result['file_name'] = pidl_data['components'][-1]
+        
+        logger.debug(f"Parsed LastSaveMRU entry: app={result['application']}, folder={result['folder_path']}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error parsing LastSaveMRU entry: {e}")
+        return result

@@ -7,6 +7,13 @@ import shutil
 import ctypes
 import platform
 try:
+    import win32security
+    import win32api
+    WIN32_AVAILABLE = True
+except ImportError:
+    WIN32_AVAILABLE = False
+    logging.warning("win32security not available - user SID retrieval will be limited")
+try:
     from Artifacts_Collectors import registry_binary_parser
 except ModuleNotFoundError:
     import sys
@@ -46,6 +53,87 @@ def require_admin_privileges():
         print("Error: This script requires administrative privileges.")
         print("Please run as Administrator to access all registry data.")
         exit(1)
+
+def get_current_user_sid():
+    """Get the SID of the current user.
+    
+    Returns:
+        str: User SID string (e.g., "S-1-5-21-...") or empty string if unavailable
+    """
+    try:
+        if not WIN32_AVAILABLE:
+            logging.warning("win32security not available - cannot retrieve user SID")
+            return ""
+        
+        # Get the current process token
+        token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
+        
+        # Get the user SID from the token
+        user_info = win32security.GetTokenInformation(token, win32security.TokenUser)
+        user_sid = user_info[0]
+        
+        # Convert SID to string format
+        sid_string = win32security.ConvertSidToStringSid(user_sid)
+        
+        return sid_string
+        
+    except Exception as e:
+        logging.error(f"Error retrieving current user SID: {e}")
+        return ""
+
+
+def get_username_from_sid(sid_string):
+    """Get the username associated with a SID.
+    
+    Args:
+        sid_string (str): SID in string format (e.g., "S-1-5-21-...")
+    
+    Returns:
+        str: Username or empty string if unavailable
+    """
+    try:
+        if not WIN32_AVAILABLE or not sid_string:
+            return ""
+        
+        # Convert string SID to SID object
+        sid = win32security.ConvertStringSidToSid(sid_string)
+        
+        # Look up the account name
+        name, domain, account_type = win32security.LookupAccountSid(None, sid)
+        
+        # Return domain\username format
+        if domain:
+            return f"{domain}\\{name}"
+        return name
+        
+    except Exception as e:
+        logging.debug(f"Could not resolve username for SID {sid_string}: {e}")
+        return ""
+
+
+def format_focus_time(milliseconds):
+    """Convert milliseconds to human-readable format.
+    
+    Args:
+        milliseconds (int): Time in milliseconds
+    
+    Returns:
+        str: Formatted time string (e.g., "2.47h", "8.17m", "5.50s")
+    """
+    if milliseconds is None or milliseconds == 0:
+        return "0s"
+    
+    seconds = milliseconds / 1000.0
+    
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    elif seconds < 3600:
+        minutes = seconds / 60.0
+        return f"{minutes:.2f}m"
+    else:
+        hours = seconds / 3600.0
+        return f"{hours:.2f}h"
+
 
 def check_exists(cursor, table_name, conditions, values):
     """Check if a record exists in the specified table based on conditions.
@@ -424,6 +512,8 @@ def main_live_reg(db_filename='registry_data.db'):
             timestamp TEXT
         )''')
         # UserAssist table for program execution tracking
+        # user_sid now contains the actual Windows user SID (e.g., S-1-5-21-...)
+        # instead of the UserAssist GUID, providing proper user attribution
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS UserAssist (
             program_path TEXT,
@@ -435,22 +525,80 @@ def main_live_reg(db_filename='registry_data.db'):
             timestamp TEXT
         )''')
         # Shellbags table for folder access history (enhanced with additional metadata)
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Shellbags (
-            folder_path TEXT,
-            folder_name TEXT,
-            shell_item_type TEXT,
-            mru_position INTEGER,
-            access_date TEXT,
-            registry_path TEXT,
-            timestamp TEXT,
-            created_date TEXT,
-            modified_date TEXT,
-            attributes TEXT,
-            file_size INTEGER DEFAULT 0,
-            special_folder TEXT,
-            network_share TEXT
-        )''')
+        # Check if old schema exists and migrate if needed
+        cursor.execute("PRAGMA table_info(Shellbags)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        if columns and 'timestamp' in columns and 'analyzing_date' not in columns:
+            # Migration needed - old schema exists
+            logging.info("Migrating Shellbags table to new schema...")
+            
+            # Create new table with updated schema
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS Shellbags_new (
+                file_name TEXT,
+                short_name TEXT,
+                shell_item_type TEXT,
+                mru_position TEXT,
+                created_date TEXT,
+                modified_date TEXT,
+                accessed_date TEXT,
+                attributes TEXT,
+                file_size INTEGER DEFAULT 0,
+                special_folder TEXT,
+                network_share TEXT,
+                server_name TEXT,
+                share_name TEXT,
+                drive_letter TEXT,
+                mft_record_number INTEGER,
+                registry_path TEXT,
+                analyzing_date TEXT
+            )''')
+            
+            # Copy existing data (folder_name becomes file_name, mru_position becomes TEXT)
+            cursor.execute('''INSERT INTO Shellbags_new 
+                (file_name, shell_item_type, mru_position, 
+                 created_date, modified_date, accessed_date, attributes, 
+                 file_size, special_folder, network_share, registry_path, analyzing_date)
+                SELECT folder_name, shell_item_type, 
+                       CAST(mru_position AS TEXT), 
+                       created_date, modified_date, access_date, attributes, 
+                       file_size, special_folder, network_share, registry_path, timestamp
+                FROM Shellbags''')
+            
+            # Drop old table and rename new one
+            cursor.execute('DROP TABLE Shellbags')
+            cursor.execute('ALTER TABLE Shellbags_new RENAME TO Shellbags')
+            
+            logging.info("Shellbags table migration completed")
+        elif not columns:
+            # No existing table, create new schema
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS Shellbags (
+                file_name TEXT,
+                short_name TEXT,
+                shell_item_type TEXT,
+                mru_position TEXT,
+                created_date TEXT,
+                modified_date TEXT,
+                accessed_date TEXT,
+                attributes TEXT,
+                file_size INTEGER DEFAULT 0,
+                special_folder TEXT,
+                network_share TEXT,
+                server_name TEXT,
+                share_name TEXT,
+                drive_letter TEXT,
+                mft_record_number INTEGER,
+                registry_path TEXT,
+                analyzing_date TEXT
+            )''')
+        
+        # Create indexes for performance
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_file_name ON Shellbags(file_name)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_mru_position ON Shellbags(mru_position)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_modified_date ON Shellbags(modified_date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_mft_record ON Shellbags(mft_record_number)')
         # RunMRU table for Run dialog command history
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS RunMRU (
@@ -484,21 +632,27 @@ def main_live_reg(db_filename='registry_data.db'):
         CREATE TABLE IF NOT EXISTS OpenSaveMRU (
             subkey TEXT,
             name TEXT,
-            data TEXT,
             type TEXT,
             file_path TEXT,
+            file_name TEXT,
             extension TEXT,
-            access_date TEXT
+            drive_letter TEXT,
+            access_date TEXT,
+            data TEXT,
+            analyzing_date TEXT
         )''')
         # Enhanced LastSaveMRU table with readable information
         cursor.execute('''
-        CREATE TABLE IF NOT EXISTS lastSaveMRU (
-            name TEXT,
-            data TEXT,
+        CREATE TABLE IF NOT EXISTS LastSaveMRU (
+            mru_number TEXT,
             type TEXT,
-            folder_path TEXT,
             application TEXT,
-            access_date TEXT
+            folder_path TEXT,
+            folder_name TEXT,
+            drive_letter TEXT,
+            access_date TEXT,
+            data TEXT,
+            analyzing_date TEXT
         )''')
         # User Profiles table for user account information from ProfileList
         cursor.execute('''
@@ -649,6 +803,11 @@ def main_live_reg(db_filename='registry_data.db'):
         # UserAssist collection - Program execution tracking
         userassist_base_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist"
        
+        # Get the current user's SID once (more efficient than getting it for each entry)
+        current_user_sid = get_current_user_sid()
+        if not current_user_sid:
+            logging.warning("Could not retrieve current user SID - will use GUID as fallback")
+       
         try:
             # Enumerate UserAssist GUIDs
             with winreg.OpenKey(HKEY_CURRENT_USER, userassist_base_path) as userassist_key:
@@ -670,8 +829,19 @@ def main_live_reg(db_filename='registry_data.db'):
                                     if value_type != "REG_BINARY":
                                         continue
                                    
-                                    # Convert string to bytes if needed
-                                    binary_data = data if isinstance(data, bytes) else data.encode('latin-1') if isinstance(data, str) else data
+                                    # Ensure we have bytes for parsing
+                                    if not isinstance(data, bytes):
+                                        logging.warning(f"UserAssist data for {value_name} is not bytes: type={type(data)}, value={data}")
+                                        if isinstance(data, str):
+                                            binary_data = data.encode('latin-1')
+                                        else:
+                                            logging.error(f"Cannot convert UserAssist data to bytes for {value_name}")
+                                            continue
+                                    else:
+                                        binary_data = data
+                                   
+                                    # Debug: Log binary data info
+                                    logging.debug(f"UserAssist entry {value_name}: data_length={len(binary_data)}, first_bytes={binary_data[:16].hex() if len(binary_data) >= 16 else binary_data.hex()}")
                                    
                                     # Parse UserAssist entry
                                     parsed_data = registry_binary_parser.parse_userassist_entry(value_name, binary_data)
@@ -680,25 +850,32 @@ def main_live_reg(db_filename='registry_data.db'):
                                     run_count = parsed_data.get('run_count', 0)
                                     last_execution = parsed_data.get('last_execution', '')
                                     focus_count = parsed_data.get('focus_count', 0)
-                                    focus_time = parsed_data.get('focus_time', 0)
+                                    focus_time_ms = parsed_data.get('focus_time', 0)
+                                    
+                                    # Convert focus time to readable format before saving
+                                    focus_time_formatted = format_focus_time(focus_time_ms)
                                    
-                                    # Get user SID (we'll use a placeholder for now, could be extracted from registry)
-                                    user_sid = guid_name # Store GUID as identifier
+                                    # Use actual user SID if available, otherwise fall back to GUID
+                                    user_sid = current_user_sid if current_user_sid else guid_name
                                    
                                     # Check if entry exists
                                     if check_exists(cursor, 'UserAssist', ['program_path', 'user_sid'], (program_path, user_sid)):
                                         logging.info(f"Skipping duplicate UserAssist entry: {program_path}")
                                         continue
                                    
-                                    # Insert into database
+                                    # Insert into database with formatted focus time
                                     cursor.execute('''INSERT OR IGNORE INTO UserAssist
                                                    (program_path, run_count, last_execution, focus_count, focus_time, user_sid, timestamp)
                                                    VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                                                 (program_path, run_count, last_execution, focus_count, focus_time,
+                                                 (program_path, run_count, last_execution, focus_count, focus_time_formatted,
                                                   user_sid, datetime.datetime.now().isoformat()))
+                                    
+                                    logging.info(f"Inserted UserAssist: {program_path} | count={run_count}, focus={focus_count}, time={focus_time_formatted} ({focus_time_ms}ms), exec={last_execution}")
                                    
                                 except Exception as e:
                                     logging.error(f"Error parsing UserAssist entry {value_name} in {guid_name}: {e}")
+                                    import traceback
+                                    logging.error(traceback.format_exc())
                                     continue
                        
                         except Exception as e:
@@ -819,8 +996,8 @@ def main_live_reg(db_filename='registry_data.db'):
                             # Parse Shellbag entry with enhanced metadata
                             parsed_data = registry_binary_parser.parse_shellbag_entry(binary_data)
                            
-                            folder_path = parsed_data.get('folder_path', '')
-                            folder_name = parsed_data.get('folder_name', '')
+                            file_name = parsed_data.get('file_name', '')
+                            short_name = parsed_data.get('short_name', '')
                             shell_item_type = parsed_data.get('shell_item_type', 'unknown')
                            
                             # Enhanced metadata
@@ -831,34 +1008,42 @@ def main_live_reg(db_filename='registry_data.db'):
                             file_size = parsed_data.get('file_size', 0)
                             special_folder = parsed_data.get('special_folder', '')
                             network_share = parsed_data.get('network_share', '')
-                           
-                            # Use best available timestamp for access_date
-                            access_date = accessed_date or modified_date or created_date
+                            server_name = parsed_data.get('server_name', '')
+                            share_name = parsed_data.get('share_name', '')
+                            drive_letter = parsed_data.get('drive_letter', '')
+                            mft_record_number = parsed_data.get('mft_record_number', 0)
                            
                             # Skip empty entries
-                            if not folder_path and not folder_name:
+                            if not file_name:
                                 logging.debug(f"Skipping empty Shellbags entry at {registry_path}/{value_name}")
                                 continue
                            
-                            # Check if entry exists
-                            if check_exists(cursor, 'Shellbags', ['folder_path', 'registry_path'], (folder_path, registry_path)):
-                                logging.info(f"Skipping duplicate Shellbags entry: {folder_path}")
+                            # Check if entry exists (using file_name and registry_path)
+                            if check_exists(cursor, 'Shellbags', ['file_name', 'registry_path'], (file_name, registry_path)):
+                                logging.debug(f"Skipping duplicate Shellbags entry: {file_name}")
                                 continue
                            
                             # Insert into database with enhanced metadata
+                            # Note: mru_position is now TEXT type to support "Unknown" value
                             cursor.execute('''INSERT OR IGNORE INTO Shellbags
-                                           (folder_path, folder_name, shell_item_type, mru_position, access_date,
-                                            registry_path, timestamp, created_date, modified_date, attributes,
-                                            file_size, special_folder, network_share)
-                                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                                         (folder_path, folder_name, shell_item_type, mru_position, access_date,
-                                          registry_path, datetime.datetime.now().isoformat(), created_date,
-                                          modified_date, attributes, file_size, special_folder, network_share))
+                                           (file_name, short_name, shell_item_type, mru_position, 
+                                            created_date, modified_date, accessed_date, attributes,
+                                            file_size, special_folder, network_share, server_name, share_name,
+                                            drive_letter, mft_record_number, registry_path, analyzing_date)
+                                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                         (file_name, short_name, shell_item_type, mru_position, 
+                                          created_date, modified_date, accessed_date, attributes,
+                                          file_size, special_folder, network_share, server_name, share_name,
+                                          drive_letter, mft_record_number, registry_path, 
+                                          datetime.datetime.now().isoformat()))
                            
                             shellbags_count += 1
+                            logging.debug(f"Shellbag {value_name} MRU position: {mru_position}")
                            
                         except Exception as e:
                             logging.error(f"Error parsing Shellbags entry {registry_path}/{value_name}: {e}")
+                            import traceback
+                            logging.debug(traceback.format_exc())
                             continue
                
                 except Exception as e:
@@ -1469,7 +1654,9 @@ def main_live_reg(db_filename='registry_data.db'):
                
                 for name, (data, value_type) in values.items():
                     file_path = ""
+                    file_name = ""
                     extension = subkey # The subkey is often the file extension
+                    drive_letter = ""
                     access_date = ""
                     # Skip MRUListEx entries - they're just ordering information
                     if name.lower() == 'mrulistex':
@@ -1483,9 +1670,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             if mru_position == 0 and most_recent_access:
                                 # Most recent entry gets the key's last write time
                                 access_date = most_recent_access
-                            else:
-                                # Other entries get relative ordering info
-                                access_date = f"MRU position: {mru_position + 1}"
+                            # For other entries, leave access_date empty
                     except (ValueError, TypeError):
                         pass # Name is not a number
                     # Try to extract file path from MRU data using specialized parser
@@ -1494,9 +1679,11 @@ def main_live_reg(db_filename='registry_data.db'):
                             # Use the specialized binary parser for OpenSaveMRU entries
                             parsed_data = registry_binary_parser.parse_opensavemru_entry(data)
                             file_path = parsed_data.get('file_path', '')
+                            file_name = parsed_data.get('file_name', '')
+                            drive_letter = parsed_data.get('drive_letter', '')
                             if parsed_data.get('extension'):
                                 extension = parsed_data.get('extension')
-                            # Don't override access_date from MRU ordering unless parser found a timestamp
+                            # Use parser's timestamp if available and we don't have one from MRU
                             if parsed_data.get('access_date') and not access_date:
                                 access_date = parsed_data.get('access_date', '')
                         except Exception as e:
@@ -1508,14 +1695,17 @@ def main_live_reg(db_filename='registry_data.db'):
                                 clean_path = ''.join(c for c in possible_path if c.isprintable() or c in [' ', '\\', '/', '.', ':', '-'])
                                 if '\\' in clean_path and len(clean_path) > 5:
                                     file_path = clean_path
+                                    # Extract file name from path
+                                    if '\\' in file_path:
+                                        file_name = file_path.split('\\')[-1]
                             except:
                                 pass
                    
                     if check_exists(cursor, 'OpenSaveMRU', ['subkey', 'name', 'data', 'type'], (subkey, name, str(data), value_type)):
                         logging.info(f"Skipping duplicate OpenSaveMRU entry: {subkey}/{name}")
                         continue
-                    cursor.execute('INSERT OR IGNORE INTO OpenSaveMRU (subkey, name, data, type, file_path, extension, access_date) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                                  (subkey, name, str(data), value_type, file_path, extension, access_date))
+                    cursor.execute('INSERT OR IGNORE INTO OpenSaveMRU (subkey, name, type, file_path, file_name, extension, drive_letter, access_date, data, analyzing_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                  (subkey, name, value_type, file_path, file_name, extension, drive_letter, access_date, str(data), datetime.datetime.now().isoformat()))
             print("OpenSaveMRU subkeys data inserted into database successfully with enhanced information.")
         except Exception as e:
             logging.error(f"Error accessing OpenSavePidlMRU: {e}")
@@ -1552,29 +1742,23 @@ def main_live_reg(db_filename='registry_data.db'):
                 most_recent_access = ""
             for name, (data, value_type) in lastsavemru_regkey.items():
                 folder_path = ""
+                folder_name = ""
                 application = ""
+                drive_letter = ""
                 access_date = ""
                 # Skip MRUListEx - we already parsed it
                 if name.lower() == 'mrulistex':
                     continue
-                # Determine access order/recency
-                try:
-                    entry_index = int(name)
-                    if mru_order and entry_index in mru_order:
-                        mru_position = mru_order.index(entry_index)
-                        if mru_position == 0 and most_recent_access:
-                            access_date = most_recent_access
-                        else:
-                            access_date = f"MRU position: {mru_position + 1}"
-                except (ValueError, TypeError):
-                    pass
-                # Parse binary data using specialized parser
+                
+                # Parse binary data using specialized parser first to get application name
                 if value_type == "REG_BINARY" and isinstance(data, bytes):
                     try:
                         # Use the specialized LastSaveMRU parser
                         parsed_data = registry_binary_parser.parse_lastsavemru_entry(data)
                         application = parsed_data.get('application', '')
                         folder_path = parsed_data.get('folder_path', '')
+                        folder_name = parsed_data.get('file_name', '')  # file_name contains folder name
+                        drive_letter = parsed_data.get('drive_letter', '')
                        
                         # Log successful parsing
                         if application or folder_path:
@@ -1594,15 +1778,30 @@ def main_live_reg(db_filename='registry_data.db'):
                                 for part in clean_parts:
                                     if '\\' in part and len(part) > 5:
                                         folder_path = part
+                                        # Extract folder name from path
+                                        if '\\' in folder_path:
+                                            folder_name = folder_path.split('\\')[-1]
                                         break
                         except:
                             pass
+                
+                # Determine access order/recency - use most_recent_access for most recent entry
+                try:
+                    entry_index = int(name)
+                    if mru_order and entry_index in mru_order:
+                        mru_position = mru_order.index(entry_index)
+                        if mru_position == 0 and most_recent_access:
+                            # Most recent entry gets the actual timestamp
+                            access_date = most_recent_access
+                        # For other entries, leave access_date empty instead of showing position
+                except (ValueError, TypeError):
+                    pass
                
-                if check_exists(cursor, 'lastSaveMRU', ['name', 'data', 'type'], (name, str(data), value_type)):
-                    logging.info(f"Skipping duplicate lastSaveMRU entry: {name}")
+                if check_exists(cursor, 'LastSaveMRU', ['mru_number', 'data', 'type'], (name, str(data), value_type)):
+                    logging.info(f"Skipping duplicate LastSaveMRU entry: {name}")
                     continue
-                cursor.execute('INSERT OR IGNORE INTO lastSaveMRU (name, data, type, folder_path, application, access_date) VALUES (?, ?, ?, ?, ?, ?)',
-                              (name, str(data), value_type, folder_path, application, access_date))
+                cursor.execute('INSERT OR IGNORE INTO LastSaveMRU (mru_number, type, application, folder_path, folder_name, drive_letter, access_date, data, analyzing_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                              (name, value_type, application, folder_path, folder_name, drive_letter, access_date, str(data), datetime.datetime.now().isoformat()))
             print("LastSaveMRU has been inserted into database successfully with enhanced information.")
         except Exception as e:
             logging.error(f"Error accessing LastVisitedPidlMRU: {e}")
@@ -2109,6 +2308,89 @@ def main_live_reg(db_filename='registry_data.db'):
         except Exception as e:
             logging.error(f"Error collecting user profile information: {e}")
             print(f"Warning: Could not collect complete user profile information: {e}")
+        
+        # Collect MUICache data (Application execution history with friendly names)
+        try:
+            print("Collecting MUICache data...")
+            
+            # MUICache registry path
+            muicache_path = "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache"
+            
+            # Create MUICache table
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS MUICache (
+                app_path TEXT,
+                app_name TEXT,
+                file_extension TEXT,
+                analyzing_date TEXT
+            )''')
+            
+            # Get MUICache values
+            muicache_values = reg_Claw_live(HKEY_CURRENT_USER, muicache_path)
+            
+            muicache_count = 0
+            for name, (data, value_type) in muicache_values.items():
+                try:
+                    # MUICache registry value names have format: path\filename.ext.PropertyName
+                    # Examples: 
+                    #   Sb\Discord.exe.ApplicationCompany
+                    #   Sb\Discord.exe.FriendlyAppName
+                    # We need to remove the property suffix to get the actual file path
+                    
+                    # Remove MUICache property suffixes
+                    property_suffixes = [
+                        '.ApplicationCompany',
+                        '.FriendlyAppName', 
+                        '.CompanyName',
+                        '.FileDescription',
+                        '.ProductName',
+                        '.ProductVersion',
+                        '.FileVersion'
+                    ]
+                    
+                    app_path = name
+                    for suffix in property_suffixes:
+                        if app_path.endswith(suffix):
+                            app_path = app_path[:-len(suffix)]
+                            break
+                    
+                    # Extract application name from path
+                    app_name = ""
+                    if '\\' in app_path:
+                        app_name = app_path.split('\\')[-1]
+                    else:
+                        app_name = app_path
+                    
+                    # Extract REAL file extension from the actual filename
+                    file_extension = ""
+                    if '.' in app_name:
+                        # Get the actual file extension (exe, dll, bat, msc, etc.)
+                        file_extension = app_name.split('.')[-1].lower()
+                    
+                    # Check for duplicates (use cleaned app_path)
+                    if check_exists(cursor, 'MUICache', ['app_path'], (app_path,)):
+                        logging.debug(f"Skipping duplicate MUICache entry: {app_path}")
+                        continue
+                    
+                    # Insert into database
+                    cursor.execute('''
+                    INSERT OR IGNORE INTO MUICache 
+                    (app_path, app_name, file_extension, analyzing_date)
+                    VALUES (?, ?, ?, ?)''',
+                    (app_path, app_name, file_extension, datetime.datetime.now().isoformat()))
+                    
+                    muicache_count += 1
+                    
+                except Exception as e:
+                    logging.error(f"Error processing MUICache entry {name}: {e}")
+                    continue
+            
+            print(f"MUICache data collected successfully. Total entries: {muicache_count}")
+            print(f"  ✓ Collected: Application paths, names, and file extensions")
+            
+        except Exception as e:
+            logging.error(f"Error collecting MUICache data: {e}")
+            print(f"Warning: Could not collect complete MUICache data: {e}")
         
         # Commit the transaction
         conn.commit()
