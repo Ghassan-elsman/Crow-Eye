@@ -513,6 +513,35 @@ validate_dependencies()
 
 # SearchWorker class moved to utils/search_utils.py
 
+
+def format_file_size(size_bytes: int) -> str:
+    """
+    Format file size in human-readable format with appropriate units.
+    
+    Args:
+        size_bytes: File size in bytes
+    
+    Returns:
+        Formatted string with units (e.g., "1.50 MB", "256 Bytes")
+    
+    Examples:
+        format_file_size(500) -> "500 Bytes"
+        format_file_size(2048) -> "2.00 KB"
+        format_file_size(1572864) -> "1.50 MB"
+        format_file_size(5368709120) -> "5.00 GB"
+    """
+    if size_bytes < 1024:
+        return f"{size_bytes} Bytes"
+    elif size_bytes < 1048576:  # 1024^2
+        return f"{size_bytes / 1024:.2f} KB"
+    elif size_bytes < 1073741824:  # 1024^3
+        return f"{size_bytes / 1048576:.2f} MB"
+    elif size_bytes < 1099511627776:  # 1024^4
+        return f"{size_bytes / 1073741824:.2f} GB"
+    else:
+        return f"{size_bytes / 1099511627776:.2f} TB"
+
+
 class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain object
     # Add data loading methods to the class
 
@@ -815,26 +844,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"[RecentDocs] Error loading data: {str(e)}")
     
-    def load_data_from_database_search_explorer_bar(self):
-        """Load Search Explorer Bar data from registry database"""
-        try:
-            db_path = self.get_registry_db_path()
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM Search_Explorer_bar")
-            rows = cursor.fetchall()
-            if hasattr(self, 'SearchViaExplorer_table'):
-                self.SearchViaExplorer_table.setRowCount(0)
-                for row in rows:
-                    row_index = self.SearchViaExplorer_table.rowCount()
-                    self.SearchViaExplorer_table.insertRow(row_index)
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value))
-                        self.SearchViaExplorer_table.setItem(row_index, col_index, item)
-            conn.close()
-        except Exception as e:
-            print(f"[SearchExplorerBar] Error loading data: {str(e)}")
-    
+
     def load_data_from_database_OpenSaveMRU(self):
         """Load Open Save MRU data from registry database"""
         try:
@@ -861,7 +871,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             db_path = self.get_registry_db_path()
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM lastSaveMRU")
+            cursor.execute("SELECT * FROM LastSaveMRU")
             rows = cursor.fetchall()
             if hasattr(self, 'LastSaveMRU_table'):
                 self.LastSaveMRU_table.setRowCount(0)
@@ -935,19 +945,32 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"[DAM] Error loading data: {str(e)}")
     
-    def load_data_from_database_UserAssist(self):
-        """Load UserAssist data from registry database"""
+    def load_data_from_database_UserAssist(self, show_only_executed=False):
+        """Load UserAssist data from registry database
+        
+        Args:
+            show_only_executed (bool): If True, only show entries with run_count > 0
+        """
         try:
             db_path = self.get_registry_db_path()
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT program_path, run_count, last_execution, focus_count, focus_time, user_sid FROM UserAssist ORDER BY last_execution DESC")
+            
+            # Build query based on filter
+            if show_only_executed:
+                query = "SELECT program_path, run_count, last_execution, focus_count, focus_time, user_sid FROM UserAssist WHERE run_count > 0 ORDER BY last_execution DESC"
+            else:
+                query = "SELECT program_path, run_count, last_execution, focus_count, focus_time, user_sid FROM UserAssist ORDER BY last_execution DESC"
+            
+            cursor.execute(query)
             rows = cursor.fetchall()
             if hasattr(self, 'UserAssist_table'):
                 self.UserAssist_table.setRowCount(0)
                 for row in rows:
                     row_index = self.UserAssist_table.rowCount()
                     self.UserAssist_table.insertRow(row_index)
+                    
+                    # Display values as-is (focus_time is already formatted in database)
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
                         self.UserAssist_table.setItem(row_index, col_index, item)
@@ -956,24 +979,67 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print(f"[UserAssist] Error loading data: {str(e)}")
     
     def load_data_from_database_Shellbags(self):
-        """Load Shellbags data from registry database"""
+        """Load Shellbags data from registry database with enhanced formatting"""
         try:
             db_path = self.get_registry_db_path()
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT folder_path, folder_name, shell_item_type, mru_position, access_date, registry_path FROM Shellbags ORDER BY mru_position")
+            
+            # Select all columns in the correct order
+            cursor.execute("""
+                SELECT 
+                    file_name, short_name, shell_item_type, 
+                    mru_position, created_date, modified_date, accessed_date, 
+                    attributes, file_size, special_folder, network_share, 
+                    server_name, share_name, drive_letter, mft_record_number, 
+                    registry_path, analyzing_date
+                FROM Shellbags 
+                ORDER BY 
+                    CASE 
+                        WHEN mru_position = 'Unknown' THEN 999999
+                        ELSE CAST(mru_position AS INTEGER)
+                    END
+            """)
             rows = cursor.fetchall()
+            
             if hasattr(self, 'Shellbags_table'):
                 self.Shellbags_table.setRowCount(0)
+                
+                # Set column headers
+                headers = [
+                    "File Name", "Short Name", "Type", 
+                    "MRU Position", "Created Date", "Modified Date", "Accessed Date",
+                    "Attributes", "File Size", "Special Folder", "Network Share",
+                    "Server Name", "Share Name", "Drive Letter", "MFT Record", 
+                    "Registry Path", "Analyzing Date"
+                ]
+                self.Shellbags_table.setColumnCount(len(headers))
+                self.Shellbags_table.setHorizontalHeaderLabels(headers)
+                
                 for row in rows:
                     row_index = self.Shellbags_table.rowCount()
                     self.Shellbags_table.insertRow(row_index)
+                    
                     for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                        # Format file size column (index 8 in new schema)
+                        if col_index == 8 and value is not None:
+                            try:
+                                display_value = format_file_size(int(value))
+                            except (ValueError, TypeError):
+                                display_value = str(value)
+                        else:
+                            display_value = str(value) if value is not None else ""
+                        
+                        item = QtWidgets.QTableWidgetItem(display_value)
                         self.Shellbags_table.setItem(row_index, col_index, item)
+                
+                print(f"[Shellbags] Successfully loaded {len(rows)} records")
+            
             conn.close()
         except Exception as e:
             print(f"[Shellbags] Error loading data: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def load_data_from_database_RunMRU(self):
         """Load RunMRU data from registry database"""
@@ -1358,8 +1424,6 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         try:
             print("[File Activity] Loading Recent Docs...")
             self.load_data_from_database_RecentDocs()
-            print("[File Activity] Loading Search Explorer Bar...")
-            self.load_data_from_database_search_explorer_bar()
             print("[File Activity] Loading Open/Save MRU...")
             self.load_data_from_database_OpenSaveMRU()
             print("[File Activity] Loading Last Save MRU...")
@@ -3668,7 +3732,6 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
     def load_files_activity(self):
         """Load file activity related tables from the registry DB"""
         # Call all individual loading functions for file activity artifacts
-        self.load_data_from_database_search_explorer_bar()
         self.load_data_from_database_RecentDocs()
         self.load_data_from_database_TypedPathes()
         self.load_data_from_database_OpenSaveMRU()
@@ -3841,13 +3904,17 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "USBStorageDevices": self.USBStorageDevices_table,
                 "USBStorageVolumes": self.USBStorageVolumes_table,
                 "RecentDocs": self.RecentDocs_table,
-                "Search_Explorer_bar": self.SearchViaExplorer_table,
                 "OpenSaveMRU": self.OpenSaveMRU_table,
-                "lastSaveMRU": self.LastSaveMRU_table,
+                "LastSaveMRU": self.LastSaveMRU_table,
                 "TypedPaths": self.TypedPath_table,
                 "BAM": self.Bam_table,
                 "DAM": self.Dam_table,
                 "InstalledSoftware": self.tableWidget,
+                "Shellbags": self.Shellbags_table,
+                "UserAssist": self.UserAssist_table,
+                "MUICache": self.MUICache_table,
+                "WordWheelQuery": self.WordWheelQuery_table,
+                "UserProfiles": self.UserProfiles_table,
             }
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -3881,11 +3948,21 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                                 # Reorder the row data according to the new column order
                                 reordered_row = [row[i] for i in col_mapping]
                                 for c_idx, value in enumerate(reordered_row):
-                                    item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                                    # Special handling for Shellbags file_size column
+                                    if db_table == "Shellbags" and reordered_columns[c_idx] == "file_size" and value is not None:
+                                        try:
+                                            display_value = format_file_size(int(value))
+                                        except (ValueError, TypeError):
+                                            display_value = str(value)
+                                    else:
+                                        display_value = str(value) if value is not None else ""
+                                    
+                                    item = QtWidgets.QTableWidgetItem(display_value)
                                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                                     gui_table.setItem(r_idx, c_idx, item)
                             
                             gui_table.resizeColumnsToContents()
+                            print(f"[Registry] Loaded {len(rows)} records from {db_table}")
                     except Exception as e:
                         print(f"[Registry Error] Failed to load {db_table}: {str(e)}")
             conn.close()
@@ -4483,16 +4560,6 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.RecentDocs_table.setObjectName("RecentDocs_table")
         self.verticalLayout_19.addWidget(self.RecentDocs_table)
         self.filesActivityTab_tables.addTab(self.Recent_docs_tab, "")
-        self.SearchViaExplorerbar_tab = QtWidgets.QWidget()
-        self.SearchViaExplorerbar_tab.setObjectName("SearchViaExplorerbar_tab")
-        self.verticalLayout_20 = QtWidgets.QVBoxLayout(self.SearchViaExplorerbar_tab)
-        self.verticalLayout_20.setObjectName("verticalLayout_20")
-        self.SearchViaExplorer_table = QtWidgets.QTableWidget(self.SearchViaExplorerbar_tab)
-        self.SearchViaExplorer_table.setMinimumSize(QtCore.QSize(2, 2))
-        self.setup_standard_table(self.SearchViaExplorer_table, 3, False, 300, 190)
-        self.SearchViaExplorer_table.setObjectName("SearchViaExplorer_table")
-        self.verticalLayout_20.addWidget(self.SearchViaExplorer_table)
-        self.filesActivityTab_tables.addTab(self.SearchViaExplorerbar_tab, "")
         self.OpenSaveMru = QtWidgets.QWidget()
         self.OpenSaveMru.setObjectName("OpenSaveMru")
         self.verticalLayout_21 = QtWidgets.QVBoxLayout(self.OpenSaveMru)
@@ -5414,26 +5481,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 _translate("Crow_Eye", "Recent Docs")
             )
         
-        # Initialize SearchViaExplorer_table headers if it exists
-        if hasattr(self, 'SearchViaExplorer_table'):
-            self.SearchViaExplorer_table.setColumnCount(3)
-            headers = ["Name", "Data", "Data Type"]
-            for i, header in enumerate(headers):
-                item = QtWidgets.QTableWidgetItem()
-                self.SearchViaExplorer_table.setHorizontalHeaderItem(i, item)
-                item.setText(_translate("Crow_Eye", header.strip()))
-        
-        # Set tab text for Search via Explorer bar tab
-        if hasattr(self, 'SearchViaExplorerbar_tab') and hasattr(self, 'filesActivityTab_tables'):
-            self.filesActivityTab_tables.setTabText(
-                self.filesActivityTab_tables.indexOf(self.SearchViaExplorerbar_tab),
-                _translate("Crow_Eye", "Explorer Search")
-            )
-        
+
         # Initialize OpenSaveMRU_table headers if it exists
         if hasattr(self, 'OpenSaveMRU_table'):
-            self.OpenSaveMRU_table.setColumnCount(7)
-            headers = ["Sub key Name", "Service", "Data", "Data Type", "File Path", "Extension", "Access Date"]
+            self.OpenSaveMRU_table.setColumnCount(10)
+            headers = ["Subkey", "Name", "Type", "File Path", "File Name", "Extension", "Drive Letter", "Access Date", "Data", "Analyzing Date"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.OpenSaveMRU_table.setHorizontalHeaderItem(i, item)
@@ -5448,8 +5500,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Initialize LastSaveMRU_table headers if it exists
         if hasattr(self, 'LastSaveMRU_table'):
-            self.LastSaveMRU_table.setColumnCount(6)
-            headers = ["Name", "Data", "Data Type", "Folder Path", "Application", "Access Date"]
+            self.LastSaveMRU_table.setColumnCount(9)
+            headers = ["MRU Number", "Type", "Application", "Folder Path", "Folder Name", "Drive Letter", "Access Date", "Data", "Analyzing Date"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.LastSaveMRU_table.setHorizontalHeaderItem(i, item)
@@ -5513,7 +5565,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize UserAssist_table headers if it exists
         if hasattr(self, 'UserAssist_table'):
             self.UserAssist_table.setColumnCount(6)
-            headers = ["Program Path", "Run Count", "Last Execution", "Focus Count", "Focus Time (ms)", "User SID"]
+            headers = ["Program Path", "Run Count", "Last Execution", "Focus Count", "Focus Time", "User SID"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.UserAssist_table.setHorizontalHeaderItem(i, item)
@@ -8064,7 +8116,6 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "USBStorageDevices": self.USBStorageDevices_table,
                 "USBStorageVolumes": self.USBStorageVolumes_table,
                 "RecentDocs": self.RecentDocs_table,
-                "SearchExplorer": self.SearchViaExplorer_table,
                 "OpenSaveMRU": self.OpenSaveMRU_table,
                 "LastSaveMRU": self.LastSaveMRU_table,
                 "TypedPaths": self.TypedPath_table,
