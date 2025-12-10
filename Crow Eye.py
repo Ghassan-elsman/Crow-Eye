@@ -105,82 +105,19 @@ def install_initial_requirements():
     
     return True
 
-# Install initial requirements first (without importing them yet)
-if not install_initial_requirements():
-    print('Failed to install initial requirements. Exiting...')
-    sys.exit(1)
+# Only install initial requirements if NOT already in virtual environment
+# This avoids redundant installations and speeds up startup
+in_venv = hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)
+
+if not in_venv:
+    # We're in system Python, need to install initial requirements before creating venv
+    if not install_initial_requirements():
+        print('Failed to install initial requirements. Exiting...')
+        sys.exit(1)
 
 # Import will happen after virtual environment setup
 import importlib.metadata
 
-def setup_virtual_environment():
-    """Create and activate a virtual environment for Crow Eye.
-    
-    This function manages the creation, validation, and activation of a Python virtual
-    environment for Crow Eye. Using a virtual environment ensures that the tool has all
-    required dependencies isolated from the system Python installation, preventing
-    conflicts and ensuring consistent behavior.
-    
-    Key features:
-    - Checks if already running in a virtual environment
-    - Creates a new virtual environment if one doesn't exist
-    - Handles path issues with spaces and special characters
-    - Restarts the application within the virtual environment
-    - Falls back to system Python if virtual environment creation fails
-    
-    Forensic significance:
-    - Ensures consistent dependency versions for reliable artifact parsing
-    - Prevents conflicts with system Python packages
-    - Maintains tool integrity across different Windows installations
-    """
-    
-    # Check if already in virtual environment
-    if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
-        print('Already running in virtual environment')
-        return
-    
-    venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crow_eye_venv')
-    
-    # Create virtual environment if it doesn't exist
-    if not os.path.exists(venv_path):
-        print('Creating virtual environment...')
-        try:
-            venv.create(venv_path, with_pip=True)
-            print(f'Virtual environment created at {venv_path}')
-        except Exception as e:
-            print(f'Failed to create virtual environment: {str(e)}')
-            print('Please check disk space and permissions')
-            input('Press Enter to continue with global Python environment...')
-            return
-    else:
-        print('Virtual environment already exists')
-
-    # Restart the script with the virtual environment's Python executable
-    try:
-        if os.name == 'nt':  # Windows
-            venv_python = os.path.join(venv_path, 'Scripts', 'python.exe')
-        else:  # Unix-like
-            venv_python = os.path.join(venv_path, 'bin', 'python')
-        
-        if os.path.exists(venv_python):
-            print('Restarting with virtual environment...')
-            # Restart the script using the virtual environment's Python
-            # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
-
-            script_path = os.path.abspath(sys.argv[0])
-            subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
-            sys.exit(0)  # Exit current process after starting the new one
-        else:
-            print(f'Virtual environment Python not found at {venv_python}')
-            input('Press Enter to continue with global Python environment...')
-    except Exception as e:
-        print(f'Failed to restart with virtual environment: {str(e)}')
-        input('Press Enter to continue with global Python environment...')
-
-# Setup virtual environment
-setup_virtual_environment()
-
-# Now safely import colorama after virtual environment is set up
 def safe_import_initial_modules():
     """Safely import colorama and other initial modules after venv setup.
     
@@ -206,8 +143,80 @@ def safe_import_initial_modules():
         init = lambda: None
         return False
 
-# Import colorama now that we're in the correct environment
-safe_import_initial_modules()
+def setup_virtual_environment():
+    """Create and activate a virtual environment for Crow Eye.
+    
+    This function manages the creation, validation, and activation of a Python virtual
+    environment for Crow Eye. Using a virtual environment ensures that the tool has all
+    required dependencies isolated from the system Python installation, preventing
+    conflicts and ensuring consistent behavior.
+    
+    Key features:
+    - Checks if already running in a virtual environment
+    - Creates a new virtual environment if one doesn't exist
+    - Handles path issues with spaces and special characters
+    - Restarts the application within the virtual environment
+    - Falls back to system Python if virtual environment creation fails
+    
+    Forensic significance:
+    - Ensures consistent dependency versions for reliable artifact parsing
+    - Prevents conflicts with system Python packages
+    - Maintains tool integrity across different Windows installations
+    """
+    
+    # Check if already in virtual environment
+    if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+        print('Already running in virtual environment')
+        # Import colorama now that we're in the venv
+        safe_import_initial_modules()
+        return
+    
+    venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crow_eye_venv')
+    
+    # Create virtual environment if it doesn't exist
+    if not os.path.exists(venv_path):
+        print('Creating virtual environment...')
+        try:
+            venv.create(venv_path, with_pip=True)
+            print(f'Virtual environment created at {venv_path}')
+        except Exception as e:
+            print(f'Failed to create virtual environment: {str(e)}')
+            print('Please check disk space and permissions')
+            input('Press Enter to continue with global Python environment...')
+            # Import colorama even if venv creation failed
+            safe_import_initial_modules()
+            return
+    else:
+        print('Virtual environment already exists')
+
+    # Restart the script with the virtual environment's Python executable
+    try:
+        if os.name == 'nt':  # Windows
+            venv_python = os.path.join(venv_path, 'Scripts', 'python.exe')
+        else:  # Unix-like
+            venv_python = os.path.join(venv_path, 'bin', 'python')
+        
+        if os.path.exists(venv_python):
+            print('Restarting with virtual environment...')
+            # Restart the script using the virtual environment's Python
+            # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
+
+            script_path = os.path.abspath(sys.argv[0])
+            subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
+            sys.exit(0)  # Exit current process after starting the new one
+        else:
+            print(f'Virtual environment Python not found at {venv_python}')
+            input('Press Enter to continue with global Python environment...')
+            # Import colorama even if venv python not found
+            safe_import_initial_modules()
+    except Exception as e:
+        print(f'Failed to restart with virtual environment: {str(e)}')
+        input('Press Enter to continue with global Python environment...')
+        # Import colorama even if restart failed
+        safe_import_initial_modules()
+
+# Setup virtual environment
+setup_virtual_environment()
 
 Crow_Eye_Requirements = [
     'PyQt5',
@@ -226,40 +235,55 @@ Crow_Eye_Requirements = [
 
 def check_and_install_requirements():
     """Check and install required packages for Crow Eye application."""
-    def install_package(package):
-        try:
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
-            print(Fore.GREEN + f'Successfully installed {package}' + Fore.RESET)
-            return True
-        except subprocess.CalledProcessError:
-            print(Fore.RED + f'Failed to install {package}' + Fore.RESET)
-            return False
-
     missing_packages = []
+    installed_count = 0
+    
     for package in Crow_Eye_Requirements:
         try:
             importlib.metadata.version(package)
-            print(Fore.GREEN + f'{package} is already installed' + Fore.RESET)
+            installed_count += 1
         except importlib.metadata.PackageNotFoundError:
-            print(Fore.RED + f'{package} is not installed' + Fore.RESET)
             missing_packages.append(package)
-
+    
+    # Show summary instead of listing each package
+    if installed_count > 0:
+        print(Fore.GREEN + f'{installed_count}/{len(Crow_Eye_Requirements)} required packages already installed' + Fore.RESET)
+    
     if missing_packages:
-        print('\nInstalling missing packages...')
-        packages_installed = False
-        for package in missing_packages:
-            if install_package(package):
-                packages_installed = True
-        
-        # If packages were installed, restart the application to ensure proper loading
-        if packages_installed:
-            print(Fore.YELLOW + '\nPackages installed. Restarting application to ensure proper module registration...' + Fore.RESET)
+        print(Fore.YELLOW + f'Installing {len(missing_packages)} missing packages: {", ".join(missing_packages)}' + Fore.RESET)
+        try:
+            # Install all missing packages in a single pip command (much faster)
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install'] + missing_packages)
+            print(Fore.GREEN + f'Successfully installed all missing packages!' + Fore.RESET)
+            
+            # Restart the application to ensure proper loading
+            print(Fore.YELLOW + 'Restarting application...' + Fore.RESET)
             # Cross-platform restart mechanism
             if os.name == 'nt':  # Windows
                 subprocess.Popen([sys.executable] + sys.argv)
                 sys.exit(0)
             else:  # Unix/Linux/Mac
                 os.execv(sys.executable, [sys.executable] + sys.argv)
+        except subprocess.CalledProcessError as e:
+            print(Fore.RED + f'Batch installation failed, trying individually...' + Fore.RESET)
+            # Fallback: try installing one by one
+            success_count = 0
+            for package in missing_packages:
+                try:
+                    subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+                    success_count += 1
+                    print(Fore.GREEN + f'✓ {package}' + Fore.RESET)
+                except subprocess.CalledProcessError:
+                    print(Fore.RED + f'✗ {package}' + Fore.RESET)
+            
+            if success_count > 0:
+                # Restart after individual installation
+                print(Fore.YELLOW + f'\n{success_count}/{len(missing_packages)} packages installed. Restarting...' + Fore.RESET)
+                if os.name == 'nt':
+                    subprocess.Popen([sys.executable] + sys.argv)
+                    sys.exit(0)
+                else:
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
     else:
         print(Fore.GREEN + '\nAll required packages are installed!' + Fore.RESET)
 
