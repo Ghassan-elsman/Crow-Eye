@@ -87,11 +87,11 @@ def install_initial_requirements():
     virtual environment or install other dependencies. These packages are prerequisites
     for the proper functioning of the dependency management system.
     
-    The function will exit the program if installation fails, as these packages are
-    essential for the tool's operation.
+    IMPORTANT: This function does NOT import the packages after installation to avoid
+    import errors before the virtual environment is properly set up.
     
     Returns:
-        None: Function exits the program if installation fails
+        bool: True if all packages installed successfully, False otherwise
     """
     initial_requirements = ['colorama', 'setuptools']
     
@@ -100,14 +100,17 @@ def install_initial_requirements():
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
             print(f'Successfully installed {package}')
         except subprocess.CalledProcessError:
-            print(f'Failed to install {package}')
-            sys.exit(1)  # Exit if essential packages cannot be installed
+            print(f'Failed to install {package}. Please run: python -m pip install {package}')
+            return False
+    
+    return True
 
-# Install initial requirements first
-install_initial_requirements()
+# Install initial requirements first (without importing them yet)
+if not install_initial_requirements():
+    print('Failed to install initial requirements. Exiting...')
+    sys.exit(1)
 
-# Now we can safely import these
-from colorama import init, Fore
+# Import will happen after virtual environment setup
 import importlib.metadata
 
 def setup_virtual_environment():
@@ -131,11 +134,9 @@ def setup_virtual_environment():
     - Maintains tool integrity across different Windows installations
     """
     
-    init()  # Initialize colorama
-    
     # Check if already in virtual environment
     if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
-        print(Fore.GREEN + 'Already running in virtual environment' + Fore.RESET)
+        print('Already running in virtual environment')
         return
     
     venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crow_eye_venv')
@@ -145,14 +146,14 @@ def setup_virtual_environment():
         print('Creating virtual environment...')
         try:
             venv.create(venv_path, with_pip=True)
-            print(Fore.GREEN + f'Virtual environment created at {venv_path}' + Fore.RESET)
+            print(f'Virtual environment created at {venv_path}')
         except Exception as e:
-            print(Fore.RED + f'Failed to create virtual environment: {str(e)}' + Fore.RESET)
-            print(Fore.RED + 'Please check disk space and permissions' + Fore.RESET)
+            print(f'Failed to create virtual environment: {str(e)}')
+            print('Please check disk space and permissions')
             input('Press Enter to continue with global Python environment...')
             return
     else:
-        print(Fore.GREEN + 'Virtual environment already exists' + Fore.RESET)
+        print('Virtual environment already exists')
 
     # Restart the script with the virtual environment's Python executable
     try:
@@ -162,7 +163,7 @@ def setup_virtual_environment():
             venv_python = os.path.join(venv_path, 'bin', 'python')
         
         if os.path.exists(venv_python):
-            print(Fore.GREEN + 'Restarting with virtual environment...' + Fore.RESET)
+            print('Restarting with virtual environment...')
             # Restart the script using the virtual environment's Python
             # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
 
@@ -170,14 +171,43 @@ def setup_virtual_environment():
             subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
             sys.exit(0)  # Exit current process after starting the new one
         else:
-            print(Fore.RED + f'Virtual environment Python not found at {venv_python}' + Fore.RESET)
+            print(f'Virtual environment Python not found at {venv_python}')
             input('Press Enter to continue with global Python environment...')
     except Exception as e:
-        print(Fore.RED + f'Failed to restart with virtual environment: {str(e)}' + Fore.RESET)
+        print(f'Failed to restart with virtual environment: {str(e)}')
         input('Press Enter to continue with global Python environment...')
 
 # Setup virtual environment
 setup_virtual_environment()
+
+# Now safely import colorama after virtual environment is set up
+def safe_import_initial_modules():
+    """Safely import colorama and other initial modules after venv setup.
+    
+    Returns:
+        bool: True if imports successful, False otherwise
+    """
+    global init, Fore
+    try:
+        from colorama import init, Fore
+        init()  # Initialize colorama
+        return True
+    except ImportError as e:
+        print(f'Warning: Failed to import colorama: {str(e)}')
+        print('Continuing with basic print statements...')
+        # Create dummy objects to prevent errors
+        class DummyFore:
+            GREEN = ''
+            RED = ''
+            YELLOW = ''
+            CYAN = ''
+            RESET = ''
+        Fore = DummyFore()
+        init = lambda: None
+        return False
+
+# Import colorama now that we're in the correct environment
+safe_import_initial_modules()
 
 Crow_Eye_Requirements = [
     'PyQt5',
