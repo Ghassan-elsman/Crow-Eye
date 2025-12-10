@@ -93,16 +93,22 @@ def install_initial_requirements():
     Returns:
         bool: True if all packages installed successfully, False otherwise
     """
+    print('\n' + '='*60)
+    print('[STEP 1/4] Installing initial requirements...')
+    print('='*60)
+    
     initial_requirements = ['colorama', 'setuptools']
     
     for package in initial_requirements:
         try:
+            print(f'  -> Installing {package}...')
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
-            print(f'Successfully installed {package}')
+            print(f'  -> Successfully installed {package}')
         except subprocess.CalledProcessError:
-            print(f'Failed to install {package}. Please run: python -m pip install {package}')
+            print(f'  -> Failed to install {package}. Please run: python -m pip install {package}')
             return False
     
+    print('[STEP 1/4] Initial requirements installed successfully!\n')
     return True
 
 # Only install initial requirements if NOT already in virtual environment
@@ -114,6 +120,9 @@ if not in_venv:
     if not install_initial_requirements():
         print('Failed to install initial requirements. Exiting...')
         sys.exit(1)
+else:
+    # Skip STEP 1 when already in venv
+    pass
 
 # Import will happen after virtual environment setup
 import importlib.metadata
@@ -166,28 +175,39 @@ def setup_virtual_environment():
     
     # Check if already in virtual environment
     if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
-        print('Already running in virtual environment')
+        print('\n' + '='*60)
+        print('[STEP 2/4] Virtual environment check')
+        print('='*60)
+        print('  -> Already running in virtual environment')
+        print('[STEP 2/4] Complete!\n')
         # Import colorama now that we're in the venv
         safe_import_initial_modules()
         return
     
     venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crow_eye_venv')
     
+    print('\n' + '='*60)
+    print('[STEP 2/4] Setting up virtual environment...')
+    print('='*60)
+    
     # Create virtual environment if it doesn't exist
     if not os.path.exists(venv_path):
-        print('Creating virtual environment...')
+        print('  -> Creating virtual environment (10-20 seconds, only happens once)...')
+        print('  -> Please wait...')
         try:
             venv.create(venv_path, with_pip=True)
-            print(f'Virtual environment created at {venv_path}')
+            print(f'  -> Virtual environment created successfully!')
+            print(f'  -> Location: {venv_path}')
         except Exception as e:
-            print(f'Failed to create virtual environment: {str(e)}')
-            print('Please check disk space and permissions')
+            print(f'  -> Failed to create virtual environment: {str(e)}')
+            print('  -> Please check disk space and permissions')
             input('Press Enter to continue with global Python environment...')
             # Import colorama even if venv creation failed
             safe_import_initial_modules()
             return
     else:
-        print('Virtual environment already exists')
+        print('  -> Virtual environment already exists')
+        print(f'  -> Location: {venv_path}')
 
     # Restart the script with the virtual environment's Python executable
     try:
@@ -197,7 +217,8 @@ def setup_virtual_environment():
             venv_python = os.path.join(venv_path, 'bin', 'python')
         
         if os.path.exists(venv_python):
-            print('Restarting with virtual environment...')
+            print('\n  -> Restarting with virtual environment...')
+            print('[STEP 2/4] Complete!\n')
             # Restart the script using the virtual environment's Python
             # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
 
@@ -205,12 +226,12 @@ def setup_virtual_environment():
             subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
             sys.exit(0)  # Exit current process after starting the new one
         else:
-            print(f'Virtual environment Python not found at {venv_python}')
+            print(f'  -> Virtual environment Python not found at {venv_python}')
             input('Press Enter to continue with global Python environment...')
             # Import colorama even if venv python not found
             safe_import_initial_modules()
     except Exception as e:
-        print(f'Failed to restart with virtual environment: {str(e)}')
+        print(f'  -> Failed to restart with virtual environment: {str(e)}')
         input('Press Enter to continue with global Python environment...')
         # Import colorama even if restart failed
         safe_import_initial_modules()
@@ -235,9 +256,14 @@ Crow_Eye_Requirements = [
 
 def check_and_install_requirements():
     """Check and install required packages for Crow Eye application."""
+    print('\n' + '='*60)
+    print('[STEP 3/4] Checking dependencies...')
+    print('='*60)
+    
     missing_packages = []
     installed_count = 0
     
+    print('  -> Scanning installed packages...')
     for package in Crow_Eye_Requirements:
         try:
             importlib.metadata.version(package)
@@ -247,48 +273,83 @@ def check_and_install_requirements():
     
     # Show summary instead of listing each package
     if installed_count > 0:
-        print(Fore.GREEN + f'{installed_count}/{len(Crow_Eye_Requirements)} required packages already installed' + Fore.RESET)
+        print(Fore.GREEN + f'  -> {installed_count}/{len(Crow_Eye_Requirements)} required packages already installed' + Fore.RESET)
     
     if missing_packages:
-        print(Fore.YELLOW + f'Installing {len(missing_packages)} missing packages: {", ".join(missing_packages)}' + Fore.RESET)
+        print(Fore.YELLOW + f'  -> {len(missing_packages)} packages need to be installed: {", ".join(missing_packages)}' + Fore.RESET)
+        print('\n' + '='*60)
+        print('[STEP 4/4] Installing missing packages...')
+        print('='*60)
+        print('  -> This may take 2-5 minutes depending on your internet speed')
+        print('  -> Please wait while packages are being downloaded and installed...\n')
         try:
             # Install all missing packages in a single pip command (much faster)
+            print('\n  -> Installing packages, please wait...\n')
             subprocess.check_call([sys.executable, '-m', 'pip', 'install'] + missing_packages)
-            print(Fore.GREEN + f'Successfully installed all missing packages!' + Fore.RESET)
+            print(Fore.GREEN + '\n  -> Successfully installed all missing packages!' + Fore.RESET)
+            print('[STEP 4/4] Complete!\n')
             
             # Restart the application to ensure proper loading
-            print(Fore.YELLOW + 'Restarting application...' + Fore.RESET)
+            print('='*60)
+            print('[INFO] Packages installed successfully!')
+            print('[INFO] Restarting Crow Eye to load new packages...')
+            print('[INFO] Please wait a moment...')
+            print('='*60 + '\n')
+            
+            import time
+            time.sleep(1)  # Brief pause to ensure output is visible
+            
             # Cross-platform restart mechanism
             if os.name == 'nt':  # Windows
-                subprocess.Popen([sys.executable] + sys.argv)
+                subprocess.Popen([sys.executable] + sys.argv, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.stdin.isatty() else 0)
                 sys.exit(0)
             else:  # Unix/Linux/Mac
                 os.execv(sys.executable, [sys.executable] + sys.argv)
         except subprocess.CalledProcessError as e:
-            print(Fore.RED + f'Batch installation failed, trying individually...' + Fore.RESET)
+            print(Fore.RED + '\n  -> Batch installation failed, trying individually...' + Fore.RESET)
             # Fallback: try installing one by one
             success_count = 0
-            for package in missing_packages:
+            for i, package in enumerate(missing_packages, 1):
                 try:
+                    print(f'  -> [{i}/{len(missing_packages)}] Installing {package}...')
                     subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
                     success_count += 1
-                    print(Fore.GREEN + f'✓ {package}' + Fore.RESET)
+                    print(Fore.GREEN + f'      ✓ {package} installed successfully' + Fore.RESET)
                 except subprocess.CalledProcessError:
-                    print(Fore.RED + f'✗ {package}' + Fore.RESET)
+                    print(Fore.RED + f'      ✗ {package} installation failed' + Fore.RESET)
             
             if success_count > 0:
                 # Restart after individual installation
-                print(Fore.YELLOW + f'\n{success_count}/{len(missing_packages)} packages installed. Restarting...' + Fore.RESET)
+                print(Fore.YELLOW + f'\n  -> {success_count}/{len(missing_packages)} packages installed successfully' + Fore.RESET)
+                print('[STEP 4/4] Complete!\n')
+                print('='*60)
+                print('[INFO] Packages installed successfully!')
+                print('[INFO] Restarting Crow Eye to load new packages...')
+                print('[INFO] Please wait a moment...')
+                print('='*60 + '\n')
+                
+                import time
+                time.sleep(1)  # Brief pause to ensure output is visible
+                
                 if os.name == 'nt':
-                    subprocess.Popen([sys.executable] + sys.argv)
+                    subprocess.Popen([sys.executable] + sys.argv, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.stdin.isatty() else 0)
                     sys.exit(0)
                 else:
                     os.execv(sys.executable, [sys.executable] + sys.argv)
     else:
-        print(Fore.GREEN + '\nAll required packages are installed!' + Fore.RESET)
+        print(Fore.GREEN + '  -> All required packages are installed!' + Fore.RESET)
+        print('[STEP 3/4] Complete!')
+        print('[STEP 4/4] No packages to install - skipping\n')
+        print('='*60)
+        print('[INFO] Crow Eye is ready to start!')
+        print('='*60 + '\n')
 
 # Check and install required packages
 check_and_install_requirements()
+
+print('='*60)
+print('[STEP 4/4] Initializing Crow Eye...')
+print('='*60)
 
 # Handle pywin32 post-install if needed
 def handle_pywin32_postinstall():
@@ -298,7 +359,7 @@ def handle_pywin32_postinstall():
     for attempt in range(max_retries):
         try:
             import win32evtlog  # Test if win32 modules are accessible
-            print(Fore.GREEN + "win32 modules are accessible" + Fore.RESET)
+            print(Fore.GREEN + "  -> win32 modules are accessible" + Fore.RESET)
             return True
         except ImportError:
             if attempt == 0:
