@@ -4164,6 +4164,30 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.main_menu.setObjectName("main_menu")
         self.left_section.addWidget(self.main_menu)
         
+        # Settings button
+        self.settings_button = QtWidgets.QPushButton(self.top_frame)
+        self.settings_button.setEnabled(True)
+        sizePolicy_settings = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        sizePolicy_settings.setHorizontalStretch(0)
+        sizePolicy_settings.setVerticalStretch(0)
+        sizePolicy_settings.setHeightForWidth(self.settings_button.sizePolicy().hasHeightForWidth())
+        self.settings_button.setSizePolicy(sizePolicy_settings)
+        self.settings_button.setMinimumSize(QtCore.QSize(42, 42))
+        self.settings_button.setMaximumSize(QtCore.QSize(42, 42))
+        self.settings_button.setFont(self.create_rockwell_font(8, False))
+        self.settings_button.setToolTip("Settings (Ctrl+,)")
+        self.settings_button.setAutoFillBackground(False)
+        self.settings_button.setStyleSheet(CrowEyeStyles.MAIN_MENU_BUTTON)
+        self.settings_button.setText("")
+        icon_settings = QtGui.QIcon()
+        icon_settings.addPixmap(QtGui.QPixmap(":/Icons/icons/settings-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        self.settings_button.setIcon(icon_settings)
+        self.settings_button.setIconSize(QtCore.QSize(24, 24))
+        self.settings_button.setFlat(False)
+        self.settings_button.setObjectName("settings_button")
+        self.settings_button.clicked.connect(self.open_settings_dialog)
+        self.left_section.addWidget(self.settings_button)
+        
         # Small spacing after menu button
         self.left_section.addSpacing(10)
         
@@ -6186,6 +6210,27 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             case_name = os.path.basename(directory_path)
             self.label.setText(f"Case: {case_name}")
             
+            # Add/update case in history
+            if hasattr(self, 'case_history_manager') and self.case_history_manager:
+                try:
+                    # Check if case exists in history
+                    existing_case = self.case_history_manager.get_case_by_path(directory_path)
+                    if existing_case:
+                        # Update access time
+                        self.case_history_manager.update_case_access(directory_path)
+                        print(f"[Config] Updated access time for case: {case_name}")
+                    else:
+                        # Add new case to history
+                        case_info = {
+                            'name': case_name,
+                            'path': directory_path,
+                            'description': ''
+                        }
+                        self.case_history_manager.add_case(case_info)
+                        print(f"[Config] Added case to history: {case_name}")
+                except Exception as e:
+                    print(f"[Config] Failed to update case history: {e}")
+            
             # Save case config and mark as last
             case_config = {
                 'case_name': case_name,
@@ -6208,6 +6253,23 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             with open(config_path, 'w') as f:
                 json.dump(case_config, f, indent=4)
             self.save_last_case(case_config)
+            
+            # Detect Windows partition for the case
+            print("[Open Case] Detecting Windows partition...")
+            try:
+                # Check if partition is already configured
+                if 'windows_partition' not in case_config:
+                    # Detect and store Windows partition
+                    detected_partition = self.detect_and_set_windows_partition(offline_mode=False)
+                    if detected_partition:
+                        print(f"[Open Case] Windows partition detected: {detected_partition}")
+                    else:
+                        print("[Open Case] Windows partition detection failed, defaulting to C:")
+                else:
+                    print(f"[Open Case] Using configured Windows partition: {case_config['windows_partition']}")
+            except Exception as e:
+                print(f"[Open Case] Error during partition detection: {e}")
+                print("[Open Case] Defaulting to C: partition")
         
             # Check if this is a new case (no database files exist yet)
             db_files_exist = any(os.path.exists(db_path) for db_path in case_config['databases'].values())
@@ -6294,6 +6356,164 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except Exception as e:
             print(f"[Error] Failed to save case configuration: {str(e)}")
             return None
+
+    def get_windows_partition(self) -> str:
+        """
+        Get Windows partition letter for the current case.
+        
+        Returns:
+            str: Windows partition letter (e.g., "C:") or "C:" as default
+        """
+        # Check if case configuration exists
+        if not hasattr(self, 'case_paths') or not self.case_paths:
+            print("[Warning] No active case, defaulting to C: partition")
+            return "C:"
+        
+        case_name = os.path.basename(self.case_paths.get('case_root', ''))
+        if not case_name:
+            print("[Warning] Invalid case name, defaulting to C: partition")
+            return "C:"
+        
+        # Try to load from case configuration file
+        try:
+            config_dir, _ = self.get_app_config_dir()
+            config_path = os.path.join(config_dir, f"case_{case_name}.json")
+            
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as config_file:
+                    case_config = json.load(config_file)
+                    
+                # Get windows_partition from config, default to "C:" if not found
+                windows_partition = case_config.get('windows_partition', 'C:')
+                print(f"[Info] Windows partition for case '{case_name}': {windows_partition}")
+                return windows_partition
+            else:
+                print(f"[Warning] Case config not found, defaulting to C: partition")
+                return "C:"
+                
+        except Exception as e:
+            print(f"[Error] Failed to load Windows partition from config: {e}")
+            return "C:"
+    
+    def set_windows_partition(self, partition: str):
+        """
+        Set Windows partition letter for the current case.
+        
+        Args:
+            partition: Windows partition letter (e.g., "D:")
+        """
+        # Validate partition format
+        if not partition or len(partition) < 2 or partition[1] != ':':
+            print(f"[Error] Invalid partition format: {partition}. Expected format like 'C:'")
+            return False
+        
+        # Check if case configuration exists
+        if not hasattr(self, 'case_paths') or not self.case_paths:
+            print("[Error] No active case to set Windows partition")
+            return False
+        
+        case_name = os.path.basename(self.case_paths.get('case_root', ''))
+        if not case_name:
+            print("[Error] Invalid case name, cannot set Windows partition")
+            return False
+        
+        # Update case configuration file
+        try:
+            config_dir, _ = self.get_app_config_dir()
+            config_path = os.path.join(config_dir, f"case_{case_name}.json")
+            
+            # Load existing config
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as config_file:
+                    case_config = json.load(config_file)
+            else:
+                # Create new config if doesn't exist
+                case_config = {
+                    'case_name': case_name,
+                    'opened_date': datetime.datetime.now().isoformat(),
+                    'paths': self.case_paths
+                }
+            
+            # Update windows_partition field
+            case_config['windows_partition'] = partition
+            case_config['partition_detection_timestamp'] = datetime.datetime.now().isoformat()
+            
+            # Save updated config
+            with open(config_path, 'w') as config_file:
+                json.dump(case_config, config_file, indent=4)
+            
+            # Update last case file
+            self.save_last_case(case_config)
+            
+            print(f"[Info] Windows partition set to {partition} for case '{case_name}'")
+            return True
+            
+        except Exception as e:
+            print(f"[Error] Failed to set Windows partition: {e}")
+            return False
+    
+    def detect_and_set_windows_partition(self, offline_mode: bool = False, 
+                                        mounted_partitions: list = None):
+        """
+        Detect Windows partition and store in case configuration.
+        
+        Args:
+            offline_mode: If True, scan for Windows installations on mounted partitions
+            mounted_partitions: List of partition paths to scan (for offline mode)
+            
+        Returns:
+            str: Detected Windows partition letter or None if detection failed
+        """
+        try:
+            from Artifacts_Collectors.windows_partition_detector import WindowsPartitionDetector
+            
+            detector = WindowsPartitionDetector()
+            
+            if offline_mode:
+                # Offline detection
+                print("[Info] Detecting Windows installations on offline disk images...")
+                windows_partitions = detector.detect_offline_system(mounted_partitions)
+                
+                if not windows_partitions:
+                    print("[Warning] No Windows installations found")
+                    QMessageBox.warning(
+                        self.main_window,
+                        "No Windows Installation Found",
+                        "No Windows installation detected on the specified partitions.\n"
+                        "Please verify the disk image is mounted correctly or manually specify the partition."
+                    )
+                    return None
+                
+                # Handle multiple installations
+                if len(windows_partitions) > 1:
+                    selected_partition = detector.prompt_user_selection(windows_partitions)
+                else:
+                    selected_partition = windows_partitions[0]
+                
+                # Store in configuration
+                self.set_windows_partition(selected_partition)
+                return selected_partition
+                
+            else:
+                # Live detection
+                print("[Info] Detecting Windows partition on live system...")
+                windows_partition = detector.detect_live_system()
+                
+                # Store in configuration
+                self.set_windows_partition(windows_partition)
+                return windows_partition
+                
+        except Exception as e:
+            print(f"[Error] Windows partition detection failed: {e}")
+            QMessageBox.critical(
+                self.main_window,
+                "Detection Error",
+                f"Failed to detect Windows partition:\n{str(e)}\n\n"
+                "Defaulting to C: drive. You can manually override this in case settings."
+            )
+            # Default to C: on error
+            self.set_windows_partition("C:")
+            return "C:"
 
     def clear_all_tables(self):
         """Clear all data from all tables in the application"""
@@ -6476,6 +6696,19 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     
                 # Update UI with case name
                 self.label.setText(f"Case: {dir_name}")
+                
+                # Add case to history
+                if hasattr(self, 'case_history_manager') and self.case_history_manager:
+                    try:
+                        case_info = {
+                            'name': dir_name,
+                            'path': self.case_paths['case_root'],
+                            'description': ''
+                        }
+                        self.case_history_manager.add_case(case_info)
+                        print(f"[Config] Added new case to history: {dir_name}")
+                    except Exception as e:
+                        print(f"[Config] Failed to add case to history: {e}")
                     
                 QMessageBox.information(
                     self.main_window,
@@ -6563,6 +6796,40 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.open_case()
             else:  # Exit button or dialog closed
                 sys.exit(0)
+    
+    def open_settings_dialog(self):
+        """Open the settings dialog."""
+        try:
+            from ui.settings_dialog import show_settings_dialog
+            
+            # Get current case path if available
+            current_case_path = None
+            if hasattr(self, 'case_paths') and self.case_paths:
+                current_case_path = self.case_paths.get('case_root')
+            
+            # Show settings dialog
+            if hasattr(self, 'case_history_manager') and self.case_history_manager:
+                show_settings_dialog(
+                    self.case_history_manager,
+                    current_case_path,
+                    self.main_window
+                )
+            else:
+                QMessageBox.warning(
+                    self.main_window,
+                    "Settings Unavailable",
+                    "Case history manager is not initialized."
+                )
+                
+        except Exception as e:
+            print(f"[Error] Failed to open settings dialog: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window,
+                "Error",
+                f"Failed to open settings dialog:\n{str(e)}"
+            )
 
     def show_loading_screen_with_function(self, title, function_to_run, *args, run_in_thread=False, **kwargs):
         """Show enhanced cyberpunk loading screen while running a function"""
@@ -6821,7 +7088,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print("[Prefetch] Starting prefetch collection...")
             from Artifacts_Collectors.Prefetch_claw import process_prefetch_files
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-            process_prefetch_files(case_path=case_root, offline_mode=False)
+            windows_partition = self.get_windows_partition()
+            process_prefetch_files(case_path=case_root, offline_mode=False, windows_partition=windows_partition)
             print("[Prefetch] Prefetch data collected successfully")
             # Load the data into the UI using the correct method
             self.load_data_from_Prefetch()
@@ -6884,9 +7152,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             else:
                 db_path = 'amcache.db'
                 
-            # Run the Amcache parser
+            # Run the Amcache parser with detected Windows partition
             offline_mode = False
-            result_db_path = parse_amcache_hive(case_path=case_root, offline_mode=offline_mode, db_path=db_path)
+            windows_partition = self.get_windows_partition()
+            result_db_path = parse_amcache_hive(case_path=case_root, offline_mode=offline_mode, 
+                                                db_path=db_path, windows_partition=windows_partition)
             print("[Amcache] Amcache data collected successfully")
             
             # Update case configuration with the database path
@@ -7089,9 +7359,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 from Artifacts_Collectors.SRUM_Claw import parse_srum_data
                 artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
                 
-                # Run the SRUM parser with artifacts directory
+                # Run the SRUM parser with artifacts directory and detected Windows partition
                 if artifacts_dir:
-                    result = parse_srum_data(case_artifacts_dir=artifacts_dir)
+                    windows_partition = self.get_windows_partition()
+                    result = parse_srum_data(case_artifacts_dir=artifacts_dir, windows_partition=windows_partition)
                     if result.get('success'):
                         print(f"[SRUM] SRUM data collected successfully: {result.get('statistics', {})}")
                     else:
@@ -7386,7 +7657,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print("[Offline Prefetch] Starting offline prefetch analysis...")
             from Artifacts_Collectors.Prefetch_claw import process_prefetch_files
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-            process_prefetch_files(case_path=case_root, offline_mode=True)
+            windows_partition = self.get_windows_partition()
+            process_prefetch_files(case_path=case_root, offline_mode=True, windows_partition=windows_partition)
             print("[Offline Prefetch] Offline prefetch analyzed successfully")
             # Load the data into the UI using the correct method
             self.load_data_from_Prefetch()
@@ -7400,9 +7672,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print("[Offline Registry] Starting offline registry analysis...")
             from Artifacts_Collectors.offline_RegClaw import reg_Claw
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+            windows_partition = self.get_windows_partition()
             
             # Call the offline registry analysis function
-            reg_Claw(case_root=case_root, offline_mode=True)
+            reg_Claw(case_root=case_root, offline_mode=True, windows_partition=windows_partition)
             print("[Offline Registry] Offline registry analyzed successfully")
             
             # Load the data into the UI using the correct method
@@ -7488,7 +7761,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     # Import and call the prefetch collection function
                     from Artifacts_Collectors.Prefetch_claw import prefetch_claw
                     case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                    prefetch_claw(case_path=case_root, offline_mode=False)
+                    windows_partition = self.get_windows_partition()
+                    prefetch_claw(case_path=case_root, offline_mode=False, windows_partition=windows_partition)
                     print("[Prefetch] Prefetch data collected successfully")
                 except Exception as e:
                     print(f"[Prefetch Error] {str(e)}")
@@ -7538,9 +7812,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         db_path = os.path.join(artifacts_dir, 'amcache.db')
                     else:
                         db_path = 'amcache.db'
-                    # Run the Amcache parser
+                    # Run the Amcache parser with detected Windows partition
                     offline_mode = False
-                    parse_amcache_hive(case_path=case_root, offline_mode=offline_mode, db_path=db_path)
+                    windows_partition = self.get_windows_partition()
+                    parse_amcache_hive(case_path=case_root, offline_mode=offline_mode, 
+                                      db_path=db_path, windows_partition=windows_partition)
                     print("[Amcache] Amcache data collected successfully")
                 except Exception as e:
                     print(f"[Amcache Error] {str(e)}")
@@ -7575,9 +7851,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     from Artifacts_Collectors.SRUM_Claw import parse_srum_data
                     artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
                     
-                    # Run the SRUM parser with artifacts directory
+                    # Run the SRUM parser with artifacts directory and detected Windows partition
                     if artifacts_dir:
-                        result = parse_srum_data(case_artifacts_dir=artifacts_dir)
+                        windows_partition = self.get_windows_partition()
+                        result = parse_srum_data(case_artifacts_dir=artifacts_dir, windows_partition=windows_partition)
                         if result.get('success'):
                             print(f"[SRUM] SRUM data collected successfully: {result.get('statistics', {})}")
                         else:
@@ -7680,7 +7957,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print("[Prefetch] Collecting prefetch data...")
                 from Artifacts_Collectors.Prefetch_claw import process_prefetch_files
                 case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                process_prefetch_files(case_path=case_root, offline_mode=False)
+                windows_partition = self.get_windows_partition()
+                process_prefetch_files(case_path=case_root, offline_mode=False, windows_partition=windows_partition)
             except Exception as e:
                 print(f"[Prefetch Error] {str(e)}")
             try:
@@ -7709,7 +7987,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 from Artifacts_Collectors.SRUM_Claw import parse_srum_data
                 artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
                 if artifacts_dir:
-                    result = parse_srum_data(case_artifacts_dir=artifacts_dir)
+                    windows_partition = self.get_windows_partition()
+                    result = parse_srum_data(case_artifacts_dir=artifacts_dir, windows_partition=windows_partition)
                     if result.get('success'):
                         print(f"[SRUM] SRUM data collected successfully: {result.get('statistics', {})}")
                     else:
@@ -8878,15 +9157,46 @@ if __name__ == "__main__":
     from ui.row_detail_dialog_handler import connect_table_double_click_events
     connect_table_double_click_events(ui)
     
-    # Try to load the last case first
-    # load_last_case will only return False if there's no last case file
-    # or if the case directory doesn't exist
-    last_case_loaded = ui.load_last_case()
+    # Initialize case history manager
+    try:
+        from config import CaseHistoryManager
+        case_history_manager = CaseHistoryManager()
+        ui.case_history_manager = case_history_manager
+    except Exception as e:
+        print(f"[Warning] Could not initialize case history manager: {e}")
+        case_history_manager = None
     
-    # Only show the case dialog if there's no last case to load
-    if not last_case_loaded:
-        print("[Info] No valid last case found. Showing case dialog.")
-        # Show dialog to create new case or open existing one
+    # Check if we have case history
+    has_case_history = case_history_manager and len(case_history_manager.case_history) > 0
+    
+    if has_case_history:
+        # Show startup menu with recent cases
+        print("[Info] Case history found. Showing startup menu.")
+        try:
+            from ui.startup_menu import show_startup_menu
+            choice = show_startup_menu(case_history_manager, Crow_Eye)
+            
+            if choice is None:
+                # User cancelled, exit
+                sys.exit(0)
+            elif choice == 'create':
+                # Create new case
+                ui.create_directory()
+            elif choice == 'open':
+                # Open existing case
+                ui.open_case()
+            else:
+                # choice is a CaseMetadata object - open that case
+                ui.open_case(choice.path)
+        except Exception as e:
+            print(f"[Error] Failed to show startup menu: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to existing dialog
+            ui.show_case_dialog()
+    else:
+        # No case history - show existing case creation dialog
+        print("[Info] No case history found. Showing case dialog.")
         ui.show_case_dialog()
     
     sys.exit(app.exec_())
