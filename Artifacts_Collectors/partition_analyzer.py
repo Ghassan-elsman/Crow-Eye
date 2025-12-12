@@ -2013,6 +2013,69 @@ class PartitionAnalyzer:
             import traceback
             traceback.print_exc()
             return []
+    
+    def detect_windows_installation(self, partition_path: str) -> bool:
+        """
+        Detect if a partition contains a Windows installation.
+        
+        This method checks for the presence of Windows directory structure
+        and verifies the installation by checking for critical system files.
+        
+        Args:
+            partition_path: Path to partition root (e.g., "D:\\")
+            
+        Returns:
+            bool: True if Windows installation found, False otherwise
+        """
+        # Ensure partition path ends with backslash
+        if not partition_path.endswith('\\'):
+            partition_path += '\\'
+        
+        # Check for Windows directory
+        windows_dir = os.path.join(partition_path, "Windows")
+        if not os.path.exists(windows_dir):
+            return False
+        
+        # Check for System32 directory
+        system32_dir = os.path.join(windows_dir, "System32")
+        if not os.path.exists(system32_dir):
+            return False
+        
+        # Verify by checking for critical system files
+        critical_files = [
+            os.path.join(system32_dir, "ntoskrnl.exe"),
+            os.path.join(system32_dir, "kernel32.dll"),
+            os.path.join(system32_dir, "ntdll.dll")
+        ]
+        
+        found_files = sum(1 for f in critical_files if os.path.exists(f))
+        
+        # Require at least 2 out of 3 critical files
+        return found_files >= 2
+    
+    def get_windows_partition_letter(self) -> Optional[str]:
+        """
+        Get the partition letter containing the Windows installation.
+        
+        Returns:
+            str: Partition letter (e.g., "C:") or None if not found
+        """
+        # Try environment variable first (for live systems)
+        system_root = os.getenv('SystemRoot')
+        if system_root and ':' in system_root:
+            partition_letter = system_root.split(':')[0] + ':'
+            if self.detect_windows_installation(partition_letter + '\\'):
+                return partition_letter
+        
+        # Scan all partitions
+        partitions = self.get_all_partitions()
+        for partition in partitions:
+            if partition.mountpoint and partition.mountpoint.endswith(':\\'):
+                if self.detect_windows_installation(partition.mountpoint):
+                    partition_letter = partition.mountpoint.rstrip('\\')
+                    return partition_letter
+        
+        return None
 
 
 
