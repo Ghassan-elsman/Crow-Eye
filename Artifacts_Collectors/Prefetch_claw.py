@@ -1197,17 +1197,19 @@ class PrefetchFile:
         
         return None
 
-def process_prefetch_files(case_path: str = None, offline_mode: bool = False):
+def process_prefetch_files(case_path: str = None, offline_mode: bool = False, windows_partition: str = "C:"):
     """
     Process prefetch files and store results in a SQLite database with case management.
     
     Args:
         case_path (str, optional): Path to the case directory for offline analysis.
         offline_mode (bool): If True, process files from case_path/Target_Artifacts/Prefetch.
+        windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
     """
     # Set the database path and prefetch directory
     default_db_path = "prefetch_data.db"
-    default_prefetch_dir = "C:\\Windows\\Prefetch"
+    # Construct prefetch directory path dynamically based on Windows partition
+    default_prefetch_dir = f"{windows_partition}\\Windows\\Prefetch"
     
     if offline_mode and case_path:
         artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
@@ -1223,11 +1225,11 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False):
             artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
             os.makedirs(artifacts_dir, exist_ok=True)
             db_path = os.path.join(artifacts_dir, 'prefetch_data.db')
-            print(f"Live mode with case: Using prefetch files from {default_prefetch_dir}")
+            print(f"Live mode with case (Windows partition: {windows_partition}): Using prefetch files from {default_prefetch_dir}")
             print(f"Database will be saved to: {db_path}")
         else:
             db_path = default_db_path
-            print(f"Live mode: Using prefetch files from {default_prefetch_dir}")
+            print(f"Live mode (Windows partition: {windows_partition}): Using prefetch files from {default_prefetch_dir}")
             print(f"Database will be saved to: {db_path}")
         prefetch_dir = default_prefetch_dir
     
@@ -1276,14 +1278,15 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False):
         if total_pf_files == 0:
             print("No .pf files found in the prefetch directory.")
 
-def prefetch_claw(case_path=None, offline_mode=False):
+def prefetch_claw(case_path=None, offline_mode=False, windows_partition="C:"):
     """Wrapper function for process_prefetch_files to maintain compatibility with Crow Eye.
     
     Args:
         case_path (str, optional): Path to the case directory.
         offline_mode (bool): If True, process files from case_path/Target_Artifacts/Prefetch.
+        windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
     """
-    return process_prefetch_files(case_path=case_path, offline_mode=offline_mode)
+    return process_prefetch_files(case_path=case_path, offline_mode=offline_mode, windows_partition=windows_partition)
 
 if __name__ == "__main__":
     # Example usage: Live mode
