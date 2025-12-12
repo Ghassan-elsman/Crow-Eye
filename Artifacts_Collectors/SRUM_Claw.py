@@ -1068,7 +1068,7 @@ class SRUMParser:
         # Not found - return descriptive text
         return (f"Unknown SID (ID:{user_id})", f"Unknown User (ID:{user_id})")
     
-    def copy_srum_database(self, source_path: str = None) -> str:
+    def copy_srum_database(self, source_path: str = None, windows_partition: str = "C:") -> str:
         """Copy SRUDB.dat from system location to temporary location.
         
         Required because the file is locked by Windows. Uses multiple methods:
@@ -1078,6 +1078,7 @@ class SRUMParser:
         
         Args:
             source_path (str, optional): Path to SRUDB.dat. Defaults to system location.
+            windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
             
         Returns:
             str: Path to copied SRUDB.dat file
@@ -1086,7 +1087,8 @@ class SRUMParser:
             SRUMFileAccessError: If copy fails
         """
         if source_path is None:
-            source_path = r"C:\Windows\System32\sru\SRUDB.dat"
+            # Construct path dynamically based on Windows partition
+            source_path = f"{windows_partition}\\Windows\\System32\\sru\\SRUDB.dat"
         
         # Create temporary directory
         self.temp_dir = tempfile.mkdtemp(prefix="srum_parse_")
@@ -2040,7 +2042,7 @@ class SRUMParser:
         return parsed_data
 
 
-def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callable] = None) -> Dict[str, any]:
+def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callable] = None, windows_partition: str = "C:") -> Dict[str, any]:
     """Main entry point for SRUM parsing called by Crow Eye application.
     
     This function:
@@ -2055,6 +2057,7 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
     Args:
         case_artifacts_dir (str): Path to Target_Artifacts folder
         progress_callback (callable, optional): Callback for progress updates
+        windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
     
     Returns:
         dict: Dictionary with parsing results
@@ -2072,8 +2075,9 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
     parser = None
     
     try:
-        # Locate SRUDB.dat at default Windows location
-        srudb_path = r"C:\Windows\System32\sru\SRUDB.dat"
+        # Locate SRUDB.dat at Windows location based on partition
+        srudb_path = f"{windows_partition}\\Windows\\System32\\sru\\SRUDB.dat"
+        logger.info(f"Looking for SRUDB.dat at: {srudb_path} (Windows partition: {windows_partition})")
         
         if not os.path.exists(srudb_path):
             error_msg = f"SRUDB.dat not found at: {srudb_path}"
@@ -2102,7 +2106,7 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         # Copy SRUDB.dat to temporary location (file is locked by Windows)
         logger.info("Copying SRUDB.dat to temporary location (file is locked by Windows)")
         try:
-            temp_srudb_path = parser.copy_srum_database(srudb_path)
+            temp_srudb_path = parser.copy_srum_database(srudb_path, windows_partition)
             logger.info(f"Successfully copied SRUDB.dat to: {temp_srudb_path}")
         except SRUMFileAccessError as copy_error:
             error_msg = f"Failed to copy SRUDB.dat: {str(copy_error)}"
