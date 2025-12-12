@@ -25,11 +25,24 @@ except ImportError:
 
 # Configuration variables
 LIVE_ANALYSIS = True  # Set to True for live analysis, False for offline analysis
-LIVE_AMCACHE_PATH = r"C:\Windows\AppCompat\Programs\Amcache.hve"  # Path for live Amcache.hve
+# Note: LIVE_AMCACHE_PATH is now constructed dynamically based on windows_partition parameter
+# Default offline path (can be overridden)
 OFFLINE_AMCACHE_PATH = r"E:\Crow Eye research\Amcache.hve"  # Path for offline Amcache.hve
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 NORMALIZED_DATABASE_PATH = os.path.join(SCRIPT_DIR, r"Amcashedb.db")  # Normalized database path
 SEARCH_KEYS = None  # Set to None for all keys or a list like ["Root\\InventoryApplication"]
+
+def get_live_amcache_path(windows_partition: str = "C:") -> str:
+    """
+    Get the live Amcache.hve path based on Windows partition.
+    
+    Args:
+        windows_partition: Windows partition letter (e.g., "C:", "D:")
+        
+    Returns:
+        str: Full path to Amcache.hve
+    """
+    return f"{windows_partition}\\Windows\\AppCompat\\Programs\\Amcache.hve"
 
 # Schema for normalized database tables (name after id if present, parsed_at last)
 AMCACHE_SCHEMAS = {
@@ -353,12 +366,13 @@ class RegistryHivesLive(object):
 
 # Class to parse Amcache.hve and store in a normalized SQLite database
 class AmcacheParser:
-    def __init__(self, file_path: str, normalized_db_path: str):
+    def __init__(self, file_path: str, normalized_db_path: str, windows_partition: str = "C:"):
         print("Loading Amcache.hve file...")
         sys.stdout.flush()  # Allow UI to process events
         self.handle = RegistryHivesLive().open_apphive_by_file(file_path)
         sys.stdout.flush()  # Allow UI to process events
         self.normalized_db_path = normalized_db_path
+        self.windows_partition = windows_partition  # Store Windows partition for path construction
         self._init_database()
         print("Database initialized.")
         sys.stdout.flush()  # Allow UI to process events
@@ -564,7 +578,9 @@ class AmcacheParser:
                     values[field] = "Installed"
                     continue
                 elif field == "mare_path":
-                    values[field] = data_json.get("Path", f"C:\\Program Files\\Mare_{entry_id[:8]}")
+                    # Use dynamic Windows partition instead of hardcoded C:
+                    default_path = f"{self.windows_partition}\\Program Files\\Mare_{entry_id[:8]}"
+                    values[field] = data_json.get("Path", default_path)
                     continue
                 elif field == "mare_flags":
                     values[field] = data_json.get("Flags", "0")
@@ -773,18 +789,19 @@ def isAdmin() -> bool:
     except AttributeError:
         return ctypes.windll.shell32.IsUserAnAdmin() != 0
 
-def parse_amcache_hive(case_path=None, offline_mode=False, db_path=None):
+def parse_amcache_hive(case_path=None, offline_mode=False, db_path=None, windows_partition="C:"):
     """Parse Amcache hive file and save data to SQLite database.
     
     Args:
         case_path (str, optional): Path to the case directory. Defaults to None.
         offline_mode (bool, optional): Whether to run in offline mode. Defaults to False.
         db_path (str, optional): Path to save the database file. Defaults to None.
+        windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
     
     Returns:
         str: Path to the Amcache database file
     """
-    print("[Amcache] Starting Amcache parser...")
+    print(f"[Amcache] Starting Amcache parser (Windows partition: {windows_partition})...")
     print("[Amcache] This may take a few minutes depending on the size of the Amcache hive.")
     sys.stdout.flush()
     
@@ -814,18 +831,18 @@ def parse_amcache_hive(case_path=None, offline_mode=False, db_path=None):
         else:
             filepath = OFFLINE_AMCACHE_PATH
     else:
-        # Live mode - use live system path
+        # Live mode - use dynamic path based on Windows partition
         if system() == 'Windows' and int(version().split(".")[0]) < 7:
             print("[Amcache Error] Your system is not compatible with Amcache.hve")
             return None
-        filepath = LIVE_AMCACHE_PATH
+        filepath = get_live_amcache_path(windows_partition)
 
     if not os.path.exists(filepath):
         print(f"[Amcache Error] Input file does not exist: {filepath}")
         return None
 
     try:
-        ap = AmcacheParser(filepath, db_path)
+        ap = AmcacheParser(filepath, db_path, windows_partition)
         yield_to_ui()  # Allow UI to process events before starting parse
         ap.parse(search_key=SEARCH_KEYS)
         print(f"[Amcache] Data saved to {db_path}")
@@ -837,17 +854,18 @@ def parse_amcache_hive(case_path=None, offline_mode=False, db_path=None):
             print("[Amcache Error] Error loading hive. Try execute as administrator")
         return None
 
-def amcache_parser(case_path=None, offline_mode=False):
+def amcache_parser(case_path=None, offline_mode=False, windows_partition="C:"):
     """Wrapper function for Amcache parser with case management integration.
     
     Args:
         case_path (str, optional): Path to the case directory. Defaults to None.
         offline_mode (bool, optional): Whether to run in offline mode. Defaults to False.
+        windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
     
     Returns:
         str: Path to the Amcache database file
     """
-    print("Starting Amcache parser...")
+    print(f"Starting Amcache parser (Windows partition: {windows_partition})...")
     
     # Set database path based on case management
     if case_path and os.path.exists(case_path):
@@ -867,18 +885,18 @@ def amcache_parser(case_path=None, offline_mode=False):
         else:
             filepath = OFFLINE_AMCACHE_PATH
     else:
-        # Live mode - use live system path
+        # Live mode - use dynamic path based on Windows partition
         if system() == 'Windows' and int(version().split(".")[0]) < 7:
             print("Your system is not compatible with Amcache.hve")
             return None
-        filepath = LIVE_AMCACHE_PATH
+        filepath = get_live_amcache_path(windows_partition)
 
     if not os.path.exists(filepath):
         print(f"[Amcache] Input file does not exist: {filepath}")
         return None
 
     try:
-        ap = AmcacheParser(filepath, db_path)
+        ap = AmcacheParser(filepath, db_path, windows_partition)
         ap.parse(search_key=SEARCH_KEYS)
         print(f"[Amcache] Data saved to {db_path}")
         return db_path
