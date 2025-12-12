@@ -1,4 +1,4 @@
-def reg_Claw(case_root=None, offline_mode=False):    
+def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):    
     import sqlite3
     from Registry import Registry
     print("Import successful")
@@ -22,9 +22,17 @@ def reg_Claw(case_root=None, offline_mode=False):
         print(f"[Offline Registry] SOFTWARE: {Software_reg_hive}")
     else:
         # Use default paths for live system analysis
-        Ntuser_reg_hive = os.path.join(os.getenv('USERPROFILE', ''), 'NTUSER.DAT')
-        system_reg_hive = os.path.join(os.getenv('SystemRoot', ''), 'System32', 'config', 'SYSTEM')
-        Software_reg_hive = os.path.join(os.getenv('SystemRoot', ''), 'System32', 'config', 'SOFTWARE')
+        # Note: os.getenv('SystemRoot') already provides dynamic partition detection
+        # The windows_partition parameter is available for explicit override if needed
+        system_root = os.getenv('SystemRoot', f'{windows_partition}\\Windows')
+        user_profile = os.getenv('USERPROFILE', f'{windows_partition}\\Users\\Default')
+        
+        Ntuser_reg_hive = os.path.join(user_profile, 'NTUSER.DAT')
+        system_reg_hive = os.path.join(system_root, 'System32', 'config', 'SYSTEM')
+        Software_reg_hive = os.path.join(system_root, 'System32', 'config', 'SOFTWARE')
+        
+        print(f"[Registry] Using Windows partition: {windows_partition}")
+        print(f"[Registry] SystemRoot: {system_root}")
 
         # Fallback to local paths if needed
         if not os.path.exists(Ntuser_reg_hive) or not os.path.exists(system_reg_hive) or not os.path.exists(Software_reg_hive):
