@@ -160,7 +160,8 @@ class ShimCacheParser:
         
         conn.commit()
         conn.close()
-        print(f"✓ Database initialized: {self.database_path}")
+        # Use ASCII-safe character instead of Unicode checkmark to avoid encoding errors
+        print(f"[OK] Database initialized: {self.database_path}")
     
     def filetime_to_datetime(self, filetime: int) -> Optional[datetime.datetime]:
         """
@@ -236,7 +237,7 @@ class ShimCacheParser:
         index = 52  # Skip 52-byte header
         entry_count = 0
         
-        print("📊 Parsing Windows 10/11 format...")
+        print("[INFO] Parsing Windows 10/11 format...")
         
         while index < len(data) - 20:  # Ensure minimum entry size
             try:
@@ -305,14 +306,14 @@ class ShimCacheParser:
                 entry_count += 1
                 
                 if entry_count % 100 == 0:
-                    print(f"  📝 Parsed {entry_count} entries...")
+                    print(f"  [PROGRESS] Parsed {entry_count} entries...")
                 
             except (struct.error, UnicodeDecodeError, IndexError) as e:
-                print(f"⚠️  Error parsing entry at offset {index}: {e}")
+                print(f"[WARNING] Error parsing entry at offset {index}: {e}")
                 index += 1
                 continue
         
-        print(f"✓ Successfully parsed {len(entries)} Windows 10/11 entries")
+        print(f"[OK] Successfully parsed {len(entries)} Windows 10/11 entries")
         return entries
     
     def parse_windows_7(self, data: bytes) -> List[ShimCacheEntry]:
@@ -332,7 +333,7 @@ class ShimCacheParser:
         """
         entries = []
         
-        print("📊 Parsing Windows 7 format...")
+        print("[INFO] Parsing Windows 7 format...")
         
         try:
             # Get number of entries (first 4 bytes after header)
@@ -340,7 +341,7 @@ class ShimCacheParser:
                 return entries
                 
             num_entries = struct.unpack('<I', data[4:8])[0]
-            print(f"  📋 Found {num_entries} entries in Windows 7 format")
+            print(f"  [INFO] Found {num_entries} entries in Windows 7 format")
             
             index = 8  # Start after header
             
@@ -401,16 +402,16 @@ class ShimCacheParser:
                     entries.append(entry)
                     
                     if (i + 1) % 100 == 0:
-                        print(f"  📝 Parsed {i + 1}/{num_entries} entries...")
+                        print(f"  [PROGRESS] Parsed {i + 1}/{num_entries} entries...")
                         
                 except (struct.error, UnicodeDecodeError, IndexError) as e:
-                    print(f"⚠️  Error parsing Windows 7 entry {i}: {e}")
+                    print(f"[WARNING] Error parsing Windows 7 entry {i}: {e}")
                     continue
                     
         except Exception as e:
-            print(f"❌ Error parsing Windows 7 format: {e}")
+            print(f"[ERROR] Error parsing Windows 7 format: {e}")
         
-        print(f"✓ Successfully parsed {len(entries)} Windows 7 entries")
+        print(f"[OK] Successfully parsed {len(entries)} Windows 7 entries")
         return entries
     
     def parse_shimcache_data(self, data: bytes) -> List[ShimCacheEntry]:
@@ -424,18 +425,18 @@ class ShimCacheParser:
             List[ShimCacheEntry]: All parsed cache entries
         """
         if not data or len(data) < 20:
-            print("❌ Invalid or empty ShimCache data")
+            print("[ERROR] Invalid or empty ShimCache data")
             return []
         
         version = self.detect_windows_version(data)
-        print(f"🔍 Detected Windows version: {version}")
+        print(f"[INFO] Detected Windows version: {version}")
         
         if version == "Windows 10/11":
             return self.parse_windows_10_11(data)
         elif version == "Windows 7":
             return self.parse_windows_7(data)
         else:
-            print("⚠️  Unknown Windows version, attempting Windows 10/11 parsing...")
+            print("[WARNING] Unknown Windows version, attempting Windows 10/11 parsing...")
             return self.parse_windows_10_11(data)
     
     def get_live_registry_data(self) -> Optional[bytes]:
@@ -448,7 +449,7 @@ class ShimCacheParser:
             bytes: Raw ShimCache data or None if failed
         """
         if not LIVE_REGISTRY_AVAILABLE:
-            print("❌ Live registry access not available on this platform")
+            print("[ERROR] Live registry access not available on this platform")
             return None
         
         try:
@@ -464,19 +465,19 @@ class ShimCacheParser:
                     key = OpenKey(HKEY_LOCAL_MACHINE, path)
                     data, _ = QueryValueEx(key, "AppCompatCache")
                     CloseKey(key)
-                    print(f"✓ Successfully read ShimCache data from {path}")
+                    print(f"[OK] Successfully read ShimCache data from {path}")
                     return data
                 except FileNotFoundError:
                     continue
                 except Exception as e:
-                    print(f"⚠️  Error reading from {path}: {e}")
+                    print(f"[WARNING] Error reading from {path}: {e}")
                     continue
             
-            print("❌ Could not find ShimCache data in any control set")
+            print("[ERROR] Could not find ShimCache data in any control set")
             return None
             
         except Exception as e:
-            print(f"❌ Error accessing live registry: {e}")
+            print(f"[ERROR] Error accessing live registry: {e}")
             return None
     
     def check_duplicate_exists(self, entry: ShimCacheEntry) -> bool:
@@ -510,7 +511,7 @@ class ShimCacheParser:
             entries (List[ShimCacheEntry]): Entries to save
         """
         if not entries:
-            print("📝 No entries to save")
+            print("[INFO] No entries to save")
             return
         
         conn = sqlite3.connect(self.database_path)
@@ -521,7 +522,7 @@ class ShimCacheParser:
         new_entries = 0
         duplicates = 0
         
-        print(f"💾 Saving {len(entries)} entries to database...")
+        print(f"[INFO] Saving {len(entries)} entries to database...")
         
         for entry in entries:
             # Check for duplicates
@@ -565,10 +566,10 @@ class ShimCacheParser:
         conn.commit()
         conn.close()
         
-        print(f"✓ Database update complete:")
-        print(f"  📝 New entries added: {new_entries}")
-        print(f"  🔄 Duplicates skipped: {duplicates}")
-        print(f"  💾 Database: {self.database_path}")
+        print(f"[OK] Database update complete:")
+        print(f"  [INFO] New entries added: {new_entries}")
+        print(f"  [INFO] Duplicates skipped: {duplicates}")
+        print(f"  [INFO] Database: {self.database_path}")
     
     def print_summary(self, entries: List[ShimCacheEntry]):
         """
@@ -578,7 +579,7 @@ class ShimCacheParser:
             entries (List[ShimCacheEntry]): Entries to summarize
         """
         if not entries:
-            print("📊 No entries found")
+            print("[INFO] No entries found")
             return
         
         total = len(entries)
@@ -603,14 +604,14 @@ class ShimCacheParser:
         else:
             oldest = newest = None
         
-        print(f"\n🎯 === ShimCache Analysis Summary ===")
-        print(f"📊 Total entries parsed: {total}")
-        print(f"💾 Database: {self.database_path}")
+        print(f"\n[SUMMARY] === ShimCache Analysis Summary ===")
+        print(f"[INFO] Total entries parsed: {total}")
+        print(f"[INFO] Database: {self.database_path}")
         
         if timestamps:
-            print(f"📅 Time range: {oldest.strftime('%Y-%m-%d')} to {newest.strftime('%Y-%m-%d')}")
+            print(f"[INFO] Time range: {oldest.strftime('%Y-%m-%d')} to {newest.strftime('%Y-%m-%d')}")
         
-        print(f"\n🔧 Top file extensions:")
+        print(f"\n[INFO] Top file extensions:")
         for ext, count in sorted(extensions.items(), key=lambda x: x[1], reverse=True)[:10]:
             print(f"  .{ext}: {count} files")
     
@@ -618,24 +619,24 @@ class ShimCacheParser:
         """
         Main execution function with comprehensive error handling.
         """
-        print("🚀 ShimCache Enhanced Parser Starting...")
+        print("[INFO] ShimCache Enhanced Parser Starting...")
         print("=" * 50)
         
         try:
             # Get data from live registry
             data = self.get_live_registry_data()
             if not data:
-                print("❌ Failed to retrieve ShimCache data")
+                print("[ERROR] Failed to retrieve ShimCache data")
                 return
             
-            print(f"📊 Retrieved {len(data):,} bytes of ShimCache data")
+            print(f"[INFO] Retrieved {len(data):,} bytes of ShimCache data")
             
             # Parse the data
             entries = self.parse_shimcache_data(data)
             
             if entries:
                 # Process entries (extract filenames, format timestamps)
-                print("🔄 Processing entries...")
+                print("[INFO] Processing entries...")
                 for entry in entries:
                     entry.extract_filename()
                     entry.format_timestamp()
@@ -646,13 +647,13 @@ class ShimCacheParser:
                 # Print summary
                 self.print_summary(entries)
                 
-                print(f"\n✅ Analysis complete! Check database: {self.database_path}")
+                print(f"\n[SUCCESS] Analysis complete! Check database: {self.database_path}")
                 
             else:
-                print("❌ No entries were successfully parsed")
+                print("[ERROR] No entries were successfully parsed")
                 
         except Exception as e:
-            print(f"❌ Critical error during execution: {e}")
+            print(f"[ERROR] Critical error during execution: {e}")
             import traceback
             traceback.print_exc()
 
