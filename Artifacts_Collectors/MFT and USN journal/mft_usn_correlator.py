@@ -201,14 +201,36 @@ class MFTUSNCorrelator:
                 original_cwd = os.getcwd()
                 try:
                     os.chdir(self.case_directory)
-                    # Run MFT parser directly as a function
-                    result = mft_claw_main()
+                    logger.info(f"Changed to case directory: {os.getcwd()}")
+                    logger.info("Running MFT parser main function...")
+                    
+                    # Capture stdout/stderr to see parser output
+                    import io
+                    import contextlib
+                    
+                    stdout_capture = io.StringIO()
+                    stderr_capture = io.StringIO()
+                    
+                    with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                        result = mft_claw_main()
+                    
+                    # Log captured output
+                    stdout_text = stdout_capture.getvalue()
+                    stderr_text = stderr_capture.getvalue()
+                    
+                    if stdout_text:
+                        logger.info(f"MFT parser output:\n{stdout_text}")
+                    if stderr_text:
+                        logger.error(f"MFT parser errors:\n{stderr_text}")
+                    
+                    logger.info(f"MFT parser returned: {result}")
                     if result == 0:
                         logger.info("MFT parser completed successfully")
                     else:
-                        logger.warning("MFT parser may have had display issues but database might be created")
+                        logger.warning(f"MFT parser returned non-zero exit code: {result}")
                 finally:
                     os.chdir(original_cwd)
+                    logger.info(f"Restored directory: {os.getcwd()}")
             else:
                 # Fallback to subprocess execution
                 env = os.environ.copy()
@@ -226,8 +248,13 @@ class MFTUSNCorrelator:
             
             # Check if database was created despite any errors
             if not os.path.exists(self.mft_db):
-                logger.error("MFT database was not created")
-                return False
+                logger.warning("MFT database was not created - parser may have failed")
+                logger.warning(f"Expected location: {self.mft_db}")
+                logger.warning("This may be due to:")
+                logger.warning("  - No NTFS volumes detected")
+                logger.warning("  - Insufficient administrator privileges")
+                logger.warning("  - Parser encountered errors")
+                # Don't return False - continue with USN parser
                 
         except Exception as e:
             logger.error(f"Error running MFT parser: {e}")
@@ -242,14 +269,36 @@ class MFTUSNCorrelator:
                 original_cwd = os.getcwd()
                 try:
                     os.chdir(self.case_directory)
-                    # Run USN parser directly as a function
-                    result = usn_claw_main()
+                    logger.info(f"Changed to case directory: {os.getcwd()}")
+                    logger.info("Running USN parser main function...")
+                    
+                    # Capture stdout/stderr to see parser output
+                    import io
+                    import contextlib
+                    
+                    stdout_capture = io.StringIO()
+                    stderr_capture = io.StringIO()
+                    
+                    with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                        result = usn_claw_main()
+                    
+                    # Log captured output
+                    stdout_text = stdout_capture.getvalue()
+                    stderr_text = stderr_capture.getvalue()
+                    
+                    if stdout_text:
+                        logger.info(f"USN parser output:\n{stdout_text}")
+                    if stderr_text:
+                        logger.error(f"USN parser errors:\n{stderr_text}")
+                    
+                    logger.info(f"USN parser returned: {result}")
                     if result == 0:
                         logger.info("USN parser completed successfully")
                     else:
-                        logger.warning("USN parser may have failed due to privilege requirements or missing dependencies")
+                        logger.warning(f"USN parser returned non-zero exit code: {result}")
                 finally:
                     os.chdir(original_cwd)
+                    logger.info(f"Restored directory: {os.getcwd()}")
             else:
                 # Fallback to subprocess execution
                 env = os.environ.copy()
