@@ -7019,9 +7019,54 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 
     def run_mft_usn_correlation(self):
         """Run MFT and USN correlation analysis with loading screen and switch to MFT/USN tab"""
-        self.run_analysis_with_loading("Running MFT & USN Correlation...", self.parse_mft_usn_correlation)
-        # Switch to the MFT/USN main tab
-        self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.MFT_USN_main_tab))
+        
+        def _run_correlation_internal():
+            """Internal function to run correlation with proper error handling"""
+            try:
+                # Run only the correlation part (no GUI updates)
+                print("[MFT-USN] Starting MFT and USN Journal correlation...")
+                
+                # Get case directory information
+                case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                
+                # Import and run the MFT-USN correlator
+                import sys
+                import os
+                # Add the MFT and USN journal directory to Python path
+                mft_usn_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'MFT and USN journal')
+                if mft_usn_path not in sys.path:
+                    sys.path.insert(0, mft_usn_path)
+                from mft_usn_correlator import MFTUSNCorrelator
+                
+                # Initialize the correlator with case directory
+                correlator = MFTUSNCorrelator(case_directory=case_root)
+                
+                # Run the complete correlation analysis
+                correlator.run_correlation_for_case()
+                
+                print("[MFT-USN] MFT and USN Journal correlation completed successfully")
+                
+                # Load the correlated data into the UI
+                print("[MFT-USN] Loading data into GUI...")
+                self.load_mft_data()
+                self.load_usn_data()
+                self.load_correlated_data()
+                
+                # Switch to the MFT/USN main tab
+                self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.MFT_USN_main_tab))
+                print("[MFT-USN] Data loaded successfully")
+                
+            except Exception as e:
+                print(f"[MFT-USN Error] {str(e)}")
+                import traceback
+                traceback.print_exc()
+                raise
+        
+        # Use the loading dialog system
+        self.show_loading_screen_with_function(
+            "RUNNING MFT & USN CORRELATION",
+            _run_correlation_internal
+        )
     
     def run_recyclebin_analysis(self):
         """Run RecycleBin analysis with loading screen and switch to RecycleBin tab"""
@@ -7283,7 +7328,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             raise
 
     def parse_mft_usn_correlation(self):
-        """Parse and correlate MFT and USN Journal data"""
+        """Parse and correlate MFT and USN Journal data (without GUI updates)"""
         try:
             print("[MFT-USN] Starting MFT and USN Journal correlation...")
             
@@ -7308,10 +7353,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             print("[MFT-USN] MFT and USN Journal correlation completed successfully")
             
-            # Load the correlated data into the UI
-            self.load_mft_data()
-            self.load_usn_data()
-            self.load_correlated_data()
+            # Note: GUI loading is now handled separately by _load_correlation_data_to_gui
             
         except Exception as e:
             print(f"[MFT-USN Error] {str(e)}")
