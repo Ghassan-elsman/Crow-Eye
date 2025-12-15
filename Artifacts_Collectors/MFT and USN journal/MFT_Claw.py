@@ -1686,7 +1686,7 @@ class MFTParser:
             # Full format for wide terminals
             bar_width = 30
             filled = int(bar_width * percentage / 100)
-            bar = '█' * filled + '░' * (bar_width - filled)
+            bar = '#' * filled + '-' * (bar_width - filled)
             progress_msg = (
                 f"[{bar}] {percentage:5.1f}% | "
                 f"Records: {processed:,}{slack_indicator} | "
@@ -1699,7 +1699,7 @@ class MFTParser:
             # Medium format - shorter progress bar
             bar_width = 20
             filled = int(bar_width * percentage / 100)
-            bar = '█' * filled + '░' * (bar_width - filled)
+            bar = '#' * filled + '-' * (bar_width - filled)
             progress_msg = (
                 f"[{bar}] {percentage:4.1f}% | "
                 f"Rec: {processed:,}{slack_indicator} | "
@@ -1712,7 +1712,7 @@ class MFTParser:
             # Compact format - minimal progress bar
             bar_width = 15
             filled = int(bar_width * percentage / 100)
-            bar = '█' * filled + '░' * (bar_width - filled)
+            bar = '#' * filled + '-' * (bar_width - filled)
             progress_msg = (
                 f"[{bar}] {percentage:4.1f}% | "
                 f"Rec: {processed:,} | "
@@ -1725,7 +1725,7 @@ class MFTParser:
             # Minimal format for very small terminals
             bar_width = 10
             filled = int(bar_width * percentage / 100)
-            bar = '█' * filled + '░' * (bar_width - filled)
+            bar = '#' * filled + '-' * (bar_width - filled)
             progress_msg = f"[{bar}] {percentage:4.1f}% | {processed:,} rec | MFT: {total_data_mb:.0f}MB | {elapsed_time}"
         
         # Ensure message doesn't exceed terminal width
@@ -1849,7 +1849,7 @@ def main():
     
     print(f"{COLOR_INFO}Available NTFS volumes detected:{COLOR_RESET}")
     for vol in volumes:
-        print(f"{COLOR_SUCCESS}  ✓ {vol}:{COLOR_RESET}")
+        print(f"{COLOR_SUCCESS}  [OK] {vol}:{COLOR_RESET}")
     
     print(f"\n{COLOR_INFO}Starting automatic analysis of {len(volumes)} volume(s)...{COLOR_RESET}")
     print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
