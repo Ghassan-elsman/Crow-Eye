@@ -19,7 +19,22 @@ import importlib.util
 from pathlib import Path
 from datetime import datetime
 
-# Colorama for colored terminal output - MUST be defined before any usage
+# Import the main functions from MFT_Claw and USN_Claw for direct function calls
+# Add the current directory to sys.path to allow importing the scripts
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+try:
+    from MFT_Claw import main as mft_claw_main
+    from USN_Claw import main as usn_claw_main
+    HAS_DIRECT_IMPORTS = True
+except ImportError as e:
+    print(f"Warning: Could not import MFT/USN scripts directly: {e}")
+    print("Falling back to subprocess execution")
+    HAS_DIRECT_IMPORTS = False
+
+# Colorama for colored terminal output
 try:
     import colorama
     from colorama import Fore, Back, Style
@@ -37,89 +52,6 @@ try:
 except ImportError:
     # Fallback if colorama is not available
     COLOR_SUCCESS = COLOR_WARNING = COLOR_ERROR = COLOR_INFO = COLOR_HEADER = COLOR_PROGRESS = COLOR_RESET = ""
-
-# Import the main functions from MFT_Claw and USN_Claw for direct function calls
-# Add the current directory to sys.path to allow importing the scripts
-script_dir = os.path.dirname(os.path.abspath(__file__))
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
-
-try:
-    # Try different import approaches for EXE compatibility
-    mft_claw_main = None
-    usn_claw_main = None
-    
-    # Method 1: Direct import (works in development)
-    try:
-        from MFT_Claw import main as mft_claw_main
-        from USN_Claw import main as usn_claw_main
-        print(f"{COLOR_SUCCESS}Method 1: Direct import successful{COLOR_RESET}")
-    except ImportError as e1:
-        print(f"{COLOR_INFO}Method 1 failed: {e1}{COLOR_RESET}")
-        
-        # Method 2: Try with module path for EXE environment
-        try:
-            # Check if we're in a frozen environment
-            if getattr(sys, 'frozen', False):
-                # In EXE, try importing from the bundled modules
-                import Artifacts_Collectors
-                mft_module = __import__('Artifacts_Collectors.MFT and USN journal.MFT_Claw', fromlist=['main'])
-                usn_module = __import__('Artifacts_Collectors.MFT and USN journal.USN_Claw', fromlist=['main'])
-                mft_claw_main = mft_module.main
-                usn_claw_main = usn_module.main
-                print(f"{COLOR_SUCCESS}Method 2: EXE import successful{COLOR_RESET}")
-            else:
-                raise ImportError("Not in EXE environment")
-        except ImportError as e2:
-            print(f"{COLOR_INFO}Method 2 failed: {e2}{COLOR_RESET}")
-            
-            # Method 3: Try with importlib for file-based loading
-            try:
-                import importlib.util
-                
-                # Get the directory where this script is located
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                
-                # Try to load MFT_Claw
-                mft_path = os.path.join(current_dir, "MFT_Claw.py")
-                if os.path.exists(mft_path):
-                    mft_spec = importlib.util.spec_from_file_location("MFT_Claw", mft_path)
-                    if mft_spec and mft_spec.loader:
-                        mft_module = importlib.util.module_from_spec(mft_spec)
-                        mft_spec.loader.exec_module(mft_module)
-                        mft_claw_main = mft_module.main
-                
-                # Try to load USN_Claw
-                usn_path = os.path.join(current_dir, "USN_Claw.py")
-                if os.path.exists(usn_path):
-                    usn_spec = importlib.util.spec_from_file_location("USN_Claw", usn_path)
-                    if usn_spec and usn_spec.loader:
-                        usn_module = importlib.util.module_from_spec(usn_spec)
-                        usn_spec.loader.exec_module(usn_module)
-                        usn_claw_main = usn_module.main
-                
-                if mft_claw_main and usn_claw_main:
-                    print(f"{COLOR_SUCCESS}Method 3: File-based import successful{COLOR_RESET}")
-                else:
-                    raise ImportError("Could not load modules via file path")
-                    
-            except ImportError as e3:
-                print(f"{COLOR_INFO}Method 3 failed: {e3}{COLOR_RESET}")
-                raise ImportError("All import methods failed")
-    
-    # Check if we successfully imported both
-    if mft_claw_main and usn_claw_main:
-        HAS_DIRECT_IMPORTS = True
-        print(f"{COLOR_SUCCESS}Successfully imported MFT and USN parsers{COLOR_RESET}")
-    else:
-        raise ImportError("Failed to import one or both parsers")
-        
-except ImportError as e:
-    print(f"{COLOR_WARNING}Warning: Could not import MFT/USN scripts directly: {e}{COLOR_RESET}")
-    print(f"{COLOR_INFO}Falling back to subprocess execution{COLOR_RESET}")
-    HAS_DIRECT_IMPORTS = False
-    mft_claw_main = None
-    usn_claw_main = None
 
 # File attribute constants
 FILE_ATTRIBUTE_MAP = {
@@ -263,62 +195,29 @@ class MFTUSNCorrelator:
         
         # Run MFT parser with live terminal output
         logger.info("Running MFT parser...")
-        logger.info(f"HAS_DIRECT_IMPORTS = {HAS_DIRECT_IMPORTS}")
         try:
             if HAS_DIRECT_IMPORTS:
-                logger.info("Using direct function call for MFT parser")
                 # Save current directory and change to case directory for direct function call
                 original_cwd = os.getcwd()
                 try:
                     os.chdir(self.case_directory)
-                    print(f"{COLOR_INFO}[MFT] Starting MFT parser in directory: {self.case_directory}{COLOR_RESET}")
                     # Run MFT parser directly as a function
                     result = mft_claw_main()
-                    print(f"{COLOR_INFO}[MFT] Parser returned result: {result}{COLOR_RESET}")
                     if result == 0:
                         logger.info("MFT parser completed successfully")
-                        print(f"{COLOR_SUCCESS}[MFT] Parser completed successfully{COLOR_RESET}")
                     else:
                         logger.warning("MFT parser may have had display issues but database might be created")
-                        print(f"{COLOR_WARNING}[MFT] Parser returned non-zero result but database might be created{COLOR_RESET}")
-                except Exception as parser_error:
-                    logger.error(f"MFT parser execution error: {parser_error}")
-                    print(f"{COLOR_ERROR}[MFT] Parser execution error: {parser_error}{COLOR_RESET}")
-                    import traceback
-                    traceback.print_exc()
                 finally:
                     os.chdir(original_cwd)
             else:
-                # Fallback to subprocess execution (not recommended for EXE)
-                logger.warning("Direct imports failed - this may not work in EXE environment")
-                print(f"{COLOR_WARNING}[MFT] Direct imports failed - attempting subprocess execution{COLOR_RESET}")
-                
-                # Check if we're in a frozen (EXE) environment
-                if getattr(sys, 'frozen', False):
-                    logger.error("Cannot use subprocess execution in EXE environment")
-                    print(f"{COLOR_ERROR}[MFT] Cannot run MFT parser in EXE environment without direct imports{COLOR_RESET}")
-                    raise Exception("MFT parser cannot be executed in EXE environment without direct imports")
-                
+                # Fallback to subprocess execution
                 env = os.environ.copy()
                 env['PYTHONIOENCODING'] = 'utf-8'
                 env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
                 
                 mft_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MFT_Claw.py")
-                logger.info(f"MFT script path: {mft_script}")
-                logger.info(f"Script exists: {os.path.exists(mft_script)}")
-                
-                if not os.path.exists(mft_script):
-                    logger.error("MFT_Claw.py script not found")
-                    raise Exception("MFT_Claw.py script not found")
-                
                 result = subprocess.run([sys.executable, mft_script], 
-                                      cwd=self.case_directory, env=env, capture_output=True, text=True)
-                
-                # Log subprocess output
-                if result.stdout:
-                    logger.info(f"MFT subprocess stdout:\n{result.stdout}")
-                if result.stderr:
-                    logger.error(f"MFT subprocess stderr:\n{result.stderr}")
+                                      cwd=self.case_directory, env=env)
                 
                 if result.returncode == 0:
                     logger.info("MFT parser completed successfully")
@@ -336,64 +235,30 @@ class MFTUSNCorrelator:
         
         # Run USN parser with live terminal output
         logger.info("Running USN parser...")
-        logger.info(f"HAS_DIRECT_IMPORTS = {HAS_DIRECT_IMPORTS}")
         
         try:
             if HAS_DIRECT_IMPORTS:
-                logger.info("Using direct function call for USN parser")
                 # Save current directory and change to case directory for direct function call
                 original_cwd = os.getcwd()
                 try:
                     os.chdir(self.case_directory)
-                    print(f"{COLOR_INFO}[USN] Starting USN parser in directory: {self.case_directory}{COLOR_RESET}")
                     # Run USN parser directly as a function
                     result = usn_claw_main()
-                    print(f"{COLOR_INFO}[USN] Parser returned result: {result}{COLOR_RESET}")
                     if result == 0:
                         logger.info("USN parser completed successfully")
-                        print(f"{COLOR_SUCCESS}[USN] Parser completed successfully{COLOR_RESET}")
                     else:
                         logger.warning("USN parser may have failed due to privilege requirements or missing dependencies")
-                        print(f"{COLOR_WARNING}[USN] Parser returned non-zero result - may need admin privileges{COLOR_RESET}")
-                except Exception as parser_error:
-                    logger.error(f"USN parser execution error: {parser_error}")
-                    print(f"{COLOR_ERROR}[USN] Parser execution error: {parser_error}{COLOR_RESET}")
-                    import traceback
-                    traceback.print_exc()
                 finally:
                     os.chdir(original_cwd)
             else:
-                # Fallback to subprocess execution (not recommended for EXE)
-                logger.warning("Direct imports failed - this may not work in EXE environment")
-                print(f"{COLOR_WARNING}[USN] Direct imports failed - attempting subprocess execution{COLOR_RESET}")
-                
-                # Check if we're in a frozen (EXE) environment
-                if getattr(sys, 'frozen', False):
-                    logger.warning("Cannot use subprocess execution in EXE environment - USN parsing will be skipped")
-                    print(f"{COLOR_WARNING}[USN] Cannot run USN parser in EXE environment without direct imports - skipping{COLOR_RESET}")
-                    # USN is optional, so we can continue without it
-                    return True
-                
+                # Fallback to subprocess execution
                 env = os.environ.copy()
                 env['PYTHONIOENCODING'] = 'utf-8'
                 env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
                 
                 usn_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "USN_Claw.py")
-                logger.info(f"USN script path: {usn_script}")
-                logger.info(f"Script exists: {os.path.exists(usn_script)}")
-                
-                if not os.path.exists(usn_script):
-                    logger.warning("USN_Claw.py script not found - skipping USN parsing")
-                    return True
-                
                 result = subprocess.run([sys.executable, usn_script], 
-                                      cwd=self.case_directory, env=env, capture_output=True, text=True)
-                
-                # Log subprocess output
-                if result.stdout:
-                    logger.info(f"USN subprocess stdout:\n{result.stdout}")
-                if result.stderr:
-                    logger.error(f"USN subprocess stderr:\n{result.stderr}")
+                                      cwd=self.case_directory, env=env)
                 
                 if result.returncode == 0:
                     logger.info("USN parser completed successfully")
@@ -406,24 +271,14 @@ class MFTUSNCorrelator:
             if not os.path.exists(self.usn_db):
                 logger.warning("USN database was not created - may need admin privileges")
                 logger.warning("Please run USN_Claw.py manually as administrator")
-                print(f"{COLOR_WARNING}[USN] Database not created - may need admin privileges{COLOR_RESET}")
                 # USN database is optional for correlation, so don't return False here
                 
         except Exception as e:
             logger.error(f"Error running USN parser: {e}")
             logger.error("This may be due to privilege requirements for USN journal access or missing dependencies")
-            print(f"{COLOR_ERROR}[USN] Error: {e}{COLOR_RESET}")
             # USN database is optional for correlation, so don't return False here
         
-        # Final check - MFT database is required, USN is optional
-        mft_success = os.path.exists(self.mft_db)
-        usn_success = os.path.exists(self.usn_db)
-        
-        logger.info(f"Parser results - MFT: {'SUCCESS' if mft_success else 'FAILED'}, USN: {'SUCCESS' if usn_success else 'FAILED'}")
-        print(f"{COLOR_INFO}[MFT-USN] Parser results - MFT: {'SUCCESS' if mft_success else 'FAILED'}, USN: {'SUCCESS' if usn_success else 'FAILED'}{COLOR_RESET}")
-        
-        # Return True if at least MFT database was created
-        return mft_success
+        return True
     
     def _show_progress(self, current, total, prefix="", suffix="", bar_length=50):
         """Display a simple progress bar without ETA"""
@@ -435,7 +290,7 @@ class MFTUSNCorrelator:
         filled_length = int(round(bar_length * percent))
         
         # Create the bar with clear characters for better visibility
-        bar = '#' * filled_length + '-' * (bar_length - filled_length)
+        bar = '█' * filled_length + '░' * (bar_length - filled_length)
         
         # Format the progress display - simple version without ETA
         progress_text = f"\r{prefix}[{bar}] {int(percent*100):3d}% | {current}/{total} {suffix}"
@@ -445,7 +300,7 @@ class MFTUSNCorrelator:
         
         if current >= total:
             # Show completion message
-            print(f"\r{COLOR_SUCCESS}{prefix}[{'#' * bar_length}] 100% | {total}/{total} | Correlation complete!{' '*30}{COLOR_RESET}")
+            print(f"\r{COLOR_SUCCESS}{prefix}[{'█' * bar_length}] 100% | {total}/{total} | Correlation complete!{' '*30}{COLOR_RESET}")
             print()
     
     def _get_namespace_name(self, namespace_value):
@@ -612,15 +467,10 @@ class MFTUSNCorrelator:
         print(f"{COLOR_INFO}Retrieved {len(mft_data)} MFT records{COLOR_RESET}")
         
         print(f"\n{COLOR_INFO}Retrieving USN data...{COLOR_RESET}")
-        # Get USN journal data if available
-        if usn_conn:
-            usn_cursor = usn_conn.cursor()
-            usn_data, usn_select_columns = self._get_usn_data(usn_cursor)
-            print(f"{COLOR_INFO}Retrieved {len(usn_data)} USN journal events{COLOR_RESET}")
-        else:
-            usn_data = []
-            usn_select_columns = []
-            print(f"{COLOR_WARNING}No USN database available - proceeding with MFT data only{COLOR_RESET}")
+        # Get USN journal data
+        usn_cursor = usn_conn.cursor()
+        usn_data, usn_select_columns = self._get_usn_data(usn_cursor)
+        print(f"{COLOR_INFO}Retrieved {len(usn_data)} USN journal events{COLOR_RESET}")
         
         # Correlate and insert data with column information
         self._correlate_and_insert(mft_data, usn_data, usn_select_columns, corr_cursor)
@@ -757,7 +607,7 @@ class MFTUSNCorrelator:
         # Show progress
         total_usn = len(usn_data)
         bar_length = 30
-        bar = '#' * bar_length
+        bar = '█' * bar_length
         print(f"\r[{bar}] {100:6.1f}% | {total_usn:,}/{total_usn:,} USN records", flush=True)
         
         print(f"\nSuccessfully fetched {len(usn_data):,} USN journal records")
@@ -1002,7 +852,7 @@ class MFTUSNCorrelator:
                     # Create a more visible progress bar
                     bar_length = 40
                     filled_length = int(bar_length * inserted_count // total_records)
-                    bar = '#' * filled_length + '.' * (bar_length - filled_length)
+                    bar = '█' * filled_length + '▒' * (bar_length - filled_length)
                     
                     # Format the progress information with processing speed
                     stats = f"{percent:6.1f}% | {inserted_count:,}/{total_records:,} records | {records_per_sec:.1f} rec/s"
@@ -1041,9 +891,9 @@ class MFTUSNCorrelator:
         # Print a new line to ensure the progress bar is complete
         print("\n")
         print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
-        print(f"{COLOR_SUCCESS}[SUCCESS] Correlation complete in {elapsed:.2f} seconds!{COLOR_RESET}")
-        print(f"{COLOR_SUCCESS}[SUCCESS] Total records processed: {inserted_count:,} ({records_per_sec:.1f} records/second){COLOR_RESET}")
-        print(f"{COLOR_SUCCESS}[SUCCESS] Records with USN matches: {matched_with_usn:,} ({usn_match_percent:.1f}%){COLOR_RESET}")
+        print(f"{COLOR_SUCCESS}✓ Correlation complete in {elapsed:.2f} seconds!{COLOR_RESET}")
+        print(f"{COLOR_SUCCESS}✓ Total records processed: {inserted_count:,} ({records_per_sec:.1f} records/second){COLOR_RESET}")
+        print(f"{COLOR_SUCCESS}✓ Records with USN matches: {matched_with_usn:,} ({usn_match_percent:.1f}%){COLOR_RESET}")
         print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
         
         logger.info(f"Total {inserted_count} correlated records inserted in {elapsed:.2f} seconds")
@@ -1358,35 +1208,21 @@ class MFTUSNCorrelator:
         logger.info(f"MFT database exists: {mft_exists}")
         logger.info(f"USN database exists: {usn_exists}")
         
-        # Step 1: Always run parsers first to ensure fresh data
-        logger.info("Running MFT and USN parsers to ensure fresh data...")
-        print(f"{COLOR_INFO}[MFT-USN] Running MFT and USN parsers...{COLOR_RESET}")
-        
-        if not self.run_parsers():
-            logger.error("Failed to run parsers")
-            print(f"{COLOR_ERROR}[MFT-USN] Failed to run parsers{COLOR_RESET}")
-            
-            # Check if databases were created despite errors
-            mft_exists_now = os.path.exists(self.mft_db)
-            usn_exists_now = os.path.exists(self.usn_db)
-            
-            if mft_exists_now:
-                logger.info("MFT database was created successfully")
-                print(f"{COLOR_SUCCESS}[MFT-USN] MFT database created successfully{COLOR_RESET}")
-            else:
-                logger.error("MFT database was not created - this is required for correlation")
-                print(f"{COLOR_ERROR}[MFT-USN] MFT database was not created - correlation cannot proceed{COLOR_RESET}")
-                return False
+        # Step 1: Run parsers if databases don't exist
+        if not mft_exists or not usn_exists:
+            logger.info("Source databases not found, running parsers...")
+            if not self.run_parsers():
+                logger.error("Failed to run parsers")
                 
-            if usn_exists_now:
-                logger.info("USN database was created successfully")
-                print(f"{COLOR_SUCCESS}[MFT-USN] USN database created successfully{COLOR_RESET}")
-            else:
-                logger.warning("USN database was not created - correlation will proceed with MFT data only")
-                print(f"{COLOR_WARNING}[MFT-USN] USN database was not created - proceeding with MFT data only{COLOR_RESET}")
-        else:
-            logger.info("Parsers completed successfully")
-            print(f"{COLOR_SUCCESS}[MFT-USN] Parsers completed successfully{COLOR_RESET}")
+                # Check if databases were created despite errors
+                mft_exists_now = os.path.exists(self.mft_db)
+                usn_exists_now = os.path.exists(self.usn_db)
+                
+                if mft_exists_now and usn_exists_now:
+                    logger.info("Databases were created successfully, continuing with correlation")
+                else:
+                    logger.error("Cannot proceed without both databases")
+                    return False
         
         # Step 2: Create correlated database
         correlation_success = self.create_correlated_database()
@@ -1690,8 +1526,8 @@ def main():
         milliseconds = int((seconds - int(seconds)) * 1000)
         
         print(f"\n{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
-        print(f"{COLOR_SUCCESS}[SUCCESS] Total script execution time: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{milliseconds:03d}{COLOR_RESET}")
-        print(f"{COLOR_SUCCESS}[SUCCESS] Completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{COLOR_RESET}")
+        print(f"{COLOR_SUCCESS}✓ Total script execution time: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{milliseconds:03d}{COLOR_RESET}")
+        print(f"{COLOR_SUCCESS}✓ Completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{COLOR_RESET}")
         print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
     
     return 0
