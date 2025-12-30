@@ -1170,11 +1170,18 @@ class IdentityBasedCorrelationEngine:
         return evidence
     
     def _parse_timestamp_value(self, value: Any) -> Optional[datetime]:
-        """Parse a timestamp value from various formats."""
+        """
+        Parse a timestamp value from various formats.
+        
+        Always returns timezone-naive datetime to avoid comparison issues.
+        """
         if value is None:
             return None
         
         if isinstance(value, datetime):
+            # Remove timezone info if present to ensure consistent comparison
+            if value.tzinfo is not None:
+                return value.replace(tzinfo=None)
             return value
         
         timestamp_str = str(value).strip()
@@ -1183,7 +1190,11 @@ class IdentityBasedCorrelationEngine:
         
         # Try ISO format first
         try:
-            return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            parsed = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            # Remove timezone info to make it naive
+            if parsed.tzinfo is not None:
+                parsed = parsed.replace(tzinfo=None)
+            return parsed
         except:
             pass
         
@@ -1203,6 +1214,9 @@ class IdentityBasedCorrelationEngine:
             try:
                 parsed = datetime.strptime(timestamp_str, fmt)
                 if 1970 <= parsed.year <= 2100:
+                    # Ensure timezone-naive
+                    if parsed.tzinfo is not None:
+                        parsed = parsed.replace(tzinfo=None)
                     return parsed
             except:
                 continue
@@ -1221,6 +1235,9 @@ class IdentityBasedCorrelationEngine:
                 return None
             
             if 1970 <= parsed.year <= 2100:
+                # Ensure timezone-naive
+                if parsed.tzinfo is not None:
+                    parsed = parsed.replace(tzinfo=None)
                 return parsed
         except:
             pass
@@ -1237,61 +1254,117 @@ class IdentityBasedCorrelationEngine:
         """
         print(f"[Identity Engine] Creating temporal anchors with {self.time_window_minutes} minute window")
         
-        # Step 1: Collect ALL timestamped evidence across ALL identities
-        all_timestamped_evidence = []
-        identity_map = {}  # evidence_id -> identity
-        
-        for identity in self.identities.values():
-            for evidence in identity.all_evidence:
-                if evidence.timestamp is not None:
-                    # Create a unique ID for this evidence
-                    evidence_id = id(evidence)
-                    all_timestamped_evidence.append(evidence)
-                    identity_map[evidence_id] = identity
-                else:
-                    # Mark non-timestamped evidence as supporting
-                    evidence.role = "supporting"
-                    evidence.has_anchor = False
-        
-        if not all_timestamped_evidence:
-            print(f"[Identity Engine] No timestamped evidence found")
-            self.stats.total_anchors = 0
-            return
-        
-        # Step 2: Sort ALL evidence by timestamp
-        all_timestamped_evidence.sort(key=lambda e: e.timestamp)
-        
-        print(f"[Identity Engine] Clustering {len(all_timestamped_evidence)} timestamped records")
-        
-        # Step 3: Create time-based clusters (global time windows)
-        time_clusters = []
-        current_cluster = []
-        cluster_start_time = None
-        
-        for evidence in all_timestamped_evidence:
-            if not current_cluster:
-                # Start new cluster
-                current_cluster = [evidence]
-                cluster_start_time = evidence.timestamp
-            else:
-                # Check if evidence fits in current cluster's time window
-                time_diff = (evidence.timestamp - cluster_start_time).total_seconds() / 60.0
+        try:
+            # Step 1: Collect ALL timestamped evidence across ALL identities
+            all_timestamped_evidence = []
+            identity_map = {}  # evidence_id -> identity
+            
+            for identity in self.identities.values():
+                for evidence in identity.all_evidence:
+                    if evidence.timestamp is not None:
+                        # Ensure timestamp is timezone-naive for consistent comparison
+                        try:
+                            if hasattr(evidence.timestamp, 'tzinfo') and evidence.timestamp.tzinfo is not None:
+                                # Create new timezone-naive datetime
+                                evidence.timestamp = evidence.timestamp.replace(tzinfo=None)
+                            # Verify it's a valid datetime object
+                            if not isinstance(evidence.timestamp, datetime):
+                                print(f"[Identity Engine] Warning: Invalid timestamp type {type(evidence.timestamp)}, skipping")
+                                evidence.role = "supporting"
+                                evidence.has_anchor = False
+                                continue
+                        except Exception as e:
+                            print(f"[Identity Engine] Warning: Failed to normalize timestamp ({e}), skipping")
+                            evidence.role = "supporting"
+                            evidence.has_anchor = False
+                            continue
+                        
+                        # Create a unique ID for this evidence
+                        evidence_id = id(evidence)
+                        all_timestamped_evidence.append(evidence)
+                        identity_map[evidence_id] = identity
+                    else:
+                        # Mark non-timestamped evidence as supporting
+                        evidence.role = "supporting"
+                        evidence.has_anchor = False
+            
+            if not all_timestamped_evidence:
+                print(f"[Identity Engine] No timestamped evidence found")
+                self.stats.total_anchors = 0
+                return
+            
+            # Step 2: Sort ALL evidence by timestamp (with safety check)
+            try:
+                all_timestamped_evidence.sort(key=lambda e: e.timestamp)
+            except TypeError as sort_error:
+                print(f"[Identity Engine] Warning: Sort failed ({sort_error}), filtering invalid timestamps")
+                # Filter out any problematic timestamps
+                valid_evidence = []
+                for evidence in all_timestamped_evidence:
+                    try:
+                        # Test if timestamp is comparable
+                        _ = evidence.timestamp < datetime.now()
+                        valid_evidence.append(evidence)
+                    except:
+                        print(f"[Identity Engine] Removing evidence with incomparable timestamp: {type(evidence.timestamp)}")
+                        evidence.role = "supporting"
+                        evidence.has_anchor = False
                 
-                if time_diff <= self.time_window_minutes:
-                    # Add to current cluster
-                    current_cluster.append(evidence)
-                else:
-                    # Save current cluster and start new one
-                    if current_cluster:
-                        time_clusters.append(current_cluster)
+                all_timestamped_evidence = valid_evidence
+                if not all_timestamped_evidence:
+                    print(f"[Identity Engine] No valid timestamped evidence after filtering")
+                    self.stats.total_anchors = 0
+                    return
+                
+                # Try sorting again
+                all_timestamped_evidence.sort(key=lambda e: e.timestamp)
+                # Filter out any remaining problematic timestamps
+                all_timestamped_evidence = [e for e in all_timestamped_evidence 
+                                           if e.timestamp is not None and isinstance(e.timestamp, datetime)]
+                all_timestamped_evidence.sort(key=lambda e: e.timestamp)
+            
+            print(f"[Identity Engine] Clustering {len(all_timestamped_evidence)} timestamped records")
+            
+            # Step 3: Create time-based clusters (global time windows)
+            time_clusters = []
+            current_cluster = []
+            cluster_start_time = None
+            
+            for evidence in all_timestamped_evidence:
+                if not current_cluster:
+                    # Start new cluster
                     current_cluster = [evidence]
                     cluster_start_time = evidence.timestamp
-        
-        # Don't forget the last cluster
-        if current_cluster:
-            time_clusters.append(current_cluster)
-        
-        print(f"[Identity Engine] Created {len(time_clusters)} time clusters")
+                else:
+                    # Check if evidence fits in current cluster's time window
+                    try:
+                        time_diff = (evidence.timestamp - cluster_start_time).total_seconds() / 60.0
+                    except TypeError:
+                        # Skip this evidence if timestamp comparison fails
+                        continue
+                    
+                    if time_diff <= self.time_window_minutes:
+                        # Add to current cluster
+                        current_cluster.append(evidence)
+                    else:
+                        # Save current cluster and start new one
+                        if current_cluster:
+                            time_clusters.append(current_cluster)
+                        current_cluster = [evidence]
+                        cluster_start_time = evidence.timestamp
+            
+            # Don't forget the last cluster
+            if current_cluster:
+                time_clusters.append(current_cluster)
+            
+            print(f"[Identity Engine] Created {len(time_clusters)} time clusters")
+            
+        except Exception as e:
+            print(f"[Identity Engine] ERROR in temporal anchor creation: {type(e).__name__}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            self.stats.total_anchors = 0
+            return
         
         # Step 4: Within each time cluster, group by identity and create anchors
         total_anchors = 0
@@ -2289,11 +2362,18 @@ class IdentityBasedEngineAdapter:
             return result
     
     def _parse_timestamp(self, value: Any) -> Optional[datetime]:
-        """Parse timestamp from various formats"""
+        """
+        Parse timestamp from various formats.
+        
+        Always returns timezone-naive datetime to avoid comparison issues.
+        """
         if not value:
             return None
         
         if isinstance(value, datetime):
+            # Remove timezone info if present
+            if value.tzinfo is not None:
+                return value.replace(tzinfo=None)
             return value
         
         timestamp_str = str(value).strip()
@@ -2324,7 +2404,11 @@ class IdentityBasedEngineAdapter:
         
         # Try ISO format
         try:
-            return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            parsed = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            # Remove timezone info to make it naive
+            if parsed.tzinfo is not None:
+                parsed = parsed.replace(tzinfo=None)
+            return parsed
         except:
             pass
         
