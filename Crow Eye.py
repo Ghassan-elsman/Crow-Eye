@@ -251,7 +251,8 @@ Crow_Eye_Requirements = [
     'psutil',
     'tqdm',
     'colorama',
-    'wmi'
+    'wmi',
+    'pyyaml'
 ]
 
 def check_and_install_requirements():
@@ -532,6 +533,13 @@ try:
 except ImportError as e:
     print(Fore.RED + f"✗ Failed to import CrowEyeStyles: {str(e)}" + Fore.RESET)
     CrowEyeStyles = None
+
+try:
+    from correlation_engine.integration.correlation_integration import CorrelationIntegration
+    print(Fore.GREEN + "✓ Successfully imported CorrelationIntegration" + Fore.RESET)
+except ImportError as e:
+    print(Fore.RED + f"✗ Failed to import CorrelationIntegration: {str(e)}" + Fore.RESET)
+    CorrelationIntegration = None
 
 try:
     from utils import SearchUtils, SearchWorker
@@ -4334,6 +4342,19 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.exprot_json_CSV.setObjectName("loadData")
         self.verticalLayout_3.addWidget(self.exprot_json_CSV)
         
+        # Correlation Analysis Button
+        self.correlation_button = QtWidgets.QPushButton(self.side_fram)
+        self.correlation_button.setStyleSheet(CrowEyeStyles.CORRELATION_BUTTON)
+        # Add descriptive correlation icon showing connected data points
+        icon_correlation = QtGui.QIcon()
+        icon_correlation.addPixmap(QtGui.QPixmap("GUI Resources/icons/correlation-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        self.correlation_button.setIcon(icon_correlation)
+        self.correlation_button.setIconSize(QtCore.QSize(24, 24))  # Larger icon for better visibility
+        self.correlation_button.setText("RUN CORRELATION")
+        self.correlation_button.setToolTip("Analyze and correlate artifacts across multiple data sources")
+        self.correlation_button.setObjectName("correlation_button")
+        self.verticalLayout_3.addWidget(self.correlation_button)
+        
 
         
         
@@ -6018,6 +6039,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.RecycleBinButton.clicked.connect(self.run_recyclebin_analysis)
         self.SRUMButton.clicked.connect(self.run_srum_analysis)
         self.exprot_json_CSV.clicked.connect(self.export_all_tables)
+        
+        # Connect correlation button
+        if hasattr(self, 'correlation_button'):
+            self.correlation_button.clicked.connect(self.run_correlation_analysis)
         
         self.Creat_case.clicked.connect(self.create_directory)
         self.open_case_btn.clicked.connect(self.open_existing_case)
@@ -8615,6 +8640,30 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 f"Failed to export tables: {str(e)}"
             )
     
+    def run_correlation_analysis(self):
+        """Run correlation analysis on current case artifacts"""
+        try:
+            if not hasattr(self, 'correlation_integration') or self.correlation_integration is None:
+                QMessageBox.warning(
+                    self.main_window,
+                    "Correlation Not Available",
+                    "Correlation integration is not available.\n"
+                    "Please ensure the correlation_engine package is properly installed."
+                )
+                return
+            
+            # Show correlation dialog
+            self.correlation_integration.show_correlation_dialog()
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self.main_window,
+                "Correlation Error",
+                f"Failed to run correlation analysis:\n\n{str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
+    
     def open_timeline_dialog(self):
         """Open the timeline visualization dialog"""
         try:
@@ -9188,6 +9237,14 @@ if __name__ == "__main__":
     Crow_Eye = QtWidgets.QMainWindow()
     ui = Ui_Crow_Eye()
     ui.setupUi(Crow_Eye)
+    
+    # Initialize correlation integration
+    try:
+        ui.correlation_integration = CorrelationIntegration(ui)
+        print("[Correlation] Integration initialized successfully")
+    except Exception as e:
+        print(f"[Correlation] Failed to initialize: {e}")
+        ui.correlation_integration = None
     
     # Set window state to maximized before showing
     Crow_Eye.show()
