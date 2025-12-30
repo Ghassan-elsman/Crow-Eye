@@ -1,0 +1,68 @@
+# Registry Semantic Mappings
+# Mappings for Windows Registry artifacts
+
+mappings:
+  # Persistence Mechanisms - Run Keys
+  - source: "Registry"
+    field: "key_path"
+    technical_value: ""
+    semantic_value: "Autorun Persistence"
+    description: "Application configured to run at startup"
+    artifact_type: "Registry"
+    category: "persistence"
+    severity: "medium"
+    pattern: ".*\\\\(Run|RunOnce|RunServices).*"
+    confidence: 0.95
+    mapping_source: "built-in"
+  
+  # User Activity Tracking - Recent Documents
+  - source: "Registry"
+    field: "key_path"
+    technical_value: ""
+    semantic_value: "Recent Document Access"
+    description: "Recently accessed document"
+    artifact_type: "Registry"
+    category: "user_activity"
+    severity: "info"
+    pattern: ".*\\\\RecentDocs.*"
+    confidence: 0.98
+    mapping_source: "built-in"
+  
+  # User Activity - MRU Lists
+  - source: "Registry"
+    field: "key_path"
+    technical_value: ""
+    semantic_value: "Most Recently Used"
+    description: "Most recently used item"
+    artifact_type: "Registry"
+    category: "user_activity"
+    severity: "info"
+    pattern: ".*\\\\(MRU|ComDlg32).*"
+    confidence: 0.95
+    mapping_source: "built-in"
+  
+  # System Configuration Changes
+  - source: "Registry"
+    field: "key_path"
+    technical_value: ""
+    semantic_value: "System Configuration Change"
+    description: "System configuration was modified"
+    artifact_type: "Registry"
+    category: "configuration"
+    severity: "low"
+    pattern: "HKLM\\\\SYSTEM\\\\CurrentControlSet.*"
+    confidence: 0.90
+    mapping_source: "built-in"
+  
+  # USB Device History
+  - source: "Registry"
+    field: "key_path"
+    technical_value: ""
+    semantic_value: "USB Device Connected"
+    description: "USB device was connected"
+    artifact_type: "Registry"
+    category: "device"
+    severity: "info"
+    pattern: ".*\\\\USBSTOR.*"
+    confidence: 0.98
+    mapping_source: "built-in"

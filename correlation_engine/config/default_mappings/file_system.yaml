@@ -1,0 +1,90 @@
+# File System Semantic Mappings
+# Mappings for MFT and USN Journal artifacts
+
+mappings:
+  # MFT Entry Types
+  - source: "MFT"
+    field: "entry_type"
+    technical_value: "FILE"
+    semantic_value: "File Created"
+    description: "New file entry in MFT"
+    artifact_type: "MFT"
+    category: "file_creation"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "MFT"
+    field: "entry_type"
+    technical_value: "DIRECTORY"
+    semantic_value: "Directory Created"
+    description: "New directory entry in MFT"
+    artifact_type: "MFT"
+    category: "file_creation"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  # USN Journal Operations
+  - source: "USNJournal"
+    field: "reason"
+    technical_value: "FILE_CREATE"
+    semantic_value: "File Created"
+    description: "File was created"
+    artifact_type: "USNJournal"
+    category: "file_operations"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "USNJournal"
+    field: "reason"
+    technical_value: "FILE_DELETE"
+    semantic_value: "File Deleted"
+    description: "File was deleted"
+    artifact_type: "USNJournal"
+    category: "file_operations"
+    severity: "low"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "USNJournal"
+    field: "reason"
+    technical_value: "DATA_OVERWRITE"
+    semantic_value: "File Modified"
+    description: "File data was overwritten"
+    artifact_type: "USNJournal"
+    category: "file_operations"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  # Mass File Operations (Anti-Forensics)
+  - source: "USNJournal"
+    field: "reason"
+    technical_value: ""
+    semantic_value: "Mass File Deletion"
+    description: "Large number of files deleted (potential anti-forensics)"
+    artifact_type: "USNJournal"
+    category: "anti_forensics"
+    severity: "high"
+    pattern: "FILE_DELETE"
+    confidence: 0.85
+    mapping_source: "built-in"
+    conditions:
+      - field: "operation_count"
+        operator: "greater_than"
+        value: "100"
+  
+  # Suspicious File Patterns
+  - source: "MFT"
+    field: "file_name"
+    technical_value: ""
+    semantic_value: "Executable in Temp Directory"
+    description: "Executable file in temporary directory (suspicious)"
+    artifact_type: "MFT"
+    category: "suspicious"
+    severity: "medium"
+    pattern: ".*\\\\(Temp|TMP)\\\\.*\\.exe$"
+    confidence: 0.90
+    mapping_source: "built-in"

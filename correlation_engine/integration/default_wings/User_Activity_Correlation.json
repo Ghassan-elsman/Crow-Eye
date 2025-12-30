@@ -1,0 +1,128 @@
+{
+  "config_name": "user_activity_correlation",
+  "wing_name": "User Activity Correlation",
+  "wing_id": "default_wing_activity_001",
+  "description": "Proves user activity using weighted scoring based on user interaction evidence strength. Uses a tiered approach with explicit user interaction artifacts (UserAssist, RecentDocs, MRU) weighted highest, followed by navigation evidence (ShellBags, TypedPaths), and temporal system confirmation (Security Logs).",
+  "proves": "User actively interacted with the system",
+  "author": "Crow-Eye Team",
+  "created_date": "2024-12-23T00:00:00Z",
+  "last_modified": "2024-12-23T00:00:00Z",
+  "version": "1.0",
+  
+  "feathers": [
+    {
+      "feather_config_name": "UserAssist_CrowEyeFeather",
+      "feather_database_path": "feathers/UserAssist_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "userassist",
+      "weight": 0.30,
+      "tier": 1,
+      "tier_name": "Explicit user interaction"
+    },
+    {
+      "feather_config_name": "RecentDocs_CrowEyeFeather",
+      "feather_database_path": "feathers/RecentDocs_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "recentdocs",
+      "weight": 0.20,
+      "tier": 1,
+      "tier_name": "Explicit user interaction"
+    },
+    {
+      "feather_config_name": "OpenSaveMRU_CrowEyeFeather",
+      "feather_database_path": "feathers/OpenSaveMRU_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "opensavemru",
+      "weight": 0.20,
+      "tier": 1,
+      "tier_name": "Explicit user interaction"
+    },
+    {
+      "feather_config_name": "LastSaveMRU_CrowEyeFeather",
+      "feather_database_path": "feathers/LastSaveMRU_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "lastsavemru",
+      "weight": 0.20,
+      "tier": 1,
+      "tier_name": "Explicit user interaction"
+    },
+    {
+      "feather_config_name": "ShellBags_CrowEyeFeather",
+      "feather_database_path": "feathers/ShellBags_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "shellbags",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Navigation & exploration"
+    },
+    {
+      "feather_config_name": "TypedPaths_CrowEyeFeather",
+      "feather_database_path": "feathers/TypedPaths_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "typedpaths",
+      "weight": 0.10,
+      "tier": 2,
+      "tier_name": "Navigation & exploration"
+    },
+    {
+      "feather_config_name": "SecurityLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SecurityLogs_CrowEyeFeather.db",
+      "artifact_type": "Logs",
+      "feather_id": "security_logs",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "Temporal system confirmation"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "File system activity"
+    }
+  ],
+  
+  "time_window_minutes": 5,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "Registry",
+    "Logs",
+    "MFT"
+  ],
+  "use_weighted_scoring": true,
+  
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed": {
+        "min": 0.60,
+        "label": "Confirmed User Activity"
+      },
+      "likely": {
+        "min": 0.35,
+        "label": "Likely User Activity"
+      },
+      "insufficient": {
+        "min": 0.0,
+        "label": "Insufficient Evidence"
+      }
+    }
+  },
+  
+  "tags": [
+    "user_activity",
+    "default",
+    "weighted"
+  ],
+  "case_types": [
+    "user_activity",
+    "data_theft",
+    "insider_threat"
+  ]
+}

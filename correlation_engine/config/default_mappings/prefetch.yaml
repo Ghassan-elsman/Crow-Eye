@@ -1,0 +1,81 @@
+# Prefetch Semantic Mappings
+# Mappings for Windows Prefetch artifacts
+
+mappings:
+  # System Startup Execution
+  - source: "Prefetch"
+    field: "executable_name"
+    technical_value: ""
+    semantic_value: "System Startup Execution"
+    description: "Application executed during system startup"
+    artifact_type: "Prefetch"
+    category: "execution"
+    severity: "info"
+    pattern: "(services|lsass|csrss|winlogon|wininit)\\.exe"
+    confidence: 0.95
+    mapping_source: "built-in"
+  
+  # User-Initiated Execution (browsers, office apps)
+  - source: "Prefetch"
+    field: "executable_name"
+    technical_value: ""
+    semantic_value: "Web Browser Execution"
+    description: "Web browser application executed"
+    artifact_type: "Prefetch"
+    category: "browser"
+    severity: "info"
+    pattern: "(chrome|firefox|edge|iexplore|opera|brave)\\.exe"
+    confidence: 0.98
+    mapping_source: "built-in"
+  
+  - source: "Prefetch"
+    field: "executable_name"
+    technical_value: ""
+    semantic_value: "Office Application Execution"
+    description: "Microsoft Office application executed"
+    artifact_type: "Prefetch"
+    category: "productivity"
+    severity: "info"
+    pattern: "(winword|excel|powerpnt|outlook|onenote)\\.exe"
+    confidence: 0.98
+    mapping_source: "built-in"
+  
+  # Scheduled Task Execution
+  - source: "Prefetch"
+    field: "executable_name"
+    technical_value: "taskeng.exe"
+    semantic_value: "Scheduled Task Execution"
+    description: "Task Scheduler executed a task"
+    artifact_type: "Prefetch"
+    category: "execution"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  # High Run Count (Frequently Used)
+  - source: "Prefetch"
+    field: "run_count"
+    technical_value: ""
+    semantic_value: "Frequently Used Application"
+    description: "Application with high execution count"
+    artifact_type: "Prefetch"
+    category: "execution"
+    severity: "info"
+    confidence: 0.90
+    mapping_source: "built-in"
+    conditions:
+      - field: "run_count"
+        operator: "greater_than"
+        value: "50"
+  
+  # First Execution Detection
+  - source: "Prefetch"
+    field: "run_count"
+    technical_value: "1"
+    semantic_value: "First Execution"
+    description: "First time this application was executed"
+    artifact_type: "Prefetch"
+    category: "execution"
+    severity: "low"
+    confidence: 1.0
+    mapping_source: "built-in"

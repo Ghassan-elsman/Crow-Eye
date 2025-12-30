@@ -1,0 +1,164 @@
+{
+  "config_name": "execution_proof_correlation",
+  "wing_name": "Execution Proof Correlation",
+  "wing_id": "default_wing_execution_001",
+  "description": "Proves program execution using weighted scoring based on forensic strength of evidence. Uses a tiered approach with direct execution evidence (Prefetch, ShimCache) weighted highest, followed by supporting evidence (AmCache), user-triggered traces (LNK, Jumplists), and runtime behavior (SRUM).",
+  "proves": "Program was executed on the system",
+  "author": "Crow-Eye Team",
+  "created_date": "2024-12-23T00:00:00Z",
+  "last_modified": "2024-12-23T00:00:00Z",
+  "version": "1.0",
+  
+  "feathers": [
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.40,
+      "tier": 1,
+      "tier_name": "Direct execution evidence"
+    },
+    {
+      "feather_config_name": "ShimCache_CrowEyeFeather",
+      "feather_database_path": "feathers/ShimCache_CrowEyeFeather.db",
+      "artifact_type": "ShimCache",
+      "feather_id": "shimcache",
+      "weight": 0.25,
+      "tier": 1,
+      "tier_name": "Direct execution evidence"
+    },
+    {
+      "feather_config_name": "InventoryApplication_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplication_CrowEyeFeather.db",
+      "artifact_type": "AmCache",
+      "feather_id": "amcache_app",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Strong supporting evidence"
+    },
+    {
+      "feather_config_name": "InventoryApplicationFile_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplicationFile_CrowEyeFeather.db",
+      "artifact_type": "AmCache",
+      "feather_id": "amcache_file",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Strong supporting evidence"
+    },
+    {
+      "feather_config_name": "InventoryApplicationShortcut_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplicationShortcut_CrowEyeFeather.db",
+      "artifact_type": "AmCache",
+      "feather_id": "amcache_shortcut",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Strong supporting evidence"
+    },
+    {
+      "feather_config_name": "LNK_CrowEyeFeather",
+      "feather_database_path": "feathers/LNK_CrowEyeFeather.db",
+      "artifact_type": "LNK",
+      "feather_id": "lnk",
+      "weight": 0.10,
+      "tier": 3,
+      "tier_name": "User-triggered execution traces"
+    },
+    {
+      "feather_config_name": "AutomaticJumplist_CrowEyeFeather",
+      "feather_database_path": "feathers/AutomaticJumplist_CrowEyeFeather.db",
+      "artifact_type": "Jumplists",
+      "feather_id": "jumplist_auto",
+      "weight": 0.10,
+      "tier": 3,
+      "tier_name": "User-triggered execution traces"
+    },
+    {
+      "feather_config_name": "CustomJumplist_CrowEyeFeather",
+      "feather_database_path": "feathers/CustomJumplist_CrowEyeFeather.db",
+      "artifact_type": "Jumplists",
+      "feather_id": "jumplist_custom",
+      "weight": 0.10,
+      "tier": 3,
+      "tier_name": "User-triggered execution traces"
+    },
+    {
+      "feather_config_name": "SRUM_ApplicationUsage_CrowEyeFeather",
+      "feather_database_path": "feathers/SRUM_ApplicationUsage_CrowEyeFeather.db",
+      "artifact_type": "SRUM",
+      "feather_id": "srum_app",
+      "weight": 0.10,
+      "tier": 4,
+      "tier_name": "Runtime + behavior correlation"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.10,
+      "tier": 4,
+      "tier_name": "File system evidence"
+    },
+    {
+      "feather_config_name": "SystemLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemLogs_CrowEyeFeather.db",
+      "artifact_type": "Logs",
+      "feather_id": "system_logs",
+      "weight": 0.05,
+      "tier": 4,
+      "tier_name": "System event logs"
+    }
+  ],
+  
+  "time_window_minutes": 5,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "Prefetch",
+    "ShimCache",
+    "AmCache",
+    "LNK",
+    "Jumplists",
+    "SRUM",
+    "MFT",
+    "Logs"
+  ],
+  "use_weighted_scoring": true,
+  
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed": {
+        "min": 0.70,
+        "label": "Confirmed Execution"
+      },
+      "probable": {
+        "min": 0.40,
+        "label": "Probable Execution"
+      },
+      "weak": {
+        "min": 0.20,
+        "label": "Weak / Partial"
+      },
+      "not_proven": {
+        "min": 0.0,
+        "label": "Not Proven"
+      }
+    }
+  },
+  
+  "tags": [
+    "execution",
+    "default",
+    "weighted"
+  ],
+  "case_types": [
+    "malware",
+    "intrusion",
+    "user_activity"
+  ]
+}

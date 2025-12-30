@@ -1,0 +1,68 @@
+# Browser History Semantic Mappings
+# URL pattern mappings for browser history artifacts
+
+mappings:
+  # Social Media
+  - source: "BrowserHistory"
+    field: "url"
+    technical_value: ""
+    semantic_value: "Social Media Access"
+    description: "Social media website accessed"
+    artifact_type: "Browser"
+    category: "social_media"
+    severity: "info"
+    pattern: "(facebook|twitter|linkedin|instagram|tiktok|reddit)\\.com"
+    confidence: 0.98
+    mapping_source: "built-in"
+  
+  # Webmail
+  - source: "BrowserHistory"
+    field: "url"
+    technical_value: ""
+    semantic_value: "Webmail Access"
+    description: "Webmail service accessed"
+    artifact_type: "Browser"
+    category: "webmail"
+    severity: "info"
+    pattern: "(gmail|outlook|yahoo|protonmail|mail)\\.com"
+    confidence: 0.98
+    mapping_source: "built-in"
+  
+  # File Downloads
+  - source: "BrowserHistory"
+    field: "url"
+    technical_value: ""
+    semantic_value: "File Download"
+    description: "File download URL"
+    artifact_type: "Browser"
+    category: "download"
+    severity: "low"
+    pattern: "\\.(exe|zip|rar|pdf|doc|docx|xls|xlsx)$"
+    confidence: 0.95
+    mapping_source: "built-in"
+  
+  # Cloud Storage
+  - source: "BrowserHistory"
+    field: "url"
+    technical_value: ""
+    semantic_value: "Cloud Storage Access"
+    description: "Cloud storage service accessed"
+    artifact_type: "Browser"
+    category: "cloud_storage"
+    severity: "info"
+    pattern: "(dropbox|drive\\.google|onedrive|box)\\.com"
+    confidence: 0.98
+    mapping_source: "built-in"
+  
+  # Remote Access
+  - source: "BrowserHistory"
+    field: "url"
+    technical_value: ""
+    semantic_value: "Remote Access Service"
+    description: "Remote access/desktop service accessed"
+    artifact_type: "Browser"
+    category: "remote_access"
+    severity: "medium"
+    pattern: "(teamviewer|anydesk|logmein|remotedesktop)\\.com"
+    confidence: 0.98
+    mapping_source: "built-in"

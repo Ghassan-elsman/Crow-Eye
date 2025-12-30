@@ -1,0 +1,261 @@
+# Event Log Semantic Mappings
+# Comprehensive mappings for Windows Event Logs
+
+mappings:
+  # Security Events - Authentication (4624, 4625, 4634, 4647, 4648, 4800, 4801)
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4624"
+    semantic_value: "User Login"
+    description: "Successful user logon"
+    artifact_type: "Logs"
+    category: "authentication"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4625"
+    semantic_value: "Failed Login"
+    description: "Failed user logon attempt"
+    artifact_type: "Logs"
+    category: "authentication"
+    severity: "medium"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4634"
+    semantic_value: "User Logoff"
+    description: "User logoff event"
+    artifact_type: "Logs"
+    category: "authentication"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4647"
+    semantic_value: "User Initiated Logoff"
+    description: "User initiated logoff"
+    artifact_type: "Logs"
+    category: "authentication"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4648"
+    semantic_value: "Explicit Credentials"
+    description: "Logon with explicit credentials (RunAs)"
+    artifact_type: "Logs"
+    category: "authentication"
+    severity: "low"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4800"
+    semantic_value: "Workstation Locked"
+    description: "Workstation locked"
+    artifact_type: "Logs"
+    category: "authentication"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4801"
+    semantic_value: "Workstation Unlocked"
+    description: "Workstation unlocked"
+    artifact_type: "Logs"
+    category: "authentication"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  # System Events - Power (6005, 6006, 1074, 42, 1, 6008, 107)
+  - source: "SystemLogs"
+    field: "EventID"
+    technical_value: "6005"
+    semantic_value: "System Startup"
+    description: "Event Log service started (system boot)"
+    artifact_type: "Logs"
+    category: "system_power"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SystemLogs"
+    field: "EventID"
+    technical_value: "6006"
+    semantic_value: "System Shutdown"
+    description: "Event Log service stopped (system shutdown)"
+    artifact_type: "Logs"
+    category: "system_power"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SystemLogs"
+    field: "EventID"
+    technical_value: "1074"
+    semantic_value: "System Restart Initiated"
+    description: "System restart or shutdown initiated by user/process"
+    artifact_type: "Logs"
+    category: "system_power"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SystemLogs"
+    field: "EventID"
+    technical_value: "42"
+    semantic_value: "System Sleep"
+    description: "System entering sleep mode"
+    artifact_type: "Logs"
+    category: "system_power"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SystemLogs"
+    field: "EventID"
+    technical_value: "1"
+    semantic_value: "System Wake"
+    description: "System resuming from sleep"
+    artifact_type: "Logs"
+    category: "system_power"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SystemLogs"
+    field: "EventID"
+    technical_value: "6008"
+    semantic_value: "Unexpected Shutdown"
+    description: "Previous system shutdown was unexpected"
+    artifact_type: "Logs"
+    category: "system_power"
+    severity: "medium"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SystemLogs"
+    field: "EventID"
+    technical_value: "107"
+    semantic_value: "Hibernate Resume"
+    description: "System resumed from hibernation"
+    artifact_type: "Logs"
+    category: "system_power"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  # Process Execution Events (4688, 4689)
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4688"
+    semantic_value: "Process Created"
+    description: "A new process was created"
+    artifact_type: "Logs"
+    category: "process_execution"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4689"
+    semantic_value: "Process Terminated"
+    description: "A process has exited"
+    artifact_type: "Logs"
+    category: "process_execution"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  # File Operations (4663, 4656, 4658, 4660)
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4663"
+    semantic_value: "File Access Attempt"
+    description: "An attempt was made to access an object"
+    artifact_type: "Logs"
+    category: "file_operations"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4656"
+    semantic_value: "Handle Requested"
+    description: "A handle to an object was requested"
+    artifact_type: "Logs"
+    category: "file_operations"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4658"
+    semantic_value: "Handle Closed"
+    description: "The handle to an object was closed"
+    artifact_type: "Logs"
+    category: "file_operations"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "4660"
+    semantic_value: "Object Deleted"
+    description: "An object was deleted"
+    artifact_type: "Logs"
+    category: "file_operations"
+    severity: "low"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  # Network Events (5156, 5157, 5158)
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "5156"
+    semantic_value: "Network Connection Allowed"
+    description: "Windows Filtering Platform allowed a connection"
+    artifact_type: "Logs"
+    category: "network"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "5157"
+    semantic_value: "Network Connection Blocked"
+    description: "Windows Filtering Platform blocked a connection"
+    artifact_type: "Logs"
+    category: "network"
+    severity: "low"
+    confidence: 1.0
+    mapping_source: "built-in"
+  
+  - source: "SecurityLogs"
+    field: "EventID"
+    technical_value: "5158"
+    semantic_value: "Network Bind Allowed"
+    description: "Windows Filtering Platform allowed a bind to a local port"
+    artifact_type: "Logs"
+    category: "network"
+    severity: "info"
+    confidence: 1.0
+    mapping_source: "built-in"
