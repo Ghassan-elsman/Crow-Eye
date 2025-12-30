@@ -358,33 +358,26 @@ class StartupMenuDialog(QtWidgets.QDialog):
                 background-color: #0B1220;
             }
             QScrollBar:vertical {
-                border: none;
-                background: #0B1220;
+                background: #1E293B;
                 width: 12px;
-                margin: 0;
                 border-radius: 6px;
+                margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #334155, stop:1 #1E293B);
-                min-height: 30px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00FFFF, stop:1 #00CED1);
                 border-radius: 6px;
-                margin: 1px;
-                border: 1px solid rgba(0, 255, 255, 0.2);
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00FFFF, stop:1 #7FFFD4);
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
-                background: none;
             }
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
                 background: none;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #475569, stop:1 #334155);
-                border: 1px solid #00FFFF;
-            }
-            QScrollBar::handle:vertical:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E293B, stop:1 #0F172A);
-                border: 1px solid #00FFFF;
             }
         """)
         

@@ -10,7 +10,7 @@ Modules:
     - mft_usn_correlator: Correlation engine for MFT and USN data
 """
 
-__version__ = "2.0.0"
+__version__ = "0.6.1"
 __author__ = "Ghassan Elsman (Crow Eye Development)"
 
 # Import main classes for easier access

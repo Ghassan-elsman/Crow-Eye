@@ -1783,6 +1783,43 @@ class CrowEyeStyles:
         }
     """
 
+    # Correlation Button Style (Purple/Violet - Analysis & Data Science)
+    CORRELATION_BUTTON = """
+        QPushButton {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                                      stop:0 #9333EA, stop:0.5 #7C3AED, stop:1 #9333EA);
+            color: #FFFFFF;
+            border: 3px solid #6B21A8;
+            border-radius: 10px;
+            padding: 12px 25px;
+            font-weight: bold;
+            font-size: 12px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            min-width: 140px;
+        }
+        QPushButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                                      stop:0 #A855F7, stop:0.5 #9333EA, stop:1 #A855F7);
+            border: 3px solid #7C3AED;
+            transform: scale(1.02);
+        }
+        QPushButton:pressed {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                                      stop:0 #6B21A8, stop:0.5 #581C87, stop:1 #6B21A8);
+            border: 3px solid #581C87;
+            padding-top: 14px;
+            padding-bottom: 10px;
+        }
+        QPushButton:disabled {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                                      stop:0 #4B5563, stop:0.5 #374151, stop:1 #4B5563);
+            color: #9CA3AF;
+            border: 3px solid #374151;
+        }
+    """
+
     # Visualization Button Style (Cyan/Indigo)
     VISUALIZATION_BUTTON = """
         QPushButton {

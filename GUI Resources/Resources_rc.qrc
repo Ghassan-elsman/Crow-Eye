@@ -7,6 +7,7 @@
     <file>icons/new-case-icon.svg</file>
     <file>icons/open-case-icon.svg</file>
     <file>icons/search-icon.svg</file>
+    <file>icons/settings-icon.svg</file>
     <file>icons/check.svg</file>
     <file>icons/filter-icon.png</file>
   </qresource>
