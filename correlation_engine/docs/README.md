@@ -195,14 +195,4 @@ When updating documentation:
 
 ---
 
-**Last Updated**: December 2024  
-**Correlation Engine Version**: 2.0.0 (Dual-Engine Architecture)  
-**Documentation Version**: 2.0
 
-**Major Updates in v2.0**:
-- ✨ Dual-Engine Architecture with Time-Based and Identity-Based engines
-- 📊 Comprehensive Engine Selection Guide
-- ⚡ Performance optimization documentation
-- 🔧 Troubleshooting guide for both engines
-- 🏗️ Enhanced architecture documentation with component integration
-- 📖 ~7,200 lines of new documentation
