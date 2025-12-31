@@ -2,20 +2,36 @@
 
 Welcome to the Crow-Eye Correlation Engine documentation! This directory contains comprehensive documentation for developers and contributors.
 
+## 🚀 What's New: Dual-Engine Architecture
+
+The Correlation Engine now features a **dual-engine architecture** with two distinct correlation strategies:
+
+- **Time-Based Engine** (O(N²)) - Comprehensive field matching for small datasets (< 1,000 records)
+- **Identity-Based Engine** (O(N log N)) - Fast, scalable correlation for large datasets with identity tracking
+
+**New Documentation**:
+- **[Engine Selection Guide](engine/ENGINE_DOCUMENTATION.md#engine-selection-guide)** - Choose the right engine for your needs
+- **[Dual-Engine Architecture](engine/ENGINE_DOCUMENTATION.md#dual-engine-architecture)** - Understand both engines
+- **[Performance Comparison](engine/ENGINE_DOCUMENTATION.md#performance-and-optimization)** - Benchmarks and optimization tips
+
 ## Quick Navigation
 
 ### 📖 Start Here
 - **[CORRELATION_ENGINE_OVERVIEW.md](CORRELATION_ENGINE_OVERVIEW.md)** - Main overview with all architecture diagrams, quick start guide, and navigation
+- **[Engine Selection Guide](engine/ENGINE_DOCUMENTATION.md#engine-selection-guide)** - **NEW!** Choose between Time-Based and Identity-Based engines
 
 ### 📁 Detailed Documentation by Directory
 
-- **[engine/ENGINE_DOCUMENTATION.md](engine/ENGINE_DOCUMENTATION.md)** - Core correlation engine, feather loading, scoring, timestamp parsing
+- **[engine/ENGINE_DOCUMENTATION.md](engine/ENGINE_DOCUMENTATION.md)** - **ENHANCED!** Dual-engine architecture, Time-Based engine, Identity-Based engine, engine selection guide, performance optimization, troubleshooting
 - **[feather/FEATHER_DOCUMENTATION.md](feather/FEATHER_DOCUMENTATION.md)** - Data normalization, import, transformation
 - **[wings/WINGS_DOCUMENTATION.md](wings/WINGS_DOCUMENTATION.md)** - Correlation rule definitions, validation, wing models
 - **[config/CONFIG_DOCUMENTATION.md](config/CONFIG_DOCUMENTATION.md)** - Configuration management, semantic mappings, session state
 - **[pipeline/PIPELINE_DOCUMENTATION.md](pipeline/PIPELINE_DOCUMENTATION.md)** - Workflow orchestration, pipeline execution, dependency management
 - **[gui/GUI_DOCUMENTATION.md](gui/GUI_DOCUMENTATION.md)** - User interface components, visualization, timeline widgets
 - **[integration/INTEGRATION_DOCUMENTATION.md](integration/INTEGRATION_DOCUMENTATION.md)** - Crow-Eye integration, auto-generation, case initialization
+
+### 🏗️ Architecture Documentation
+- **[ARCHITECTURE.md](../ARCHITECTURE.md)** - **ENHANCED!** Component integration, Wing vs Feather comparison, data flow diagrams
 
 ## Documentation Structure
 
@@ -41,10 +57,29 @@ This documentation follows a two-tier structure:
 If you're new to the Correlation Engine:
 
 1. **Start with the [Overview](CORRELATION_ENGINE_OVERVIEW.md)** - Read the introduction and look at the diagrams
-2. **Understand the architecture** - Review the system architecture and data flow diagrams
-3. **Identify your area** - Determine which directory you'll be working in
-4. **Read detailed docs** - Read the detailed documentation for that directory
-5. **Review scenarios** - Look at modification scenarios similar to your task
+2. **Understand the dual-engine architecture** - Read about [Time-Based](engine/ENGINE_DOCUMENTATION.md#time-based-correlation-engine) and [Identity-Based](engine/ENGINE_DOCUMENTATION.md#identity-based-correlation-engine) engines
+3. **Learn engine selection** - Review the [Engine Selection Guide](engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) to understand when to use each engine
+4. **Understand the architecture** - Review the system architecture and data flow diagrams
+5. **Identify your area** - Determine which directory you'll be working in
+6. **Read detailed docs** - Read the detailed documentation for that directory
+7. **Review scenarios** - Look at modification scenarios similar to your task
+
+## Engine Selection Quick Guide
+
+**Choose Time-Based Engine when:**
+- ✅ Dataset has < 1,000 records
+- ✅ You need comprehensive field-level analysis
+- ✅ You're debugging or doing research
+- ✅ Detailed semantic matching is critical
+
+**Choose Identity-Based Engine when:**
+- ✅ Dataset has > 1,000 records
+- ✅ Performance is critical
+- ✅ You need identity tracking across artifacts
+- ✅ You want to filter by specific applications
+- ✅ Memory constraints require streaming mode
+
+**See the full [Engine Selection Guide](engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) for detailed decision criteria.**
 
 ## For Contributors
 
@@ -61,17 +96,33 @@ If you're contributing to the Correlation Engine:
 ### Finding Specific Information
 
 - **How correlation works**: [Overview - Correlation Execution Flow](CORRELATION_ENGINE_OVERVIEW.md#correlation-execution-flow)
+- **Choosing an engine**: [Engine Selection Guide](engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) **NEW!**
+- **Time-Based Engine**: [Time-Based Correlation Engine](engine/ENGINE_DOCUMENTATION.md#time-based-correlation-engine) **NEW!**
+- **Identity-Based Engine**: [Identity-Based Correlation Engine](engine/ENGINE_DOCUMENTATION.md#identity-based-correlation-engine) **NEW!**
+- **Performance optimization**: [Performance and Optimization](engine/ENGINE_DOCUMENTATION.md#performance-and-optimization) **NEW!**
+- **Troubleshooting engines**: [Troubleshooting](engine/ENGINE_DOCUMENTATION.md#troubleshooting) **NEW!**
 - **Adding new artifact type**: [Feather Documentation - Scenario 1](feather/FEATHER_DOCUMENTATION.md#scenario-1-adding-support-for-a-new-artifact-type)
 - **Modifying correlation logic**: [Engine Documentation - Scenario 2](engine/ENGINE_DOCUMENTATION.md#scenario-2-modifying-scoring-weights)
 - **Adding GUI feature**: [GUI Documentation - Scenario 1](gui/GUI_DOCUMENTATION.md#scenario-1-adding-a-new-tab-to-main-window)
 - **Understanding Wings**: [Wings Documentation](wings/WINGS_DOCUMENTATION.md)
 - **Pipeline execution**: [Pipeline Documentation](pipeline/PIPELINE_DOCUMENTATION.md)
+- **Component integration**: [Architecture - Component Integration](../ARCHITECTURE.md#component-integration) **NEW!**
+- **Wing vs Feather**: [Architecture - Wing vs Feather](../ARCHITECTURE.md#wing-vs-feather-key-differences) **NEW!**
 
 ### Key Files by Function
 
-**Correlation**:
-- `engine/correlation_engine.py` - Main correlation logic
+**Engine Selection & Creation**:
+- `engine/engine_selector.py` - **NEW!** Engine factory and selection
+- `engine/base_engine.py` - **NEW!** Common engine interface
+
+**Correlation Engines**:
+- `engine/time_based_engine.py` - **NEW!** Time-Based correlation (O(N²))
+- `engine/identity_correlation_engine.py` - **NEW!** Identity-Based correlation (O(N log N))
+- `engine/correlation_engine.py` - Original correlation logic (used by Time-Based)
 - `engine/weighted_scoring.py` - Confidence scoring
+
+**Data Structures**:
+- `engine/data_structures.py` - **NEW!** Identity, Anchor, EvidenceRow structures
 
 **Data Loading**:
 - `engine/feather_loader.py` - Load feather databases
@@ -82,7 +133,7 @@ If you're contributing to the Correlation Engine:
 - `wings/core/wing_model.py` - Wing data models
 
 **Execution**:
-- `pipeline/pipeline_executor.py` - Execute pipelines
+- `pipeline/pipeline_executor.py` - Execute pipelines (uses EngineSelector)
 - `gui/execution_control.py` - GUI execution control
 
 **Integration**:
@@ -91,16 +142,29 @@ If you're contributing to the Correlation Engine:
 
 ## Documentation Files
 
-Total: 8 documentation files
+Total: 8 documentation files + 1 architecture document
 
-1. `CORRELATION_ENGINE_OVERVIEW.md` (Main overview with all diagrams)
-2. `engine/ENGINE_DOCUMENTATION.md` (15 Python files documented)
+1. `CORRELATION_ENGINE_OVERVIEW.md` (Main overview with all diagrams) - **UPDATED**
+2. `engine/ENGINE_DOCUMENTATION.md` (18 Python files documented) - **MAJOR ENHANCEMENT**
+   - Dual-Engine Architecture
+   - Time-Based Correlation Engine
+   - Identity-Based Correlation Engine
+   - Engine Selection Guide
+   - Configuration and Integration
+   - Performance and Optimization
+   - Migration and Compatibility
+   - Troubleshooting
 3. `feather/FEATHER_DOCUMENTATION.md` (4 Python files + UI)
 4. `wings/WINGS_DOCUMENTATION.md` (3 Python files + UI)
 5. `config/CONFIG_DOCUMENTATION.md` (10 Python files)
 6. `pipeline/PIPELINE_DOCUMENTATION.md` (7 Python files)
 7. `gui/GUI_DOCUMENTATION.md` (26 Python files)
 8. `integration/INTEGRATION_DOCUMENTATION.md` (7 Python files)
+9. `../ARCHITECTURE.md` (System architecture) - **MAJOR ENHANCEMENT**
+   - Component Integration
+   - Wing vs Feather: Key Differences
+
+**Total Documentation**: ~7,200 lines of new content added covering dual-engine architecture
 
 ## Additional Resources
 
@@ -131,6 +195,14 @@ When updating documentation:
 
 ---
 
-**Last Updated**: 2024  
-**Correlation Engine Version**: 0.1.0  
-**Documentation Version**: 1.0
+**Last Updated**: December 2024  
+**Correlation Engine Version**: 2.0.0 (Dual-Engine Architecture)  
+**Documentation Version**: 2.0
+
+**Major Updates in v2.0**:
+- ✨ Dual-Engine Architecture with Time-Based and Identity-Based engines
+- 📊 Comprehensive Engine Selection Guide
+- ⚡ Performance optimization documentation
+- 🔧 Troubleshooting guide for both engines
+- 🏗️ Enhanced architecture documentation with component integration
+- 📖 ~7,200 lines of new documentation

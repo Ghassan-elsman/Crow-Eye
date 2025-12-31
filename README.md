@@ -21,6 +21,7 @@
 - [Technical Notes](#technical-notes)
 - [Screenshots](#screenshots)
 - [Official Website](#-official-website)
+- [Correlation Engine](#-correlation-engine)
 - [Coming Soon Features](#-coming-soon-features)
 - [Development Credits](#development-credits)
 
@@ -247,12 +248,41 @@ To analyze custom artifacts:
 
 ## Documentation & Contribution
 
+### General Documentation
+
 - **[README.md](README.md)**: Project overview, vision, features, and usage guide (this document)
 - **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)**: Complete technical documentation including architecture, components, and development guide
 - **[CONTRIBUTING.md](CONTRIBUTING.md)**: Contribution guidelines, coding standards, and development workflows
 - **[timeline/ARCHITECTURE.md](timeline/ARCHITECTURE.md)**: Detailed timeline module architecture
 
-For developers and contributors, please review the technical documentation and contribution guide before submitting pull requests.
+### 🔥 Correlation Engine Documentation & Contributing
+
+The Correlation Engine is our most active development area with comprehensive documentation:
+
+**Documentation** (~7,200 lines):
+- **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** - System overview with architecture diagrams
+- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** - Dual-engine architecture, engine selection guide, performance optimization
+- **[Architecture Documentation](correlation_engine/ARCHITECTURE.md)** - Component integration and data flow
+- **[Feather Documentation](correlation_engine/docs/feather/FEATHER_DOCUMENTATION.md)** - Data normalization system
+- **[Wings Documentation](correlation_engine/docs/wings/WINGS_DOCUMENTATION.md)** - Correlation rules
+- **[Pipeline Documentation](correlation_engine/docs/pipeline/PIPELINE_DOCUMENTATION.md)** - Workflow orchestration
+
+**Contributing**:
+- **[Correlation Engine Contributing Guide](correlation_engine/CONTRIBUTING.md)** - Priority areas, development status, and how to contribute
+
+**Quick Links**:
+- [Engine Selection Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) - Choose the right engine
+- [Troubleshooting Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#troubleshooting) - Common issues and solutions
+- [Performance Optimization](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#performance-and-optimization) - Optimize correlation
+
+### For Contributors
+
+For developers and contributors:
+- **General contributions**: Review the [Main Contributing Guide](CONTRIBUTING.md)
+- **Correlation Engine contributions** (priority area): See the [Correlation Engine Contributing Guide](correlation_engine/CONTRIBUTING.md)
+- Please review the technical documentation before submitting pull requests
+
+
 
 ## Technical Notes
 - The tool incorporates a modified version of the JumpList_Lnk_Parser Python module.
@@ -277,18 +307,367 @@ Visit our official website: [https://crow-eye.com/](https://crow-eye.com/)
 
 For additional resources, documentation, and updates, check out our dedicated website.
 
+---
+
+## 🧩 Correlation Engine
+
+The **Crow-Eye Correlation Engine** is a correlation system designed to collect and correlate various artifacts into meaningful connections. It works with default correlation rules out of the box, and also allows users to build custom rules tailored to their specific investigation needs.
+
+The engine finds temporal and semantic relationships between different types of forensic artifacts, helping investigators discover connections between events that occurred on a system by correlating data from multiple sources.
+
+**Universal Data Import**: The Correlation Engine can take output from **any forensic tool** in CSV, JSON, or SQLite format and convert it into a Feather database. This means you can correlate data from third-party tools (Plaso, Autopsy, Volatility, etc.) with Crow-Eye's native artifacts, creating a unified correlation analysis across all your forensic data sources.
+
+### 🚧 Development Status
+
+The Correlation Engine is **functional and actively being used**, but is still under **active development** with ongoing enhancements:
+
+**Current Status**:
+- ✅ **Feather Builder**: Fully functional - imports CSV/JSON/SQLite from any tool
+- ✅ **Wings System**: Fully functional - create and manage correlation rules
+- ✅ **Pipeline Orchestration**: Fully functional - automate correlation workflows
+- 🔄 **Identity-Based Engine**: Functional and more mature - recommended for production use
+- ⚠️ **Time-Based Engine**: Prototype stage - functional but not finalized
+- 🔄 **Identity Extractor**: Working but being enhanced for better accuracy
+- 🔄 **Semantic Mapping**: Under active implementation
+- 🔄 **Correlation Scoring**: Under active implementation
+
+**Recommendations**:
+- ✅ **Use Identity-Based Engine** for production investigations (more mature)
+- ⚠️ **Time-Based Engine** is available for testing but not yet production-ready
+- 📊 **Feather Builder** is stable and ready for all data import needs
+- 🎯 **Wings and Pipelines** are production-ready
+
+**What We're Working On**:
+- Enhancing identity extraction accuracy across more artifact types
+- Implementing comprehensive semantic field mapping
+- Finalizing correlation scoring algorithms
+- Completing Time-Based Engine development
+- Improving performance and optimization
+
+The system is usable now and actively being improved. Feedback and contributions are welcome!
+
+### Key Features
+
+- **🔄 Dual-Engine Architecture**: Choose between Time-Based (O(N²)) and Identity-Based (O(N log N)) correlation strategies
+- **📊 Multi-Artifact Support**: Correlate Prefetch, ShimCache, AmCache, Event Logs, LNK files, Jumplists, MFT, SRUM, Registry, and more
+- **🔌 Universal Import**: Import CSV/JSON/SQLite output from any forensic tool and convert to Feather databases
+- **🎯 Identity Tracking**: Track applications and files across multiple artifacts
+- **⚡ High Performance**: Process millions of records with streaming mode
+- **🔍 Flexible Rules**: Define custom correlation rules (Wings) with configurable parameters
+- **🎨 Professional UI**: Cyberpunk-styled interface with timeline visualization
+
+### System Architecture
+
+The Correlation Engine consists of four main components:
+
+#### 1. 🗄️ Feathers (Data Normalization)
+
+**Purpose**: Transform raw forensic artifacts into a standardized, queryable format.
+
+**What They Are**:
+- SQLite databases containing normalized forensic artifact data
+- Each feather represents one artifact type (e.g., Prefetch, ShimCache, Event Logs)
+- Standardized schema with metadata for efficient querying
+- **Universal format** that accepts data from any forensic tool
+
+**How They Work**:
+```
+Any Tool Output → Feather Builder → Normalized Feather Database
+(CSV/JSON/SQLite)                   (SQLite with standard schema)
+
+Examples:
+- Plaso CSV → Feather Builder → timeline.db
+- Autopsy JSON → Feather Builder → autopsy_artifacts.db
+- Volatility CSV → Feather Builder → memory_artifacts.db
+- Custom Tool Output → Feather Builder → custom.db
+```
+
+**Key Features**:
+- **Multi-source import**: SQLite databases, CSV files, JSON files from any tool
+- Automatic column mapping and data type detection
+- Timestamp normalization to ISO format
+- Data validation and error handling
+- Optimized indexes for fast correlation
+
+**Supported Import Formats**:
+- **CSV**: Any CSV file with headers (from Plaso, Excel exports, custom scripts, etc.)
+- **JSON**: Flat or nested JSON from any forensic tool
+- **SQLite**: Direct import from other SQLite databases
+
+**Example**:
+```
+prefetch.db (Feather)
+├── feather_metadata (artifact type, source, record count)
+├── prefetch_data (executable_name, path, last_executed, hash)
+└── Indexes (timestamp, name, path)
+```
+
+#### 2. 🎯 Wings (Correlation Rules)
+
+**Purpose**: Define which artifacts to correlate and how to correlate them.
+
+**What They Are**:
+- JSON/YAML configuration files that specify correlation rules
+- Define time windows, minimum matches, and feather relationships
+- Reusable across different cases and datasets
+
+**Key Components**:
+- **Correlation Rules**: Time window, minimum matches, anchor priority
+- **Feather Specifications**: Which feathers to correlate, weights, requirements
+- **Filters**: Optional time period or identity filters
+
+**Example Wing**:
+```json
+{
+  "wing_id": "execution-proof",
+  "wing_name": "Execution Proof",
+  "correlation_rules": {
+    "time_window_minutes": 5,
+    "minimum_matches": 2,
+    "anchor_priority": ["Prefetch", "SRUM", "AmCache"]
+  },
+  "feathers": [
+    {"feather_id": "prefetch", "weight": 0.4},
+    {"feather_id": "shimcache", "weight": 0.3},
+    {"feather_id": "amcache", "weight": 0.3}
+  ]
+}
+```
+
+#### 3. ⚙️ Engines (Correlation Strategies)
+
+**Purpose**: Execute correlation logic to find relationships between artifacts.
+
+The Correlation Engine offers two distinct strategies:
+
+##### Time-Based Correlation Engine
+
+**Best For**: Small datasets (< 1,000 records), comprehensive analysis, research
+
+**How It Works**:
+1. Collect anchor records from ALL feathers
+2. For each anchor, find records within time window from other feathers
+3. Apply semantic field matching and weighted scoring
+4. Prevent duplicates using MatchSet tracking
+5. Return correlation matches with confidence scores
+
+**Complexity**: O(N²) where N = number of anchor records
+
+**Key Features**:
+- Comprehensive field-level matching
+- Semantic field mapping across artifact types
+- Weighted confidence scoring
+- Duplicate prevention
+
+##### Identity-Based Correlation Engine
+
+**Best For**: Large datasets (> 1,000 records), production environments, identity tracking
+
+**How It Works**:
+1. Extract and normalize identity information from all records
+2. Group records by identity (application/file)
+3. Create temporal anchors within each identity cluster
+4. Classify evidence as primary, secondary, or supporting
+5. Return identity-centric correlation results
+
+**Complexity**: O(N log N) where N = number of records
+
+**Key Features**:
+- Identity extraction with 40+ field patterns per type
+- Multi-feather identity grouping
+- Temporal anchor clustering
+- Streaming mode for large datasets (> 5,000 anchors)
+- Constant memory usage with streaming
+- Identity filtering support
+
+**Engine Selection**:
+- **< 1,000 records**: Use Time-Based Engine for detailed analysis
+- **> 1,000 records**: Use Identity-Based Engine for performance
+
+#### 4. 🔄 Pipelines (Workflow Orchestration)
+
+**Purpose**: Automate complete analysis workflows from feather creation to result generation.
+
+**What They Are**:
+- Orchestration layer that ties everything together
+- Automate feather creation, wing execution, and report generation
+- Support for multiple wings and complex workflows
+
+**Pipeline Workflow**:
+1. **Load Configuration**: Read pipeline config with engine type, wings, feathers
+2. **Create Engine**: Use EngineSelector to instantiate appropriate engine
+3. **Execute Wings**: Run each wing against specified feathers
+4. **Collect Results**: Aggregate correlation matches from all wings
+5. **Generate Reports**: Save results to database and JSON files
+6. **Display Results**: Present in GUI with filtering and visualization
+
+**Example Pipeline**:
+```json
+{
+  "pipeline_name": "Investigation Pipeline",
+  "engine_type": "identity_based",
+  "wings": [
+    {"wing_id": "execution-proof"},
+    {"wing_id": "file-access"}
+  ],
+  "feathers": [
+    {"feather_id": "prefetch", "database_path": "data/prefetch.db"},
+    {"feather_id": "srum", "database_path": "data/srum.db"},
+    {"feather_id": "eventlogs", "database_path": "data/eventlogs.db"}
+  ],
+  "filters": {
+    "time_period_start": "2024-01-01T00:00:00",
+    "time_period_end": "2024-12-31T23:59:59"
+  }
+}
+```
+
+### How It All Works Together
+
+```
+1. Data Preparation
+   Raw Forensic Data → Feather Builder → Feather Databases
+
+2. Configuration
+   Wing Configs + Feather References → Pipeline Config
+
+3. Execution
+   Pipeline Executor → Engine Selector → Correlation Engine
+
+4. Correlation
+   Engine loads Feathers + applies Wing rules → Correlation Results
+
+5. Visualization
+   Results Database → Results Viewer GUI
+```
+
+### Example Use Case: Finding Execution Proof
+
+**Scenario**: Prove that `malware.exe` was executed on a system
+
+**Step 1: Create Feathers**
+```bash
+# Import Prefetch, ShimCache, and AmCache data
+python -m correlation_engine.feather.feather_builder
+```
+
+**Step 2: Create Wing**
+```json
+{
+  "wing_id": "malware-execution",
+  "correlation_rules": {
+    "time_window_minutes": 5,
+    "minimum_matches": 2
+  },
+  "feathers": ["prefetch", "shimcache", "amcache"]
+}
+```
+
+**Step 3: Execute Pipeline**
+```python
+from correlation_engine.pipeline import PipelineExecutor
+
+executor = PipelineExecutor(pipeline_config)
+results = executor.execute()
+```
+
+**Step 4: View Results**
+```
+Identity: malware.exe
+  Anchor 1 (2024-01-15 10:30:00):
+    ✓ Prefetch: malware.exe executed at 10:30:00
+    ✓ ShimCache: malware.exe modified at 10:30:15
+    ✓ AmCache: malware.exe installed at 10:29:45
+  
+  Conclusion: Execution proven with 3 corroborating artifacts
+```
+
+### Performance Benchmarks
+
+**Time-Based Engine**:
+- 100 records: 0.5s
+- 1,000 records: 20s
+- Best for: < 1,000 records
+
+**Identity-Based Engine**:
+- 1,000 records: 2s
+- 10,000 records: 15s
+- 100,000 records: 2.5 min (with streaming)
+- 1,000,000 records: 25 min (with streaming)
+- Best for: > 1,000 records
+
+### Documentation
+
+**Comprehensive Documentation** (~7,200 lines):
+- **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** - System overview with architecture diagrams
+- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** - Dual-engine architecture, engine selection guide, performance optimization
+- **[Architecture Documentation](correlation_engine/ARCHITECTURE.md)** - Component integration and data flow
+- **[Feather Documentation](correlation_engine/docs/feather/FEATHER_DOCUMENTATION.md)** - Data normalization system
+- **[Wings Documentation](correlation_engine/docs/wings/WINGS_DOCUMENTATION.md)** - Correlation rules
+- **[Pipeline Documentation](correlation_engine/docs/pipeline/PIPELINE_DOCUMENTATION.md)** - Workflow orchestration
+
+**Quick Links**:
+- [Engine Selection Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) - Choose the right engine
+- [Troubleshooting Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#troubleshooting) - Common issues and solutions
+- [Performance Optimization](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#performance-and-optimization) - Optimize correlation
+
+### Getting Started with Correlation Engine
+
+1. **Launch Feather Builder**:
+   ```bash
+   python -m correlation_engine.main
+   ```
+
+2. **Create Feathers**: Import your forensic artifacts (Prefetch, ShimCache, etc.)
+
+3. **Create Wings**: Define correlation rules for your investigation
+
+4. **Create Pipeline**: Configure which wings and feathers to use
+
+5. **Execute**: Run the pipeline and view correlated results
+
+6. **Analyze**: Use the Results Viewer to explore temporal relationships
+
+**Current Status**: 
+- ✅ **Functional and Usable** - Core system operational
+- 🔄 **Active Development** - Ongoing enhancements to semantic mapping, scoring, and identity extraction
+- ✅ **Identity-Based Engine** - Production-ready (recommended)
+- ⚠️ **Time-Based Engine** - Prototype stage (functional but not finalized)
+
+### 📚 Correlation Engine Documentation
+
+**Comprehensive Documentation** (~7,200 lines covering all aspects):
+- **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** - System overview with architecture diagrams
+- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** - Dual-engine architecture, engine selection guide, performance optimization
+- **[Architecture Documentation](correlation_engine/ARCHITECTURE.md)** - Component integration and data flow
+- **[Contribution Guide](correlation_engine/CONTRIBUTING.md)** - How to contribute to the Correlation Engine
+
+**Quick Links**:
+- [Engine Selection Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) - Choose the right engine
+- [Troubleshooting Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#troubleshooting) - Common issues and solutions
+- [Performance Optimization](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#performance-and-optimization) - Optimize correlation
+
+---
+
 ## 🚀 Coming Soon Features
 - 📊 **Advanced GUI Views and Reports**
-- 🧩 **Correlation Engine** (Correlates all forensic artifacts)
-- 🔎 **Advanced Search Engine and Dialog** for efficient artifact querying
 - 🔄 **Enhanced Search Dialog** with advanced filtering and natural language support
 - ⏱️ **Enhanced Visualization Timeline** with interactive zooming and event correlation
 - 🤖 **AI Integration** for querying results, summarizing findings, and assisting non-technical users with natural language questions
+
+---
 
 If you're interested in contributing to these features or have suggestions for additional forensic artifacts, please feel free to:
 - Open an issue with your ideas
 - Submit a pull request
 - Contact me directly at ghassanelsman@gmail.com
+
+**For Correlation Engine Contributions**:
+See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.md) for detailed information on:
+- Development status and priority areas
+- How to contribute to specific components
+- Code guidelines and testing requirements
+- Documentation standards
 
 ## Development Credits
 - Jump List/LNK parsing based on work by Saleh Muhaysin

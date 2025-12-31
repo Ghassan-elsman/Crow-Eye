@@ -8,6 +8,7 @@ Welcome to the Crow Eye project! We appreciate your interest in contributing. Th
 - [Documentation Index](#documentation-index)
   - [Core Documentation](#core-documentation)
   - [Component Details](#component-details)
+- [🔥 Priority: Correlation Engine Contributions](#-priority-correlation-engine-contributions)
 - [Development Environment Setup](#development-environment-setup)
 - [Contribution Guidelines](#contribution-guidelines)
   - [Types of Contributions](#types-of-contributions)
@@ -224,6 +225,54 @@ Helper functions and utilities:
 - **File Utilities** (`utils/file_utils.py`): Common file operations
 - **Search Utilities** (`utils/search_utils.py`): Global search and highlighting functionality
 
+---
+
+## 🔥 Priority: Correlation Engine Contributions
+
+The **Correlation Engine** is our **highest priority development area** and where we need the most contributions!
+
+### Why Contribute to the Correlation Engine?
+
+- 🚀 **Most Active Development**: This is where the project is evolving fastest
+- 🎯 **Clear Roadmap**: Well-defined priority areas and tasks
+- 💡 **Innovative Technology**: Work on cutting-edge forensic correlation algorithms
+- 🌟 **High Impact**: Your contributions directly shape the future of Crow-Eye
+- 📚 **Great Documentation**: Comprehensive guides to help you get started
+
+### Current Status
+
+- ✅ **Functional and Usable** - Core system operational
+- 🔄 **Active Development** - Ongoing enhancements
+- ✅ **Identity-Based Engine** - Production-ready (recommended)
+- ⚠️ **Time-Based Engine** - Prototype stage (functional but not finalized)
+
+### Priority Areas for Contribution
+
+1. **Identity Extractor Enhancement** - Improve accuracy across more artifact types
+2. **Semantic Mapping Implementation** - Complete field mapping system
+3. **Correlation Scoring Algorithm** - Finalize confidence scoring
+4. **Time-Based Engine Completion** - Bring to production readiness
+5. **Performance Optimization** - Improve speed and memory usage
+
+### Getting Started with Correlation Engine
+
+**📖 Read the dedicated guide**: **[Correlation Engine Contributing Guide](correlation_engine/CONTRIBUTING.md)**
+
+The Correlation Engine has its own comprehensive contributing guide that includes:
+- Detailed vision and philosophy
+- Specific priority areas with examples
+- Development status for each component
+- Technical guidelines and code examples
+- Testing requirements
+- Documentation standards
+
+**Quick Start**:
+1. Read the [Correlation Engine Contributing Guide](correlation_engine/CONTRIBUTING.md)
+2. Review the [Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)
+3. Check the priority areas and pick a task
+4. Start contributing!
+
+---
 
 ## Development Environment Setup
 
