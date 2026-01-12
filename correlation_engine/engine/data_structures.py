@@ -11,7 +11,7 @@ This module defines the fundamental data structures used throughout the correlat
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from uuid import uuid4
 
 
@@ -279,6 +279,9 @@ class QueryFilters:
     # NEW: Pagination fields
     page: int = 0  # Page number (0-indexed)
     page_size: int = 100  # Records per page
+    
+    # NEW: Time-based filtering fields
+    time_window_minutes: float = 30.0  # Time window for anchor grouping
 
 
 # NEW: Enhanced correlation result data structures
@@ -319,6 +322,8 @@ class CorrelationResults:
     configuration: Dict[str, Any] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    status: str = "Completed"  # "Completed" or "Cancelled"
+    cancellation_timestamp: Optional[datetime] = None
     
     def add_identity(self, identity: Identity):
         """Add identity to results and update statistics."""
@@ -384,3 +389,172 @@ class IdentityWithAllEvidence:
     supporting_evidence: List[EvidenceRow] = field(default_factory=list)
     artifacts_involved: List[str] = field(default_factory=list)
     semantic_summary: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AnchorTimeGroup:
+    """
+    Group of identities active at a specific anchor time.
+    
+    Organizes correlation results by temporal anchor points for time-first analysis.
+    """
+    anchor_time: datetime
+    identities: List[IdentityWithAnchors] = field(default_factory=list)
+    total_identities: int = 0
+    total_evidence: int = 0
+    primary_artifacts: List[str] = field(default_factory=list)
+    time_window_minutes: float = 0.0
+    
+    def __post_init__(self):
+        """Calculate derived fields."""
+        self.total_identities = len(self.identities)
+        self.total_evidence = sum(
+            len(anchor.evidence_rows) 
+            for identity in self.identities 
+            for anchor in identity.anchors
+        )
+        
+        # Extract primary artifacts
+        artifacts = set()
+        for identity in self.identities:
+            for anchor in identity.anchors:
+                for evidence in anchor.evidence_rows:
+                    if evidence.role == "primary":
+                        artifacts.add(evidence.artifact)
+        self.primary_artifacts = list(artifacts)
+
+
+@dataclass
+class TimeBasedQueryResult:
+    """
+    Results organized by anchor time for time-first hierarchical display.
+    
+    Transforms identity-first data into time-first organization.
+    """
+    anchor_time_groups: List[AnchorTimeGroup] = field(default_factory=list)
+    total_anchor_times: int = 0
+    total_identities: int = 0
+    total_evidence: int = 0
+    time_range: Optional[Tuple[datetime, datetime]] = None
+    
+    def __post_init__(self):
+        """Calculate summary statistics."""
+        self.total_anchor_times = len(self.anchor_time_groups)
+        self.total_identities = sum(group.total_identities for group in self.anchor_time_groups)
+        self.total_evidence = sum(group.total_evidence for group in self.anchor_time_groups)
+        
+        # Calculate time range
+        if self.anchor_time_groups:
+            times = [group.anchor_time for group in self.anchor_time_groups]
+            self.time_range = (min(times), max(times))
+
+
+# NEW: Time-based hierarchical data structures
+
+@dataclass
+class AnchorTimeGroup:
+    """
+    Group of identities active at a specific anchor time.
+    
+    Represents all identities that have evidence at a particular temporal anchor,
+    enabling time-first hierarchical navigation.
+    """
+    anchor_time: datetime
+    identities: List[IdentityWithAnchors] = field(default_factory=list)
+    total_identities: int = 0
+    total_evidence: int = 0
+    primary_artifacts: List[str] = field(default_factory=list)  # Most common artifacts at this time
+    time_window_minutes: float = 0.0  # Time window used for grouping
+    
+    def __post_init__(self):
+        """Calculate derived fields."""
+        self.total_identities = len(self.identities)
+        self.total_evidence = sum(
+            len(anchor.evidence_rows) 
+            for identity in self.identities 
+            for anchor in identity.anchors
+            if self._anchor_contains_time(anchor, self.anchor_time)
+        )
+        
+        # Calculate primary artifacts
+        artifact_counts = {}
+        for identity in self.identities:
+            for anchor in identity.anchors:
+                if self._anchor_contains_time(anchor, self.anchor_time):
+                    for evidence in anchor.evidence_rows:
+                        artifact_counts[evidence.artifact] = artifact_counts.get(evidence.artifact, 0) + 1
+        
+        # Sort by frequency and take top 3
+        self.primary_artifacts = sorted(artifact_counts.keys(), 
+                                      key=lambda x: artifact_counts[x], 
+                                      reverse=True)[:3]
+    
+    def _anchor_contains_time(self, anchor: AnchorWithEvidence, target_time: datetime) -> bool:
+        """Check if anchor contains the target time."""
+        return anchor.start_time <= target_time <= anchor.end_time
+    
+    def get_identities_at_time(self) -> List[IdentityWithAnchors]:
+        """Get all identities that have evidence at this anchor time."""
+        return self.identities
+    
+    def get_evidence_count_at_time(self) -> int:
+        """Get total evidence count at this anchor time."""
+        return self.total_evidence
+
+
+@dataclass
+class TimeBasedQueryResult:
+    """
+    Results organized by anchor time for time-first hierarchical display.
+    
+    Transforms identity-centric correlation results into time-centric organization
+    while preserving all original data relationships.
+    """
+    anchor_time_groups: List[AnchorTimeGroup] = field(default_factory=list)
+    total_anchor_times: int = 0
+    total_identities: int = 0
+    total_evidence: int = 0
+    time_range: Optional[Tuple[datetime, datetime]] = None
+    time_window_minutes: float = 30.0  # Default time window for grouping
+    
+    def __post_init__(self):
+        """Calculate derived statistics."""
+        self.total_anchor_times = len(self.anchor_time_groups)
+        
+        # Calculate totals (avoiding double-counting)
+        unique_identities = set()
+        total_evidence_count = 0
+        
+        for group in self.anchor_time_groups:
+            for identity in group.identities:
+                unique_identities.add(identity.identity_id)
+            total_evidence_count += group.total_evidence
+        
+        self.total_identities = len(unique_identities)
+        self.total_evidence = total_evidence_count
+        
+        # Calculate time range
+        if self.anchor_time_groups:
+            times = [group.anchor_time for group in self.anchor_time_groups]
+            self.time_range = (min(times), max(times))
+    
+    def get_anchor_times_chronological(self) -> List[AnchorTimeGroup]:
+        """Get anchor time groups in chronological order."""
+        return sorted(self.anchor_time_groups, key=lambda x: x.anchor_time)
+    
+    def get_anchor_times_by_activity(self) -> List[AnchorTimeGroup]:
+        """Get anchor time groups ordered by activity level (most evidence first)."""
+        return sorted(self.anchor_time_groups, key=lambda x: x.total_evidence, reverse=True)
+    
+    def filter_by_time_range(self, start_time: datetime, end_time: datetime) -> 'TimeBasedQueryResult':
+        """Filter results to a specific time range."""
+        filtered_groups = [
+            group for group in self.anchor_time_groups
+            if start_time <= group.anchor_time <= end_time
+        ]
+        
+        result = TimeBasedQueryResult(
+            anchor_time_groups=filtered_groups,
+            time_window_minutes=self.time_window_minutes
+        )
+        return result

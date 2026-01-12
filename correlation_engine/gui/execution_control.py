@@ -5,6 +5,7 @@ Orchestrate correlation engine execution and monitor progress.
 
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -12,7 +13,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QProgressBar, QTextEdit, QFileDialog, QLineEdit, QFormLayout,
     QMessageBox, QListWidget, QListWidgetItem, QComboBox, QDateTimeEdit,
-    QCheckBox
+    QCheckBox, QDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QObject, QMetaType, QDateTime, QTimer
 from PyQt5.QtGui import QFont, QTextCursor
@@ -35,21 +36,35 @@ class OutputRedirector(QObject):
         self.original_stream = original_stream
         if text_widget:
             # Use Qt.QueuedConnection to ensure thread-safe updates
+            # Use insertPlainText instead of append to avoid extra newlines
             self.output_written.connect(
-                lambda text: text_widget.append(text),
+                self._append_text,
                 Qt.QueuedConnection
             )
     
+    def _append_text(self, text):
+        """Append text with single newline"""
+        if self.text_widget:
+            cursor = self.text_widget.textCursor()
+            cursor.movePosition(cursor.End)
+            # Add text with single newline (text was already stripped of trailing \n)
+            cursor.insertText(text + '\n')
+            self.text_widget.setTextCursor(cursor)
+            self.text_widget.ensureCursorVisible()
+    
     def write(self, text):
         """Write text to the widget"""
-        if text and text.strip():  # Only emit non-empty text
-            self.output_written.emit(text.rstrip())
-        # Also write to original stream if available
-        if self.original_stream:
-            try:
-                self.original_stream.write(text)
-            except:
-                pass
+        try:
+            # Only emit if there's actual content (not just whitespace/newlines)
+            if text and text.strip():
+                # Remove both leading and trailing newlines
+                cleaned_text = text.strip('\n')
+                if cleaned_text:  # Make sure there's still content after stripping
+                    self.output_written.emit(cleaned_text)
+            # DON'T write to original stream - causes double printing
+        except RuntimeError:
+            # Handle case where the widget has been deleted
+            pass
     
     def flush(self):
         """Flush (required for file-like object)"""
@@ -67,6 +82,7 @@ class CorrelationEngineWrapper(QObject):
     anchor_progress_updated = pyqtSignal(int, int)  # NEW: anchor_index, total_anchors
     execution_completed = pyqtSignal(dict)  # results summary
     execution_failed = pyqtSignal(str)  # error message
+    log_message = pyqtSignal(str)  # NEW: Signal for log messages from worker thread
     
     def __init__(self):
         super().__init__()
@@ -74,11 +90,17 @@ class CorrelationEngineWrapper(QObject):
         self.pipeline_config: Optional[PipelineConfig] = None
         self.output_dir: str = ""
         self.progress_handler = None  # Reference to progress handler method
+        self._original_stdout = None
+        self._log_widget = None
     
     def set_pipeline(self, pipeline_config: PipelineConfig, output_dir: str):
         """Set pipeline configuration and output directory"""
         self.pipeline_config = pipeline_config
         self.output_dir = output_dir
+    
+    def set_log_widget(self, widget):
+        """Set the log widget for output redirection"""
+        self._log_widget = widget
     
     def set_progress_handler(self, handler):
         """Set progress handler method for detailed progress display"""
@@ -95,48 +117,88 @@ class CorrelationEngineWrapper(QObject):
         if self.progress_handler:
             self.progress_handler(event)
         
-        # Emit anchor progress for progress bar
-        if event.event_type == "anchor_progress":
-            anchor_index = event.data.get('anchor_index', 0)
-            total_anchors = event.data.get('total_anchors', 1)
-            self.anchor_progress_updated.emit(anchor_index, total_anchors)
+        # Handle new ProgressEvent objects with ProgressEventType
+        if hasattr(event, 'event_type') and hasattr(event, 'overall_progress'):
+            # New progress tracking system
+            from ..engine.progress_tracking import ProgressEventType
+            
+            if event.event_type == ProgressEventType.WINDOW_PROGRESS:
+                # Update progress bar based on window progress
+                progress = event.overall_progress
+                if progress.total_windows > 0:
+                    self.anchor_progress_updated.emit(progress.windows_processed, progress.total_windows)
+            
+            elif event.event_type == ProgressEventType.SCANNING_START:
+                # Reset progress bar for new scanning
+                progress = event.overall_progress
+                self.anchor_progress_updated.emit(0, progress.total_windows)
+            
+            elif event.event_type == ProgressEventType.SCANNING_COMPLETE:
+                # Complete progress bar
+                progress = event.overall_progress
+                self.anchor_progress_updated.emit(progress.total_windows, progress.total_windows)
+            
+            elif event.event_type == ProgressEventType.WINDOW_COMPLETE:
+                # Update progress on window completion
+                progress = event.overall_progress
+                if progress.total_windows > 0:
+                    self.anchor_progress_updated.emit(progress.windows_processed, progress.total_windows)
         
-        elif event.event_type == "summary_progress":
-            # Also emit on summary progress
-            anchors_processed = event.data.get('anchors_processed', 0)
-            total_anchors = event.data.get('total_anchors', 1)
-            self.anchor_progress_updated.emit(anchors_processed, total_anchors)
+        # Handle legacy event format (for backward compatibility)
+        elif hasattr(event, 'event_type') and hasattr(event, 'data'):
+            # Legacy progress event format
+            if event.event_type == "anchor_progress":
+                anchor_index = event.data.get('anchor_index', 0)
+                total_anchors = event.data.get('total_anchors', 1)
+                self.anchor_progress_updated.emit(anchor_index, total_anchors)
+            
+            elif event.event_type == "summary_progress":
+                # Also emit on summary progress
+                anchors_processed = event.data.get('anchors_processed', 0)
+                total_anchors = event.data.get('total_anchors', 1)
+                self.anchor_progress_updated.emit(anchors_processed, total_anchors)
     
     def run(self):
         """Execute correlation in worker thread"""
         try:
-            print("[CorrelationEngineWrapper] Starting execution...")
+            # Redirect stdout in this thread to emit signals
+            class ThreadOutputRedirector:
+                def __init__(self, signal, original):
+                    self.signal = signal
+                    self.original = original
+                
+                def write(self, text):
+                    # Only emit if there's actual content (not just whitespace/newlines)
+                    if text and text.strip():
+                        # Remove both leading and trailing newlines
+                        cleaned_text = text.strip('\n')
+                        if cleaned_text:  # Make sure there's still content after stripping
+                            self.signal.emit(cleaned_text)
+                    # DON'T write to original - causes double printing
+                
+                def flush(self):
+                    if self.original:
+                        try:
+                            self.original.flush()
+                        except:
+                            pass
+            
+            # Save original stdout and redirect
+            self._original_stdout = sys.stdout
+            sys.stdout = ThreadOutputRedirector(self.log_message, self._original_stdout)
             
             if not self.pipeline_config:
                 error_msg = "No pipeline configuration set"
-                print(f"[CorrelationEngineWrapper] ERROR: {error_msg}")
                 self.execution_failed.emit(error_msg)
                 return
             
-            print(f"[CorrelationEngineWrapper] Pipeline: {self.pipeline_config.pipeline_name}")
-            print(f"[CorrelationEngineWrapper] Wings: {len(self.pipeline_config.wing_configs)}")
-            
             # Set output directory
             self.pipeline_config.output_directory = self.output_dir
-            print(f"[CorrelationEngineWrapper] Output directory: {self.output_dir}")
             
             # Create executor
-            print("[CorrelationEngineWrapper] Creating PipelineExecutor...")
             self.executor = PipelineExecutor(self.pipeline_config)
-            print("[CorrelationEngineWrapper] PipelineExecutor created successfully")
-            
-            # Set progress handler on executor (connects to engine)
-            if self.progress_handler:
-                # Note: We don't call set_progress_widget anymore since we removed it
-                pass
             
             # Register our progress handler to receive events
-            print("[CorrelationEngineWrapper] Registering progress listener...")
             self.executor.engine.register_progress_listener(self.handle_engine_progress)
             
             # Execute pipeline
@@ -145,9 +207,7 @@ class CorrelationEngineWrapper(QObject):
             self.progress_updated.emit(0, total_wings, "Starting execution...")
             
             # Execute
-            print("[CorrelationEngineWrapper] Starting pipeline execution...")
             summary = self.executor.execute()
-            print("[CorrelationEngineWrapper] Pipeline execution completed")
             
             self.progress_updated.emit(total_wings, total_wings, "Execution complete")
             
@@ -157,8 +217,11 @@ class CorrelationEngineWrapper(QObject):
         except Exception as e:
             import traceback
             error_msg = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            print(f"[CorrelationEngineWrapper] EXCEPTION: {error_msg}")
             self.execution_failed.emit(error_msg)
+        finally:
+            # Restore original stdout
+            if self._original_stdout:
+                sys.stdout = self._original_stdout
 
 
 class ExecutionControlWidget(QWidget):
@@ -166,6 +229,7 @@ class ExecutionControlWidget(QWidget):
     
     execution_started = pyqtSignal()
     execution_completed = pyqtSignal(dict)
+    load_results_requested = pyqtSignal(dict)  # Signal to request loading results
     progress_message = pyqtSignal(str)  # Signal for thread-safe progress messages
     
     def __init__(self, parent=None):
@@ -181,6 +245,11 @@ class ExecutionControlWidget(QWidget):
         self.stdout_redirector = None
         self.stderr_redirector = None
         
+        # Progress throttling state
+        self._last_progress_time: Optional[datetime] = None
+        self._min_progress_interval: float = 0.5  # Minimum 0.5 seconds between progress updates
+        self._last_progress_message: str = ""
+        
         self._init_ui()
         
         # Setup output redirection after UI is initialized
@@ -188,6 +257,23 @@ class ExecutionControlWidget(QWidget):
         
         # Connect progress message signal to append method with QueuedConnection
         self.progress_message.connect(self._append_to_log, Qt.QueuedConnection)
+    
+    def _setup_output_redirection(self):
+        """Setup stdout/stderr redirection to the log output widget"""
+        # Create redirectors that write to both the widget and original streams
+        self.stdout_redirector = OutputRedirector(self.log_output, self.original_stdout)
+        self.stderr_redirector = OutputRedirector(self.log_output, self.original_stderr)
+        
+        # Redirect stdout and stderr
+        sys.stdout = self.stdout_redirector
+        sys.stderr = self.stderr_redirector
+    
+    def _restore_output(self):
+        """Restore original stdout/stderr"""
+        if self.original_stdout:
+            sys.stdout = self.original_stdout
+        if self.original_stderr:
+            sys.stderr = self.original_stderr
     
     def _init_ui(self):
         """Initialize the user interface"""
@@ -403,6 +489,33 @@ class ExecutionControlWidget(QWidget):
         self.cancel_btn.clicked.connect(self._cancel_execution)
         layout.addWidget(self.cancel_btn)
         
+        # Load Last Results button
+        self.load_results_btn = QPushButton("📂 Load Last Results")
+        self.load_results_btn.setMinimumHeight(30)
+        self.load_results_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #3B82F6, stop:1 #2563EB);
+                color: white;
+                border: 2px solid #1D4ED8;
+                border-radius: 4px;
+                font-size: 9pt;
+                font-weight: bold;
+                padding: 4px 12px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #60A5FA, stop:1 #3B82F6);
+            }
+            QPushButton:disabled {
+                background: #4B5563;
+                color: #9CA3AF;
+                border: #374151;
+            }
+        """)
+        self.load_results_btn.clicked.connect(self._load_last_results)
+        layout.addWidget(self.load_results_btn)
+        
         return widget
     
     def _create_progress_section(self) -> QWidget:
@@ -415,10 +528,10 @@ class ExecutionControlWidget(QWidget):
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
-        self.progress_bar.setMaximum(100)
-        self.progress_bar.setValue(0)
+        self.progress_bar.setMaximum(100)  # Start in determinate mode (not animated)
+        self.progress_bar.setValue(0)  # Empty bar
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%p% - %v/%m anchors")
+        self.progress_bar.setFormat("Ready")
         self.progress_bar.setMaximumHeight(20)  # Compact progress bar
         layout.addWidget(self.progress_bar)
         
@@ -451,7 +564,7 @@ class ExecutionControlWidget(QWidget):
         return widget
     
     def _create_engine_selection_section(self) -> QGroupBox:
-        """Create engine selection section (compact for side-by-side layout)"""
+        """Create engine selection section with integration features display"""
         from ..engine.engine_selector import EngineSelector
         
         group = QGroupBox("🔧 Correlation Engine")
@@ -463,12 +576,33 @@ class ExecutionControlWidget(QWidget):
         engine_layout.setSpacing(4)
         
         self.engine_combo = QComboBox()
-        for engine_type, name, desc, complexity, use_cases, supports_id_filter in EngineSelector.get_available_engines():
-            # Shorter display name for compact layout
-            display_name = "Time-Based" if engine_type == "time_based" else "Identity-Based"
-            self.engine_combo.addItem(f"{display_name} ({complexity})", engine_type)
+        engines = EngineSelector.get_available_engines()
         
-        # Set Identity-Based as default (index 1)
+        for engine_data in engines:
+            # Handle both old and new format for backward compatibility
+            if len(engine_data) >= 7:  # New format with integration features
+                engine_type, name, desc, complexity, use_cases, supports_id_filter, integration_features = engine_data
+            else:  # Old format
+                engine_type, name, desc, complexity, use_cases, supports_id_filter = engine_data
+                integration_features = {}
+            
+            # Skip the legacy time_based engine - only show the modern engines
+            if engine_type == "time_based":
+                continue  # Skip legacy engine
+            
+            # Map engine types to proper display names
+            if engine_type == "time_window_scanning":
+                display_name = "Time Engine"
+            elif engine_type == "identity_based":
+                display_name = "Identity-Based"
+            else:
+                display_name = name  # Fallback to full name for unknown types
+            
+            # Add integration feature count to display
+            feature_count = len(integration_features)
+            self.engine_combo.addItem(f"{display_name} ({complexity}) - {feature_count} features", engine_type)
+        
+        # Set Identity-Based as default (index 1, but now index 0 since we removed time_based)
         self.engine_combo.setCurrentIndex(1)
         
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
@@ -476,10 +610,17 @@ class ExecutionControlWidget(QWidget):
         
         # Compare button (smaller)
         compare_btn = QPushButton("📊")
-        compare_btn.setToolTip("Compare correlation engines")
+        compare_btn.setToolTip("Compare correlation engines and integration features")
         compare_btn.setMaximumWidth(40)
         compare_btn.clicked.connect(self._show_engine_comparison)
         engine_layout.addWidget(compare_btn)
+        
+        # Integration features button
+        features_btn = QPushButton("🔧")
+        features_btn.setToolTip("View integration features for selected engine")
+        features_btn.setMaximumWidth(40)
+        features_btn.clicked.connect(self._show_integration_features)
+        engine_layout.addWidget(features_btn)
         
         layout.addLayout(engine_layout)
         
@@ -496,6 +637,13 @@ class ExecutionControlWidget(QWidget):
         self.engine_recommendations.setStyleSheet("color: #00d9ff; font-size: 8pt; padding: 3px;")
         self.engine_recommendations.setMaximumHeight(30)
         layout.addWidget(self.engine_recommendations)
+        
+        # Integration features display (new)
+        self.integration_features_label = QLabel()
+        self.integration_features_label.setWordWrap(True)
+        self.integration_features_label.setStyleSheet("color: #90EE90; font-size: 8pt; padding: 3px;")
+        self.integration_features_label.setMaximumHeight(30)
+        layout.addWidget(self.integration_features_label)
         
         # Set initial description for Identity-Based engine (default)
         self._on_engine_changed(1)
@@ -666,7 +814,7 @@ class ExecutionControlWidget(QWidget):
     def _start_execution(self):
         """Start correlation execution"""
         try:
-            print("[ExecutionControl] _start_execution called")
+            # print("[ExecutionControl] _start_execution called")
             
             if not self.current_pipeline:
                 QMessageBox.warning(
@@ -676,11 +824,11 @@ class ExecutionControlWidget(QWidget):
                 )
                 return
             
-            print(f"[ExecutionControl] Current pipeline: {self.current_pipeline.pipeline_name}")
+            # print(f"[ExecutionControl] Current pipeline: {self.current_pipeline.pipeline_name}")
             
             # Get selected wings
             selected_wings = self._get_selected_wings()
-            print(f"[ExecutionControl] Selected wings: {len(selected_wings)}")
+            # print(f"[ExecutionControl] Selected wings: {len(selected_wings)}")
             
             if not selected_wings:
                 QMessageBox.warning(
@@ -692,7 +840,7 @@ class ExecutionControlWidget(QWidget):
             
             # Get output directory
             output_dir = self.output_dir_input.text().strip()
-            print(f"[ExecutionControl] Output directory: {output_dir}")
+            # print(f"[ExecutionControl] Output directory: {output_dir}")
             
             if not output_dir:
                 QMessageBox.warning(
@@ -705,7 +853,7 @@ class ExecutionControlWidget(QWidget):
             # Create output directory
             try:
                 Path(output_dir).mkdir(parents=True, exist_ok=True)
-                print(f"[ExecutionControl] Output directory created/verified")
+                # print(f"[ExecutionControl] Output directory created/verified")
             except Exception as e:
                 QMessageBox.critical(
                     self,
@@ -721,27 +869,29 @@ class ExecutionControlWidget(QWidget):
             
             # Create a copy of pipeline config with only selected wings
             from copy import deepcopy
-            print("[ExecutionControl] Creating execution pipeline copy...")
+            # print("[ExecutionControl] Creating execution pipeline copy...")
             execution_pipeline = deepcopy(self.current_pipeline)
             execution_pipeline.wing_configs = selected_wings
-            print(f"[ExecutionControl] Execution pipeline created with {len(selected_wings)} wings")
+            # print(f"[ExecutionControl] Execution pipeline created with {len(selected_wings)} wings")
             
             # NEW: Apply engine selection and filters
             if hasattr(self, 'engine_combo'):
                 engine_type = self.engine_combo.currentData()
                 execution_pipeline.engine_type = engine_type
-                print(f"[ExecutionControl] Engine type: {engine_type}")
+                print(f"[ExecutionControl] Engine type selected: {engine_type}")
+            else:
+                print(f"[ExecutionControl] WARNING: No engine_combo found!")
             
             # NEW: Apply time period filter
             if hasattr(self, 'start_enabled') and self.start_enabled.isChecked():
                 execution_pipeline.time_period_start = self.start_datetime.dateTime().toString("yyyy-MM-ddTHH:mm:ss")
-                print(f"[ExecutionControl] Time period start: {execution_pipeline.time_period_start}")
+                # print(f"[ExecutionControl] Time period start: {execution_pipeline.time_period_start}")
             else:
                 execution_pipeline.time_period_start = None
             
             if hasattr(self, 'end_enabled') and self.end_enabled.isChecked():
                 execution_pipeline.time_period_end = self.end_datetime.dateTime().toString("yyyy-MM-ddTHH:mm:ss")
-                print(f"[ExecutionControl] Time period end: {execution_pipeline.time_period_end}")
+                # print(f"[ExecutionControl] Time period end: {execution_pipeline.time_period_end}")
             else:
                 execution_pipeline.time_period_end = None
             
@@ -751,7 +901,7 @@ class ExecutionControlWidget(QWidget):
                 if identity_text:
                     execution_pipeline.identity_filters = [line.strip() for line in identity_text.split('\n') if line.strip()]
                     execution_pipeline.identity_filter_case_sensitive = self.case_sensitive_checkbox.isChecked()
-                    print(f"[ExecutionControl] Identity filters: {len(execution_pipeline.identity_filters)} patterns")
+                    # print(f"[ExecutionControl] Identity filters: {len(execution_pipeline.identity_filters)} patterns")
                 else:
                     execution_pipeline.identity_filters = None
             else:
@@ -769,19 +919,20 @@ class ExecutionControlWidget(QWidget):
                 self.log_output.append(f"  - {wing_name}")
             self.log_output.append("")
             
-            # Reset progress
-            self.progress_bar.setValue(0)
-            self.progress_bar.setMaximum(100)  # Will be updated when we know total anchors
+            # Reset progress bar to indeterminate mode
+            self.progress_bar.setMaximum(0)  # Indeterminate - shows activity
+            self.progress_bar.setFormat("Correlation Engine Working...")
+            self._last_progress_time = None  # Reset throttling for new execution
             self.status_label.setText("Initializing...")
             
-            print("[ExecutionControl] Creating worker thread...")
+            # print("[ExecutionControl] Creating worker thread...")
             
             # Create worker thread
             self.worker_thread = QThread()
             self.engine_wrapper = CorrelationEngineWrapper()
             self.engine_wrapper.moveToThread(self.worker_thread)
             
-            print("[ExecutionControl] Setting pipeline on engine wrapper...")
+            # print("[ExecutionControl] Setting pipeline on engine wrapper...")
             
             # Set pipeline (use filtered pipeline with only selected wings)
             self.engine_wrapper.set_pipeline(execution_pipeline, output_dir)
@@ -789,24 +940,25 @@ class ExecutionControlWidget(QWidget):
             # Set progress handler for detailed progress display in log_output
             self.engine_wrapper.set_progress_handler(self._handle_progress_event)
             
-            print("[ExecutionControl] Connecting signals...")
+            # print("[ExecutionControl] Connecting signals...")
             
             # Connect signals
             self.worker_thread.started.connect(self.engine_wrapper.run)
             self.engine_wrapper.progress_updated.connect(self._update_progress)
             self.engine_wrapper.anchor_progress_updated.connect(self._update_anchor_progress)  # NEW
+            self.engine_wrapper.log_message.connect(self._append_to_log, Qt.QueuedConnection)  # NEW: Connect log messages
             self.engine_wrapper.execution_completed.connect(self._on_execution_completed)
             self.engine_wrapper.execution_failed.connect(self._on_execution_failed)
             self.engine_wrapper.execution_completed.connect(self.worker_thread.quit)
             self.engine_wrapper.execution_failed.connect(self.worker_thread.quit)
             self.worker_thread.finished.connect(self._cleanup_thread)
             
-            print("[ExecutionControl] Starting worker thread...")
+            # print("[ExecutionControl] Starting worker thread...")
             
             # Start thread
             self.worker_thread.start()
             
-            print("[ExecutionControl] Worker thread started successfully")
+            # print("[ExecutionControl] Worker thread started successfully")
             
             # Emit signal
             self.execution_started.emit()
@@ -814,7 +966,7 @@ class ExecutionControlWidget(QWidget):
         except Exception as e:
             import traceback
             error_msg = f"Failed to start execution:\n{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            print(f"[ExecutionControl] EXCEPTION in _start_execution: {error_msg}")
+            # print(f"[ExecutionControl] EXCEPTION in _start_execution: {error_msg}")
             QMessageBox.critical(
                 self,
                 "Execution Error",
@@ -826,24 +978,60 @@ class ExecutionControlWidget(QWidget):
             self.cancel_btn.setEnabled(False)
     
     def _cancel_execution(self):
-        """Cancel execution"""
+        """Cancel execution and save partial results."""
         if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-            self.worker_thread.wait()
+            # Request graceful shutdown
+            if self.engine_wrapper and self.engine_wrapper.executor:
+                self.log_output.append("\n⚠️ Cancellation requested - saving partial results...")
+                self.status_label.setText("Cancelling execution...")
+                
+                # Set cancellation flag on executor
+                if hasattr(self.engine_wrapper.executor, '_cancelled'):
+                    self.engine_wrapper.executor._cancelled = True
+                
+                # Also try to cancel through the engine's cancellation manager
+                if hasattr(self.engine_wrapper.executor, 'request_cancellation'):
+                    self.engine_wrapper.executor.request_cancellation("User requested cancellation")
+                
+                # Give it time to save partial results
+                self.worker_thread.quit()
+                if not self.worker_thread.wait(5000):  # Wait up to 5 seconds
+                    self.log_output.append("⚠️ Force terminating execution...")
+                    self.worker_thread.terminate()
+                    self.worker_thread.wait()
+            else:
+                self.worker_thread.quit()
+                self.worker_thread.wait()
             
-            self.log_output.append("\n❌ Execution cancelled by user")
-            self.status_label.setText("Cancelled")
+            self.log_output.append("❌ Execution cancelled by user")
+            
+            # Show cancellation confirmation message
+            partial_results_count = 0
+            if self.engine_wrapper and self.engine_wrapper.executor:
+                # Try to get partial results count
+                if hasattr(self.engine_wrapper.executor, 'identities'):
+                    partial_results_count = len(self.engine_wrapper.executor.identities)
+                elif hasattr(self.engine_wrapper.executor, 'stats'):
+                    partial_results_count = getattr(self.engine_wrapper.executor.stats, 'total_identities', 0)
+            
+            if partial_results_count > 0:
+                QMessageBox.information(
+                    self,
+                    "Execution Cancelled",
+                    f"Execution cancelled. Saved {partial_results_count} partial results.\n\n"
+                    f"Partial results have been saved to the database and can be loaded later."
+                )
+                self.log_output.append(f"✓ Partial results saved: {partial_results_count} identities")
+            else:
+                self.log_output.append("✓ Partial results have been saved to database")
+            
+            self.status_label.setText("Cancelled - Partial results saved")
             
             self._cleanup_thread()
     
     def _update_progress(self, wing_index: int, total_wings: int, status: str):
-        """Update progress indicators"""
-        if total_wings > 0:
-            percentage = int((wing_index / total_wings) * 100)
-            # Don't override anchor progress if it's running
-            if self.progress_bar.maximum() == 100:
-                self.progress_bar.setValue(percentage)
-        
+        """Update progress indicators - simplified"""
+        # Just update status, progress bar stays in indeterminate mode
         self.status_label.setText(status)
         self.log_output.append(f"[{wing_index}/{total_wings}] {status}")
         
@@ -853,25 +1041,22 @@ class ExecutionControlWidget(QWidget):
     def _update_anchor_progress(self, anchor_index: int, total_anchors: int):
         """
         Update progress bar based on anchor processing.
-        
-        This provides real-time progress updates during correlation.
+        Shows actual progress with percentage.
         """
         if total_anchors > 0:
-            # Update progress bar maximum if needed
-            if self.progress_bar.maximum() != total_anchors:
-                self.progress_bar.setMaximum(total_anchors)
-                self.progress_bar.setFormat(f"%p% - %v/{total_anchors} anchors")
-            
-            # Update progress bar value
+            # Set to determinate mode with actual progress
+            self.progress_bar.setMaximum(total_anchors)
             self.progress_bar.setValue(anchor_index)
-            
-            # Update status label
-            percentage = int((anchor_index / total_anchors) * 100)
-            self.status_label.setText(f"Processing anchors: {anchor_index}/{total_anchors} ({percentage}%)")
+            percentage = (anchor_index / total_anchors * 100)
+            self.progress_bar.setFormat(f"{anchor_index:,}/{total_anchors:,} ({percentage:.1f}%)")
+            self.status_label.setText(f"Processing... {anchor_index:,} items processed")
     
     def _on_execution_completed(self, summary: dict):
         """Handle execution completion"""
+        # Set to determinate mode and show complete
+        self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Complete")
         self.status_label.setText("✓ Execution completed successfully")
         
         # Log summary
@@ -888,7 +1073,10 @@ class ExecutionControlWidget(QWidget):
         execution_id = summary.get('execution_id')
         if execution_id:
             self.log_output.append(f"Execution ID: {execution_id}")
-            self.log_output.append(f"Database: {summary.get('database_path', 'N/A')}")
+            db_path = summary.get('database_path', 'N/A')
+            self.log_output.append(f"Database: {db_path}")
+            if db_path != 'N/A':
+                self.log_output.append(f"Tables: executions, results, matches")
         
         if summary.get('errors'):
             self.log_output.append(f"\n⚠ Errors: {len(summary['errors'])}")
@@ -925,8 +1113,9 @@ class ExecutionControlWidget(QWidget):
             # Check which button was clicked
             if msg_box.clickedButton() == open_results_btn:
                 # Emit signal with execution_id for parent to open results viewer
-                print(f"[ExecutionControl] User requested to open results for execution_id: {execution_id}")
+                # print(f"[ExecutionControl] User requested to open results for execution_id: {execution_id}")
                 # Parent widget should connect to execution_completed signal to handle this
+                pass  # Signal already emitted above
         else:
             QMessageBox.information(
                 self,
@@ -966,6 +1155,164 @@ class ExecutionControlWidget(QWidget):
             self.engine_wrapper.deleteLater()
             self.engine_wrapper = None
     
+    def _handle_progress_event(self, event):
+        """
+        Handle progress events from the correlation engine.
+        Updates the progress bar and log output with detailed progress information.
+        
+        Args:
+            event: Progress event from the engine (ProgressEvent or legacy format)
+        """
+        try:
+            # Throttle progress updates to avoid UI lag
+            current_time = datetime.now()
+            if self._last_progress_time:
+                time_diff = (current_time - self._last_progress_time).total_seconds()
+                if time_diff < self._min_progress_interval:
+                    return  # Skip this update
+            self._last_progress_time = current_time
+            
+            # Handle new ProgressEvent format
+            if hasattr(event, 'event_type') and hasattr(event, 'overall_progress'):
+                from ..engine.progress_tracking import ProgressEventType
+                
+                progress = event.overall_progress
+                
+                # Update progress bar based on event type
+                if event.event_type == ProgressEventType.SCANNING_START:
+                    # Set progress bar to determinate mode with total
+                    total = progress.total_windows if progress.total_windows > 0 else 100
+                    self.progress_bar.setMaximum(total)
+                    self.progress_bar.setValue(0)
+                    self.progress_bar.setFormat(f"0/{total} (0%)")
+                    self.status_label.setText("Starting correlation...")
+                    
+                elif event.event_type == ProgressEventType.WINDOW_PROGRESS:
+                    # Update progress bar
+                    processed = progress.windows_processed
+                    total = progress.total_windows if progress.total_windows > 0 else 100
+                    percentage = progress.completion_percentage
+                    
+                    self.progress_bar.setMaximum(total)
+                    self.progress_bar.setValue(processed)
+                    self.progress_bar.setFormat(f"{processed}/{total} ({percentage:.1f}%)")
+                    self.status_label.setText(f"Processing... {progress.matches_found:,} matches found")
+                    
+                elif event.event_type == ProgressEventType.WINDOW_COMPLETE:
+                    # Update on window completion
+                    processed = progress.windows_processed
+                    total = progress.total_windows if progress.total_windows > 0 else 100
+                    percentage = progress.completion_percentage
+                    
+                    self.progress_bar.setMaximum(total)
+                    self.progress_bar.setValue(processed)
+                    self.progress_bar.setFormat(f"{processed}/{total} ({percentage:.1f}%)")
+                    
+                elif event.event_type == ProgressEventType.SCANNING_COMPLETE:
+                    # Complete the progress bar
+                    self.progress_bar.setMaximum(100)
+                    self.progress_bar.setValue(100)
+                    self.progress_bar.setFormat("Complete (100%)")
+                    self.status_label.setText(f"✓ Completed - {progress.matches_found:,} matches found")
+                
+                # Log message if provided
+                if event.message and event.message != self._last_progress_message:
+                    self._last_progress_message = event.message
+                    # Use signal for thread-safe logging
+                    self.progress_message.emit(event.message)
+            
+            # Handle legacy event format
+            elif hasattr(event, 'event_type') and hasattr(event, 'data'):
+                data = event.data
+                
+                if event.event_type == "anchor_progress":
+                    anchor_index = data.get('anchor_index', 0)
+                    total_anchors = data.get('total_anchors', 1)
+                    percentage = (anchor_index / total_anchors * 100) if total_anchors > 0 else 0
+                    
+                    self.progress_bar.setMaximum(total_anchors)
+                    self.progress_bar.setValue(anchor_index)
+                    self.progress_bar.setFormat(f"{anchor_index}/{total_anchors} ({percentage:.1f}%)")
+                    
+                elif event.event_type == "summary_progress":
+                    anchors_processed = data.get('anchors_processed', 0)
+                    total_anchors = data.get('total_anchors', 1)
+                    percentage = (anchors_processed / total_anchors * 100) if total_anchors > 0 else 0
+                    
+                    self.progress_bar.setMaximum(total_anchors)
+                    self.progress_bar.setValue(anchors_processed)
+                    self.progress_bar.setFormat(f"{anchors_processed}/{total_anchors} ({percentage:.1f}%)")
+                    
+        except Exception as e:
+            # Don't let progress handling errors crash the execution
+            print(f"[ExecutionControl] Progress event handling error: {e}")
+    
+    def _append_to_log(self, text: str):
+        """Thread-safe method to append text to log output"""
+        # Skip empty or whitespace-only messages to prevent empty lines
+        if text and text.strip():
+            self.log_output.append(text)
+            QTimer.singleShot(0, self._scroll_to_bottom)
+    
+    def _scroll_to_bottom(self):
+        """Scroll log output to bottom"""
+        scrollbar = self.log_output.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
+    def _load_last_results(self):
+        """Load results from database using enhanced loader dialog."""
+        output_dir = self.output_dir_input.text().strip()
+        
+        if not output_dir:
+            QMessageBox.warning(
+                self,
+                "No Output Directory",
+                "Please specify an output directory first."
+            )
+            return
+        
+        output_path = Path(output_dir)
+        db_file = output_path / "correlation_results.db"
+        
+        if not db_file.exists():
+            QMessageBox.warning(
+                self,
+                "No Database Found",
+                f"No results database found in:\n{output_dir}\n\n"
+                "Please run a correlation first or select a different output directory."
+            )
+            return
+        
+        try:
+            # Import and show the enhanced database loader dialog
+            from .database_results_loader import DatabaseResultsLoaderDialog
+            
+            dialog = DatabaseResultsLoaderDialog(self, str(db_file))
+            
+            if dialog.exec_() == QDialog.Accepted:
+                selected_executions = dialog.get_selected_executions()
+                
+                if selected_executions:
+                    self.log_output.append(f"\n📂 Loading {len(selected_executions)} execution(s)...")
+                    
+                    for db_path, execution_id, engine_type in selected_executions:
+                        self.log_output.append(f"   • Execution {execution_id} ({engine_type})")
+                    
+                    # Emit signal to load results in main window
+                    self.load_results_requested.emit({
+                        'selected_executions': selected_executions,
+                        'output_dir': output_dir
+                    })
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error Loading Results",
+                f"Failed to load results:\n\n{str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
+    
     def _select_all_wings(self):
         """Select all wings"""
         for i in range(self.wing_list.count()):
@@ -992,15 +1339,35 @@ class ExecutionControlWidget(QWidget):
         self.selected_count_label.setText(f"{selected_count}/{total_count} selected")
     
     def _on_engine_changed(self, index: int):
-        """Handle engine selection change"""
+        """Handle engine selection change with integration features"""
         engine_type = self.engine_combo.itemData(index)
         
         # Update description and recommendations
         from ..engine.engine_selector import EngineSelector
-        for et, name, desc, complexity, use_cases, supports_id_filter in EngineSelector.get_available_engines():
+        engines = EngineSelector.get_available_engines()
+        
+        for engine_data in engines:
+            # Handle both old and new format for backward compatibility
+            if len(engine_data) >= 7:  # New format with integration features
+                et, name, desc, complexity, use_cases, supports_id_filter, integration_features = engine_data
+            else:  # Old format
+                et, name, desc, complexity, use_cases, supports_id_filter = engine_data
+                integration_features = {}
+            
             if et == engine_type:
                 self.engine_description.setText(desc)
                 self.engine_recommendations.setText(f"✓ Best for: {', '.join(use_cases)}")
+                
+                # Update integration features display
+                if hasattr(self, 'integration_features_label'):
+                    feature_names = list(integration_features.keys())
+                    if feature_names:
+                        features_text = f"🔧 Features: {', '.join(feature_names[:3])}"
+                        if len(feature_names) > 3:
+                            features_text += f" (+{len(feature_names) - 3} more)"
+                        self.integration_features_label.setText(features_text)
+                    else:
+                        self.integration_features_label.setText("🔧 Features: Basic correlation")
                 
                 # Show/hide identity filter based on engine support
                 if hasattr(self, 'identity_filter_group'):
@@ -1011,29 +1378,195 @@ class ExecutionControlWidget(QWidget):
         if self.current_pipeline:
             self.current_pipeline.engine_type = engine_type
     
-    def _show_engine_comparison(self):
-        """Show engine comparison dialog"""
+    def _show_integration_features(self):
+        """Show integration features dialog for selected engine"""
+        engine_type = self.engine_combo.currentData()
+        if not engine_type:
+            return
+        
         from ..engine.engine_selector import EngineSelector
         
-        comparison_text = "Correlation Engine Comparison\n\n"
+        # Get engine metadata with integration features
+        engine_metadata = EngineSelector.get_engine_metadata(engine_type)
+        if not engine_metadata:
+            QMessageBox.information(self, "No Information", "No integration features information available.")
+            return
         
-        for engine_type, name, desc, complexity, use_cases, supports_id_filter in EngineSelector.get_available_engines():
-            comparison_text += f"{'='*60}\n"
-            comparison_text += f"{name}\n"
-            comparison_text += f"{'='*60}\n"
-            comparison_text += f"Complexity: {complexity}\n"
-            comparison_text += f"Description: {desc}\n"
-            comparison_text += f"Best for:\n"
+        # Handle both old and new format
+        if len(engine_metadata) >= 7:
+            _, name, desc, complexity, use_cases, supports_id_filter, integration_features = engine_metadata
+        else:
+            _, name, desc, complexity, use_cases, supports_id_filter = engine_metadata
+            integration_features = {}
+        
+        # Create features dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Integration Features - {name}")
+        dialog.setModal(True)
+        dialog.resize(600, 500)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Header
+        header_label = QLabel(f"<h3>{name}</h3>")
+        header_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(header_label)
+        
+        # Description
+        desc_label = QLabel(desc)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("color: #888; margin: 10px;")
+        layout.addWidget(desc_label)
+        
+        # Features list
+        features_text = QTextEdit()
+        features_text.setReadOnly(True)
+        
+        features_content = f"<h4>Integration Features ({len(integration_features)} available):</h4>\n\n"
+        
+        for feature_name, feature_info in integration_features.items():
+            supported = feature_info.get('supported', False)
+            description = feature_info.get('description', 'No description available')
+            feature_list = feature_info.get('features', [])
+            
+            status_icon = "✅" if supported else "❌"
+            features_content += f"<h5>{status_icon} {feature_name.replace('_', ' ').title()}</h5>\n"
+            features_content += f"<p><i>{description}</i></p>\n"
+            
+            if feature_list:
+                features_content += "<ul>\n"
+                for feature in feature_list:
+                    features_content += f"<li>{feature}</li>\n"
+                features_content += "</ul>\n"
+            
+            features_content += "<br>\n"
+        
+        if not integration_features:
+            features_content += "<p><i>No integration features available for this engine.</i></p>\n"
+        
+        features_text.setHtml(features_content)
+        layout.addWidget(features_text)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec_()
+    
+    def _show_engine_comparison(self):
+        """Show enhanced engine comparison dialog with integration features"""
+        from ..engine.engine_selector import EngineSelector
+        
+        # Get comprehensive comparison data
+        comparison_data = EngineSelector.get_engine_comparison_data()
+        
+        # Create comparison dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Correlation Engine Comparison")
+        dialog.setModal(True)
+        dialog.resize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Header
+        header_label = QLabel("<h2>Correlation Engine Comparison</h2>")
+        header_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(header_label)
+        
+        # Comparison content
+        comparison_text = QTextEdit()
+        comparison_text.setReadOnly(True)
+        
+        content = ""
+        
+        # Engine overview
+        content += "<h3>Available Engines:</h3>\n"
+        for engine_info in comparison_data['engines']:
+            engine_type = engine_info['type']
+            name = engine_info['name']
+            desc = engine_info['description']
+            complexity = engine_info['complexity']
+            use_cases = engine_info['use_cases']
+            supports_id_filter = engine_info['supports_identity_filter']
+            integration_features = engine_info['integration_features']
+            
+            content += f"<h4>{name}</h4>\n"
+            content += f"<p><b>Complexity:</b> {complexity}</p>\n"
+            content += f"<p><b>Description:</b> {desc}</p>\n"
+            content += f"<p><b>Identity Filter Support:</b> {'Yes' if supports_id_filter else 'No'}</p>\n"
+            
+            content += "<p><b>Best for:</b></p>\n<ul>\n"
             for use_case in use_cases:
-                comparison_text += f"  • {use_case}\n"
-            comparison_text += f"Identity Filter Support: {'Yes' if supports_id_filter else 'No'}\n"
-            comparison_text += "\n"
+                content += f"<li>{use_case}</li>\n"
+            content += "</ul>\n"
+            
+            content += f"<p><b>Integration Features ({len(integration_features)}):</b></p>\n<ul>\n"
+            for feature_name, feature_info in integration_features.items():
+                supported = feature_info.get('supported', False)
+                description = feature_info.get('description', '')
+                status_icon = "✅" if supported else "❌"
+                content += f"<li>{status_icon} <b>{feature_name.replace('_', ' ').title()}:</b> {description}</li>\n"
+            content += "</ul>\n"
+            
+            content += "<hr>\n"
         
-        QMessageBox.information(
-            self,
-            "Engine Comparison",
-            comparison_text
-        )
+        # Feature matrix
+        content += "<h3>Feature Comparison Matrix:</h3>\n"
+        content += "<table border='1' cellpadding='5' cellspacing='0'>\n"
+        content += "<tr><th>Feature</th>"
+        
+        # Header row with engine names
+        for engine_info in comparison_data['engines']:
+            content += f"<th>{engine_info['name']}</th>"
+        content += "</tr>\n"
+        
+        # Feature rows
+        for feature_name, feature_data in comparison_data['feature_matrix'].items():
+            content += f"<tr><td><b>{feature_name.replace('_', ' ').title()}</b></td>"
+            
+            for engine_info in comparison_data['engines']:
+                engine_type = engine_info['type']
+                if engine_type in feature_data:
+                    supported = feature_data[engine_type]['supported']
+                    status = "✅ Yes" if supported else "❌ No"
+                else:
+                    status = "❓ Unknown"
+                content += f"<td>{status}</td>"
+            
+            content += "</tr>\n"
+        
+        content += "</table>\n"
+        
+        # Performance comparison
+        content += "<h3>Performance Comparison:</h3>\n"
+        content += "<table border='1' cellpadding='5' cellspacing='0'>\n"
+        content += "<tr><th>Engine</th><th>Complexity</th><th>Memory Efficiency</th><th>Processing Speed</th><th>Scalability</th></tr>\n"
+        
+        for engine_info in comparison_data['engines']:
+            engine_type = engine_info['type']
+            name = engine_info['name']
+            perf_data = comparison_data['performance_comparison'][engine_type]
+            
+            content += f"<tr>"
+            content += f"<td><b>{name}</b></td>"
+            content += f"<td>{perf_data['complexity']}</td>"
+            content += f"<td>{perf_data['memory_efficiency']}</td>"
+            content += f"<td>{perf_data['processing_speed']}</td>"
+            content += f"<td>{perf_data['scalability']}</td>"
+            content += "</tr>\n"
+        
+        content += "</table>\n"
+        
+        comparison_text.setHtml(content)
+        layout.addWidget(comparison_text)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec_()
     
     def _get_filter_config(self) -> dict:
         """Get current filter configuration from GUI controls"""
@@ -1074,26 +1607,15 @@ class ExecutionControlWidget(QWidget):
         Args:
             message: Message to append
         """
-        self.log_output.append(message)
-        # Auto-scroll to bottom (use QTimer to ensure it happens after text is rendered)
-        QTimer.singleShot(0, self._scroll_to_bottom)
+        # Skip empty or whitespace-only messages to prevent empty lines
+        if message and message.strip():
+            self.log_output.append(message)
+            # Auto-scroll to bottom (use QTimer to ensure it happens after text is rendered)
+            QTimer.singleShot(0, self._scroll_to_bottom)
     
     def _scroll_to_bottom(self):
-        """Scroll the log output to the bottom with extra space"""
-        # Add a blank line at the end to ensure last line is visible
-        cursor = self.log_output.textCursor()
-        cursor.movePosition(cursor.End)
-        
-        # Insert temporary newlines to push content up
-        cursor.insertText("\n\n")
-        
-        # Move back to actual end
-        cursor.movePosition(cursor.End)
-        cursor.movePosition(cursor.Up, cursor.MoveAnchor, 2)
-        
-        self.log_output.setTextCursor(cursor)
-        
-        # Scroll to bottom
+        """Scroll the log output to the bottom"""
+        # Simply scroll to bottom without adding extra newlines
         scrollbar = self.log_output.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
         
@@ -1107,42 +1629,167 @@ class ExecutionControlWidget(QWidget):
         Thread-safe: Uses signals to update GUI from worker thread.
         
         Args:
-            event: ProgressEvent object with event_type and data
+            event: ProgressEvent object with event_type and overall_progress
         """
-        event_type = event.event_type
-        data = event.data
+        # Handle new ProgressEvent objects with ProgressEventType
+        if hasattr(event, 'event_type') and hasattr(event, 'overall_progress'):
+            # New progress tracking system
+            from ..engine.progress_tracking import ProgressEventType
+            
+            if event.event_type == ProgressEventType.SCANNING_START:
+                progress = event.overall_progress
+                self.progress_message.emit(f"\n[Correlation] Starting correlation scan...")
+                self.progress_message.emit(f"[Correlation] Total windows to process: {progress.total_windows}")
+                self.progress_message.emit(f"[Correlation] Processing mode: {progress.processing_mode}")
+                if progress.streaming_mode:
+                    self.progress_message.emit(f"[Correlation] Streaming mode: enabled")
+            
+            elif event.event_type == ProgressEventType.WINDOW_START:
+                if hasattr(event, 'window_progress') and event.window_progress:
+                    wp = event.window_progress
+                    self.progress_message.emit(f"[Correlation] Processing window: {wp.window_id}")
+            
+            elif event.event_type == ProgressEventType.WINDOW_COMPLETE:
+                if hasattr(event, 'window_progress') and event.window_progress:
+                    wp = event.window_progress
+                    self.progress_message.emit(
+                        f"[Correlation] Window {wp.window_id} complete: "
+                        f"{wp.records_found} records, {wp.matches_created} matches, "
+                        f"{wp.processing_time_seconds:.2f}s"
+                    )
+            
+            elif event.event_type == ProgressEventType.WINDOW_PROGRESS:
+                # Throttle progress updates to avoid flooding the GUI
+                if self._should_throttle_progress():
+                    return
+                
+                progress = event.overall_progress
+                percentage = progress.completion_percentage
+                time_remaining = ""
+                if progress.time_remaining_seconds:
+                    remaining_mins = int(progress.time_remaining_seconds / 60)
+                    remaining_secs = int(progress.time_remaining_seconds % 60)
+                    if remaining_mins > 0:
+                        time_remaining = f", ETA: {remaining_mins}m {remaining_secs}s"
+                    else:
+                        time_remaining = f", ETA: {remaining_secs}s"
+                
+                rate_info = ""
+                if progress.processing_rate_windows_per_second:
+                    rate_info = f", {progress.processing_rate_windows_per_second:.1f}/sec"
+                
+                self.progress_message.emit(
+                    f"[Progress] {percentage:.1f}% ({progress.windows_processed}/{progress.total_windows} windows, "
+                    f"{progress.matches_found} matches{rate_info}{time_remaining})"
+                )
+            
+            elif event.event_type == ProgressEventType.STREAMING_ENABLED:
+                self.progress_message.emit(f"[Correlation] Streaming mode enabled: {event.message}")
+            
+            elif event.event_type == ProgressEventType.MEMORY_WARNING:
+                self.progress_message.emit(f"[Warning] Memory usage high: {event.message}")
+            
+            elif event.event_type == ProgressEventType.SCANNING_COMPLETE:
+                progress = event.overall_progress
+                self.progress_message.emit(f"\n[Correlation] Scan complete!")
+                self.progress_message.emit(f"[Correlation] Total matches found: {progress.matches_found}")
+                self.progress_message.emit(f"[Correlation] Windows processed: {progress.windows_processed}")
+            
+            elif event.event_type == ProgressEventType.DATABASE_QUERY_START:
+                data = event.additional_data
+                self.progress_message.emit(f"[Database] Querying {data['total_feathers']} feathers...")
+            
+            elif event.event_type == ProgressEventType.DATABASE_QUERY_PROGRESS:
+                data = event.additional_data
+                # Update the same line to show progress without flooding the log
+                feather_id = data['feather_id']
+                feathers_queried = data['feathers_queried']
+                total_feathers = data['total_feathers']
+                records_found = data['records_found']
+                
+                # Show a dynamic progress indicator
+                progress_percent = (feathers_queried / total_feathers * 100) if total_feathers > 0 else 0
+                self.progress_message.emit(
+                    f"[Database] {progress_percent:.0f}% - {feather_id}: {records_found} records "
+                    f"({feathers_queried}/{total_feathers})"
+                )
+            
+            elif event.event_type == ProgressEventType.DATABASE_QUERY_COMPLETE:
+                data = event.additional_data
+                self.progress_message.emit(
+                    f"[Database] Query complete: {data['total_records']} records "
+                    f"from {data['total_feathers']} feathers ({data['query_time_seconds']:.2f}s)"
+                )
+            
+            elif event.event_type == ProgressEventType.ERROR_OCCURRED:
+                self.progress_message.emit(f"[Error] {event.message}")
+                if hasattr(event, 'error_details') and event.error_details:
+                    self.progress_message.emit(f"[Error Details] {event.error_details}")
         
-        if event_type == "wing_start":
-            self.progress_message.emit(f"\n[Correlation] Wing: {data['wing_name']} (ID: {data['wing_id']})")
-            self.progress_message.emit(f"[Correlation] Feathers in wing: {data['feather_count']}")
-        
-        elif event_type == "anchor_collection":
-            self.progress_message.emit(
-                f"[Correlation]   • {data['feather_id']} "
-                f"({data['artifact_type']}): {data['anchor_count']} anchors"
-            )
-        
-        elif event_type == "correlation_start":
-            self.progress_message.emit(f"[Correlation] Total anchors collected: {data['total_anchors']}")
-            self.progress_message.emit(f"[Correlation] Time window: {data['time_window']} minutes")
-            self.progress_message.emit(f"[Correlation] Minimum matches required: {data['minimum_matches']}")
-            self.progress_message.emit("[Correlation] Starting correlation analysis...")
-        
-        elif event_type == "anchor_progress":
-            # Only show every 100th anchor to avoid flooding
-            if data['anchor_index'] % 100 == 0:
+        # Handle legacy event format (for backward compatibility)
+        elif hasattr(event, 'event_type') and hasattr(event, 'data'):
+            event_type = event.event_type
+            data = event.data
+            
+            if event_type == "wing_start":
+                self.progress_message.emit(f"\n[Correlation] Wing: {data['wing_name']} (ID: {data['wing_id']})")
+                self.progress_message.emit(f"[Correlation] Feathers in wing: {data['feather_count']}")
+            
+            elif event_type == "anchor_collection":
+                self.progress_message.emit(
+                    f"[Correlation]   • {data['feather_id']} "
+                    f"({data['artifact_type']}): {data['anchor_count']} anchors"
+                )
+            
+            elif event_type == "correlation_start":
+                self.progress_message.emit(f"[Correlation] Total anchors collected: {data['total_anchors']}")
+                self.progress_message.emit(f"[Correlation] Time window: {data['time_window']} minutes")
+                self.progress_message.emit(f"[Correlation] Minimum matches required: {data['minimum_matches']}")
+                self.progress_message.emit("[Correlation] Starting correlation analysis...")
+            
+            elif event_type == "anchor_progress":
+                # Throttle progress updates to avoid flooding the GUI
+                if self._should_throttle_progress():
+                    return
+                
+                # Show progress updates
                 self.progress_message.emit(
                     f"    [Analyzing] Anchor {data['anchor_index']}/{data['total_anchors']} "
                     f"from {data['feather_id']} ({data['artifact_type']}) "
                     f"at {data['timestamp']}"
                 )
+            
+            elif event_type == "summary_progress":
+                # Throttle summary progress updates
+                if self._should_throttle_progress():
+                    return
+                
+                # Show summary progress
+                self.progress_message.emit(
+                    f"    Progress: {data['anchors_processed']}/{data['total_anchors']} "
+                    f"anchors processed, {data['matches_found']} matches found"
+                )
+    
+    def _should_throttle_progress(self) -> bool:
+        """
+        Check if progress update should be throttled.
         
-        elif event_type == "summary_progress":
-            # Show summary every 1000 anchors
-            self.progress_message.emit(
-                f"    Progress: {data['anchors_processed']}/{data['total_anchors']} "
-                f"anchors processed, {data['matches_found']} matches found"
-            )
+        Returns:
+            True if update should be skipped (throttled)
+        """
+        now = datetime.now()
+        
+        if self._last_progress_time is None:
+            self._last_progress_time = now
+            return False
+        
+        elapsed = (now - self._last_progress_time).total_seconds()
+        
+        if elapsed < self._min_progress_interval:
+            return True
+        
+        self._last_progress_time = now
+        return False
     
     def _setup_output_redirection(self):
         """Setup stdout/stderr redirection to log output widget"""
@@ -1150,6 +1797,10 @@ class ExecutionControlWidget(QWidget):
         # This prevents duplicate output in the terminal
         self.stdout_redirector = OutputRedirector(self.log_output, None)
         self.stderr_redirector = OutputRedirector(self.log_output, None)
+        
+        # Keep strong references to prevent garbage collection
+        self.stdout_redirector.setParent(self)
+        self.stderr_redirector.setParent(self)
         
         # Redirect stdout and stderr
         sys.stdout = self.stdout_redirector

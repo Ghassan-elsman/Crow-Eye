@@ -17,6 +17,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from .data_structures import Identity, Anchor, EvidenceRow, CorrelationResults, CorrelationStatistics
+from .cancellation_support import EnhancedCancellationManager
 
 
 class IdentityCorrelationEngine:
@@ -865,13 +866,16 @@ class IdentityBasedCorrelationEngine:
     This is the main engine that ties all components together.
     """
     
-    def __init__(self, time_window_minutes: int = 5, debug_mode: bool = False):
+    def __init__(self, time_window_minutes: int = 180, debug_mode: bool = False, 
+                 semantic_mapper: Optional[Any] = None, scoring_engine: Optional[Any] = None):
         """
         Initialize Identity-Based Correlation Engine.
         
         Args:
-            time_window_minutes: Time window for anchor clustering (default 5 minutes, matches Wing default)
+            time_window_minutes: Time window for anchor clustering (default 180 minutes, matches Wing default)
             debug_mode: Enable debug logging
+            semantic_mapper: Optional semantic mapping integration for enriching evidence
+            scoring_engine: Optional weighted scoring engine for calculating match scores
         """
         self.time_window_minutes = time_window_minutes
         self.debug_mode = debug_mode
@@ -880,6 +884,14 @@ class IdentityBasedCorrelationEngine:
         self.identity_engine = IdentityCorrelationEngine(debug_mode=debug_mode)
         self.identity_matcher = IdentityMatcher(debug_mode=debug_mode)
         
+        # Integration components (optional)
+        self.semantic_mapper = semantic_mapper
+        self.scoring_engine = scoring_engine
+        
+        # Cancellation support
+        self.cancellation_manager = EnhancedCancellationManager(debug_mode=debug_mode)
+        self._cancelled = False  # Legacy flag for backward compatibility
+        
         # Correlation state
         self.identities: Dict[str, Identity] = {}  # identity_key -> Identity
         self.correlation_results: Optional[CorrelationResults] = None
@@ -887,6 +899,30 @@ class IdentityBasedCorrelationEngine:
         # Statistics tracking
         self.stats = CorrelationStatistics()
         self.start_time: Optional[datetime] = None
+    
+    def request_cancellation(self, reason: str = "User requested"):
+        """
+        Request cancellation of the current correlation operation.
+        
+        Args:
+            reason: Reason for cancellation
+        """
+        self.cancellation_manager.request_cancellation(reason=reason, requested_by="User")
+        self._cancelled = True  # Set legacy flag
+    
+    def is_cancelled(self) -> bool:
+        """Check if cancellation has been requested"""
+        return self.cancellation_manager.is_cancelled() or self._cancelled
+    
+    def check_cancellation(self):
+        """
+        Check for cancellation and raise exception if cancelled.
+        
+        Raises:
+            Exception: If operation was cancelled
+        """
+        if self.is_cancelled():
+            raise Exception("Operation cancelled by user")
     
     def correlate_records(self, records: List[Dict[str, Any]], 
                          wing_name: str = "Unknown Wing",
@@ -922,36 +958,86 @@ class IdentityBasedCorrelationEngine:
             execution_timestamp=self.start_time
         )
         
-        # Step 1: Identity Extraction and Clustering
-        self._extract_and_cluster_identities(records)
-        print(f"[Identity Engine] Step 1: Extracted {len(self.identities)} unique identities")
-        
-        # Step 2: Temporal Anchor Clustering
-        self._create_temporal_anchors()
-        print(f"[Identity Engine] Step 2: Created {self.stats.total_anchors} anchors")
-        
-        # Step 3: Primary Anchor Selection
-        self._select_primary_anchors()
-        print(f"[Identity Engine] Step 3: Selected primary evidence")
-        
-        # Step 4: Generate Final Results
-        self._generate_results()
-        print(f"[Identity Engine] Step 4: Generated results")
-        
-        # Calculate final statistics
-        self._calculate_final_statistics()
-        
-        # Print summary of multi-feather identities
-        multi_feather_identities = 0
-        for identity in self.identities.values():
-            feathers = set()
-            for evidence in identity.all_evidence:
-                if hasattr(evidence, 'feather_id'):
-                    feathers.add(evidence.feather_id)
-            if len(feathers) > 1:
-                multi_feather_identities += 1
-        
-        print(f"[Identity Engine] Identities with evidence from multiple feathers: {multi_feather_identities}")
+        try:
+            # Check for cancellation before starting
+            self.check_cancellation()
+            
+            # Step 1: Identity Extraction and Clustering
+            self._extract_and_cluster_identities(records)
+            print(f"[Identity Engine] Step 1: Extracted {len(self.identities)} unique identities")
+            
+            # Check for cancellation after identity extraction
+            self.check_cancellation()
+            
+            # Step 2: Temporal Anchor Clustering
+            self._create_temporal_anchors()
+            print(f"[Identity Engine] Step 2: Created {self.stats.total_anchors} anchors")
+            
+            # Check for cancellation after anchor creation
+            self.check_cancellation()
+            
+            # Step 3: Primary Anchor Selection
+            self._select_primary_anchors()
+            print(f"[Identity Engine] Step 3: Selected primary evidence")
+            
+            # Check for cancellation after primary selection
+            self.check_cancellation()
+            
+            # Step 4: Semantic Enrichment (if available)
+            self._enrich_semantic_data()
+            if self.semantic_mapper:
+                print(f"[Identity Engine] Step 4: Applied semantic enrichment")
+            
+            # Check for cancellation after semantic enrichment
+            self.check_cancellation()
+            
+            # Step 5: Apply Weighted Scoring (if available)
+            self._apply_scoring_weights()
+            if self.scoring_engine:
+                print(f"[Identity Engine] Step 5: Applied weighted scoring")
+            
+            # Check for cancellation after scoring
+            self.check_cancellation()
+            
+            # Step 6: Generate Final Results
+            self._generate_results()
+            print(f"[Identity Engine] Step 6: Generated results")
+            
+            # Calculate final statistics
+            self._calculate_final_statistics()
+            
+            # Print summary of multi-feather identities
+            multi_feather_identities = 0
+            for identity in self.identities.values():
+                feathers = set()
+                for evidence in identity.all_evidence:
+                    if hasattr(evidence, 'feather_id'):
+                        feathers.add(evidence.feather_id)
+                if len(feathers) > 1:
+                    multi_feather_identities += 1
+            
+            print(f"[Identity Engine] Identities with evidence from multiple feathers: {multi_feather_identities}")
+            
+        except Exception as e:
+            # Check if this was a cancellation
+            if self.is_cancelled():
+                print(f"[Identity Engine] ⚠️ Correlation cancelled - saving partial results...")
+                
+                # Generate partial results
+                self._generate_results()
+                self._calculate_final_statistics()
+                
+                # Mark as cancelled
+                if self.correlation_results:
+                    self.correlation_results.status = "Cancelled"
+                    self.correlation_results.cancellation_timestamp = datetime.now()
+                    self.correlation_results.warnings.append("Execution was cancelled by user")
+                    self.correlation_results.warnings.append(f"Partial results saved: {len(self.identities)} identities, {self.stats.total_anchors} anchors")
+                
+                print(f"[Identity Engine] ✓ Partial results saved: {len(self.identities)} identities")
+            else:
+                # Re-raise if not a cancellation
+                raise
         
         return self.correlation_results
     
@@ -1050,20 +1136,70 @@ class IdentityBasedCorrelationEngine:
                     print(f"[ERROR] Failed to process record: {e}")
         
         # Log extraction stats per feather with success rate and sample fields for failures
-        print(f"[Identity Engine] Extraction stats per feather:")
+        print(f"\n[Identity Engine] 📊 Identity Extraction Summary:")
+        print(f"  Total Records Processed: {processed_count:,}")
+        print(f"  Records Skipped (no identity): {skipped_no_identity:,}")
+        print(f"  Unique Identities Found: {len(self.identities):,}")
+        
+        print(f"\n[Identity Engine] 📁 Extraction Statistics by Feather:")
         feathers_with_issues = []
+        
+        # Track identities per feather
+        identities_per_feather = {}  # feather_id -> set of identity_keys
+        for identity_key, feather_set in identity_feathers.items():
+            for fid in feather_set:
+                if fid not in identities_per_feather:
+                    identities_per_feather[fid] = set()
+                identities_per_feather[fid].add(identity_key)
+        
         for fid, stats in sorted(feather_extraction_stats.items(), key=lambda x: x[1]['total'], reverse=True):
             success_rate = (stats['extracted'] / stats['total'] * 100) if stats['total'] > 0 else 0
             status_icon = "✓" if success_rate >= 90 else "+" if success_rate >= 50 else "!" if success_rate > 0 else "✗"
-            print(f"  {status_icon} {fid} ({stats['artifact_type']}): {stats['extracted']}/{stats['total']} ({success_rate:.1f}%)")
+            
+            # Get unique identities from this feather
+            unique_identities = len(identities_per_feather.get(fid, set()))
+            
+            print(f"  {status_icon} {fid} ({stats['artifact_type']})")
+            print(f"      Records: {stats['extracted']}/{stats['total']} extracted ({success_rate:.1f}%)")
+            print(f"      Identities: {unique_identities} unique")
+            
+            # Show top identities from this feather
+            if unique_identities > 0:
+                # Count evidence per identity for this feather
+                identity_counts = {}
+                for identity_key in identities_per_feather.get(fid, set()):
+                    if identity_key in self.identities:
+                        # Count evidence from this specific feather
+                        count = sum(1 for ev in self.identities[identity_key].evidence 
+                                  if ev.feather_id == fid)
+                        identity_counts[identity_key] = count
+                
+                # Show top 3
+                top_identities = sorted(identity_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+                if top_identities:
+                    top_str = ", ".join([f"{self.identities[k].primary_name} ({v})" for k, v in top_identities])
+                    print(f"      Top: {top_str}")
             
             # Track feathers with low extraction rates for detailed logging
             if success_rate < 50 and stats['total'] > 0:
                 feathers_with_issues.append((fid, stats, success_rate))
         
+        # Show cross-feather correlation summary
+        print(f"\n[Identity Engine] 🔗 Cross-Feather Correlations:")
+        multi_feather_identities = [(k, v) for k, v in identity_feathers.items() if len(v) > 1]
+        multi_feather_identities.sort(key=lambda x: len(x[1]), reverse=True)
+        
+        if multi_feather_identities:
+            for identity_key, feather_set in multi_feather_identities[:10]:  # Top 10
+                identity = self.identities[identity_key]
+                feather_names = [f.split('_')[0] for f in sorted(feather_set)]  # Shorten names
+                print(f"  {identity.primary_name}: Found in {len(feather_set)} feathers ({', '.join(feather_names)})")
+        else:
+            print(f"  No identities found across multiple feathers")
+        
         # Show sample fields for feathers with low extraction rates
         if feathers_with_issues:
-            print(f"\n[Identity Engine] ⚠ Feathers with low extraction rates - sample fields:")
+            print(f"\n[Identity Engine] ⚠️  Feathers with Low Extraction Rates:")
             sample_records_by_feather = {}
             for record in records[:1000]:  # Check first 1000 records for samples
                 fid = record.get('feather_id', 'unknown')
@@ -1071,15 +1207,17 @@ class IdentityBasedCorrelationEngine:
                     sample_records_by_feather[fid] = record
             
             for fid, stats, rate in feathers_with_issues:
+                print(f"  ! {fid} ({stats['artifact_type']}): {rate:.1f}% extraction rate")
                 if fid in sample_records_by_feather:
                     sample = sample_records_by_feather[fid]
                     # Show field names and sample values
                     fields_preview = []
-                    for key, value in list(sample.items())[:10]:
+                    for key, value in list(sample.items())[:8]:
                         if key not in ('feather_id', 'artifact', 'table', 'row_id'):
-                            val_str = str(value)[:30] if value else 'None'
+                            val_str = str(value)[:25] if value else 'None'
                             fields_preview.append(f"{key}={val_str}")
-                    print(f"    {fid}: {', '.join(fields_preview)}")
+                    print(f"      Available fields: {', '.join(fields_preview)}")
+                    print(f"      Suggestion: Add artifact-specific field mapping or check field names")
         
         # Log identity-feather mapping for debugging
         multi_feather_count = sum(1 for feathers in identity_feathers.values() if len(feathers) > 1)
@@ -1166,6 +1304,18 @@ class IdentityBasedCorrelationEngine:
             original_data=record.copy(),
             semantic_data={}  # Will be populated during semantic enrichment
         )
+        
+        # Apply semantic mapping if available
+        if self.semantic_mapper:
+            try:
+                semantic_data = self.semantic_mapper.map_record(record, artifact, table)
+                if semantic_data:
+                    evidence.semantic_data = semantic_data
+                    if self.debug_mode:
+                        print(f"[DEBUG] Applied semantic mapping: {semantic_data.get('category', 'unknown')}")
+            except Exception as e:
+                if self.debug_mode:
+                    print(f"[DEBUG] Semantic mapping failed: {e}")
         
         return evidence
     
@@ -1584,6 +1734,126 @@ class IdentityBasedCorrelationEngine:
                 self.stats.identities_by_type[identity.identity_type] = 0
             self.stats.identities_by_type[identity.identity_type] += 1
     
+    def _apply_scoring_weights(self, wing_config: Optional[Any] = None):
+        """
+        Apply weighted scoring to anchors if scoring engine is available.
+        
+        Calculates match scores based on:
+        - Feather weights (tier-based scoring)
+        - Evidence quality (primary vs secondary)
+        - Temporal clustering quality
+        - Cross-feather correlation strength
+        
+        Args:
+            wing_config: Optional wing configuration with scoring weights
+        """
+        if not self.scoring_engine:
+            if self.debug_mode:
+                print("[DEBUG] No scoring engine available, skipping weighted scoring")
+            return
+        
+        scored_anchors = 0
+        
+        for identity in self.identities.values():
+            for anchor in identity.anchors:
+                try:
+                    # Prepare anchor data for scoring
+                    anchor_data = {
+                        'feather_ids': getattr(anchor, 'feather_ids', []),
+                        'evidence_count': anchor.evidence_count,
+                        'primary_count': anchor.primary_count,
+                        'secondary_count': anchor.secondary_count,
+                        'duration_minutes': anchor.duration_minutes,
+                        'artifacts': [e.artifact for e in anchor.rows]
+                    }
+                    
+                    # Calculate weighted score
+                    score_result = self.scoring_engine.calculate_anchor_score(
+                        anchor_data, 
+                        wing_config
+                    )
+                    
+                    # Store score in anchor metadata
+                    if score_result:
+                        anchor.metadata['weighted_score'] = score_result.get('score', 0.0)
+                        anchor.metadata['score_breakdown'] = score_result.get('breakdown', {})
+                        anchor.metadata['score_tier'] = score_result.get('tier', 'unknown')
+                        anchor.confidence = score_result.get('confidence', anchor.confidence)
+                        scored_anchors += 1
+                        
+                        if self.debug_mode:
+                            print(f"[DEBUG] Scored anchor {anchor.anchor_id}: {score_result.get('score', 0.0):.2f}")
+                
+                except Exception as e:
+                    if self.debug_mode:
+                        print(f"[DEBUG] Failed to score anchor {anchor.anchor_id}: {e}")
+        
+        if scored_anchors > 0:
+            print(f"[Identity Engine] Applied weighted scoring to {scored_anchors} anchors")
+    
+    def _enrich_semantic_data(self):
+        """
+        Enrich all evidence with semantic mappings if semantic mapper is available.
+        
+        This method processes evidence that wasn't enriched during initial creation,
+        and updates anchor semantic summaries.
+        """
+        if not self.semantic_mapper:
+            if self.debug_mode:
+                print("[DEBUG] No semantic mapper available, skipping semantic enrichment")
+            return
+        
+        enriched_count = 0
+        
+        for identity in self.identities.values():
+            # Enrich evidence that doesn't have semantic data yet
+            for evidence in identity.all_evidence:
+                if not evidence.semantic_data:
+                    try:
+                        semantic_data = self.semantic_mapper.map_record(
+                            evidence.original_data,
+                            evidence.artifact,
+                            evidence.table
+                        )
+                        if semantic_data:
+                            evidence.semantic_data = semantic_data
+                            enriched_count += 1
+                    except Exception as e:
+                        if self.debug_mode:
+                            print(f"[DEBUG] Failed to enrich evidence: {e}")
+            
+            # Create semantic summaries for anchors
+            for anchor in identity.anchors:
+                try:
+                    # Aggregate semantic data from all evidence in anchor
+                    categories = set()
+                    meanings = set()
+                    severities = []
+                    
+                    for evidence in anchor.rows:
+                        if evidence.semantic_data:
+                            if 'category' in evidence.semantic_data:
+                                categories.add(evidence.semantic_data['category'])
+                            if 'meaning' in evidence.semantic_data:
+                                meanings.add(evidence.semantic_data['meaning'])
+                            if 'severity' in evidence.semantic_data:
+                                severities.append(evidence.semantic_data['severity'])
+                    
+                    # Store summary in anchor
+                    anchor.semantic_summary = {
+                        'categories': list(categories),
+                        'meanings': list(meanings),
+                        'max_severity': max(severities) if severities else 'low',
+                        'evidence_with_semantics': sum(1 for e in anchor.rows if e.semantic_data)
+                    }
+                    
+                except Exception as e:
+                    if self.debug_mode:
+                        print(f"[DEBUG] Failed to create semantic summary for anchor: {e}")
+        
+        if enriched_count > 0:
+            print(f"[Identity Engine] Enriched {enriched_count} evidence records with semantic data")
+    
     def _calculate_final_statistics(self):
         """
         Calculate final performance and quality statistics.
@@ -1593,6 +1863,28 @@ class IdentityBasedCorrelationEngine:
             self.stats.execution_duration_seconds = duration
             if duration > 0:
                 self.stats.records_per_second = self.stats.total_evidence / duration
+        
+        # Calculate and log total feather data size
+        total_feather_data_size = 0
+        if self.identities:
+            import json
+            for identity in self.identities.values():
+                for evidence in identity.all_evidence:
+                    if hasattr(evidence, 'original_data') and evidence.original_data:
+                        try:
+                            evidence_json = json.dumps(evidence.original_data)
+                            total_feather_data_size += len(evidence_json.encode('utf-8'))
+                        except:
+                            pass  # Skip if data can't be serialized
+            
+            # Log feather data size
+            size_mb = total_feather_data_size / (1024 * 1024)
+            if size_mb > 100:
+                print(f"[Identity Engine] ⚠️ Large feather data size: {size_mb:.2f} MB")
+                if self.correlation_results:
+                    self.correlation_results.warnings.append(f"Large feather data size: {size_mb:.2f} MB")
+            elif self.debug_mode:
+                print(f"[Identity Engine] 📊 Total feather data size: {size_mb:.2f} MB")
         
         # Update correlation results with final statistics
         self.correlation_results.statistics = self.stats
@@ -1604,12 +1896,12 @@ class CorrelationExecutor:
     Provides a simple interface for running correlation on forensic data.
     """
     
-    def __init__(self, time_window_minutes: int = 5, debug_mode: bool = False):
+    def __init__(self, time_window_minutes: int = 180, debug_mode: bool = False):
         """
         Initialize correlation executor.
         
         Args:
-            time_window_minutes: Time window for anchor clustering (default 5 minutes)
+            time_window_minutes: Time window for anchor clustering (default 180 minutes)
             debug_mode: Enable debug logging
         """
         self.engine = IdentityBasedCorrelationEngine(
@@ -1642,7 +1934,7 @@ class CorrelationExecutor:
 
 # Convenience function for simple correlation
 def correlate_forensic_records(records: List[Dict[str, Any]], 
-                             time_window_minutes: int = 5,
+                             time_window_minutes: int = 180,
                              wing_name: str = "Unknown Wing",
                              wing_id: str = "unknown",
                              debug_mode: bool = False) -> CorrelationResults:
@@ -1651,7 +1943,7 @@ def correlate_forensic_records(records: List[Dict[str, Any]],
     
     Args:
         records: List of forensic records to correlate
-        time_window_minutes: Time window for anchor clustering (default 5 minutes)
+        time_window_minutes: Time window for anchor clustering (default 180 minutes)
         wing_name: Name of the Wing being processed
         wing_id: ID of the Wing being processed
         debug_mode: Enable debug logging
@@ -1692,15 +1984,19 @@ class IdentityBasedEngineAdapter:
     """
     
     def __init__(self, config: Any, filters: Optional['FilterConfig'] = None, 
-                 time_window_minutes: int = 5, debug_mode: bool = False):
+                 time_window_minutes: int = 180, debug_mode: bool = False,
+                 scoring_integration: Optional['IScoringIntegration'] = None,
+                 mapping_integration: Optional['ISemanticMappingIntegration'] = None):
         """
         Initialize Identity-Based Engine Adapter.
         
         Args:
             config: Pipeline configuration object
             filters: Optional filter configuration
-            time_window_minutes: Time window for anchor clustering (default 5 minutes)
+            time_window_minutes: Time window for anchor clustering (default 180 minutes)
             debug_mode: Enable debug logging
+            scoring_integration: Optional scoring integration (for dependency injection)
+            mapping_integration: Optional semantic mapping integration (for dependency injection)
         """
         # Import here to avoid circular dependency
         from .base_engine import BaseCorrelationEngine, EngineMetadata, FilterConfig
@@ -1710,10 +2006,21 @@ class IdentityBasedEngineAdapter:
         self.filters = filters or FilterConfig()
         self.debug_mode = debug_mode
         
-        # Create internal identity engine
+        # Get or create integrations
+        if scoring_integration is None:
+            from ..integration.weighted_scoring_integration import WeightedScoringIntegration
+            scoring_integration = WeightedScoringIntegration(getattr(config, 'config_manager', None))
+        
+        if mapping_integration is None:
+            from ..integration.semantic_mapping_integration import SemanticMappingIntegration
+            mapping_integration = SemanticMappingIntegration(getattr(config, 'config_manager', None))
+        
+        # Create internal identity engine with injected integrations
         self.engine = IdentityBasedCorrelationEngine(
             time_window_minutes=time_window_minutes,
-            debug_mode=debug_mode
+            debug_mode=debug_mode,
+            semantic_mapper=mapping_integration,
+            scoring_engine=scoring_integration
         )
         
         # Store last result
@@ -2032,8 +2339,8 @@ class IdentityBasedEngineAdapter:
         print(f"[Identity Engine] execute_wing called for: {wing.wing_name}")
         print(f"[Identity Engine] Available feather_paths keys: {list(feather_paths.keys())[:10]}...")
         
-        # Get time window from wing's correlation rules (default 5 minutes)
-        time_window = 5  # Default
+        # Get time window from wing's correlation rules (default 180 minutes)
+        time_window = 180  # Default: 3 hours for better correlation accuracy
         if hasattr(wing, 'correlation_rules') and hasattr(wing.correlation_rules, 'time_window_minutes'):
             time_window = wing.correlation_rules.time_window_minutes
         print(f"[Identity Engine] Using time window from wing: {time_window} minutes")

@@ -19,6 +19,12 @@ from .ui_styling import CorrelationEngineStyles
 
 
 from ..config import PipelineConfig, FeatherConfig, WingConfig
+from ..integration.feather_mappings import (
+    detect_artifact_type_from_name, 
+    get_artifact_type_info,
+    get_parent_artifact_type,
+    ENHANCED_ARTIFACT_TYPES
+)
 
 
 class PipelineBuilderWidget(QWidget):
@@ -621,13 +627,103 @@ class PipelineBuilderWidget(QWidget):
                 f"Failed to open Feather Creator:\n{str(e)}"
             )
     
+    def _enhance_artifact_type_display(self, feather_config: FeatherConfig) -> str:
+        """
+        Enhance artifact type display with detailed information.
+        
+        Args:
+            feather_config: Feather configuration
+            
+        Returns:
+            Enhanced display string with artifact type and forensic value
+        """
+        artifact_type = feather_config.artifact_type
+        
+        # Try to detect enhanced artifact type if not already specific
+        if artifact_type in ['Registry', 'AmCache', 'SRUM', 'Logs', 'Jumplists']:
+            # Try to detect more specific type from feather name
+            enhanced_type = detect_artifact_type_from_name(
+                feather_config.feather_name,
+                getattr(feather_config, 'source_table', None),
+                getattr(feather_config, 'source_database', None)
+            )
+            if enhanced_type != artifact_type and enhanced_type in ENHANCED_ARTIFACT_TYPES:
+                artifact_type = enhanced_type
+        
+        # Get artifact type info
+        type_info = get_artifact_type_info(artifact_type)
+        
+        # Create enhanced display
+        display_name = f"{feather_config.feather_name} ({artifact_type})"
+        
+        # Add forensic value indicator
+        forensic_value = type_info.get('forensic_value', 'Unknown')
+        if 'High' in forensic_value:
+            display_name += " 🔴"  # High value
+        elif 'Medium' in forensic_value:
+            display_name += " 🟡"  # Medium value
+        else:
+            display_name += " ⚪"  # Low/Unknown value
+            
+        return display_name
+    
+    def _create_enhanced_tooltip(self, feather_config: FeatherConfig, wing_name: str = None) -> str:
+        """
+        Create enhanced tooltip with artifact type information.
+        
+        Args:
+            feather_config: Feather configuration
+            wing_name: Optional wing name
+            
+        Returns:
+            Enhanced tooltip string
+        """
+        artifact_type = feather_config.artifact_type
+        
+        # Try to detect enhanced artifact type
+        if artifact_type in ['Registry', 'AmCache', 'SRUM', 'Logs', 'Jumplists']:
+            enhanced_type = detect_artifact_type_from_name(
+                feather_config.feather_name,
+                getattr(feather_config, 'source_table', None),
+                getattr(feather_config, 'source_database', None)
+            )
+            if enhanced_type != artifact_type and enhanced_type in ENHANCED_ARTIFACT_TYPES:
+                artifact_type = enhanced_type
+        
+        # Get detailed info
+        type_info = get_artifact_type_info(artifact_type)
+        parent_type = get_parent_artifact_type(artifact_type)
+        
+        # Build tooltip
+        tooltip_parts = []
+        
+        if hasattr(feather_config, 'output_database'):
+            tooltip_parts.append(f"Database: {feather_config.output_database}")
+        
+        tooltip_parts.append(f"Artifact Type: {artifact_type}")
+        
+        if parent_type != artifact_type:
+            tooltip_parts.append(f"Category: {parent_type}")
+        
+        tooltip_parts.append(f"Description: {type_info.get('description', 'No description')}")
+        tooltip_parts.append(f"Forensic Value: {type_info.get('forensic_value', 'Unknown')}")
+        
+        if wing_name:
+            tooltip_parts.append(f"From Wing: {wing_name}")
+        
+        return "\n".join(tooltip_parts)
+    
     def _add_feather_to_list(self, feather_config: FeatherConfig):
-        """Add feather config to list widget"""
-        item = QListWidgetItem(
-            f"{feather_config.feather_name} ({feather_config.artifact_type})"
-        )
+        """Add feather config to list widget with enhanced artifact type display"""
+        display_name = self._enhance_artifact_type_display(feather_config)
+        
+        item = QListWidgetItem(display_name)
         item.setData(Qt.UserRole, feather_config)
-        item.setToolTip(f"Database: {feather_config.output_database}")
+        
+        # Enhanced tooltip
+        tooltip = self._create_enhanced_tooltip(feather_config)
+        item.setToolTip(tooltip)
+        
         self.feathers_list.addItem(item)
         
         # Add to pipeline if exists
@@ -848,14 +944,22 @@ class PipelineBuilderWidget(QWidget):
                     # Requirement 5.5: Validate that feather database file exists
                     db_path = Path(feather_config.output_database)
                     if not db_path.is_absolute() and case_feathers_dir:
-                        # Resolve relative path
-                        db_path = case_feathers_dir / db_path.name
+                        # First try relative to case Correlation directory
+                        db_path = case_feathers_dir.parent / feather_config.output_database
+                        if not db_path.exists():
+                            # Fallback: try just the filename in feathers directory
+                            db_path = case_feathers_dir / Path(feather_config.output_database).name
                     
                     if db_path.exists():
-                        # Add to feathers list
-                        item = QListWidgetItem(f"{feather_config.feather_name} ({feather_config.artifact_type})")
+                        # Add to feathers list with enhanced display
+                        display_name = self._enhance_artifact_type_display(feather_config)
+                        item = QListWidgetItem(display_name)
                         item.setData(Qt.UserRole, feather_config)
-                        item.setToolTip(f"Database: {feather_config.output_database}\nFrom Wing: {wing_config.wing_name}")
+                        
+                        # Enhanced tooltip
+                        tooltip = self._create_enhanced_tooltip(feather_config, wing_config.wing_name)
+                        item.setToolTip(tooltip)
+                        
                         self.feathers_list.addItem(item)
                         
                         # Add to pipeline if exists
@@ -867,10 +971,16 @@ class PipelineBuilderWidget(QWidget):
                         print(f"[Pipeline Builder] ✓ Auto-added feather from Wing: {feather_name} (DB exists)")
                     else:
                         print(f"[Pipeline Builder] ⚠ Warning: Feather database not found: {db_path}")
-                        # Still add it but with a warning in tooltip
-                        item = QListWidgetItem(f"{feather_config.feather_name} ({feather_config.artifact_type}) ⚠")
+                        # Still add it but with a warning and enhanced display
+                        display_name = self._enhance_artifact_type_display(feather_config) + " ⚠"
+                        item = QListWidgetItem(display_name)
                         item.setData(Qt.UserRole, feather_config)
-                        item.setToolTip(f"⚠ Database not found: {feather_config.output_database}\nFrom Wing: {wing_config.wing_name}")
+                        
+                        # Enhanced tooltip with warning
+                        tooltip = self._create_enhanced_tooltip(feather_config, wing_config.wing_name)
+                        tooltip = f"⚠ Database not found: {feather_config.output_database}\n\n{tooltip}"
+                        item.setToolTip(tooltip)
+                        
                         self.feathers_list.addItem(item)
                         
                         # Add to pipeline if exists
@@ -895,12 +1005,18 @@ class PipelineBuilderWidget(QWidget):
                 if case_feathers_dir:
                     # Try using the feather_database_path from the reference
                     if feather_ref.feather_database_path:
-                        # Extract just the filename if it's a path
-                        db_filename = Path(feather_ref.feather_database_path).name
-                        potential_db = case_feathers_dir / db_filename
+                        # First try the path as-is relative to case Correlation directory
+                        potential_db = case_feathers_dir.parent / feather_ref.feather_database_path
                         if potential_db.exists():
                             feather_db_path = str(potential_db)
                             db_exists = True
+                        else:
+                            # Fallback: Extract just the filename if it's a path
+                            db_filename = Path(feather_ref.feather_database_path).name
+                            potential_db = case_feathers_dir / db_filename
+                            if potential_db.exists():
+                                feather_db_path = str(potential_db)
+                                db_exists = True
                     
                     # Also try with feather_name
                     if not db_exists:

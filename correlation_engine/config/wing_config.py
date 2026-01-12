@@ -25,6 +25,19 @@ class WingFeatherReference:
     tier_name: str = ""  # Human-readable tier name
 
 
+def _get_anchor_priority_from_registry() -> List[str]:
+    """Get anchor priority list from artifact type registry"""
+    try:
+        from .artifact_type_registry import get_registry
+        return get_registry().get_anchor_priority_list()
+    except Exception:
+        # Fallback to hard-coded defaults if registry fails
+        return [
+            "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
+            "Jumplists", "LNK", "MFT", "USN"
+        ]
+
+
 @dataclass
 class WingConfig:
     """Configuration for a wing (correlation rule)"""
@@ -43,7 +56,7 @@ class WingConfig:
     feathers: List[WingFeatherReference] = field(default_factory=list)
     
     # Correlation rules
-    time_window_minutes: int = 5
+    time_window_minutes: int = 180  # Default: 3 hours for better correlation accuracy
     minimum_matches: int = 1
     
     # Filters (wing-level)
@@ -53,10 +66,7 @@ class WingConfig:
     apply_to: str = "all"  # "all" or "specific"
     
     # Anchor priority
-    anchor_priority: List[str] = field(default_factory=lambda: [
-        "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
-        "Jumplists", "LNK", "MFT", "USN"
-    ])
+    anchor_priority: List[str] = field(default_factory=lambda: _get_anchor_priority_from_registry())
     
     # Weighted scoring configuration
     use_weighted_scoring: bool = False

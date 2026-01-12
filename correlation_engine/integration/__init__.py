@@ -19,6 +19,9 @@ from .feather_mappings import (
     get_mappings_by_artifact_type,
     get_mappings_by_source_db
 )
+from .semantic_mapping_integration import SemanticMappingIntegration, SemanticMappingStats
+from .weighted_scoring_integration import WeightedScoringIntegration
+from .progress_tracking_integration import ProgressTrackingIntegration, GUIProgressListener, EnhancedProgressEvent
 
 __all__ = [
     'CrowEyeIntegration',
@@ -31,4 +34,10 @@ __all__ = [
     'get_mapping_by_name',
     'get_mappings_by_artifact_type',
     'get_mappings_by_source_db',
+    'SemanticMappingIntegration',
+    'SemanticMappingStats',
+    'WeightedScoringIntegration',
+    'ProgressTrackingIntegration',
+    'GUIProgressListener',
+    'EnhancedProgressEvent',
 ]

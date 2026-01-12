@@ -6,13 +6,15 @@ Features:
 - Tree view matching app background
 - Smaller tab text
 - Compact statistics tables
+- Weighted scoring display
+- Semantic mapping information
 """
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QLabel, QLineEdit, QPushButton, QGroupBox, QDialog,
+    QLabel, QLineEdit, QPushButton, QGroupBox, QDialog, QSplitter,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
-    QMessageBox, QTextEdit, QTabWidget, QFrame
+    QMessageBox, QTextEdit, QTabWidget, QFrame, QProgressDialog, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QBrush
@@ -20,7 +22,7 @@ from typing import List, Dict, Any
 
 
 class IdentityResultsView(QWidget):
-    """Compact Identity-Based Correlation Results View with Pagination."""
+    """Compact Identity-Based Correlation Results View with Pagination and Scoring."""
     
     match_selected = pyqtSignal(dict)
     
@@ -33,6 +35,8 @@ class IdentityResultsView(QWidget):
         self.filtered_identities = []
         self.current_results = None
         self.current_page = 0
+        self.scoring_enabled = False
+        self.semantic_enabled = False
         self.setup_ui()
     
     def setup_ui(self):
@@ -68,6 +72,11 @@ class IdentityResultsView(QWidget):
         self.feathers_used_lbl = QLabel("Feathers: 0")
         self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 7pt;")
         top_layout.addWidget(self.feathers_used_lbl)
+        
+        # Scoring indicator
+        self.scoring_lbl = QLabel("📊 Scoring: Off")
+        self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #888;")
+        top_layout.addWidget(self.scoring_lbl)
         
         # Separator
         sep = QFrame()
@@ -164,21 +173,27 @@ class IdentityResultsView(QWidget):
         self.role_table = self._create_compact_table(["Role", "#"])
         stats_layout.addWidget(self._wrap_table("Roles", self.role_table), stretch=1)
         
+        # Scoring Summary (new)
+        self.scoring_table = self._create_compact_table(["Score Range", "#"])
+        stats_layout.addWidget(self._wrap_table("Scores", self.scoring_table), stretch=1)
+        
         main_layout.addWidget(stats_frame)
     
     def _create_tree(self) -> QTreeWidget:
-        """Create tree with app-matching background."""
+        """Create tree with app-matching background and score column."""
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Identity / Anchor / Evidence", "Feathers", "Time", "Ev", "Artifact"])
+        tree.setHeaderLabels(["Identity / Anchor / Evidence", "Feathers", "Time", "Score", "Ev", "Artifact"])
         
         tree.setColumnWidth(0, 280)
         tree.setColumnWidth(1, 150)
         tree.setColumnWidth(2, 140)
-        tree.setColumnWidth(3, 40)
-        tree.setColumnWidth(4, 80)
+        tree.setColumnWidth(3, 60)  # Score column
+        tree.setColumnWidth(4, 40)
+        tree.setColumnWidth(5, 80)
         
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
+        tree.itemClicked.connect(self._on_item_clicked)
         
         # Match app background - transparent/inherit
         tree.setStyleSheet("""
@@ -269,44 +284,126 @@ class IdentityResultsView(QWidget):
         self._update_stats(results)
     
     def load_from_correlation_result(self, result):
-        """Load from CorrelationResult object."""
-        identities = self._convert_matches(result.matches)
+        """Load from CorrelationResult object with progress indicator."""
+        print(f"[IdentityResultsView] load_from_correlation_result called with {result.total_matches} matches")
         
-        # Use feather_metadata from result if available (contains records_loaded and identities_found)
-        feather_metadata = result.feather_metadata if hasattr(result, 'feather_metadata') and result.feather_metadata else {}
+        # Show progress dialog if we have many matches
+        progress = None
+        if result.total_matches > 100:
+            progress = QProgressDialog("Loading identity data...", "Cancel", 0, 100, self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(500)
+            progress.setWindowTitle("Loading Results")
+            progress.show()
+            QApplication.processEvents()
         
-        # If feather_metadata doesn't have the right format, build it from matches
-        if feather_metadata and not any('records_loaded' in v for v in feather_metadata.values() if isinstance(v, dict)):
-            # Old format - convert
-            new_metadata = {}
+        try:
+            identities = self._convert_matches(result.matches, progress)
+            
+            if progress and progress.wasCanceled():
+                print("[IdentityResultsView] Loading cancelled by user")
+                return
+            
+            print(f"[IdentityResultsView] Converted to {len(identities)} identities")
+            
+            # Use feather_metadata from result if available (contains records_loaded and identities_found)
+            feather_metadata = result.feather_metadata if hasattr(result, 'feather_metadata') and result.feather_metadata else {}
+            
+            # Filter out non-dict metadata entries
+            filtered_metadata = {}
             for fid, data in feather_metadata.items():
                 if isinstance(data, dict):
-                    new_metadata[fid] = {
-                        'records_loaded': data.get('records', data.get('records_loaded', 0)),
-                        'artifact_type': data.get('artifact', data.get('artifact_type', 'Unknown')),
-                        'identities_found': data.get('identities_found', 0)
-                    }
-            feather_metadata = new_metadata
-        
-        results_dict = {
-            'identities': identities,
-            'statistics': {
-                'total_identities': len(identities),
-                'total_anchors': sum(len(i.get('anchors', [])) for i in identities),
-                'total_evidence': result.total_records_scanned,
-                'execution_time': result.execution_duration_seconds,
-                'feathers_used': result.feathers_processed
-            },
-            'wing_name': result.wing_name,
-            'feather_metadata': feather_metadata
-        }
-        self.load_results(results_dict)
+                    filtered_metadata[fid] = data
+            feather_metadata = filtered_metadata
+            
+            # If feather_metadata doesn't have the right format, build it from matches
+            if feather_metadata and not any('records_loaded' in v for v in feather_metadata.values() if isinstance(v, dict)):
+                # Old format - convert
+                new_metadata = {}
+                for fid, data in feather_metadata.items():
+                    if isinstance(data, dict):
+                        new_metadata[fid] = {
+                            'records_loaded': data.get('records', data.get('records_loaded', 0)),
+                            'artifact_type': data.get('artifact', data.get('artifact_type', 'Unknown')),
+                            'identities_found': data.get('identities_found', 0)
+                        }
+                feather_metadata = new_metadata
+            
+            # Calculate total anchors properly for new format
+            total_anchors = 0
+            for identity in identities:
+                sub_identities = identity.get('sub_identities', [])
+                if sub_identities:
+                    for sub in sub_identities:
+                        total_anchors += len(sub.get('anchors', []))
+                else:
+                    total_anchors += len(identity.get('anchors', []))
+            
+            results_dict = {
+                'identities': identities,
+                'statistics': {
+                    'total_identities': len(identities),
+                    'total_anchors': total_anchors,
+                    'total_evidence': result.total_records_scanned,
+                    'execution_time': result.execution_duration_seconds,
+                    'feathers_used': result.feathers_processed
+                },
+                'wing_name': result.wing_name,
+                'feather_metadata': feather_metadata
+            }
+            
+            if progress:
+                progress.setLabelText("Displaying results...")
+                progress.setValue(90)
+                QApplication.processEvents()
+            
+            print(f"[IdentityResultsView] Calling load_results with {len(identities)} identities, {total_anchors} anchors")
+            self.load_results(results_dict)
+            print(f"[IdentityResultsView] load_results completed, tree has {self.results_tree.topLevelItemCount()} items")
+            
+            if progress:
+                progress.setValue(100)
+                progress.close()
+                
+        except Exception as e:
+            if progress:
+                progress.close()
+            print(f"[Error] Failed to load results: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Load Error", f"Failed to load results:\n{str(e)}")
     
-    def _convert_matches(self, matches) -> List[Dict]:
+    def _convert_matches(self, matches, progress=None) -> List[Dict]:
         """Convert matches to identity format with sub-identities."""
         identity_map = {}
         
+        # Debug: Check if matches is iterable and has items
+        if not matches:
+            print(f"[IdentityResultsView] _convert_matches: No matches provided (matches is {type(matches)})")
+            return []
+        
+        total_matches = len(matches)
+        
+        match_count = 0
         for match in matches:
+            match_count += 1
+            
+            # Update progress every 100 matches
+            if progress and match_count % 100 == 0:
+                percentage = int((match_count / total_matches) * 80)  # 0-80% for processing
+                progress.setValue(percentage)
+                progress.setLabelText(f"Loading identity data: {match_count}/{total_matches} identities...")
+                QApplication.processEvents()
+                
+                if progress.wasCanceled():
+                    return []
+            
+            # Debug first few matches
+            if match_count <= 3:
+                print(f"[IdentityResultsView] Match {match_count}: app={getattr(match, 'matched_application', 'N/A')}, "
+                      f"path={getattr(match, 'matched_file_path', 'N/A')}, "
+                      f"records={len(getattr(match, 'feather_records', {}))}")
+            
             # Main identity (normalized name)
             main_app = match.matched_application or "Unknown"
             
@@ -356,12 +453,33 @@ class IdentityResultsView(QWidget):
             sub_identity = identity_map[main_app]['sub_identities'][original_name]
             sub_identity['feathers_found'].update(match.feather_records.keys())
             
+            # Get anchor metadata if available (from streaming mode)
+            anchor_start_time = getattr(match, 'anchor_start_time', match.timestamp)
+            anchor_end_time = getattr(match, 'anchor_end_time', match.timestamp)
+            anchor_record_count = getattr(match, 'anchor_record_count', len(match.feather_records))
+            
+            # Get scoring data
+            weighted_score = getattr(match, 'weighted_score', None)
+            score_breakdown = getattr(match, 'score_breakdown', None)
+            confidence_score = getattr(match, 'confidence_score', None)
+            confidence_category = getattr(match, 'confidence_category', None)
+            
+            # Get semantic data
+            semantic_data = getattr(match, 'semantic_data', None)
+            
             anchor = {
                 'anchor_id': match.match_id,
-                'start_time': match.timestamp,
+                'start_time': anchor_start_time,
+                'end_time': anchor_end_time,
+                'record_count': anchor_record_count,
                 'feathers': list(match.feather_records.keys()),
                 'primary_artifact': match.anchor_artifact_type,
                 'evidence_count': match.feather_count,
+                'weighted_score': weighted_score,
+                'score_breakdown': score_breakdown,
+                'confidence_score': confidence_score,
+                'confidence_category': confidence_category,
+                'semantic_data': semantic_data,
                 'evidence_rows': [
                     {'feather_id': fid, 'artifact': match.anchor_artifact_type, 
                      'timestamp': match.timestamp, 'data': data,
@@ -383,12 +501,30 @@ class IdentityResultsView(QWidget):
             identity['sub_identities'] = sub_list
             result.append(identity)
         
+        # Debug: Show conversion summary
+        print(f"[IdentityResultsView] _convert_matches: Processed {match_count} matches -> {len(result)} identities")
+        
         return result
     
     def _update_summary(self, results: Dict):
-        """Update summary labels."""
+        """Update summary labels with cancelled indicator if applicable."""
         stats = results.get('statistics', {})
-        self.identities_lbl.setText(f"Identities: {stats.get('total_identities', len(self.identities)):,}")
+        
+        # Check if execution was cancelled
+        status = results.get('status', 'Completed')
+        is_cancelled = status == "Cancelled"
+        
+        # Update identity label with cancelled indicator
+        identity_count = stats.get('total_identities', len(self.identities))
+        if is_cancelled:
+            self.identities_lbl.setText(f"⚠️ Identities: {identity_count:,} (Cancelled)")
+            self.identities_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 8pt;")
+            self.identities_lbl.setToolTip("Execution was cancelled by user. Showing partial results.")
+        else:
+            self.identities_lbl.setText(f"Identities: {identity_count:,}")
+            self.identities_lbl.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 8pt;")
+            self.identities_lbl.setToolTip("")
+        
         self.anchors_lbl.setText(f"Anchors: {stats.get('total_anchors', 0):,}")
         self.evidence_lbl.setText(f"Evidence: {stats.get('total_evidence', 0):,}")
         self.time_lbl.setText(f"Time: {stats.get('execution_time', 0):.1f}s")
@@ -432,6 +568,14 @@ class IdentityResultsView(QWidget):
     def _populate_tree(self, identities: List[Dict]):
         """Populate tree with given identities (used internally)."""
         self.results_tree.clear()
+        
+        if not identities:
+            # Show a message when there are no results
+            empty_item = QTreeWidgetItem(["No correlation matches found", "", "", "", ""])
+            empty_item.setForeground(0, QBrush(QColor("#888888")))
+            empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
+            self.results_tree.addTopLevelItem(empty_item)
+            return
         
         for identity in identities:
             item = self._create_identity_item(identity)
@@ -496,16 +640,30 @@ class IdentityResultsView(QWidget):
         feather_str = ", ".join(sorted(feathers)[:2]) + ("..." if len(feathers) > 2 else "")
         sub_count = len(sub_identities) if sub_identities else 0
         
-        # Main identity item with blue diamond icon
+        # Calculate average score for identity
+        avg_score = self._calculate_identity_score(identity)
+        score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
+        
+        # Main identity item with blue diamond icon (6 columns now)
         item = QTreeWidgetItem([
             f"🔷 {name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
             feather_str, 
             "", 
+            score_str,
             str(total_evidence), 
             f"{total_anchors} anchors"
         ])
         item.setFont(0, QFont("Segoe UI", 9, QFont.Bold))
         item.setForeground(0, QBrush(QColor("#2196F3")))
+        
+        # Color score based on value
+        if avg_score >= 0.7:
+            item.setForeground(3, QBrush(QColor("#4CAF50")))  # Green - high score
+        elif avg_score >= 0.4:
+            item.setForeground(3, QBrush(QColor("#FF9800")))  # Orange - medium score
+        elif avg_score > 0:
+            item.setForeground(3, QBrush(QColor("#F44336")))  # Red - low score
+        
         item.setData(0, Qt.UserRole, {'type': 'identity', 'data': identity})
         
         # Add sub-identities if present
@@ -520,29 +678,68 @@ class IdentityResultsView(QWidget):
         
         return item
     
+    def _calculate_identity_score(self, identity: Dict) -> float:
+        """Calculate average weighted score for an identity."""
+        scores = []
+        sub_identities = identity.get('sub_identities', [])
+        
+        if sub_identities:
+            for sub in sub_identities:
+                for anchor in sub.get('anchors', []):
+                    weighted_score = anchor.get('weighted_score', {})
+                    if isinstance(weighted_score, dict):
+                        score = weighted_score.get('score', 0)
+                        if score > 0:
+                            scores.append(score)
+        else:
+            for anchor in identity.get('anchors', []):
+                weighted_score = anchor.get('weighted_score', {})
+                if isinstance(weighted_score, dict):
+                    score = weighted_score.get('score', 0)
+                    if score > 0:
+                        scores.append(score)
+        
+        return sum(scores) / len(scores) if scores else 0.0
+    
     def _create_sub_identity_item(self, sub_identity: Dict) -> QTreeWidgetItem:
         """Create sub-identity tree item (original filename)."""
         feathers = set(sub_identity.get('feathers_found', []))
         evidence = 0
         anchors = sub_identity.get('anchors', [])
+        scores = []
         
         for a in anchors:
             feathers.update(a.get('feathers', []))
             evidence += a.get('evidence_count', len(a.get('evidence_rows', [])))
+            weighted_score = a.get('weighted_score', {})
+            if isinstance(weighted_score, dict) and weighted_score.get('score', 0) > 0:
+                scores.append(weighted_score.get('score', 0))
         
         original_name = sub_identity.get('original_name', 'Unknown')
         feather_str = ", ".join(sorted(feathers)[:2]) + ("..." if len(feathers) > 2 else "")
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+        score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Sub-identity item with folder icon (orange/yellow)
+        # Sub-identity item with folder icon (orange/yellow) - 6 columns
         item = QTreeWidgetItem([
             f"📁 {original_name}",
             feather_str,
             "",
+            score_str,
             str(evidence),
             f"{len(anchors)} anchors"
         ])
         item.setFont(0, QFont("Segoe UI", 8))
         item.setForeground(0, QBrush(QColor("#FF9800")))  # Orange for sub-identity
+        
+        # Color score
+        if avg_score >= 0.7:
+            item.setForeground(3, QBrush(QColor("#4CAF50")))
+        elif avg_score >= 0.4:
+            item.setForeground(3, QBrush(QColor("#FF9800")))
+        elif avg_score > 0:
+            item.setForeground(3, QBrush(QColor("#F44336")))
+        
         item.setData(0, Qt.UserRole, {'type': 'sub_identity', 'data': sub_identity})
         
         # Add anchors under sub-identity
@@ -552,22 +749,93 @@ class IdentityResultsView(QWidget):
         return item
     
     def _create_anchor_item(self, anchor: Dict) -> QTreeWidgetItem:
-        """Create anchor tree item."""
-        time = anchor.get('start_time', '')
-        if isinstance(time, str):
-            time = time[:19] if time else ""
+        """Create anchor tree item with score and time range."""
+        start_time = anchor.get('start_time', '')
+        end_time = anchor.get('end_time', start_time)
+        record_count = anchor.get('record_count', 0)
+        
+        # Format time display
+        if isinstance(start_time, str):
+            start_time = start_time[:19] if start_time else ""
+        if isinstance(end_time, str):
+            end_time = end_time[:19] if end_time else ""
+        
+        # Show time range if different, otherwise just start time
+        if start_time and end_time and start_time != end_time:
+            time_display = f"{start_time[:10]} {start_time[11:16]}-{end_time[11:16]}"
+        else:
+            time_display = start_time
         
         feathers = anchor.get('feathers', [])
         count = anchor.get('evidence_count', len(anchor.get('evidence_rows', [])))
         
+        # Get weighted score
+        weighted_score = anchor.get('weighted_score', {})
+        if isinstance(weighted_score, dict):
+            score = weighted_score.get('score', 0)
+            interpretation = weighted_score.get('interpretation', '')
+            score_str = f"{score:.2f}"
+        else:
+            score = 0
+            interpretation = ''
+            score_str = "-"
+        
+        # 6 columns now - show record count in artifact column
+        artifact_info = anchor.get('primary_artifact', '-')
+        if record_count > 0:
+            artifact_info = f"{artifact_info} ({record_count} rec)"
+        
         item = QTreeWidgetItem([
             "⏱️ Anchor",
             ", ".join(feathers[:2]) + ("..." if len(feathers) > 2 else ""),
-            time,
+            time_display,
+            score_str,
             str(count),
-            anchor.get('primary_artifact', '-')
+            artifact_info
         ])
         item.setForeground(0, QBrush(QColor("#FFC107")))
+        
+        # Color score and add tooltip
+        if score >= 0.7:
+            item.setForeground(3, QBrush(QColor("#4CAF50")))  # Green
+        elif score >= 0.4:
+            item.setForeground(3, QBrush(QColor("#FF9800")))  # Orange
+        elif score > 0:
+            item.setForeground(3, QBrush(QColor("#F44336")))  # Red
+        
+        # Build comprehensive tooltip
+        tooltip_lines = []
+        if start_time:
+            tooltip_lines.append(f"Start: {start_time}")
+        if end_time and end_time != start_time:
+            tooltip_lines.append(f"End: {end_time}")
+        if record_count > 0:
+            tooltip_lines.append(f"Records: {record_count}")
+        
+        # Add scoring information
+        if score > 0:
+            tooltip_lines.append(f"\n📊 Scoring:")
+            tooltip_lines.append(f"  Score: {score:.3f}")
+            if interpretation:
+                tooltip_lines.append(f"  {interpretation}")
+        
+        # Add confidence information
+        confidence_score = anchor.get('confidence_score')
+        confidence_category = anchor.get('confidence_category')
+        if confidence_score is not None:
+            tooltip_lines.append(f"  Confidence: {confidence_score:.2f} ({confidence_category or 'Unknown'})")
+        
+        # Add semantic data if available
+        semantic_data = anchor.get('semantic_data')
+        if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
+            tooltip_lines.append(f"\n🔗 Semantic Mapping:")
+            for key, value in semantic_data.items():
+                if not key.startswith('_') and value:
+                    tooltip_lines.append(f"  {key}: {value}")
+        
+        if tooltip_lines:
+            item.setToolTip(0, "\n".join(tooltip_lines))
+        
         item.setData(0, Qt.UserRole, {'type': 'anchor', 'data': anchor})
         
         for ev in anchor.get('evidence_rows', []):
@@ -610,16 +878,42 @@ class IdentityResultsView(QWidget):
         if not original_name:
             original_name = evidence.get('artifact', '-')
         
+        # Check for semantic info
+        semantic_info = evidence.get('semantic_info', {})
+        has_semantic = bool(semantic_info)
+        
+        # 6 columns now
         item = QTreeWidgetItem([
-            f"📄 {original_name}",
+            f"📄 {original_name}" + (" 🔍" if has_semantic else ""),
             evidence.get('feather_id', ''),
             ts,
+            "-",  # Score column (evidence doesn't have individual scores)
             "1",
             evidence.get('artifact', '-')
         ])
         item.setForeground(0, QBrush(QColor("#4CAF50")))
+        
+        # Add semantic tooltip if available
+        if has_semantic:
+            tooltip_lines = ["Semantic Information:"]
+            for field, value in semantic_info.items():
+                tooltip_lines.append(f"  {field}: {value}")
+            item.setToolTip(0, "\n".join(tooltip_lines))
+        
         item.setData(0, Qt.UserRole, {'type': 'evidence', 'data': evidence})
         return item
+    
+    def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
+        """Handle item click to show scoring details."""
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            return
+        
+        item_type = data.get('type')
+        item_data = data.get('data', {})
+        
+        # Emit signal for external handlers
+        self.match_selected.emit({'type': item_type, 'data': item_data})
     
     def _update_stats(self, results: Dict):
         """Update statistics tables."""
@@ -627,18 +921,25 @@ class IdentityResultsView(QWidget):
         feather_metadata = results.get('feather_metadata', {})
         
         if feather_metadata:
-            # Use the pre-calculated feather metadata
-            self.feather_table.setRowCount(len(feather_metadata))
-            for row, (fid, meta) in enumerate(sorted(feather_metadata.items(), 
-                                                      key=lambda x: x[1].get('records_loaded', 0), 
+            # Use the pre-calculated feather metadata - group by base name
+            grouped_metadata = defaultdict(lambda: {'records_loaded': 0, 'identities_found': set()})
+            for fid, meta in feather_metadata.items():
+                # Extract base feather name (remove _number suffix)
+                base_name = fid.rsplit('_', 1)[0] if '_' in fid else fid
+                grouped_metadata[base_name]['records_loaded'] += meta.get('records_loaded', meta.get('records', 0))
+                grouped_metadata[base_name]['identities_found'].add(meta.get('identities_found', 0))
+            
+            self.feather_table.setRowCount(len(grouped_metadata))
+            for row, (base_name, meta) in enumerate(sorted(grouped_metadata.items(), 
+                                                      key=lambda x: x[1]['records_loaded'], 
                                                       reverse=True)):
-                self.feather_table.setItem(row, 0, QTableWidgetItem(fid))
-                records = meta.get('records_loaded', meta.get('records', 0))
+                self.feather_table.setItem(row, 0, QTableWidgetItem(base_name))
+                records = meta['records_loaded']
                 self.feather_table.setItem(row, 1, QTableWidgetItem(f"{records:,}"))
-                identities = meta.get('identities_found', 0)
+                identities = sum(meta['identities_found'])
                 self.feather_table.setItem(row, 2, QTableWidgetItem(str(identities)))
         else:
-            # Fallback: calculate from identities
+            # Fallback: calculate from identities - group by base name
             feather_stats = {}
             for identity in self.identities:
                 # Handle both old and new format
@@ -647,17 +948,21 @@ class IdentityResultsView(QWidget):
                     for sub in sub_identities:
                         for anchor in sub.get('anchors', []):
                             for f in anchor.get('feathers', []):
-                                if f not in feather_stats:
-                                    feather_stats[f] = {'records': 0, 'identities': set()}
-                                feather_stats[f]['records'] += anchor.get('evidence_count', 0)
-                                feather_stats[f]['identities'].add(identity.get('identity_id', ''))
+                                # Extract base feather name (remove _number suffix)
+                                base_name = f.rsplit('_', 1)[0] if '_' in f else f
+                                if base_name not in feather_stats:
+                                    feather_stats[base_name] = {'records': 0, 'identities': set()}
+                                feather_stats[base_name]['records'] += anchor.get('evidence_count', 0)
+                                feather_stats[base_name]['identities'].add(identity.get('identity_id', ''))
                 else:
                     for anchor in identity.get('anchors', []):
                         for f in anchor.get('feathers', []):
-                            if f not in feather_stats:
-                                feather_stats[f] = {'records': 0, 'identities': set()}
-                            feather_stats[f]['records'] += anchor.get('evidence_count', 0)
-                            feather_stats[f]['identities'].add(identity.get('identity_id', ''))
+                            # Extract base feather name (remove _number suffix)
+                            base_name = f.rsplit('_', 1)[0] if '_' in f else f
+                            if base_name not in feather_stats:
+                                feather_stats[base_name] = {'records': 0, 'identities': set()}
+                            feather_stats[base_name]['records'] += anchor.get('evidence_count', 0)
+                            feather_stats[base_name]['identities'].add(identity.get('identity_id', ''))
             
             self.feather_table.setRowCount(len(feather_stats))
             for row, (f, s) in enumerate(sorted(feather_stats.items())):
@@ -697,6 +1002,63 @@ class IdentityResultsView(QWidget):
         for row, (r, c) in enumerate(roles.items()):
             self.role_table.setItem(row, 0, QTableWidgetItem(r))
             self.role_table.setItem(row, 1, QTableWidgetItem(str(c)))
+        
+        # Scoring statistics
+        score_ranges = {'High (≥0.7)': 0, 'Medium (0.4-0.7)': 0, 'Low (<0.4)': 0, 'No Score': 0}
+        for i in self.identities:
+            sub_identities = i.get('sub_identities', [])
+            if sub_identities:
+                for sub in sub_identities:
+                    for a in sub.get('anchors', []):
+                        ws = a.get('weighted_score', {})
+                        if isinstance(ws, dict) and ws.get('score', 0) > 0:
+                            score = ws.get('score', 0)
+                            if score >= 0.7:
+                                score_ranges['High (≥0.7)'] += 1
+                            elif score >= 0.4:
+                                score_ranges['Medium (0.4-0.7)'] += 1
+                            else:
+                                score_ranges['Low (<0.4)'] += 1
+                        else:
+                            score_ranges['No Score'] += 1
+            else:
+                for a in i.get('anchors', []):
+                    ws = a.get('weighted_score', {})
+                    if isinstance(ws, dict) and ws.get('score', 0) > 0:
+                        score = ws.get('score', 0)
+                        if score >= 0.7:
+                            score_ranges['High (≥0.7)'] += 1
+                        elif score >= 0.4:
+                            score_ranges['Medium (0.4-0.7)'] += 1
+                        else:
+                            score_ranges['Low (<0.4)'] += 1
+                    else:
+                        score_ranges['No Score'] += 1
+        
+        # Update scoring indicator
+        total_scored = score_ranges['High (≥0.7)'] + score_ranges['Medium (0.4-0.7)'] + score_ranges['Low (<0.4)']
+        if total_scored > 0:
+            self.scoring_enabled = True
+            self.scoring_lbl.setText(f"📊 Scoring: On ({total_scored})")
+            self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #4CAF50;")
+        else:
+            self.scoring_enabled = False
+            self.scoring_lbl.setText("📊 Scoring: Off")
+            self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #888;")
+        
+        # Populate scoring table
+        self.scoring_table.setRowCount(len(score_ranges))
+        for row, (range_name, count) in enumerate(score_ranges.items()):
+            self.scoring_table.setItem(row, 0, QTableWidgetItem(range_name))
+            count_item = QTableWidgetItem(str(count))
+            # Color code
+            if 'High' in range_name:
+                count_item.setForeground(QBrush(QColor("#4CAF50")))
+            elif 'Medium' in range_name:
+                count_item.setForeground(QBrush(QColor("#FF9800")))
+            elif 'Low' in range_name:
+                count_item.setForeground(QBrush(QColor("#F44336")))
+            self.scoring_table.setItem(row, 1, count_item)
     
     def _apply_filters(self):
         """Apply filters with pagination."""
@@ -765,14 +1127,27 @@ class IdentityDetailDialog(QDialog):
     def setup_ui(self):
         """Setup dialog."""
         self.setWindowTitle(f"{self.item_type.capitalize()} Details")
-        self.setMinimumSize(800, 500)
+        self.setMinimumSize(900, 600)
+        
+        # Get screen size and set maximum to 90%
+        from PyQt5.QtWidgets import QDesktopWidget
+        screen = QDesktopWidget().screenGeometry()
+        max_width = int(screen.width() * 0.9)
+        max_height = int(screen.height() * 0.9)
+        self.setMaximumSize(max_width, max_height)
+        
+        # Set initial size to something reasonable
+        self.resize(950, 650)
         
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10)
         
-        # Header
-        header = self._create_header()
-        layout.addWidget(header)
+        # Only add header for anchor and evidence types
+        # For identity type, the Summary tab contains all header info
+        if self.item_type not in ['identity']:
+            header = self._create_header()
+            layout.addWidget(header)
         
         # Content
         if self.item_type == 'identity':
@@ -781,12 +1156,17 @@ class IdentityDetailDialog(QDialog):
             content = self._create_anchor_content()
         else:
             content = self._create_evidence_content()
+        
+        # Ensure content expands to fill available space
+        from PyQt5.QtWidgets import QSizePolicy
+        content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(content, stretch=1)
         
         # Close button
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         close_btn = QPushButton("Close")
+        close_btn.setMinimumWidth(100)
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
@@ -933,17 +1313,24 @@ class IdentityDetailDialog(QDialog):
         """)
         feather_layout = QVBoxLayout(feather_group)
         
+        # Group feather records by base name
+        grouped_feather_records = defaultdict(list)
+        for fid, records in feather_records.items():
+            # Extract base feather name (remove _number suffix)
+            base_name = fid.rsplit('_', 1)[0] if '_' in fid else fid
+            grouped_feather_records[base_name].extend(records)
+        
         feather_table = QTableWidget()
         feather_table.setColumnCount(2)
         feather_table.setHorizontalHeaderLabels(["Feather", "Records"])
-        feather_table.setRowCount(len(feather_records))
+        feather_table.setRowCount(len(grouped_feather_records))
         feather_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         feather_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         feather_table.setAlternatingRowColors(True)
         
-        for row, (fid, records) in enumerate(sorted(feather_records.items(), 
+        for row, (base_name, records) in enumerate(sorted(grouped_feather_records.items(), 
                                                      key=lambda x: len(x[1]), reverse=True)):
-            feather_table.setItem(row, 0, QTableWidgetItem(fid))
+            feather_table.setItem(row, 0, QTableWidgetItem(base_name))
             feather_table.setItem(row, 1, QTableWidgetItem(str(len(records))))
         
         feather_layout.addWidget(feather_table)
@@ -981,7 +1368,7 @@ class IdentityDetailDialog(QDialog):
         return widget
     
     def _create_feather_tab(self, feather_id: str, records: list) -> QWidget:
-        """Create tab showing all records from a specific feather."""
+        """Create tab showing all records from a specific feather with search."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -990,6 +1377,12 @@ class IdentityDetailDialog(QDialog):
         header = QLabel(f"<b>{feather_id}</b> - {len(records)} records")
         header.setStyleSheet("font-size: 9pt; color: #aaa; padding: 4px;")
         layout.addWidget(header)
+        
+        # Search box
+        search_box = QLineEdit()
+        search_box.setPlaceholderText("Search records...")
+        search_box.setStyleSheet("padding: 4px; font-size: 8pt;")
+        layout.addWidget(search_box)
         
         # Collect all unique keys from all records
         all_keys = set()
@@ -1005,6 +1398,7 @@ class IdentityDetailDialog(QDialog):
         table.setHorizontalHeaderLabels(cols)
         table.setRowCount(len(records))
         table.setAlternatingRowColors(True)
+        table.setSortingEnabled(True)  # Enable column sorting
         
         for row, rec in enumerate(records):
             table.setItem(row, 0, QTableWidgetItem(str(rec.get('timestamp', ''))[:19]))
@@ -1016,11 +1410,34 @@ class IdentityDetailDialog(QDialog):
                 val = str(data.get(key, ''))
                 display_val = val[:80] + "..." if len(val) > 80 else val
                 item = QTableWidgetItem(display_val)
-                item.setToolTip(val)
+                item.setToolTip(val)  # Full value in tooltip
                 table.setItem(row, col, item)
         
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        # Enable column resizing
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
+        
+        # Connect search box to filter function
+        def filter_table(search_text):
+            search_text = search_text.lower()
+            for row in range(table.rowCount()):
+                match = False
+                if not search_text:
+                    match = True
+                else:
+                    for col in range(table.columnCount()):
+                        item = table.item(row, col)
+                        if item and search_text in item.text().lower():
+                            match = True
+                            break
+                table.setRowHidden(row, not match)
+        
+        search_box.textChanged.connect(filter_table)
+        
+        # Add row selection highlighting
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+        
         layout.addWidget(table)
         
         return widget

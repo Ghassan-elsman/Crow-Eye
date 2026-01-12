@@ -73,7 +73,7 @@ class IdentifierExtractionConfigPanel(QWidget):
         self.time_window_spin = QSpinBox()
         self.time_window_spin.setMinimum(1)
         self.time_window_spin.setMaximum(1440)  # Max 24 hours
-        self.time_window_spin.setValue(5)
+        self.time_window_spin.setValue(180)
         self.time_window_spin.setToolTip(
             "Evidence within this time window will be grouped into the same execution anchor"
         )

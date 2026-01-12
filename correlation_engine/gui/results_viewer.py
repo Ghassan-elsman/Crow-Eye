@@ -13,15 +13,53 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLabel, QGroupBox, QFormLayout,
     QPushButton, QLineEdit, QSlider, QCheckBox, QComboBox,
     QSplitter, QTextEdit, QMessageBox, QFileDialog, QDateTimeEdit,
-    QFrame
+    QFrame, QGridLayout, QProgressDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
 from PyQt5.QtGui import QColor
+
+# Matplotlib imports for chart rendering
+try:
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+    from matplotlib.figure import Figure
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    print("[Warning] matplotlib not available - charts will not be rendered")
+
 from .ui_styling import CorrelationEngineStyles
 
 
 from ..engine.correlation_result import CorrelationResult, CorrelationMatch
 from .scoring_breakdown_widget import ScoringBreakdownWidget
+from .results_tab_widget import ResultsTabWidget
+from .results_exporter import show_export_dialog, export_results_with_progress
+
+
+class LoadingProgressDialog(QProgressDialog):
+    """Helper class for showing loading progress with convenience methods."""
+    
+    def __init__(self, title: str, parent=None):
+        super().__init__(title, "Cancel", 0, 100, parent)
+        self.setWindowModality(Qt.WindowModal)
+        self.setMinimumDuration(500)  # Show after 500ms
+        self.setAutoClose(True)
+        self.setAutoReset(True)
+        self.setWindowTitle("Loading")
+    
+    def update_progress(self, current: int, total: int, message: str = ""):
+        """Update progress bar and message."""
+        if total > 0:
+            percentage = int((current / total) * 100)
+            self.setValue(percentage)
+        
+        if message:
+            self.setLabelText(f"{message}\n{current}/{total} items")
+        
+        # Process events to keep UI responsive
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
 
 
 class ResultsTableWidget(QTableWidget):
@@ -88,7 +126,7 @@ class ResultsTableWidget(QTableWidget):
             self.setItem(row, 1, QTableWidgetItem(match.timestamp))
             
             # Score - check if weighted scoring is used
-            if match.weighted_score:
+            if match.weighted_score and isinstance(match.weighted_score, dict):
                 score_value = match.weighted_score.get('score', match.match_score)
                 score_item = QTableWidgetItem(f"{score_value:.2f}")
                 score_item.setData(Qt.UserRole, score_value)
@@ -108,7 +146,7 @@ class ResultsTableWidget(QTableWidget):
             self.setItem(row, 2, score_item)
             
             # Interpretation (for weighted scoring)
-            if match.weighted_score:
+            if match.weighted_score and isinstance(match.weighted_score, dict):
                 interpretation = match.weighted_score.get('interpretation', '-')
                 interp_item = QTableWidgetItem(interpretation)
                 # Apply same color coding
@@ -349,7 +387,7 @@ class FilterPanelWidget(QWidget):
 
 
 class DynamicResultsTabWidget(QWidget):
-    """Widget with dynamic tabs for wing results"""
+    """Widget with dynamic tabs for wing results with semantic and scoring support"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -357,509 +395,761 @@ class DynamicResultsTabWidget(QWidget):
         self.results_data: Dict[str, CorrelationResult] = {}
         self.engine_type = "time_based"  # Default engine type
         
+        # Use results tab widget
+        self.enhanced_tab_widget = ResultsTabWidget()
+        self.enhanced_tab_widget.match_selected.connect(self._on_match_selected)
+        self.enhanced_tab_widget.export_requested.connect(self._on_export_requested)
+        
         self._init_ui()
     
     def _init_ui(self):
         """Initialize UI"""
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         
-        # Create tab widget with styling matching main app tabs
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #334155;
-                background: #1E293B;
-                border-radius: 8px;
-            }
-            QTabBar::tab {
-                background: #1E293B;
-                color: #94A3B8;
-                border: 1px solid #334155;
-                padding: 4px 12px;
-                font-weight: 600;
-                font-size: 7pt;
-                min-height: 14px;
-                min-width: 100px;
-                max-width: 200px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }
-            QTabBar::tab:selected {
-                background-color: #0B1220;
-                color: #00FFFF;
-                border-bottom: 2px solid #00FFFF;
-            }
-            QTabBar::tab:hover:!selected {
-                background-color: #334155;
-                color: #FFFFFF;
-            }
-        """)
-        layout.addWidget(self.tab_widget)
-        
-        # Create summary tab
-        self.summary_tab = self._create_summary_tab()
-        self.tab_widget.addTab(self.summary_tab, "Summary")
-    
-    def _create_summary_tab(self) -> QWidget:
-        """Create summary statistics tab"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # Statistics labels
-        stats_group = QGroupBox("Overall Statistics")
-        stats_layout = QFormLayout()
-        
-        self.total_matches_label = QLabel("0")
-        stats_layout.addRow("Total Matches:", self.total_matches_label)
-        
-        self.wings_executed_label = QLabel("0")
-        stats_layout.addRow("Wings Executed:", self.wings_executed_label)
-        
-        self.avg_score_label = QLabel("0.00")
-        stats_layout.addRow("Average Score:", self.avg_score_label)
-        
-        self.engine_type_label = QLabel("Time-Based")
-        stats_layout.addRow("Engine Type:", self.engine_type_label)
-        
-        stats_group.setLayout(stats_layout)
-        layout.addWidget(stats_group)
-        
-        # Wing breakdown
-        breakdown_group = QGroupBox("Wing Breakdown")
-        breakdown_layout = QVBoxLayout()
-        
-        self.breakdown_table = QTableWidget()
-        self.breakdown_table.setColumnCount(3)
-        self.breakdown_table.setHorizontalHeaderLabels(["Wing Name", "Matches", "Avg Score"])
-        self.breakdown_table.horizontalHeader().setStretchLastSection(True)
-        breakdown_layout.addWidget(self.breakdown_table)
-        
-        breakdown_group.setLayout(breakdown_layout)
-        layout.addWidget(breakdown_group)
-        
-        layout.addStretch()
-        
-        return widget
+        # Add enhanced tab widget
+        layout.addWidget(self.enhanced_tab_widget)
     
     def set_engine_type(self, engine_type: str):
-        """Set the engine type for results display."""
+        """Set the engine type for results display and reconfigure layout."""
         self.engine_type = engine_type
-        if engine_type == "identity_based":
-            self.engine_type_label.setText("Identity-Based")
-        else:
-            self.engine_type_label.setText("Time-Based")
-    
-    def load_results(self, output_dir: str, wing_id: Optional[str] = None, pipeline_id: Optional[str] = None):
-        """
-        Load results from output directory with semantic mapping.
+        self.enhanced_tab_widget.set_engine_type(engine_type)
         
-        For large result sets, loads from SQLite database instead of JSON files.
+        # Reconfigure display layout based on engine type
+        print(f"[DynamicResultsTabWidget] Engine type set to: {engine_type}")
+        
+        # Clear any existing charts
+        if hasattr(self, 'chart_container'):
+            self.chart_container.setParent(None)
+            self.chart_container.deleteLater()
+            delattr(self, 'chart_container')
+    
+    def _render_identity_charts(self, feather_metadata: Dict):
+        """Render charts for Identity Engine results."""
+        if not MATPLOTLIB_AVAILABLE:
+            print("[Warning] Cannot render charts - matplotlib not available")
+            return None
+        
+        try:
+            # Extract data from feather_metadata
+            feathers = []
+            identities_counts = []
+            
+            for feather_id, metadata in sorted(feather_metadata.items()):
+                if isinstance(metadata, dict):
+                    feathers.append(feather_id)
+                    identities_counts.append(metadata.get('identities_found', 0))
+            
+            if not feathers:
+                return None
+            
+            # Create figure and canvas
+            fig = Figure(figsize=(8, 4))
+            canvas = FigureCanvasQTAgg(fig)
+            ax = fig.add_subplot(111)
+            
+            # Create bar chart with distinct colors
+            colors = plt.cm.Set3(range(len(feathers)))
+            bars = ax.bar(feathers, identities_counts, color=colors)
+            
+            ax.set_xlabel('Feather')
+            ax.set_ylabel('Identities Found')
+            ax.set_title('Identity Extraction by Feather')
+            ax.tick_params(axis='x', rotation=45)
+            fig.tight_layout()
+            
+            # Add hover tooltips (via matplotlib events)
+            def on_hover(event):
+                if event.inaxes == ax:
+                    for i, bar in enumerate(bars):
+                        if bar.contains(event)[0]:
+                            total = sum(identities_counts)
+                            percentage = (identities_counts[i] / total * 100) if total > 0 else 0
+                            ax.set_title(f'{feathers[i]}: {identities_counts[i]} identities ({percentage:.1f}%)')
+                            canvas.draw()
+                            return
+                    ax.set_title('Identity Extraction by Feather')
+                    canvas.draw()
+            
+            canvas.mpl_connect('motion_notify_event', on_hover)
+            
+            # Store chart data for export
+            canvas.chart_data = {
+                'feathers': feathers,
+                'counts': identities_counts,
+                'title': 'Identity Extraction by Feather',
+                'ylabel': 'Identities Found'
+            }
+            canvas.figure = fig  # Store figure reference for export
+            
+            return canvas
+            
+        except Exception as e:
+            print(f"[Error] Failed to render identity charts: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _render_timebased_charts(self, time_windows: List):
+        """Render charts for Time-Based Engine results."""
+        if not MATPLOTLIB_AVAILABLE:
+            print("[Warning] Cannot render charts - matplotlib not available")
+            return None
+        
+        try:
+            # Extract timestamp counts per feather from time windows
+            feather_timestamps = {}
+            
+            for window in time_windows:
+                for identity in window.get('identities', []):
+                    for feather in identity.get('feathers_found', []):
+                        if feather not in feather_timestamps:
+                            feather_timestamps[feather] = 0
+                        feather_timestamps[feather] += identity.get('total_matches', 0)
+            
+            if not feather_timestamps:
+                return None
+            
+            # Sort by count
+            sorted_feathers = sorted(feather_timestamps.items(), key=lambda x: x[1], reverse=True)
+            feathers = [f[0] for f in sorted_feathers]
+            counts = [f[1] for f in sorted_feathers]
+            
+            # Create figure and canvas
+            fig = Figure(figsize=(8, 4))
+            canvas = FigureCanvasQTAgg(fig)
+            ax = fig.add_subplot(111)
+            
+            # Create bar chart with distinct colors
+            colors = plt.cm.Set3(range(len(feathers)))
+            bars = ax.bar(feathers, counts, color=colors)
+            
+            ax.set_xlabel('Feather')
+            ax.set_ylabel('Timestamp Records')
+            ax.set_title('Timestamp Extraction by Feather')
+            ax.tick_params(axis='x', rotation=45)
+            fig.tight_layout()
+            
+            # Add hover tooltips
+            def on_hover(event):
+                if event.inaxes == ax:
+                    for i, bar in enumerate(bars):
+                        if bar.contains(event)[0]:
+                            total = sum(counts)
+                            percentage = (counts[i] / total * 100) if total > 0 else 0
+                            ax.set_title(f'{feathers[i]}: {counts[i]} timestamps ({percentage:.1f}%)')
+                            canvas.draw()
+                            return
+                    ax.set_title('Timestamp Extraction by Feather')
+                    canvas.draw()
+            
+            canvas.mpl_connect('motion_notify_event', on_hover)
+            
+            # Store chart data for export
+            canvas.chart_data = {
+                'feathers': feathers,
+                'counts': counts,
+                'title': 'Timestamp Extraction by Feather',
+                'ylabel': 'Timestamp Records'
+            }
+            canvas.figure = fig  # Store figure reference for export
+            
+            return canvas
+            
+        except Exception as e:
+            print(f"[Error] Failed to render time-based charts: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def update_global_semantic_mappings(self, semantic_mappings: Dict[str, Any]):
+        """Update global semantic mappings for all tabs."""
+        self.enhanced_tab_widget.update_global_semantic_mappings(semantic_mappings)
+    
+    def update_global_scoring_configuration(self, scoring_config: Dict[str, Any]):
+        """Update global scoring configuration for all tabs."""
+        self.enhanced_tab_widget.update_global_scoring_configuration(scoring_config)
+    
+    def _on_match_selected(self, tab_id: str, match_data: dict):
+        """Handle match selection from enhanced tab widget."""
+        print(f"[Results Viewer] Match selected in tab {tab_id}: {match_data.get('match_id', 'Unknown')}")
+    
+    def _on_export_requested(self, tab_id: str, export_options: dict):
+        """Handle export request from enhanced tab widget."""
+        try:
+            # Get all tab states for export
+            all_tab_states = self.enhanced_tab_widget.get_all_tab_states()
+            
+            # Convert tab states to export format
+            export_tab_states = {}
+            for state_id, tab_state in all_tab_states.items():
+                export_tab_states[state_id] = {
+                    'tab_id': tab_state.tab_id,
+                    'wing_name': tab_state.wing_name,
+                    'matches': [match.to_dict() for match in tab_state.result.matches],
+                    'semantic_mappings': tab_state.semantic_mappings,
+                    'scoring_configuration': tab_state.scoring_configuration,
+                    'filter_state': tab_state.filter_state,
+                    'created_timestamp': tab_state.created_timestamp.isoformat(),
+                    'last_accessed': tab_state.last_accessed.isoformat()
+                }
+            
+            # Show export dialog
+            export_config = show_export_dialog(export_tab_states, self)
+            
+            if export_config:
+                # Perform export with progress
+                success, message = export_results_with_progress(export_config, self)
+                
+                if success:
+                    QMessageBox.information(
+                        self,
+                        "Export Successful",
+                        f"Results exported successfully:\n{message}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Export Failed",
+                        f"Export failed:\n{message}"
+                    )
+        
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"An error occurred during export:\n{str(e)}"
+            )
+    
+    def load_results(self, output_dir: str, wing_id: Optional[str] = None, pipeline_id: Optional[str] = None, engine_type: Optional[str] = None):
+        """
+        Load results from output directory with enhanced semantic and scoring support.
         
         Args:
             output_dir: Directory containing result files
             wing_id: Optional Wing ID for Wing-specific semantic mappings
             pipeline_id: Optional Pipeline ID for Pipeline-specific semantic mappings
+            engine_type: Optional engine type to render appropriate charts
         """
-        output_path = Path(output_dir)
-        
-        if not output_path.exists():
-            QMessageBox.warning(
-                self,
-                "Directory Not Found",
-                f"Output directory not found:\n{output_dir}"
-            )
-            return
-        
-        # Import semantic mapping formatter
-        from ..engine.results_formatter import apply_semantic_mappings_to_result
-        
-        # Clear existing tabs (except summary)
-        while self.tab_widget.count() > 1:
-            self.tab_widget.removeTab(1)
-        
-        self.results_data.clear()
-        
-        # Try to detect engine type from pipeline_summary.json
-        summary_file = output_path / "pipeline_summary.json"
-        execution_id = None
-        if summary_file.exists():
-            try:
-                with open(summary_file, 'r') as f:
-                    summary_data = json.load(f)
-                    # Check for engine type in summary
-                    if 'engine_type' in summary_data:
-                        self.set_engine_type(summary_data['engine_type'])
-                    # Get execution_id for database loading
-                    if 'execution_id' in summary_data:
-                        execution_id = summary_data['execution_id']
-            except Exception:
-                pass
-        
-        # Check if we should load from database (for large results)
-        db_file = output_path / "correlation_results.db"
-        load_from_db = False
-        
-        # Check if any result file indicates truncation
-        for result_file in output_path.glob("result_*.json"):
-            try:
-                with open(result_file, 'r') as f:
-                    result_data = json.load(f)
-                    if result_data.get('matches_truncated', False) or result_data.get('full_results_in_database', False):
-                        load_from_db = True
-                        break
-            except Exception:
-                pass
-        
-        # Load from database if results are truncated and database exists
-        if load_from_db and db_file.exists() and execution_id:
-            print(f"[Results Viewer] Loading from database (execution_id={execution_id})")
-            self._load_results_from_database(str(db_file), execution_id, wing_id, pipeline_id)
-            return
-        
-        # Load result files (standard JSON loading)
-        total_matches = 0
-        all_scores = []
-        
-        for result_file in output_path.glob("result_*.json"):
-            try:
-                result = CorrelationResult.load_from_file(str(result_file))
+        try:
+            # Set engine type if provided
+            if engine_type:
+                self.set_engine_type(engine_type)
+            
+            # Delegate to enhanced tab widget
+            self.enhanced_tab_widget.load_results(output_dir, wing_id, pipeline_id)
+            
+            # Update local results data for compatibility
+            self.results_data.clear()
+            all_tab_states = self.enhanced_tab_widget.get_all_tab_states()
+            
+            for tab_state in all_tab_states.values():
+                self.results_data[tab_state.wing_name] = tab_state.result
+            
+            # Render charts based on engine type and available data
+            self._render_charts_for_results()
                 
-                # Apply semantic mappings to the result
-                result = apply_semantic_mappings_to_result(
-                    result, 
-                    wing_id=wing_id or result.wing_id,
-                    pipeline_id=pipeline_id
-                )
-                
-                self.results_data[result.wing_name] = result
-                
-                # Create tab for this wing based on engine type
-                if result.total_matches > 0:
-                    if self.engine_type == "identity_based":
-                        self._create_identity_wing_tab(result.wing_name, result)
-                    else:
-                        self._create_wing_tab(result.wing_name, result.matches)
-                
-                total_matches += result.total_matches
-                all_scores.extend([m.match_score for m in result.matches])
-                
-            except Exception as e:
-                print(f"Error loading result file {result_file}: {e}")
-        
-        # Update summary
-        self.total_matches_label.setText(str(total_matches))
-        self.wings_executed_label.setText(str(len(self.results_data)))
-        
-        if all_scores:
-            avg_score = sum(all_scores) / len(all_scores)
-            self.avg_score_label.setText(f"{avg_score:.2f}")
-        
-        # Update breakdown table
-        self._update_breakdown_table()
+            print(f"✓ Results loaded successfully from {output_dir}")
+            
+        except Exception as e:
+            print(f"❌ Failed to load results from {output_dir}: {e}")
+            import traceback
+            traceback.print_exc()
     
-    def _load_results_from_database(self, db_path: str, execution_id: int, 
-                                    wing_id: Optional[str] = None, 
-                                    pipeline_id: Optional[str] = None):
+    def _render_charts_for_results(self):
+        """Render charts based on loaded results and engine type."""
+        try:
+            # Get first result to extract metadata
+            if not self.results_data:
+                return
+            
+            first_result = next(iter(self.results_data.values()))
+            
+            # Check if we have feather_metadata
+            feather_metadata = getattr(first_result, 'feather_metadata', {})
+            
+            chart_widget = None
+            
+            if self.engine_type == "identity_based" and feather_metadata:
+                print("[DynamicResultsTabWidget] Rendering Identity Engine charts...")
+                chart_widget = self._render_identity_charts(feather_metadata)
+            
+            elif self.engine_type in ["time_window_scanning", "time_based"]:
+                # Try to get time_windows data
+                print("[DynamicResultsTabWidget] Rendering Time-Based Engine charts...")
+                # For time-based, we need to extract time windows from results
+                # This might be in a different format, so we'll handle it
+                time_windows = self._extract_time_windows_from_results()
+                if time_windows:
+                    chart_widget = self._render_timebased_charts(time_windows)
+            
+            # Add chart to layout if created
+            if chart_widget:
+                # Setup context menu for export
+                self._setup_chart_context_menu(chart_widget)
+                
+                # Create chart container if it doesn't exist
+                if not hasattr(self, 'chart_container'):
+                    self.chart_container = QWidget()
+                    chart_layout = QVBoxLayout(self.chart_container)
+                    chart_layout.setContentsMargins(5, 5, 5, 5)
+                    
+                    # Add engine type label
+                    engine_label = QLabel(f"Engine: {self.engine_type.replace('_', ' ').title()}")
+                    engine_label.setStyleSheet("font-weight: bold; font-size: 10pt; color: #2196F3;")
+                    chart_layout.addWidget(engine_label)
+                    
+                    chart_layout.addWidget(chart_widget)
+                    
+                    # Add export buttons
+                    export_layout = QHBoxLayout()
+                    export_png_btn = QPushButton("Export as PNG")
+                    export_png_btn.clicked.connect(lambda: self._handle_export_png(chart_widget))
+                    export_layout.addWidget(export_png_btn)
+                    
+                    export_csv_btn = QPushButton("Export Data as CSV")
+                    export_csv_btn.clicked.connect(lambda: self._handle_export_csv(chart_widget))
+                    export_layout.addWidget(export_csv_btn)
+                    
+                    export_layout.addStretch()
+                    chart_layout.addLayout(export_layout)
+                    
+                    # Insert at top of main layout
+                    main_layout = self.layout()
+                    main_layout.insertWidget(0, self.chart_container)
+                
+                print("[DynamicResultsTabWidget] Charts rendered successfully")
+            
+        except Exception as e:
+            print(f"[Error] Failed to render charts: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _extract_time_windows_from_results(self) -> List:
+        """Extract time windows data from results for chart rendering."""
+        try:
+            # This is a helper to extract time window data
+            # The actual structure depends on how results are stored
+            time_windows = []
+            
+            for result in self.results_data.values():
+                # Check if result has time_windows attribute or similar
+                if hasattr(result, 'time_windows'):
+                    time_windows.extend(result.time_windows)
+                # Or if matches can be grouped into windows
+                elif hasattr(result, 'matches'):
+                    # Group matches by time window (simplified)
+                    # This is a placeholder - actual implementation depends on data structure
+                    pass
+            
+            return time_windows
+            
+        except Exception as e:
+            print(f"[Error] Failed to extract time windows: {e}")
+            return []
+    
+    def _export_chart_as_png(self, chart_widget, filepath: str):
+        """Export chart to PNG file."""
+        try:
+            if not hasattr(chart_widget, 'figure'):
+                QMessageBox.warning(self, "Export Error", "Chart figure not available for export")
+                return False
+            
+            # Save figure to file
+            chart_widget.figure.savefig(filepath, dpi=300, bbox_inches='tight')
+            print(f"[Export] Chart saved to: {filepath}")
+            return True
+            
+        except Exception as e:
+            print(f"[Error] Failed to export chart as PNG: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export chart:\n{str(e)}")
+            return False
+    
+    def _export_chart_data_as_csv(self, chart_data: Dict, filepath: str):
+        """Export chart data to CSV file."""
+        try:
+            import csv
+            
+            if not chart_data:
+                QMessageBox.warning(self, "Export Error", "No chart data available for export")
+                return False
+            
+            feathers = chart_data.get('feathers', [])
+            counts = chart_data.get('counts', [])
+            
+            if not feathers or not counts:
+                QMessageBox.warning(self, "Export Error", "Chart data is incomplete")
+                return False
+            
+            # Calculate percentages
+            total = sum(counts)
+            percentages = [(c / total * 100) if total > 0 else 0 for c in counts]
+            
+            # Write to CSV
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Feather', 'Count', 'Percentage'])
+                for feather, count, percentage in zip(feathers, counts, percentages):
+                    writer.writerow([feather, count, f"{percentage:.2f}%"])
+            
+            print(f"[Export] Chart data saved to: {filepath}")
+            return True
+            
+        except Exception as e:
+            print(f"[Error] Failed to export chart data as CSV: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export data:\n{str(e)}")
+            return False
+    
+    def _setup_chart_context_menu(self, chart_widget):
+        """Setup right-click context menu for chart."""
+        try:
+            from PyQt5.QtWidgets import QMenu
+            from PyQt5.QtCore import QPoint
+            
+            def show_context_menu(event):
+                if event.button == 3:  # Right click
+                    menu = QMenu(self)
+                    
+                    export_png_action = menu.addAction("Export as PNG")
+                    export_csv_action = menu.addAction("Export Data as CSV")
+                    
+                    action = menu.exec_(chart_widget.mapToGlobal(QPoint(int(event.x), int(event.y))))
+                    
+                    if action == export_png_action:
+                        self._handle_export_png(chart_widget)
+                    elif action == export_csv_action:
+                        self._handle_export_csv(chart_widget)
+            
+            chart_widget.mpl_connect('button_press_event', show_context_menu)
+            
+        except Exception as e:
+            print(f"[Error] Failed to setup context menu: {e}")
+    
+    def _handle_export_png(self, chart_widget):
+        """Handle PNG export action."""
+        try:
+            # Generate default filename
+            wing_name = next(iter(self.results_data.keys()), "chart")
+            timestamp = datetime.now().strftime("%Y-%m-%d")
+            default_filename = f"{wing_name}_{self.engine_type}_chart_{timestamp}.png"
+            
+            filepath, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Chart as PNG",
+                default_filename,
+                "PNG Files (*.png);;All Files (*)"
+            )
+            
+            if filepath:
+                if self._export_chart_as_png(chart_widget, filepath):
+                    QMessageBox.information(self, "Export Successful", f"Chart exported to:\n{filepath}")
+                    
+        except Exception as e:
+            print(f"[Error] Failed to handle PNG export: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export:\n{str(e)}")
+    
+    def _handle_export_csv(self, chart_widget):
+        """Handle CSV export action."""
+        try:
+            if not hasattr(chart_widget, 'chart_data'):
+                QMessageBox.warning(self, "Export Error", "Chart data not available")
+                return
+            
+            # Generate default filename
+            wing_name = next(iter(self.results_data.keys()), "chart")
+            timestamp = datetime.now().strftime("%Y-%m-%d")
+            default_filename = f"{wing_name}_{self.engine_type}_data_{timestamp}.csv"
+            
+            filepath, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Chart Data as CSV",
+                default_filename,
+                "CSV Files (*.csv);;All Files (*)"
+            )
+            
+            if filepath:
+                if self._export_chart_data_as_csv(chart_widget.chart_data, filepath):
+                    QMessageBox.information(self, "Export Successful", f"Data exported to:\n{filepath}")
+                    
+        except Exception as e:
+            print(f"[Error] Failed to handle CSV export: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export:\n{str(e)}")
+
+
+class ResultsViewer(QWidget):
+    """
+    Main Results Viewer Widget
+    
+    Provides a comprehensive interface for viewing, filtering, and analyzing correlation results.
+    Integrates enhanced tab management, semantic mapping, and weighted scoring support.
+    """
+    
+    # Signals
+    results_loaded = pyqtSignal(str)  # output_dir
+    match_selected = pyqtSignal(dict)  # match_data
+    export_completed = pyqtSignal(str)  # export_path
+    
+    def __init__(self, parent=None):
+        """Initialize the Results Viewer"""
+        super().__init__(parent)
+        
+        self.current_output_dir = None
+        self.engine_type = "time_based"
+        
+        self._init_ui()
+        self._connect_signals()
+    
+    def _init_ui(self):
+        """Initialize the user interface"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Header section
+        header_frame = self._create_header_section()
+        layout.addWidget(header_frame)
+        
+        # Main content - use DynamicResultsTabWidget
+        self.results_widget = DynamicResultsTabWidget()
+        # Also create enhanced_tab_widget alias for compatibility
+        self.enhanced_tab_widget = self.results_widget.enhanced_tab_widget
+        layout.addWidget(self.results_widget)
+        
+        # Status bar
+        self.status_label = QLabel("Ready to load results")
+        self.status_label.setStyleSheet("color: #666; font-size: 9pt; padding: 2px;")
+        layout.addWidget(self.status_label)
+    
+    def _create_header_section(self) -> QFrame:
+        """Create the header section with controls"""
+        frame = QFrame()
+        frame.setMaximumHeight(60)
+        frame.setStyleSheet("""
+            QFrame {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 6px;
+            }
+        """)
+        
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(10, 5, 10, 5)
+        
+        # Title
+        title_label = QLabel("Correlation Results Viewer")
+        title_label.setStyleSheet("font-weight: bold; font-size: 12pt; color: #2c3e50;")
+        layout.addWidget(title_label)
+        
+        layout.addStretch()
+        
+        # Engine type indicator
+        self.engine_label = QLabel("Engine: Time-Based")
+        self.engine_label.setStyleSheet("color: #6c757d; font-size: 9pt;")
+        layout.addWidget(self.engine_label)
+        
+        # Load results button
+        load_btn = QPushButton("Load Results")
+        load_btn.setMaximumWidth(100)
+        load_btn.clicked.connect(self._load_results_dialog)
+        layout.addWidget(load_btn)
+        
+        # Refresh button
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setMaximumWidth(70)
+        refresh_btn.clicked.connect(self._refresh_results)
+        layout.addWidget(refresh_btn)
+        
+        return frame
+    
+    def _connect_signals(self):
+        """Connect internal signals"""
+        if hasattr(self.results_widget, 'match_selected'):
+            self.results_widget.match_selected.connect(self._on_match_selected)
+        
+        if hasattr(self.results_widget, 'export_requested'):
+            self.results_widget.export_requested.connect(self._on_export_requested)
+    
+    def _load_results_dialog(self):
+        """Show dialog to select results directory"""
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select Results Directory",
+            self.current_output_dir or ".",
+            QFileDialog.ShowDirsOnly
+        )
+        
+        if directory:
+            self.load_results(directory)
+    
+    def _refresh_results(self):
+        """Refresh current results"""
+        if self.current_output_dir:
+            self.load_results(self.current_output_dir)
+        else:
+            QMessageBox.information(
+                self,
+                "No Results",
+                "No results directory loaded. Please load results first."
+            )
+    
+    def _on_match_selected(self, tab_id: str, match_data: dict):
+        """Handle match selection from results widget"""
+        self.match_selected.emit(match_data)
+    
+    def _on_export_requested(self, tab_id: str, export_options: dict):
+        """Handle export request from results widget"""
+        # The DynamicResultsTabWidget handles the export internally
+        pass
+    
+    def load_results(self, output_dir: str, wing_id: Optional[str] = None, pipeline_id: Optional[str] = None):
         """
-        Load results from SQLite database for large result sets.
+        Load correlation results from output directory
         
         Args:
-            db_path: Path to correlation_results.db
-            execution_id: Execution ID to load
+            output_dir: Directory containing result files
             wing_id: Optional Wing ID for semantic mappings
             pipeline_id: Optional Pipeline ID for semantic mappings
         """
-        from ..engine.database_persistence import ResultsDatabase
-        from ..engine.results_formatter import apply_semantic_mappings_to_result
-        
         try:
-            with ResultsDatabase(db_path) as db:
-                # Get execution metadata
-                metadata = db.get_execution_metadata(execution_id)
-                if not metadata:
-                    print(f"[Results Viewer] Execution {execution_id} not found in database")
-                    return
-                
-                # Set engine type
-                if metadata.get('engine_type'):
-                    self.set_engine_type(metadata['engine_type'])
-                
-                # Get all results for this execution
-                results = db.get_execution_results(execution_id)
-                
-                total_matches = 0
-                all_scores = []
-                
-                for result_info in results:
-                    result_id = result_info['result_id']
-                    wing_name = result_info['wing_name']
-                    
-                    # Get matches for this result (limit for performance)
-                    matches_data = db.get_matches(result_id, limit=50000)
-                    
-                    # Convert to CorrelationMatch objects
-                    matches = []
-                    for match_data in matches_data:
-                        # Get full match details including feather_records
-                        full_match = db.get_match_details(match_data['match_id'])
-                        if full_match:
-                            match = CorrelationMatch(
-                                match_id=full_match['match_id'],
-                                timestamp=full_match['timestamp'] or '',
-                                feather_records=full_match.get('feather_records', {}),
-                                match_score=full_match['match_score'] or 0.0,
-                                feather_count=full_match['feather_count'] or 0,
-                                time_spread_seconds=full_match['time_spread_seconds'] or 0.0,
-                                anchor_feather_id=full_match['anchor_feather_id'] or '',
-                                anchor_artifact_type=full_match['anchor_artifact_type'] or '',
-                                matched_application=full_match['matched_application'],
-                                matched_file_path=full_match['matched_file_path'],
-                                matched_event_id=full_match['matched_event_id'],
-                                confidence_score=full_match['confidence_score'],
-                                confidence_category=full_match['confidence_category'],
-                                is_duplicate=full_match['is_duplicate'] or False
-                            )
-                            
-                            # Add weighted score if present
-                            if full_match.get('weighted_score_value') is not None:
-                                match.weighted_score = {
-                                    'score': full_match['weighted_score_value'],
-                                    'interpretation': full_match['weighted_score_interpretation']
-                                }
-                            
-                            matches.append(match)
-                            all_scores.append(match.match_score)
-                    
-                    # Create CorrelationResult
-                    result = CorrelationResult(
-                        wing_id=result_info['wing_id'],
-                        wing_name=wing_name,
-                        matches=matches,
-                        total_matches=result_info['total_matches'],
-                        feathers_processed=result_info['feathers_processed'],
-                        total_records_scanned=result_info['total_records_scanned'],
-                        execution_duration_seconds=result_info['execution_duration_seconds'] or 0.0
-                    )
-                    
-                    # Apply semantic mappings
-                    result = apply_semantic_mappings_to_result(
-                        result,
-                        wing_id=wing_id or result.wing_id,
-                        pipeline_id=pipeline_id
-                    )
-                    
-                    self.results_data[wing_name] = result
-                    
-                    # Create tab for this wing
-                    if result.total_matches > 0:
-                        if self.engine_type == "identity_based":
-                            self._create_identity_wing_tab(wing_name, result)
-                        else:
-                            self._create_wing_tab(wing_name, result.matches)
-                    
-                    total_matches += result.total_matches
-                    print(f"[Results Viewer] Loaded {len(matches)} matches for {wing_name}")
-                
-                # Update summary
-                self.total_matches_label.setText(f"{total_matches:,}")
-                self.wings_executed_label.setText(str(len(self.results_data)))
-                
-                if all_scores:
-                    avg_score = sum(all_scores) / len(all_scores)
-                    self.avg_score_label.setText(f"{avg_score:.2f}")
-                
-                # Update breakdown table
-                self._update_breakdown_table()
-                
-                print(f"[Results Viewer] Loaded {total_matches:,} total matches from database")
-                
+            # Handle None input
+            if output_dir is None:
+                self.status_label.setText("No directory specified")
+                return
+            
+            self.current_output_dir = output_dir
+            self.status_label.setText(f"Loading results from {output_dir}...")
+            
+            # Delegate to results widget
+            self.results_widget.load_results(output_dir, wing_id, pipeline_id)
+            
+            # Update status
+            result_count = len(self.results_widget.results_data)
+            if result_count > 0:
+                self.status_label.setText(f"Loaded {result_count} result sets from {output_dir}")
+            else:
+                self.status_label.setText(f"No results found in {output_dir}")
+            
+            # Emit signal
+            self.results_loaded.emit(output_dir)
+            
         except Exception as e:
-            print(f"[Results Viewer] Error loading from database: {e}")
+            error_msg = f"Failed to load results: {str(e)}"
+            self.status_label.setText(error_msg)
+            print(f"❌ {error_msg}")
             import traceback
             traceback.print_exc()
-            QMessageBox.warning(
-                self,
-                "Database Load Error",
-                f"Failed to load results from database:\n{str(e)}"
-            )
     
-    def _create_identity_wing_tab(self, wing_name: str, result: CorrelationResult):
-        """Create tab for identity-based wing results using IdentityResultsView."""
+    def set_engine_type(self, engine_type: str):
+        """Set the correlation engine type"""
+        self.engine_type = engine_type
+        self.results_widget.set_engine_type(engine_type)
+        
+        # Update engine label with visual indicator
+        engine_display = {
+            "time_based": "Time-Based",
+            "time_window_scanning": "Time-Based",
+            "identity_based": "Identity-Based"
+        }.get(engine_type, f"{engine_type.title()}")
+        
+        self.engine_label.setText(f"Engine: {engine_display}")
+        
+        # Show warning for unrecognized engine types
+        if engine_type not in ("time_based", "time_window_scanning", "identity_based"):
+            print(f"[ResultsViewer] Warning: Unrecognized engine type '{engine_type}', defaulting to time_window_scanning")
+    
+    def clear_and_reconfigure(self, engine_type: str = None):
+        """
+        Clear all results and reconfigure display for a new engine type.
+        
+        This method should be called when switching between correlation engines
+        to ensure the display is properly configured for the new engine type.
+        
+        Args:
+            engine_type: Optional new engine type. If not provided, uses current engine type.
+        """
+        # Clear existing results
+        self.clear_results()
+        
+        # Reconfigure for new engine type if provided
+        if engine_type:
+            self.set_engine_type(engine_type)
+        
+        # Clear all tabs in the results widget
+        if hasattr(self.results_widget, 'enhanced_tab_widget'):
+            self.results_widget.enhanced_tab_widget.clear_all_tabs()
+        
+        # Update status
+        engine_display = {
+            "time_based": "Time-Based",
+            "time_window_scanning": "Time-Based",
+            "identity_based": "Identity-Based"
+        }.get(self.engine_type, self.engine_type)
+        
+        self.status_label.setText(f"Ready for {engine_display} correlation results")
+    
+    def update_semantic_mappings(self, semantic_mappings: Dict[str, Any]):
+        """Update semantic mappings for all result tabs"""
+        self.results_widget.update_global_semantic_mappings(semantic_mappings)
+    
+    def update_scoring_configuration(self, scoring_config: Dict[str, Any]):
+        """Update scoring configuration for all result tabs"""
+        self.results_widget.update_global_scoring_configuration(scoring_config)
+    
+    def get_current_results(self) -> Dict[str, Any]:
+        """Get currently loaded results data"""
+        return self.results_widget.results_data
+    
+    def clear_results(self):
+        """Clear all loaded results"""
+        self.results_widget.results_data.clear()
+        self.current_output_dir = None
+        self.status_label.setText("Ready to load results")
+    
+    def export_all_results(self, export_path: str, export_format: str = "json"):
+        """
+        Export all results to file
+        
+        Args:
+            export_path: Path to export file
+            export_format: Export format (json, csv, xlsx)
+        """
         try:
-            from .identity_results_view import IdentityResultsView
+            # Use the results exporter
+            from .results_exporter import export_results_with_progress
             
-            # Create identity results view
-            identity_view = IdentityResultsView()
-            identity_view.load_from_correlation_result(result)
+            # Get all tab states for export
+            all_tab_states = {}
+            if hasattr(self.results_widget, 'enhanced_tab_widget'):
+                all_tab_states = self.results_widget.enhanced_tab_widget.get_all_tab_states()
             
-            # Add tab
-            tab_label = f"🔷 {wing_name} ({result.total_matches})"
-            self.tab_widget.addTab(identity_view, tab_label)
+            # Convert to export format
+            export_data = {}
+            for state_id, tab_state in all_tab_states.items():
+                export_data[state_id] = {
+                    'tab_id': tab_state.tab_id,
+                    'wing_name': tab_state.wing_name,
+                    'matches': [match.to_dict() for match in tab_state.result.matches],
+                    'semantic_mappings': tab_state.semantic_mappings,
+                    'scoring_configuration': tab_state.scoring_configuration
+                }
             
-        except ImportError as e:
-            print(f"Could not import IdentityResultsView: {e}")
-            # Fall back to standard view
-            self._create_wing_tab(wing_name, result.matches)
-    
-    def _create_wing_tab(self, wing_name: str, matches: List[CorrelationMatch]):
-        """Create tab for wing results with compact design matching identity view"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setSpacing(4)
-        layout.setContentsMargins(4, 4, 4, 4)
-        
-        # === TOP: Summary + Filters (single compact row) ===
-        top_frame = QFrame()
-        top_frame.setMaximumHeight(60)
-        top_layout = QHBoxLayout(top_frame)
-        top_layout.setSpacing(15)
-        top_layout.setContentsMargins(5, 2, 5, 2)
-        
-        # Calculate statistics
-        total_matches = len(matches)
-        avg_score = sum(m.match_score for m in matches) / total_matches if total_matches > 0 else 0
-        avg_feather_count = sum(m.feather_count for m in matches) / total_matches if total_matches > 0 else 0
-        
-        # Check if weighted scoring is used
-        uses_weighted = any(m.weighted_score is not None for m in matches)
-        
-        # Summary labels (compact)
-        matches_lbl = QLabel(f"Matches: {total_matches:,}")
-        matches_lbl.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 9pt;")
-        top_layout.addWidget(matches_lbl)
-        
-        if uses_weighted:
-            weighted_scores = [m.weighted_score.get('score', 0) for m in matches if m.weighted_score]
-            avg_weighted = sum(weighted_scores) / len(weighted_scores) if weighted_scores else 0
-            score_lbl = QLabel(f"Avg Score: {avg_weighted:.2f}")
-        else:
-            score_lbl = QLabel(f"Avg Score: {avg_score:.2f}")
-        score_lbl.setStyleSheet("font-size: 8pt;")
-        top_layout.addWidget(score_lbl)
-        
-        feather_lbl = QLabel(f"Avg Feathers: {avg_feather_count:.1f}")
-        feather_lbl.setStyleSheet("font-size: 8pt;")
-        top_layout.addWidget(feather_lbl)
-        
-        scoring_lbl = QLabel(f"Scoring: {'Weighted' if uses_weighted else 'Simple'}")
-        scoring_lbl.setStyleSheet("color: #4CAF50; font-size: 8pt;")
-        top_layout.addWidget(scoring_lbl)
-        
-        # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #555;")
-        top_layout.addWidget(sep)
-        
-        # Filters (compact)
-        app_filter = QLineEdit()
-        app_filter.setPlaceholderText("Application...")
-        app_filter.setMaximumWidth(120)
-        app_filter.setStyleSheet("font-size: 8pt; padding: 2px;")
-        top_layout.addWidget(app_filter)
-        
-        path_filter = QLineEdit()
-        path_filter.setPlaceholderText("File path...")
-        path_filter.setMaximumWidth(120)
-        path_filter.setStyleSheet("font-size: 8pt; padding: 2px;")
-        top_layout.addWidget(path_filter)
-        
-        score_slider = QSlider(Qt.Horizontal)
-        score_slider.setMinimum(0)
-        score_slider.setMaximum(100)
-        score_slider.setValue(0)
-        score_slider.setMaximumWidth(80)
-        top_layout.addWidget(score_slider)
-        
-        score_min_lbl = QLabel("Min: 0.00")
-        score_min_lbl.setStyleSheet("font-size: 8pt;")
-        top_layout.addWidget(score_min_lbl)
-        
-        reset_btn = QPushButton("Reset")
-        reset_btn.setMaximumWidth(45)
-        reset_btn.setStyleSheet("font-size: 8pt; padding: 2px 5px;")
-        top_layout.addWidget(reset_btn)
-        
-        top_layout.addStretch()
-        layout.addWidget(top_frame)
-        
-        # === MIDDLE: Results Table ===
-        results_table = ResultsTableWidget()
-        results_table.populate_results(matches)
-        results_table.setStyleSheet("""
-            QTableWidget {
-                font-size: 9pt;
-                background-color: transparent;
-                alternate-background-color: rgba(255,255,255,0.02);
-                border: 1px solid #333;
+            # Export configuration
+            export_config = {
+                'export_path': export_path,
+                'format': export_format,
+                'data': export_data,
+                'include_semantic': True,
+                'include_scoring': True
             }
-            QTableWidget::item { padding: 2px; }
-            QTableWidget::item:selected { background-color: #0d47a1; }
-            QHeaderView::section {
-                background-color: #2196F3;
-                color: white;
-                padding: 4px;
-                font-size: 8pt;
-                font-weight: bold;
-                border: none;
-            }
-        """)
-        layout.addWidget(results_table, stretch=1)
-        
-        # === BOTTOM: Match Details Panel ===
-        details_frame = QFrame()
-        details_frame.setMaximumHeight(150)
-        details_layout = QHBoxLayout(details_frame)
-        details_layout.setSpacing(8)
-        details_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Match detail viewer (compact)
-        match_detail = MatchDetailViewer()
-        match_detail.setMaximumHeight(140)
-        details_layout.addWidget(match_detail)
-        
-        layout.addWidget(details_frame)
-        
-        # Connect signals
-        def apply_filters():
-            filters = {
-                'application': app_filter.text().strip(),
-                'file_path': path_filter.text().strip(),
-                'score_min': score_slider.value() / 100.0
-            }
-            results_table.apply_filters(filters)
-            score_min_lbl.setText(f"Min: {score_slider.value() / 100.0:.2f}")
-        
-        def reset_filters():
-            app_filter.clear()
-            path_filter.clear()
-            score_slider.setValue(0)
-            score_min_lbl.setText("Min: 0.00")
-            results_table.apply_filters({})
-        
-        app_filter.textChanged.connect(apply_filters)
-        path_filter.textChanged.connect(apply_filters)
-        score_slider.valueChanged.connect(apply_filters)
-        reset_btn.clicked.connect(reset_filters)
-        results_table.match_selected.connect(match_detail.display_match)
-        
-        # Add tab with full name visible
-        tab_label = f"⏱️ {wing_name} ({len(matches)})"
-        self.tab_widget.addTab(widget, tab_label)
-    
-    def _update_breakdown_table(self):
-        """Update wing breakdown table"""
-        self.breakdown_table.setRowCount(0)
-        
-        for wing_name, result in self.results_data.items():
-            row = self.breakdown_table.rowCount()
-            self.breakdown_table.insertRow(row)
             
-            self.breakdown_table.setItem(row, 0, QTableWidgetItem(wing_name))
-            self.breakdown_table.setItem(row, 1, QTableWidgetItem(str(result.total_matches)))
+            # Perform export
+            success, message = export_results_with_progress(export_config, self)
             
-            if result.matches:
-                avg_score = sum(m.match_score for m in result.matches) / len(result.matches)
-                self.breakdown_table.setItem(row, 2, QTableWidgetItem(f"{avg_score:.2f}"))
+            if success:
+                self.export_completed.emit(export_path)
+                QMessageBox.information(self, "Export Complete", f"Results exported to:\n{export_path}")
             else:
-                self.breakdown_table.setItem(row, 2, QTableWidgetItem("0.00"))
+                QMessageBox.warning(self, "Export Failed", f"Export failed:\n{message}")
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Export error:\n{str(e)}")

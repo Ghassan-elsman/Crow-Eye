@@ -34,53 +34,133 @@ class ArtifactDetector:
             'exact': ['prefetch', 'prefetch_data', 'windows_prefetch'],
             'partial': ['prefetch', 'pf']
         },
-        'SystemLog': {
-            'exact': ['systemlog', 'system_log', 'syslog', 'event_log', 'eventlog'],
-            'partial': ['log', 'event']
+        'SystemLogs': {
+            'exact': ['systemlogs', 'system_logs', 'systemlog', 'system_log', 'syslog'],
+            'partial': ['systemlog', 'syslog']
+        },
+        'SecurityLogs': {
+            'exact': ['securitylogs', 'security_logs', 'securitylog', 'security_log'],
+            'partial': ['securitylog', 'security']
+        },
+        'ApplicationLogs': {
+            'exact': ['applicationlogs', 'application_logs', 'applicationlog', 'application_log', 'applog'],
+            'partial': ['applicationlog', 'applog']
+        },
+        'Logs': {
+            'exact': ['eventlog', 'event_log', 'evtx', 'logs', 'log'],
+            'partial': ['evtx', 'log', 'event']
         },
         'MFT': {
-            'exact': ['mft', 'mft_records', 'mft_entries', 'master_file_table'],
+            'exact': ['mft', 'mft_records', 'mft_entries', 'master_file_table', 'mft_usn_correlated'],
             'partial': ['mft']
         },
         'SRUM': {
             'exact': ['srum', 'srum_data', 'system_resource'],
             'partial': ['srum']
         },
+        'SRUM_ApplicationUsage': {
+            'exact': ['srum_application_usage', 'srum_app_usage', 'application_usage'],
+            'partial': ['srum_application', 'app_usage']
+        },
+        'SRUM_NetworkDataUsage': {
+            'exact': ['srum_network_data_usage', 'srum_network_usage', 'network_data_usage'],
+            'partial': ['srum_network', 'network_usage']
+        },
         'AmCache': {
             'exact': ['amcache', 'amcache_entries', 'application_cache'],
             'partial': ['amcache', 'cache']
         },
+        'InventoryApplication': {
+            'exact': ['inventoryapplication', 'inventory_application'],
+            'partial': ['inventoryapplication', 'inventory_app']
+        },
+        'InventoryApplicationFile': {
+            'exact': ['inventoryapplicationfile', 'inventory_application_file'],
+            'partial': ['inventoryapplicationfile', 'inventory_app_file']
+        },
+        'InventoryApplicationShortcut': {
+            'exact': ['inventoryapplicationshortcut', 'inventory_application_shortcut'],
+            'partial': ['inventoryapplicationshortcut', 'inventory_shortcut']
+        },
         'UserAssist': {
             'exact': ['userassist', 'user_assist'],
-            'partial': ['assist']
+            'partial': ['userassist', 'assist']
+        },
+        'ShellBags': {
+            'exact': ['shellbags', 'shell_bags', 'shellbag'],
+            'partial': ['shellbag', 'bags']
+        },
+        'MUICache': {
+            'exact': ['muicache', 'mui_cache'],
+            'partial': ['muicache', 'mui']
+        },
+        'RecentDocs': {
+            'exact': ['recentdocs', 'recent_docs', 'recentdocuments'],
+            'partial': ['recentdocs', 'recent']
+        },
+        'OpenSaveMRU': {
+            'exact': ['opensavemru', 'open_save_mru', 'opensave'],
+            'partial': ['opensavemru', 'opensave']
+        },
+        'LastSaveMRU': {
+            'exact': ['lastsavemru', 'last_save_mru', 'lastsave'],
+            'partial': ['lastsavemru', 'lastsave']
+        },
+        'TypedPaths': {
+            'exact': ['typedpaths', 'typed_paths'],
+            'partial': ['typedpaths', 'typed']
+        },
+        'WordWheelQuery': {
+            'exact': ['wordwheelquery', 'word_wheel_query', 'wordwheel'],
+            'partial': ['wordwheelquery', 'wordwheel']
+        },
+        'BAM': {
+            'exact': ['bam', 'background_activity_moderator'],
+            'partial': ['bam']
+        },
+        'InstalledSoftware': {
+            'exact': ['installedsoftware', 'installed_software'],
+            'partial': ['installedsoftware', 'installed']
+        },
+        'SystemServices': {
+            'exact': ['systemservices', 'system_services'],
+            'partial': ['systemservices', 'services']
+        },
+        'AutoStartPrograms': {
+            'exact': ['autostartprograms', 'auto_start_programs', 'autostart'],
+            'partial': ['autostartprograms', 'autostart']
         },
         'RecycleBin': {
-            'exact': ['recyclebin', 'recycle_bin', 'recycle'],
+            'exact': ['recyclebin', 'recycle_bin', 'recycle', 'recycle_bin_entries'],
             'partial': ['recycle']
         },
         'Registry': {
-            'exact': ['registry', 'reg_data', 'hive'],
+            'exact': ['registry', 'reg_data', 'hive', 'registry_data'],
             'partial': ['registry', 'reg']
-        },
-        'Logs': {
-            'exact': ['eventlog', 'event_log', 'evtx'],
-            'partial': ['evtx']
         },
         'BrowserHistory': {
             'exact': ['browser', 'history', 'web_history', 'browser_history'],
             'partial': ['browser', 'history']
         },
-        'ShellBags': {
-            'exact': ['shellbags', 'shell_bags'],
-            'partial': ['shellbag']
+        'ShimCache': {
+            'exact': ['shimcache', 'shimcache_entries', 'shim_cache'],
+            'partial': ['shimcache', 'shim']
         },
         'LNK': {
-            'exact': ['lnk', 'shortcut', 'link_files'],
+            'exact': ['lnk', 'shortcut', 'link_files', 'jlce'],
             'partial': ['lnk', 'shortcut']
         },
         'Jumplists': {
             'exact': ['jumplists', 'jump_lists', 'automatic_destinations'],
             'partial': ['jumplist', 'jump']
+        },
+        'AutomaticJumplist': {
+            'exact': ['automaticjumplist', 'automatic_jumplist', 'automatic_destinations'],
+            'partial': ['automaticjumplist', 'automatic_jump']
+        },
+        'CustomJumplist': {
+            'exact': ['customjumplist', 'custom_jumplist', 'custom_jlce'],
+            'partial': ['customjumplist', 'custom_jump']
         },
     }
     
@@ -296,8 +376,50 @@ class ArtifactDetector:
     
     @classmethod
     def get_all_artifact_types(cls) -> List[str]:
-        """Get list of all supported artifact types"""
-        return list(cls.PATTERNS.keys())
+        """Get list of all supported artifact types including enhanced subtypes"""
+        # Basic artifact types
+        basic_types = list(cls.PATTERNS.keys())
+        
+        # Enhanced subtypes from feather mappings
+        enhanced_types = [
+            # Registry subtypes
+            'UserAssist', 'ShellBags', 'MUICache', 'RecentDocs', 'OpenSaveMRU', 
+            'LastSaveMRU', 'TypedPaths', 'WordWheelQuery', 'BAM', 'InstalledSoftware',
+            'SystemServices', 'AutoStartPrograms',
+            
+            # SRUM subtypes  
+            'SRUM_ApplicationUsage', 'SRUM_NetworkDataUsage',
+            
+            # Log subtypes
+            'SecurityLogs', 'SystemLogs', 'ApplicationLogs',
+            
+            # AmCache subtypes
+            'InventoryApplication', 'InventoryApplicationFile', 'InventoryApplicationShortcut',
+            
+            # Jumplist subtypes
+            'AutomaticJumplist', 'CustomJumplist',
+            
+            # Additional types
+            'Registry', 'RecycleBin', 'BrowserHistory'
+        ]
+        
+        # Combine and remove duplicates while preserving order
+        all_types = []
+        seen = set()
+        
+        # Add basic types first
+        for artifact_type in basic_types:
+            if artifact_type not in seen:
+                all_types.append(artifact_type)
+                seen.add(artifact_type)
+        
+        # Add enhanced types
+        for artifact_type in enhanced_types:
+            if artifact_type not in seen:
+                all_types.append(artifact_type)
+                seen.add(artifact_type)
+        
+        return sorted(all_types)
     
     @classmethod
     def get_confidence_description(cls, confidence: str) -> str:

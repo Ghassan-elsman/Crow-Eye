@@ -15,7 +15,7 @@ from pathlib import Path
 
 from correlation_engine.engine.data_structures import (
     QueryFilters, IdentityWithAnchors, AnchorWithEvidence, EvidenceRow,
-    PaginatedResult, IdentityWithAllEvidence
+    PaginatedResult, IdentityWithAllEvidence, AnchorTimeGroup, TimeBasedQueryResult
 )
 
 logger = logging.getLogger(__name__)
@@ -807,6 +807,440 @@ class QueryInterface:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.disconnect()
+    
+    def query_identities_by_anchor_time(self, filters: Optional[QueryFilters] = None) -> TimeBasedQueryResult:
+        """
+        Query identities grouped by their anchor times.
+        
+        Transforms identity-first data into time-first organization for temporal analysis.
+        
+        Args:
+            filters: Optional query filters
+            
+        Returns:
+            TimeBasedQueryResult with identities grouped by anchor time
+            
+        Requirements: 1.1, 1.2, 1.3
+        """
+        # First get identities using existing method
+        identities = self.query_identities(filters)
+        
+        # Transform into time-based groups
+        anchor_time_groups = group_identities_by_anchor_time(identities)
+        
+        # Create result object
+        result = TimeBasedQueryResult(anchor_time_groups=anchor_time_groups)
+        
+        logger.info(f"Grouped {result.total_identities} identities into {result.total_anchor_times} anchor time groups")
+        return result
+    
+    # NEW: Time-based query methods for hierarchical results view
+    
+    def group_identities_by_anchor_time(self, identities: List[IdentityWithAnchors], 
+                                       time_window_minutes: float = 30.0) -> List[AnchorTimeGroup]:
+        """
+        Group identities by their anchor times for time-first hierarchical display.
+        
+        Transforms identity-centric data into time-centric organization by creating
+        AnchorTimeGroup objects for each unique anchor time.
+        
+        Args:
+            identities: List of IdentityWithAnchors objects
+            time_window_minutes: Time window for grouping nearby anchor times
+            
+        Returns:
+            List of AnchorTimeGroup objects sorted chronologically
+            
+        Requirements: 1.1, 1.2, 1.3
+        """
+        from datetime import timedelta
+        from correlation_engine.engine.data_structures import AnchorTimeGroup
+        
+        # Collect all unique anchor times
+        anchor_times = set()
+        for identity in identities:
+            for anchor in identity.anchors:
+                anchor_times.add(anchor.start_time)
+        
+        # Sort anchor times chronologically
+        sorted_times = sorted(anchor_times)
+        
+        # Group nearby times within the time window
+        time_groups = []
+        current_group_time = None
+        current_group_identities = []
+        
+        for anchor_time in sorted_times:
+            # Check if this time should start a new group
+            if (current_group_time is None or 
+                (anchor_time - current_group_time).total_seconds() > time_window_minutes * 60):
+                
+                # Save previous group if it exists
+                if current_group_time is not None:
+                    group = AnchorTimeGroup(
+                        anchor_time=current_group_time,
+                        identities=current_group_identities.copy(),
+                        time_window_minutes=time_window_minutes
+                    )
+                    time_groups.append(group)
+                
+                # Start new group
+                current_group_time = anchor_time
+                current_group_identities = []
+            
+            # Add identities that have anchors at this time
+            for identity in identities:
+                for anchor in identity.anchors:
+                    if anchor.start_time == anchor_time:
+                        if identity not in current_group_identities:
+                            current_group_identities.append(identity)
+        
+        # Add final group
+        if current_group_time is not None:
+            group = AnchorTimeGroup(
+                anchor_time=current_group_time,
+                identities=current_group_identities.copy(),
+                time_window_minutes=time_window_minutes
+            )
+            time_groups.append(group)
+        
+        logger.info(f"Grouped {len(identities)} identities into {len(time_groups)} anchor time groups")
+        return time_groups
+    
+    def query_identities_by_anchor_time(self, filters: Optional[QueryFilters] = None) -> TimeBasedQueryResult:
+        """
+        Query identities organized by anchor time for time-first hierarchical display.
+        
+        Returns correlation results organized by temporal anchors rather than identities,
+        enabling time-centric forensic analysis workflows.
+        
+        Args:
+            filters: Optional query filters including time range and identity filters
+            
+        Returns:
+            TimeBasedQueryResult with anchor time groups
+            
+        Requirements: 1.1, 1.2, 1.3
+        """
+        from correlation_engine.engine.data_structures import TimeBasedQueryResult
+        
+        # Query identities using existing method
+        identities = self.query_identities(filters)
+        
+        # Determine time window from filters or use default
+        time_window_minutes = 30.0
+        if filters and hasattr(filters, 'time_window_minutes'):
+            time_window_minutes = filters.time_window_minutes
+        
+        # Group by anchor time
+        anchor_time_groups = self.group_identities_by_anchor_time(identities, time_window_minutes)
+        
+        # Create time-based result
+        result = TimeBasedQueryResult(
+            anchor_time_groups=anchor_time_groups,
+            time_window_minutes=time_window_minutes
+        )
+        
+        logger.info(f"Time-based query returned {result.total_anchor_times} anchor times, "
+                   f"{result.total_identities} identities, {result.total_evidence} evidence")
+        
+        return result
+    
+    def query_identities_by_anchor_time_paginated(self, filters: Optional[QueryFilters] = None) -> TimeBasedQueryResult:
+        """
+        Query identities organized by anchor time with pagination support for large datasets.
+        
+        Optimized version that uses database-level pagination to handle large result sets
+        efficiently without loading all data into memory.
+        
+        Args:
+            filters: Optional query filters including pagination parameters
+            
+        Returns:
+            TimeBasedQueryResult with paginated anchor time groups
+            
+        Requirements: 5.5 - Performance optimizations for large datasets
+        """
+        from correlation_engine.engine.data_structures import TimeBasedQueryResult
+        
+        if not self.conn:
+            self.connect()
+        
+        # Use pagination if specified in filters
+        if filters and filters.page_size and filters.page_size > 0:
+            paginated_result = self.query_with_pagination(filters)
+            identities = paginated_result.results
+        else:
+            identities = self.query_identities(filters)
+        
+        # Determine time window from filters or use default
+        time_window_minutes = 30.0
+        if filters and hasattr(filters, 'time_window_minutes'):
+            time_window_minutes = filters.time_window_minutes
+        
+        # Group by anchor time with optimized algorithm for large datasets
+        anchor_time_groups = self.group_identities_by_anchor_time_optimized(identities, time_window_minutes)
+        
+        # Create time-based result
+        result = TimeBasedQueryResult(
+            anchor_time_groups=anchor_time_groups,
+            time_window_minutes=time_window_minutes
+        )
+        
+        logger.info(f"Paginated time-based query returned {result.total_anchor_times} anchor times, "
+                   f"{result.total_identities} identities, {result.total_evidence} evidence")
+        
+        return result
+    
+    def group_identities_by_anchor_time_optimized(self, identities: List[IdentityWithAnchors], 
+                                                 time_window_minutes: float = 30.0) -> List[AnchorTimeGroup]:
+        """
+        Optimized version of anchor time grouping for large datasets.
+        
+        Uses efficient algorithms and memory management for better performance
+        with thousands of identities and anchor times.
+        
+        Args:
+            identities: List of IdentityWithAnchors objects
+            time_window_minutes: Time window for grouping nearby anchor times
+            
+        Returns:
+            List of AnchorTimeGroup objects sorted chronologically
+            
+        Requirements: 5.5 - Performance optimizations for large datasets
+        """
+        from datetime import timedelta
+        from correlation_engine.engine.data_structures import AnchorTimeGroup
+        from collections import defaultdict
+        
+        if not identities:
+            return []
+        
+        # Step 1: Collect all anchor times efficiently using set for O(1) lookups
+        anchor_times = set()
+        identity_by_anchor_time = defaultdict(list)
+        
+        for identity in identities:
+            for anchor in identity.anchors:
+                if anchor.start_time:
+                    anchor_times.add(anchor.start_time)
+                    identity_by_anchor_time[anchor.start_time].append(identity)
+        
+        if not anchor_times:
+            return []
+        
+        # Step 2: Sort anchor times once for efficiency
+        sorted_times = sorted(anchor_times)
+        
+        # Step 3: Group nearby times using sliding window algorithm
+        time_groups = []
+        current_group_time = None
+        current_group_identities = []  # Use list instead of set
+        time_window_delta = timedelta(minutes=time_window_minutes)
+        
+        for anchor_time in sorted_times:
+            # Check if this time should start a new group
+            if (current_group_time is None or 
+                (anchor_time - current_group_time) > time_window_delta):
+                
+                # Save previous group if it exists
+                if current_group_time is not None and current_group_identities:
+                    group = AnchorTimeGroup(
+                        anchor_time=current_group_time,
+                        identities=list(current_group_identities),
+                        time_window_minutes=time_window_minutes
+                    )
+                    time_groups.append(group)
+                
+                # Start new group
+                current_group_time = anchor_time
+                current_group_identities = []
+            
+            # Add identities for this anchor time (avoid duplicates manually)
+            for identity in identity_by_anchor_time[anchor_time]:
+                if identity not in current_group_identities:
+                    current_group_identities.append(identity)
+        
+        # Add final group
+        if current_group_time is not None and current_group_identities:
+            group = AnchorTimeGroup(
+                anchor_time=current_group_time,
+                identities=list(current_group_identities),
+                time_window_minutes=time_window_minutes
+            )
+            time_groups.append(group)
+        
+        logger.info(f"Optimized grouping: {len(identities)} identities into {len(time_groups)} anchor time groups")
+        return time_groups
+    
+    def get_evidence_for_identity_at_time_lazy(self, identity_id: str, anchor_time: datetime, 
+                                              limit: int = 50, offset: int = 0) -> List[EvidenceRow]:
+        """
+        Lazy load evidence for an identity at a specific anchor time.
+        
+        Supports pagination to avoid loading large amounts of evidence at once.
+        
+        Args:
+            identity_id: Identity ID
+            anchor_time: Anchor time to filter by
+            limit: Maximum number of evidence rows to return
+            offset: Number of rows to skip (for pagination)
+            
+        Returns:
+            List of EvidenceRow objects
+            
+        Requirements: 5.5 - Lazy loading for evidence when expanding identity nodes
+        """
+        if not self.conn:
+            self.connect()
+        
+        cursor = self.conn.cursor()
+        
+        # Query evidence for identity at specific anchor time with pagination
+        cursor.execute("""
+            SELECT e.* FROM evidence e
+            INNER JOIN anchors a ON e.anchor_id = a.anchor_id
+            WHERE a.identity_id = ? 
+            AND a.start_time <= ? 
+            AND a.end_time >= ?
+            ORDER BY e.timestamp ASC, e.role ASC
+            LIMIT ? OFFSET ?
+        """, (identity_id, anchor_time.isoformat(), anchor_time.isoformat(), limit, offset))
+        
+        evidence_rows = []
+        for row in cursor.fetchall():
+            evidence = self._build_enhanced_evidence_row(row)
+            evidence_rows.append(evidence)
+        
+        logger.info(f"Lazy loaded {len(evidence_rows)} evidence rows for identity {identity_id[:8]} at time {anchor_time}")
+        return evidence_rows
+    
+    def get_evidence_count_for_identity_at_time(self, identity_id: str, anchor_time: datetime) -> int:
+        """
+        Get count of evidence for an identity at a specific anchor time.
+        
+        Used to determine if lazy loading is needed and for pagination.
+        
+        Args:
+            identity_id: Identity ID
+            anchor_time: Anchor time to filter by
+            
+        Returns:
+            Count of evidence rows
+            
+        Requirements: 5.5 - Performance optimizations for large datasets
+        """
+        if not self.conn:
+            self.connect()
+        
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM evidence e
+            INNER JOIN anchors a ON e.anchor_id = a.anchor_id
+            WHERE a.identity_id = ? 
+            AND a.start_time <= ? 
+            AND a.end_time >= ?
+        """, (identity_id, anchor_time.isoformat(), anchor_time.isoformat()))
+        
+        count = cursor.fetchone()[0]
+        return count
+    
+    def get_optimized_anchor_time_statistics(self, filters: Optional[QueryFilters] = None) -> Dict[datetime, Dict[str, int]]:
+        """
+        Get optimized statistics for anchor times using database aggregation.
+        
+        Avoids loading full datasets by using SQL aggregation functions.
+        
+        Args:
+            filters: Optional filters to apply
+            
+        Returns:
+            Dictionary mapping anchor time to statistics
+            
+        Requirements: 5.5 - Optimize database queries for time-based access patterns
+        """
+        if not self.conn:
+            self.connect()
+        
+        cursor = self.conn.cursor()
+        
+        # Build optimized query with aggregation
+        query = """
+            SELECT 
+                a.start_time as anchor_time,
+                COUNT(DISTINCT a.identity_id) as identity_count,
+                COUNT(e.evidence_id) as evidence_count,
+                COUNT(CASE WHEN e.role = 'primary' THEN 1 END) as primary_count,
+                COUNT(CASE WHEN e.role = 'secondary' THEN 1 END) as secondary_count,
+                COUNT(CASE WHEN e.role = 'supporting' THEN 1 END) as supporting_count
+            FROM anchors a
+            LEFT JOIN evidence e ON a.anchor_id = e.anchor_id
+            WHERE 1=1
+        """
+        
+        params = []
+        
+        # Apply time range filters
+        if filters:
+            if filters.start_time:
+                query += " AND a.start_time >= ?"
+                params.append(filters.start_time.isoformat())
+            
+            if filters.end_time:
+                query += " AND a.end_time <= ?"
+                params.append(filters.end_time.isoformat())
+        
+        query += " GROUP BY a.start_time ORDER BY a.start_time ASC"
+        
+        cursor.execute(query, params)
+        
+        statistics = {}
+        for row in cursor.fetchall():
+            anchor_time = datetime.fromisoformat(row['anchor_time'])
+            statistics[anchor_time] = {
+                'identity_count': row['identity_count'],
+                'evidence_count': row['evidence_count'],
+                'primary_count': row['primary_count'],
+                'secondary_count': row['secondary_count'],
+                'supporting_count': row['supporting_count']
+            }
+        
+        logger.info(f"Retrieved optimized statistics for {len(statistics)} anchor times")
+        return statistics
+    
+    def get_anchor_times_in_range(self, start_time: datetime, end_time: datetime) -> List[datetime]:
+        """
+        Get all unique anchor times within a time range.
+        
+        Useful for time-based filtering and navigation.
+        
+        Args:
+            start_time: Start of time range
+            end_time: End of time range
+            
+        Returns:
+            List of anchor times sorted chronologically
+            
+        Requirements: 4.1, 4.2
+        """
+        if not self.conn:
+            self.connect()
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT start_time
+            FROM anchors
+            WHERE start_time >= ? AND start_time <= ?
+            ORDER BY start_time ASC
+        """, (start_time.isoformat(), end_time.isoformat()))
+        
+        anchor_times = []
+        for row in cursor.fetchall():
+            anchor_times.append(datetime.fromisoformat(row[0]))
+        
+        logger.info(f"Found {len(anchor_times)} unique anchor times in range")
+        return anchor_times
 
 
 # Convenience functions
@@ -839,3 +1273,42 @@ def get_identity(db_path: str, identity_id: str) -> Optional[IdentityWithAnchors
     """
     with QueryInterface(db_path) as qi:
         return qi.get_identity_with_anchors(identity_id)
+
+
+def group_identities_by_anchor_time(identities: List[IdentityWithAnchors]) -> List[AnchorTimeGroup]:
+    """
+    Transform identity-first data into time-first organization.
+    
+    Groups identities by their anchor times for temporal analysis.
+    
+    Args:
+        identities: List of identities with anchors
+        
+    Returns:
+        List of AnchorTimeGroup objects sorted chronologically
+    """
+    from collections import defaultdict
+    
+    # Group identities by anchor time
+    time_groups = defaultdict(list)
+    
+    for identity in identities:
+        for anchor in identity.anchors:
+            if anchor.start_time:
+                # Use start_time as the anchor time
+                anchor_time = anchor.start_time
+                time_groups[anchor_time].append(identity)
+    
+    # Create AnchorTimeGroup objects
+    anchor_time_groups = []
+    for anchor_time, grouped_identities in time_groups.items():
+        group = AnchorTimeGroup(
+            anchor_time=anchor_time,
+            identities=grouped_identities
+        )
+        anchor_time_groups.append(group)
+    
+    # Sort chronologically (earliest first)
+    anchor_time_groups.sort(key=lambda g: g.anchor_time)
+    
+    return anchor_time_groups

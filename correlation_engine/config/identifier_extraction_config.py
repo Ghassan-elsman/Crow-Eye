@@ -39,7 +39,7 @@ class WingsConfig:
     identifier_extraction: IdentifierExtractionConfig = field(
         default_factory=IdentifierExtractionConfig
     )
-    anchor_time_window_minutes: int = 5
+    anchor_time_window_minutes: int = 180
     timestamp_parsing: TimestampParsingConfig = field(
         default_factory=TimestampParsingConfig
     )
@@ -67,7 +67,7 @@ class WingsConfig:
         
         return cls(
             identifier_extraction=id_extract,
-            anchor_time_window_minutes=data.get('anchor_time_window_minutes', 5),
+            anchor_time_window_minutes=data.get('anchor_time_window_minutes', 180),
             timestamp_parsing=ts_parse,
             correlation_database=data.get('correlation_database', 'correlation.db')
         )
@@ -132,7 +132,7 @@ def create_default_config() -> WingsConfig:
             name_columns=[],
             path_columns=[]
         ),
-        anchor_time_window_minutes=5,
+        anchor_time_window_minutes=180,  # Default: 3 hours for better correlation accuracy
         timestamp_parsing=TimestampParsingConfig(
             custom_formats=[],
             default_timezone="UTC",

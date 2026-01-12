@@ -1,0 +1,127 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "version": "1.0",
+  "description": "Centralized artifact type definitions for Crow-Eye Correlation Engine",
+  "artifact_types": [
+    {
+      "id": "Logs",
+      "name": "Event Logs",
+      "description": "Windows Event Logs (Security, System, Application)",
+      "default_weight": 0.4,
+      "default_tier": 1,
+      "anchor_priority": 1,
+      "category": "primary_evidence",
+      "forensic_strength": "high"
+    },
+    {
+      "id": "Prefetch",
+      "name": "Prefetch Files",
+      "description": "Windows Prefetch execution artifacts",
+      "default_weight": 0.3,
+      "default_tier": 1,
+      "anchor_priority": 2,
+      "category": "primary_evidence",
+      "forensic_strength": "high"
+    },
+    {
+      "id": "SRUM",
+      "name": "System Resource Usage Monitor",
+      "description": "Windows SRUM database artifacts",
+      "default_weight": 0.2,
+      "default_tier": 2,
+      "anchor_priority": 3,
+      "category": "supporting_evidence",
+      "forensic_strength": "medium"
+    },
+    {
+      "id": "AmCache",
+      "name": "AmCache",
+      "description": "Windows AmCache execution artifacts",
+      "default_weight": 0.15,
+      "default_tier": 2,
+      "anchor_priority": 4,
+      "category": "supporting_evidence",
+      "forensic_strength": "medium"
+    },
+    {
+      "id": "ShimCache",
+      "name": "ShimCache",
+      "description": "Windows Application Compatibility Cache",
+      "default_weight": 0.15,
+      "default_tier": 2,
+      "anchor_priority": 5,
+      "category": "supporting_evidence",
+      "forensic_strength": "medium"
+    },
+    {
+      "id": "Jumplists",
+      "name": "Jump Lists",
+      "description": "Windows Jump List artifacts",
+      "default_weight": 0.1,
+      "default_tier": 3,
+      "anchor_priority": 6,
+      "category": "contextual_evidence",
+      "forensic_strength": "low"
+    },
+    {
+      "id": "LNK",
+      "name": "LNK Files",
+      "description": "Windows shortcut files",
+      "default_weight": 0.1,
+      "default_tier": 3,
+      "anchor_priority": 7,
+      "category": "contextual_evidence",
+      "forensic_strength": "low"
+    },
+    {
+      "id": "MFT",
+      "name": "Master File Table",
+      "description": "NTFS Master File Table entries",
+      "default_weight": 0.05,
+      "default_tier": 4,
+      "anchor_priority": 8,
+      "category": "background_evidence",
+      "forensic_strength": "low"
+    },
+    {
+      "id": "USN",
+      "name": "USN Journal",
+      "description": "NTFS Update Sequence Number Journal",
+      "default_weight": 0.05,
+      "default_tier": 4,
+      "anchor_priority": 9,
+      "category": "background_evidence",
+      "forensic_strength": "low"
+    },
+    {
+      "id": "Registry",
+      "name": "Registry",
+      "description": "Windows Registry artifacts",
+      "default_weight": 0.1,
+      "default_tier": 3,
+      "anchor_priority": 10,
+      "category": "contextual_evidence",
+      "forensic_strength": "medium"
+    },
+    {
+      "id": "Browser",
+      "name": "Browser History",
+      "description": "Web browser history and artifacts",
+      "default_weight": 0.1,
+      "default_tier": 3,
+      "anchor_priority": 11,
+      "category": "contextual_evidence",
+      "forensic_strength": "low"
+    },
+    {
+      "id": "Network",
+      "name": "Network Artifacts",
+      "description": "Network connection logs and artifacts",
+      "default_weight": 0.15,
+      "default_tier": 2,
+      "anchor_priority": 12,
+      "category": "supporting_evidence",
+      "forensic_strength": "medium"
+    }
+  ]
+}

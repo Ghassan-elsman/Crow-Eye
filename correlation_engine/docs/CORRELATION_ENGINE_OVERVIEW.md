@@ -49,24 +49,40 @@ This document provides a comprehensive overview of the Crow-Eye Correlation Engi
 
 The **Correlation Engine** is a forensic analysis system that finds temporal and semantic relationships between different types of forensic artifacts. It helps investigators discover connections between events that occurred on a system by correlating data from multiple sources.
 
+The system implements a **dual-engine architecture** with two distinct correlation strategies:
+
+1. **Time-Based Correlation Engine** - Uses temporal proximity as the primary factor with comprehensive field matching. Ideal for small datasets (< 1,000 records) requiring detailed analysis.
+
+2. **Identity-Based Correlation Engine** - Groups records by identity first, then creates temporal anchors. Optimized for large datasets (> 1,000 records) with O(N log N) performance and streaming support.
+
 ### Key Capabilities
 
-1. **Temporal Correlation**: Find events that occurred within a specified time window
-2. **Multi-Artifact Support**: Correlate data from Prefetch, ShimCache, AmCache, Event Logs, LNK files, Jumplists, MFT, SRUM, Registry, and more
-3. **Flexible Rules**: Define custom correlation rules (Wings) with configurable parameters
-4. **Semantic Mapping**: Map different column names to common semantic meanings
-5. **Duplicate Prevention**: Automatically detect and prevent duplicate matches
-6. **Weighted Scoring**: Calculate confidence scores based on multiple factors
-7. **Pipeline Automation**: Execute complete analysis workflows automatically
-8. **Visual Interface**: GUI for building pipelines, viewing results, and exploring timelines
+1. **Dual-Engine Architecture**: Choose between Time-Based (O(N²)) and Identity-Based (O(N log N)) engines based on dataset size and analysis goals
+2. **Engine Selection**: Automatic or manual engine selection via `EngineSelector` factory
+3. **Temporal Correlation**: Find events that occurred within a specified time window
+4. **Identity Tracking**: Track applications and files across multiple artifacts (Identity-Based engine)
+5. **Multi-Artifact Support**: Correlate data from Prefetch, ShimCache, AmCache, Event Logs, LNK files, Jumplists, MFT, SRUM, Registry, and more
+6. **Flexible Rules**: Define custom correlation rules (Wings) with configurable parameters
+7. **Semantic Mapping**: Map different column names to common semantic meanings
+8. **Duplicate Prevention**: Automatically detect and prevent duplicate matches
+9. **Weighted Scoring**: Calculate confidence scores based on multiple factors
+10. **Streaming Mode**: Process millions of records with constant memory usage (Identity-Based engine)
+11. **Pipeline Automation**: Execute complete analysis workflows automatically
+12. **Visual Interface**: GUI for building pipelines, viewing results, and exploring timelines
 
 ### Core Concepts
 
 - **Feather**: A normalized SQLite database containing forensic artifact data from a single source
 - **Wing**: A configuration that defines correlation rules (which feathers to correlate, time window, filters)
-- **Anchor**: A record from one feather that serves as the starting point for finding correlations
+- **Engine**: The correlation strategy (Time-Based or Identity-Based) used to find relationships
+- **Engine Selector**: Factory for creating engine instances based on configuration
+- **Anchor**: A record from one feather that serves as the starting point for finding correlations (Time-Based) or a temporal cluster of evidence (Identity-Based)
+- **Identity**: A normalized representation of an application, file, or entity across artifacts (Identity-Based engine)
 - **Match**: A set of temporally-related records from different feathers
 - **Pipeline**: An automated workflow that creates feathers and executes wings
+- **Streaming Mode**: Memory-efficient processing that writes results directly to database (Identity-Based engine)
+
+For detailed information about engine selection and capabilities, see the [Engine Selection Guide](docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide).
 
 ---
 
@@ -462,24 +478,42 @@ The correlation_engine is organized into 7 main directories, each with a specifi
 
 #### 1. Understanding the Correlation Process
 
-**Start here**: Read the [Correlation Execution Flow](#correlation-execution-flow) diagram above.
+**Start here**: Read the [Correlation Execution Flow](#correlation-execution-flow) diagram above and the [Engine Selection Guide](docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide).
 
 **Key files to understand**:
-- `engine/correlation_engine.py` - Main correlation logic
+- `engine/engine_selector.py` - Engine factory and selection
+- `engine/base_engine.py` - Common engine interface
+- `engine/time_based_engine.py` - Time-Based correlation strategy
+- `engine/identity_correlation_engine.py` - Identity-Based correlation strategy
 - `engine/feather_loader.py` - How feathers are loaded
 - `wings/core/wing_model.py` - Wing configuration structure
 
-#### 2. Adding Support for a New Artifact Type
+**Engine Selection**: Choose the appropriate engine based on your dataset size:
+- **< 1,000 records**: Time-Based Engine for comprehensive analysis
+- **> 1,000 records**: Identity-Based Engine for performance and identity tracking
+
+#### 2. Selecting the Right Correlation Engine
+
+**Decision Factors**:
+- **Dataset Size**: Identity-Based for large datasets (> 1,000 records)
+- **Analysis Goal**: Time-Based for detailed field matching, Identity-Based for identity tracking
+- **Performance**: Identity-Based provides O(N log N) vs Time-Based O(N²)
+- **Memory**: Identity-Based supports streaming mode for constant memory usage
+
+**See**: [Engine Selection Guide](docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) for detailed decision criteria and use case scenarios.
+
+#### 3. Adding Support for a New Artifact Type
 
 **Files to modify**:
 1. `integration/feather_mappings.py` - Add column mappings for the new artifact
 2. `feather/transformer.py` - Add transformation logic if needed
 3. `wings/core/artifact_detector.py` - Add detection logic
-4. `engine/correlation_engine.py` - Update `forensic_timestamp_patterns` if needed
+4. `engine/identity_correlation_engine.py` - Add artifact-specific field mappings for Identity-Based engine
+5. `engine/correlation_engine.py` - Update `forensic_timestamp_patterns` if needed for Time-Based engine
 
 **See**: [Feather Documentation - Adding New Artifact Type](feather/FEATHER_DOCUMENTATION.md#scenario-adding-support-for-a-new-artifact-type)
 
-#### 3. Modifying Correlation Logic
+#### 4. Modifying Correlation Logic
 
 **Files to modify**:
 1. `engine/correlation_engine.py` - Core correlation algorithm

@@ -28,6 +28,9 @@ class PipelineExecutor:
         """
         self.config = pipeline_config
         
+        # Cancellation flag
+        self._cancelled = False
+        
         # NEW: Create filter configuration from pipeline config
         self.filters = FilterConfig(
             time_period_start=self._parse_datetime(getattr(pipeline_config, 'time_period_start', None)),
@@ -36,30 +39,154 @@ class PipelineExecutor:
             case_sensitive=getattr(pipeline_config, 'identity_filter_case_sensitive', False)
         )
         
-        # NEW: Create engine using selector based on pipeline config
+        # Create shared integration instances for dependency injection
+        self._create_shared_integrations(pipeline_config)
+        
+        # NEW: Create engine using selector based on pipeline config with integrations
         # Use getattr with default to handle old configs without engine_type
-        engine_type = getattr(pipeline_config, 'engine_type', 'time_based')
+        # Default to identity_based (the preferred default engine)
+        engine_type = getattr(pipeline_config, 'engine_type', EngineType.IDENTITY_BASED)
+        
+        # Normalize engine type - handle legacy 'time_based' value
+        if engine_type == 'time_based':
+            engine_type = EngineType.TIME_WINDOW_SCANNING
+        
+        print(f"[PipelineExecutor] Creating engine: {engine_type}")
         
         try:
-            self.engine = EngineSelector.create_engine(
-                config=pipeline_config,
-                engine_type=engine_type,
-                filters=self.filters
+            # Create engine with shared integrations (dependency injection)
+            self.engine = self._create_engine_with_integrations(
+                pipeline_config=pipeline_config,
+                engine_type=engine_type
             )
-            print(f"[Pipeline] Using {self.engine.metadata.name}")
+            print(f"[PipelineExecutor] Engine created successfully: {type(self.engine).__name__}")
         except Exception as e:
-            print(f"[Pipeline] Warning: Failed to create {engine_type} engine: {e}")
-            print(f"[Pipeline] Falling back to time_based engine")
-            self.engine = EngineSelector.create_engine(
-                config=pipeline_config,
-                engine_type=EngineType.TIME_BASED,
-                filters=self.filters
-            )
+            # Only log errors, not routine messages
+            import logging
+            logging.warning(f"Failed to create {engine_type} engine with integrations: {e}")
+            print(f"[PipelineExecutor] WARNING: Failed to create {engine_type} engine: {e}")
+            try:
+                self.engine = EngineSelector.create_engine(
+                    config=pipeline_config,
+                    engine_type=engine_type,
+                    filters=self.filters
+                )
+                print(f"[PipelineExecutor] Engine created (without integrations): {type(self.engine).__name__}")
+            except Exception as e2:
+                logging.warning(f"Failed to create {engine_type} engine: {e2}, falling back to identity_based")
+                print(f"[PipelineExecutor] WARNING: Falling back to IDENTITY_BASED: {e2}")
+                self.engine = EngineSelector.create_engine(
+                    config=pipeline_config,
+                    engine_type=EngineType.IDENTITY_BASED,
+                    filters=self.filters
+                )
         
         self.results: List[CorrelationResult] = []
         self.errors: List[str] = []
         self.warnings: List[str] = []
         self.progress_widget = None  # Optional progress display widget
+        self.verbose = False  # Set to True for debug output
+    
+    def _create_shared_integrations(self, pipeline_config: PipelineConfig):
+        """
+        Create shared integration instances for dependency injection.
+        
+        Args:
+            pipeline_config: Pipeline configuration
+        """
+        try:
+            from ..integration.weighted_scoring_integration import WeightedScoringIntegration
+            from ..integration.semantic_mapping_integration import SemanticMappingIntegration
+            
+            # Get config manager from pipeline config
+            config_manager = getattr(pipeline_config, 'config_manager', None)
+            
+            # Create shared integration instances
+            self.scoring_integration = WeightedScoringIntegration(config_manager)
+            self.semantic_integration = SemanticMappingIntegration(config_manager)
+            
+            # Load case-specific configurations if available
+            case_id = getattr(pipeline_config, 'case_id', None)
+            if case_id:
+                self.scoring_integration.load_case_specific_scoring_weights(case_id)
+                self.semantic_integration.load_case_specific_mappings(case_id)
+            
+            # Register integrations as configuration observers
+            if config_manager:
+                config_manager.register_observer(self._on_config_changed)
+            
+            print("[PipelineExecutor] Shared integrations created and registered as observers")
+            
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to create shared integrations: {e}")
+            # Set to None so engines will create their own
+            self.scoring_integration = None
+            self.semantic_integration = None
+    
+    def _on_config_changed(self, old_config, new_config):
+        """
+        Called when configuration changes.
+        
+        Args:
+            old_config: Previous configuration
+            new_config: New configuration
+        """
+        try:
+            print("[PipelineExecutor] Configuration changed, reloading integrations...")
+            
+            # Reload integrations
+            if self.scoring_integration:
+                self.scoring_integration.reload_configuration()
+            
+            if self.semantic_integration:
+                self.semantic_integration.reload_configuration()
+            
+            print("[PipelineExecutor] Integrations reloaded successfully")
+            
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to reload integrations after configuration change: {e}")
+    
+    def _create_engine_with_integrations(self, pipeline_config: PipelineConfig, 
+                                        engine_type: EngineType) -> BaseCorrelationEngine:
+        """
+        Create engine with shared integrations injected.
+        
+        Args:
+            pipeline_config: Pipeline configuration
+            engine_type: Type of engine to create
+            
+        Returns:
+            Engine instance with injected integrations
+        """
+        from ..engine.time_based_engine import TimeWindowScanningEngine
+        from ..engine.identity_correlation_engine import IdentityCorrelationEngine
+        
+        if engine_type == EngineType.TIME_WINDOW_SCANNING:
+            return TimeWindowScanningEngine(
+                config=pipeline_config,
+                filters=self.filters,
+                debug_mode=getattr(pipeline_config, 'debug_mode', False),
+                scoring_integration=self.scoring_integration,
+                mapping_integration=self.semantic_integration
+            )
+        elif engine_type == EngineType.IDENTITY_BASED:
+            return IdentityCorrelationEngine(
+                config=pipeline_config,
+                filters=self.filters,
+                time_window_minutes=getattr(pipeline_config, 'time_window_minutes', 180),
+                debug_mode=getattr(pipeline_config, 'debug_mode', False),
+                scoring_integration=self.scoring_integration,
+                mapping_integration=self.semantic_integration
+            )
+        else:
+            # Fallback to EngineSelector for other engine types
+            return EngineSelector.create_engine(
+                config=pipeline_config,
+                engine_type=engine_type,
+                filters=self.filters
+            )
     
     def _parse_datetime(self, dt_str: Optional[str]) -> Optional[datetime]:
         """Parse datetime string to datetime object"""
@@ -91,35 +218,47 @@ class PipelineExecutor:
         """
         start_time = time.time()
         
-        print(f"Executing Pipeline: {self.config.pipeline_name}")
-        print("=" * 60)
+        if self.verbose:
+            print(f"Executing Pipeline: {self.config.pipeline_name}")
+            print("=" * 60)
         
         # Step 1: Create feathers (if configured)
         feather_paths = {}
         if self.config.auto_create_feathers:
-            print("\nStep 1: Creating Feathers...")
+            if self.verbose:
+                print("\nStep 1: Creating Feathers...")
             feather_paths = self._create_feathers()
         else:
-            print("\nStep 1: Skipping feather creation (using existing feathers)")
+            if self.verbose:
+                print("\nStep 1: Skipping feather creation (using existing feathers)")
             # Use paths from feather configs
             # Map by BOTH config_name AND feather_name for compatibility
             for feather_config in self.config.feather_configs:
                 feather_paths[feather_config.config_name] = feather_config.output_database
                 feather_paths[feather_config.feather_name] = feather_config.output_database
         
+        # Check for cancellation
+        if self._cancelled:
+            print("\n⚠️ Execution cancelled before wing execution")
+            return self._build_cancelled_summary(start_time)
+        
         # Step 2: Execute wings (if configured)
         if self.config.auto_run_correlation:
-            print("\nStep 2: Executing Wings...")
+            if self.verbose:
+                print("\nStep 2: Executing Wings...")
             
             # Detect circular dependencies and missing references
             dep_report = self._detect_circular_dependencies(feather_paths)
             
             if dep_report['errors']:
-                print("  Dependency validation errors:")
+                if self.verbose:
+                    print("  Dependency validation errors:")
+                    for error in dep_report['errors']:
+                        print(f"    ✗ {error}")
                 for error in dep_report['errors']:
-                    print(f"    ✗ {error}")
                     self.errors.append(error)
-                print("  Halting execution due to missing feather references")
+                if self.verbose:
+                    print("  Halting execution due to missing feather references")
             else:
                 # Generate dependency graph
                 if self.config.output_directory:
@@ -130,15 +269,22 @@ class PipelineExecutor:
                         f.write(dot_graph)
                     print(f"  Dependency graph saved to: {graph_path}")
                 
-                # Execute wings
+                # Execute wings (with cancellation support)
                 self._execute_wings(feather_paths)
         else:
-            print("\nStep 2: Skipping correlation (manual execution required)")
+            if self.verbose:
+                print("\nStep 2: Skipping correlation (manual execution required)")
+        
+        # Check for cancellation
+        if self._cancelled:
+            print("\n⚠️ Execution cancelled - saving partial results")
+            return self._build_cancelled_summary(start_time)
         
         # Step 3: Generate report (if configured)
         execution_id = None
         if self.config.generate_report:
-            print("\nStep 3: Generating Report...")
+            if self.verbose:
+                print("\nStep 3: Generating Report...")
             execution_id = self._generate_report()
         
         # Calculate execution time
@@ -185,22 +331,53 @@ class PipelineExecutor:
             'warnings': self.warnings,
             'results': results_summary,
             'execution_id': execution_id,  # Include execution_id for results viewer
-            'database_path': str(Path(self.config.output_directory) / "correlation_results.db") if self.config.output_directory else None
+            'database_path': str(Path(self.config.output_directory) / "correlation_results.db") if self.config.output_directory else None,
+            'engine_type': getattr(self.config, 'engine_type', 'time_window_scanning'),  # Include engine type for viewer selection
+            'cancelled': self._cancelled
         }
         
-        print("\n" + "=" * 60)
-        print(f"Pipeline Execution Complete!")
-        print(f"Time: {execution_time:.2f} seconds")
-        print(f"Feathers Used: {summary['feathers_used']}")
-        print(f"Wings: {len(self.results)}")
-        print(f"Total Matches: {summary['total_matches']}")
+        if self.verbose:
+            print("\n" + "=" * 60)
+            if self._cancelled:
+                print(f"Pipeline Execution Cancelled (Partial Results Saved)")
+            else:
+                print(f"Pipeline Execution Complete!")
+            print(f"Time: {execution_time:.2f} seconds")
+            print(f"Feathers Used: {summary['feathers_used']}")
+            print(f"Wings: {len(self.results)}")
+            print(f"Total Matches: {summary['total_matches']}")
         
-        if self.errors:
+        if self.errors and self.verbose:
             print(f"Errors: {len(self.errors)}")
-        if self.warnings:
+        if self.warnings and self.verbose:
             print(f"Warnings: {len(self.warnings)}")
         
         return summary
+    
+    def _build_cancelled_summary(self, start_time: float) -> Dict[str, Any]:
+        """Build summary for cancelled execution."""
+        execution_time = time.time() - start_time
+        
+        # Save partial results if any
+        execution_id = None
+        if self.results and self.config.generate_report:
+            execution_id = self._generate_report()
+        
+        return {
+            'pipeline_name': self.config.pipeline_name,
+            'execution_time': execution_time,
+            'feathers_created': 0,
+            'feathers_used': 0,
+            'wings_executed': len(self.results),
+            'total_matches': sum(r.total_matches for r in self.results),
+            'errors': self.errors + ["Execution cancelled by user"],
+            'warnings': self.warnings,
+            'results': [],
+            'execution_id': execution_id,
+            'database_path': str(Path(self.config.output_directory) / "correlation_results.db") if self.config.output_directory else None,
+            'engine_type': getattr(self.config, 'engine_type', 'time_window_scanning'),
+            'cancelled': True
+        }
     
     def _create_feathers(self) -> Dict[str, str]:
         """
@@ -212,7 +389,8 @@ class PipelineExecutor:
         feather_paths = {}
         
         for i, feather_config in enumerate(self.config.feather_configs, 1):
-            print(f"  [{i}/{len(self.config.feather_configs)}] Creating {feather_config.feather_name}...")
+            if self.verbose:
+                print(f"  [{i}/{len(self.config.feather_configs)}] Creating {feather_config.feather_name}...")
             
             try:
                 # In a real implementation, this would:
@@ -232,12 +410,14 @@ class PipelineExecutor:
                 feather_paths[feather_config.config_name] = feather_config.output_database
                 feather_paths[feather_config.feather_name] = feather_config.output_database
                 
-                print(f"      ✓ Created: {feather_config.output_database}")
+                if self.verbose:
+                    print(f"      ✓ Created: {feather_config.output_database}")
                 
             except Exception as e:
                 error_msg = f"Failed to create feather {feather_config.feather_name}: {str(e)}"
                 self.errors.append(error_msg)
-                print(f"      ✗ Error: {str(e)}")
+                if self.verbose:
+                    print(f"      ✗ Error: {str(e)}")
         
         return feather_paths
 
@@ -253,46 +433,53 @@ class PipelineExecutor:
         validation_report = self._validate_feather_wing_linkages(feather_paths)
         
         if validation_report['errors']:
-            print("  Pre-execution validation errors:")
+            if self.verbose:
+                print("  Pre-execution validation errors:")
+                for error in validation_report['errors']:
+                    print(f"    ✗ {error}")
             for error in validation_report['errors']:
-                print(f"    ✗ {error}")
                 self.errors.append(error)
             return
         
         if validation_report['warnings']:
-            print("  Pre-execution validation warnings:")
+            if self.verbose:
+                print("  Pre-execution validation warnings:")
+                for warning in validation_report['warnings']:
+                    print(f"    ! {warning}")
             for warning in validation_report['warnings']:
-                print(f"    ! {warning}")
                 self.warnings.append(warning)
         
         for i, wing_config in enumerate(self.config.wing_configs, 1):
-            print(f"\n  [{i}/{len(self.config.wing_configs)}] Executing Wing: {wing_config.wing_name}")
-            print(f"      Wing ID: {wing_config.wing_id}")
-            print(f"      Feathers in wing: {len(wing_config.feathers)}")
+            if self.verbose:
+                print(f"\n  [{i}/{len(self.config.wing_configs)}] Executing Wing: {wing_config.wing_name}")
+                print(f"      Wing ID: {wing_config.wing_id}")
+                print(f"      Feathers in wing: {len(wing_config.feathers)}")
             
             # NEW: Log filter configuration
-            if self.filters.time_period_start or self.filters.time_period_end:
+            if self.verbose and (self.filters.time_period_start or self.filters.time_period_end):
                 print(f"      Time Period Filter:")
                 if self.filters.time_period_start:
                     print(f"        Start: {self.filters.time_period_start}")
                 if self.filters.time_period_end:
                     print(f"        End: {self.filters.time_period_end}")
             
-            if self.filters.identity_filters:
+            if self.verbose and self.filters.identity_filters:
                 print(f"      Identity Filters: {', '.join(self.filters.identity_filters)}")
                 print(f"        Case Sensitive: {self.filters.case_sensitive}")
             
             # List all feathers in this wing
-            for feather_ref in wing_config.feathers:
-                feather_display_name = feather_ref.feather_config_name or feather_ref.feather_id
-                print(f"        • {feather_display_name} ({feather_ref.artifact_type})")
+            if self.verbose:
+                for feather_ref in wing_config.feathers:
+                    feather_display_name = feather_ref.feather_config_name or feather_ref.feather_id
+                    print(f"        • {feather_display_name} ({feather_ref.artifact_type})")
             
             try:
                 # Convert WingConfig to Wing (with validation)
                 wing = self._wing_config_to_wing(wing_config)
             except ValueError as e:
                 # Validation failed - skip this wing
-                print(f"      ✗ Configuration validation failed: {str(e)}")
+                if self.verbose:
+                    print(f"      ✗ Configuration validation failed: {str(e)}")
                 continue
             
             try:
@@ -365,7 +552,7 @@ class PipelineExecutor:
                         feather_key = feather_ref.feather_id or consistent_feather_id
                         wing_feather_paths[feather_key] = resolved_path
                         # Log resolved path for debugging
-                        if self.config.output_directory:  # Only log in verbose mode
+                        if self.verbose and self.config.output_directory:
                             print(f"        Resolved {feather_key} via {resolution_method}: {resolved_path}")
                     else:
                         error_msg = (
@@ -373,7 +560,8 @@ class PipelineExecutor:
                             f"feather_id '{consistent_feather_id}': {feather_ref.feather_database_path}"
                         )
                         self.errors.append(error_msg)
-                        print(f"      ✗ {error_msg}")
+                        if self.verbose:
+                            print(f"      ✗ {error_msg}")
                 
                 if len(wing_feather_paths) < wing.correlation_rules.minimum_matches:
                     warning_msg = (
@@ -381,18 +569,47 @@ class PipelineExecutor:
                         f"found {len(wing_feather_paths)}, need {wing.correlation_rules.minimum_matches}"
                     )
                     self.warnings.append(warning_msg)
-                    print(f"      ! {warning_msg}")
+                    if self.verbose:
+                        print(f"      ! {warning_msg}")
                     continue
                 
-                # Set output directory for streaming support (if engine supports it)
+                # Create execution record BEFORE wing execution for streaming support
+                execution_id = None
                 if hasattr(self.engine, 'set_output_directory') and self.config.output_directory:
-                    self.engine.set_output_directory(self.config.output_directory)
+                    # Create database and execution record first
+                    output_dir = Path(self.config.output_directory)
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    db_file = output_dir / "correlation_results.db"
+                    
+                    from ..engine.database_persistence import ResultsDatabase
+                    with ResultsDatabase(str(db_file)) as db:
+                        # Create execution record with placeholder values
+                        execution_id = db.create_execution_placeholder(
+                            pipeline_name=self.config.pipeline_name,
+                            output_dir=str(output_dir),
+                            case_name=self.config.case_name,
+                            investigator=self.config.investigator,
+                            engine_type=self.config.engine_type,
+                            wing_config=self.config.wing_configs[0].to_dict() if self.config.wing_configs else None,
+                            pipeline_config=self.config.to_dict(),
+                            time_period_start=self.config.time_period_start,
+                            time_period_end=self.config.time_period_end,
+                            identity_filters=self.config.identity_filters
+                        )
+                    
+                    # Now set output directory with execution_id for streaming
+                    self.engine.set_output_directory(self.config.output_directory, execution_id)
+                    print(f"[Pipeline] Streaming enabled with execution_id={execution_id}")
                 
                 # Execute wing
                 result = self.engine.execute_wing(wing, wing_feather_paths)
                 self.results.append(result)
                 
-                print(f"      ✓ Matches found: {result.total_matches}")
+                # Store execution_id for later use
+                if execution_id:
+                    self._execution_id = execution_id
+                
+                # Progress reported via events, not print
                 
                 if result.errors:
                     self.errors.extend(result.errors)
@@ -402,7 +619,8 @@ class PipelineExecutor:
             except Exception as e:
                 error_msg = f"Failed to execute wing {wing_config.wing_name}: {str(e)}"
                 self.errors.append(error_msg)
-                print(f"      ✗ Error: {str(e)}")
+                if self.verbose:
+                    print(f"      ✗ Error: {str(e)}")
     
     def _validate_feather_wing_linkages(self, feather_paths: Dict[str, str]) -> Dict[str, Any]:
         """
@@ -465,13 +683,6 @@ class PipelineExecutor:
             'dependency_graph': {}
         }
         
-        # DEBUG: Print feather_paths keys
-        print(f"  [DEBUG] feather_paths has {len(feather_paths)} entries:")
-        for key in sorted(list(feather_paths.keys())[:10]):  # Show first 10
-            print(f"    - '{key}'")
-        if len(feather_paths) > 10:
-            print(f"    ... and {len(feather_paths) - 10} more")
-        
         # Track which feathers are referenced by which wings
         feather_usage = {}  # feather_config_name -> list of wing_names
         
@@ -485,8 +696,6 @@ class PipelineExecutor:
                 
                 # Check if feather exists in pipeline
                 if feather_ref.feather_config_name and feather_ref.feather_config_name not in feather_paths:
-                    # DEBUG: Show what we're looking for
-                    print(f"  [DEBUG] Looking for '{feather_ref.feather_config_name}' - NOT FOUND")
                     report['errors'].append(
                         f"Wing '{wing_config.wing_name}' references feather '{feather_ref.feather_config_name}' "
                         f"which doesn't exist in pipeline's feather_configs"
@@ -569,14 +778,31 @@ class PipelineExecutor:
         # Validate minimum_matches
         if wing_config.minimum_matches < 1:
             validation_errors.append(
-                f"minimum_matches must be >= 1 (current: {wing_config.minimum_matches})"
+                f"minimum_matches must be >= 1 (current: {wing_config.minimum_matches}). "
+                f"This value determines how many non-anchor feathers must have matching records. "
+                f"For example, minimum_matches=1 requires anchor + 1 other feather (2 total)."
+            )
+        
+        # Validate minimum_matches vs feather count
+        feather_count = len(wing_config.feathers) if wing_config.feathers else 0
+        if feather_count > 0 and wing_config.minimum_matches >= feather_count:
+            validation_errors.append(
+                f"minimum_matches ({wing_config.minimum_matches}) must be less than feather count ({feather_count}). "
+                f"With {feather_count} feathers, maximum minimum_matches is {feather_count - 1}. "
+                f"Remember: minimum_matches determines non-anchor feathers required (total = anchor + minimum_matches)."
             )
         
         # Validate anchor_priority contains valid artifact types
-        valid_artifact_types = {
-            "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
-            "Jumplists", "LNK", "MFT", "USN", "Registry", "Browser"
-        }
+        try:
+            from ..config.artifact_type_registry import get_registry
+            registry = get_registry()
+            valid_artifact_types = set(registry.get_all_types())
+        except Exception:
+            # Fallback to hard-coded set if registry fails
+            valid_artifact_types = {
+                "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
+                "Jumplists", "LNK", "MFT", "USN", "Registry", "Browser"
+            }
         for artifact_type in wing_config.anchor_priority:
             if artifact_type not in valid_artifact_types:
                 validation_errors.append(
@@ -652,7 +878,8 @@ class PipelineExecutor:
             feather_paths: Dictionary mapping feather_config_name -> database_path
         """
         for i, wing_config in enumerate(self.config.wing_configs, 1):
-            print(f"  [{i}/{len(self.config.wing_configs)}] Executing {wing_config.wing_name}...")
+            if self.verbose:
+                print(f"  [{i}/{len(self.config.wing_configs)}] Executing {wing_config.wing_name}...")
             
             try:
                 # Convert WingConfig to Wing
@@ -681,7 +908,8 @@ class PipelineExecutor:
                 result = self.engine.execute_wing(wing, wing_feather_paths)
                 self.results.append(result)
                 
-                print(f"      ✓ Matches found: {result.total_matches}")
+                if self.verbose:
+                    print(f"      ✓ Matches found: {result.total_matches}")
                 
                 if result.errors:
                     self.errors.extend(result.errors)
@@ -691,7 +919,8 @@ class PipelineExecutor:
             except Exception as e:
                 error_msg = f"Failed to execute wing {wing_config.wing_name}: {str(e)}"
                 self.errors.append(error_msg)
-                print(f"      ✗ Error: {str(e)}")
+                if self.verbose:
+                    print(f"      ✗ Error: {str(e)}")
     
     def _wing_config_to_wing(self, wing_config: WingConfig) -> Wing:
         """Convert WingConfig to Wing object"""
@@ -729,12 +958,16 @@ class PipelineExecutor:
         """
         Generate analysis report - saves to SQLite database and JSON files.
         
+        If streaming mode was used, matches are already in the database,
+        so we only update the execution record and save JSON files.
+        
         Returns:
             execution_id if successful, None otherwise
         """
         if not self.config.output_directory:
             self.warnings.append("No output directory specified, skipping report generation")
-            print("      ⚠ WARNING: No output directory set, results will not be saved!")
+            if self.verbose:
+                print("      ⚠ WARNING: No output directory set, results will not be saved!")
             return None
         
         try:
@@ -742,65 +975,65 @@ class PipelineExecutor:
             output_dir = Path(self.config.output_directory)
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            print(f"\n      📁 Saving results to database...")
-            print(f"      " + "=" * 60)
-            
-            # Save to SQLite database (PRIMARY OUTPUT)
             db_file = output_dir / "correlation_results.db"
             from ..engine.database_persistence import ResultsDatabase
             
+            # Check if streaming mode was used (execution_id already exists)
+            streaming_used = hasattr(self, '_execution_id') and self._execution_id is not None
+            
+            if streaming_used:
+                # Streaming mode: matches already saved, just update execution record
+                execution_id = self._execution_id
+                print(f"\n      📁 Finalizing streaming results...")
+                print(f"      " + "=" * 60)
+                print(f"      ✓ Matches already saved via streaming mode")
+                
+                # Update execution record with final statistics
+                with ResultsDatabase(str(db_file)) as db:
+                    db.update_execution_stats(
+                        execution_id=execution_id,
+                        execution_duration=sum(r.execution_duration_seconds for r in self.results),
+                        total_matches=sum(r.total_matches for r in self.results),
+                        total_records_scanned=sum(r.total_records_scanned for r in self.results),
+                        errors=self.errors,
+                        warnings=self.warnings
+                    )
+            else:
+                # Non-streaming mode: save everything to database
+                print(f"\n      📁 Saving results to database...")
+                print(f"      " + "=" * 60)
+                
+                with ResultsDatabase(str(db_file)) as db:
+                    execution_id = db.save_execution(
+                        pipeline_name=self.config.pipeline_name,
+                        execution_time=sum(r.execution_duration_seconds for r in self.results),
+                        results=self.results,
+                        output_dir=str(output_dir),
+                        case_name=self.config.case_name,
+                        investigator=self.config.investigator,
+                        errors=self.errors,
+                        warnings=self.warnings,
+                        engine_type=self.config.engine_type,
+                        wing_config=self.config.wing_configs[0].to_dict() if self.config.wing_configs else None,
+                        pipeline_config=self.config.to_dict(),
+                        time_period_start=self.config.time_period_start,
+                        time_period_end=self.config.time_period_end,
+                        identity_filters=self.config.identity_filters
+                    )
+            
+            # Get run name from database for display
             with ResultsDatabase(str(db_file)) as db:
-                execution_id = db.save_execution(
-                    pipeline_name=self.config.pipeline_name,
-                    execution_time=sum(r.execution_duration_seconds for r in self.results),
-                    results=self.results,
-                    output_dir=str(output_dir),
-                    case_name=self.config.case_name,
-                    investigator=self.config.investigator,
-                    errors=self.errors,
-                    warnings=self.warnings,
-                    engine_type=self.config.engine_type,
-                    wing_config=self.config.wing_configs[0].to_dict() if self.config.wing_configs else None,
-                    pipeline_config=self.config.to_dict(),
-                    time_period_start=self.config.time_period_start,
-                    time_period_end=self.config.time_period_end,
-                    identity_filters=self.config.identity_filters
-                )
+                exec_metadata = db.get_execution_metadata(execution_id)
+                run_name = exec_metadata.get('run_name', f'Execution_{execution_id}') if exec_metadata else f'Execution_{execution_id}'
             
             print(f"      " + "=" * 60)
             print(f"      ✓ Results saved to database: {db_file.name}")
             print(f"      ✓ Execution ID: {execution_id}")
+            print(f"      ✓ Run Name: {run_name}")
             print(f"      ✓ Total matches: {sum(r.total_matches for r in self.results):,}")
+            print(f"      ✓ Wings executed: {len(self.results)}")
             print(f"      📂 Database location: {db_file.absolute()}")
-            
-            # Save individual result JSON files for results viewer compatibility
-            for i, result in enumerate(self.results, 1):
-                result_file = output_dir / f"result_{i}_{result.wing_name.replace(' ', '_')}.json"
-                try:
-                    result.save_to_file(str(result_file))
-                    print(f"      ✓ Saved JSON: {result_file.name}")
-                except Exception as e:
-                    print(f"      ⚠ Warning: Could not save JSON for {result.wing_name}: {e}")
-            
-            # Also save summary JSON for quick reference
-            summary_file = output_dir / "pipeline_summary.json"
-            import json
-            with open(summary_file, 'w') as f:
-                json.dump({
-                    'pipeline': self.config.pipeline_name,
-                    'executed': self.config.last_executed,
-                    'case': self.config.case_name,
-                    'investigator': self.config.investigator,
-                    'results_count': len(self.results),
-                    'total_matches': sum(r.total_matches for r in self.results),
-                    'database_file': str(db_file),
-                    'execution_id': execution_id,
-                    'engine_type': self.config.engine_type,  # Include engine type
-                    'errors': self.errors,
-                    'warnings': self.warnings
-                }, f, indent=2)
-            
-            print(f"      ✓ Summary: {summary_file.name}")
+            print(f"      💾 Tables: executions, results, matches")
             
             return execution_id
             

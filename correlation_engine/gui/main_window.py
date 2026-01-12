@@ -22,6 +22,8 @@ from ..config import PipelineConfig
 from .pipeline_builder import PipelineBuilderWidget
 from .execution_control import ExecutionControlWidget
 from .results_viewer import DynamicResultsTabWidget
+from .identity_results_view import IdentityResultsView
+from .timebased_results_viewer import TimeBasedResultsViewer
 from ..integration.auto_feather_generator import AutoFeatherGenerator
 from ..integration.default_wings_loader import DefaultWingsLoader
 
@@ -619,15 +621,25 @@ class MainWindow(QMainWindow):
         # Add execution control widget
         self.execution_control = ExecutionControlWidget()
         self.execution_control.execution_completed.connect(self._on_execution_completed)
+        self.execution_control.load_results_requested.connect(self._on_load_results_requested)
         execution_layout.addWidget(self.execution_control)
         
-        # Initialize Results tab with results viewer
+        # Initialize Results tab with sub-tabs for different viewers
         results_layout = QVBoxLayout(self.results_tab)
         results_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Add results viewer widget
-        self.results_viewer = DynamicResultsTabWidget()
-        results_layout.addWidget(self.results_viewer)
+        # Create a QTabWidget inside the Results tab for Summary and engine viewers
+        self.results_sub_tabs = QTabWidget()
+        self.results_sub_tabs.setTabPosition(QTabWidget.North)
+        
+        # Add Summary tab (default viewer)
+        self.summary_viewer = DynamicResultsTabWidget()
+        self.results_sub_tabs.addTab(self.summary_viewer, "Summary")
+        
+        # Keep reference to current viewer (for backward compatibility)
+        self.current_results_viewer = self.summary_viewer
+        
+        results_layout.addWidget(self.results_sub_tabs)
         
         # Create menu bar
         self._create_menu_bar()
@@ -1167,8 +1179,46 @@ class MainWindow(QMainWindow):
     
     def _show_preferences(self):
         """Show preferences dialog"""
-        # TODO: Implement preferences dialog
-        self.show_notification("Preferences not yet implemented", "info")
+        try:
+            from .settings_dialog import SettingsDialog
+            from ..config.integrated_configuration_manager import IntegratedConfigurationManager
+            
+            # Initialize configuration manager if not already done
+            if not hasattr(self, 'config_manager'):
+                self.config_manager = IntegratedConfigurationManager()
+            
+            # Create and show settings dialog
+            dialog = SettingsDialog(self.config_manager, self)
+            
+            # Connect configuration change signal
+            dialog.configuration_changed.connect(self._on_configuration_changed)
+            
+            # Show dialog
+            dialog.exec_()
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Settings Error",
+                f"Failed to open settings dialog: {str(e)}"
+            )
+    
+    def _on_configuration_changed(self, new_config):
+        """Handle configuration changes from settings dialog"""
+        try:
+            # Update any components that depend on configuration
+            # This will be expanded as more components are integrated
+            
+            # Update status bar
+            self.status_bar.showMessage("Configuration updated", 3000)
+            
+            # Log the change
+            print(f"[Main Window] Configuration updated: "
+                  f"Semantic mapping: {'enabled' if new_config.semantic_mapping.enabled else 'disabled'}, "
+                  f"Weighted scoring: {'enabled' if new_config.weighted_scoring.enabled else 'disabled'}")
+            
+        except Exception as e:
+            print(f"[Main Window] Error handling configuration change: {e}")
     
     def _show_about(self):
         """Show about dialog"""
@@ -1273,13 +1323,344 @@ class MainWindow(QMainWindow):
         self._update_window_title()
     
     def _on_execution_completed(self, summary: dict):
-        """Handle execution completion"""
-        # Load results
+        """Handle execution completion and open appropriate results viewer"""
+        # Get engine type from summary
+        engine_type = summary.get('engine_type', 'time_window_scanning')
         output_dir = self.current_pipeline.output_directory if self.current_pipeline else "output"
-        self.results_viewer.load_results(output_dir)
         
-        # Switch to results tab
-        self.tab_widget.setCurrentIndex(2)
+        print(f"[MainWindow] Execution completed with engine type: {engine_type}")
+        
+        # Pass engine type to Summary Tab
+        self.summary_viewer.set_engine_type(engine_type)
+        self.summary_viewer.load_results(output_dir)
+        
+        # Create appropriate results viewer based on engine type
+        new_viewer = self._create_results_viewer_for_engine(engine_type, output_dir)
+        
+        if new_viewer:
+            # Add as sub-tab with engine-specific name
+            tab_name = engine_type.replace('_', ' ').title()
+            self._switch_results_viewer(new_viewer, tab_name)
+            
+            # Load results into the new viewer
+            self._load_results_into_viewer(new_viewer, engine_type, output_dir)
+        else:
+            # Fallback to current viewer
+            print(f"[MainWindow] Using fallback viewer for engine type: {engine_type}")
+            self.current_results_viewer.set_engine_type(engine_type)
+            self.current_results_viewer.load_results(output_dir)
+    
+    def _on_load_results_requested(self, request: dict):
+        """Handle request to load results from execution control (enhanced for multiple selections)."""
+        selected_executions = request.get('selected_executions', [])
+        output_dir = request.get('output_dir', '')
+        
+        if not selected_executions:
+            print("[MainWindow] No executions selected")
+            return
+        
+        print(f"[MainWindow] Loading {len(selected_executions)} execution(s)")
+        
+        # Show progress dialog
+        from PyQt5.QtWidgets import QProgressDialog
+        progress = QProgressDialog(
+            f"Loading {len(selected_executions)} execution(s)...",
+            "Cancel",
+            0,
+            len(selected_executions),
+            self
+        )
+        progress.setWindowTitle("Loading Results")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)  # Show immediately
+        progress.setValue(0)
+        
+        # Load each selected execution into its appropriate viewer
+        for idx, (db_path, execution_id, engine_type) in enumerate(selected_executions):
+            if progress.wasCanceled():
+                print("[MainWindow] Loading cancelled by user")
+                break
+                
+            progress.setLabelText(f"Loading execution {execution_id} ({engine_type})...\n{idx + 1} of {len(selected_executions)}")
+            progress.setValue(idx)
+            QApplication.processEvents()  # Update UI
+            
+            print(f"[MainWindow] Loading execution {execution_id} ({engine_type}) from {db_path}")
+            
+            # Create appropriate results viewer based on engine type
+            new_viewer = self._create_results_viewer_for_engine(engine_type, output_dir)
+            
+            if new_viewer:
+                # Add as sub-tab with execution-specific name
+                tab_name = f"{engine_type.replace('_', ' ').title()} - Exec {execution_id}"
+                self._switch_results_viewer(new_viewer, tab_name)
+                
+                # Load results from specific execution
+                self._load_results_from_execution(new_viewer, engine_type, db_path, execution_id)
+            else:
+                print(f"[MainWindow] Failed to create viewer for engine type: {engine_type}")
+        
+        progress.setValue(len(selected_executions))
+        progress.close()
+        
+        if not progress.wasCanceled():
+            self.show_notification(f"Loaded {len(selected_executions)} execution(s)", "success")
+    
+    def _load_results_from_execution(self, viewer, engine_type: str, db_path: str, execution_id: int):
+        """Load results from a specific execution into the viewer."""
+        try:
+            if isinstance(viewer, IdentityResultsView):
+                # Identity viewer expects CorrelationResult objects
+                print(f"[MainWindow] Loading execution {execution_id} into Identity Results Viewer")
+                self._load_identity_results_from_execution(viewer, db_path, execution_id)
+                
+            elif isinstance(viewer, TimeBasedResultsViewer):
+                # Time-based viewer can load from database
+                print(f"[MainWindow] Loading execution {execution_id} into Time-Based Results Viewer")
+                viewer.set_database_path(db_path)
+                viewer.load_results_from_execution(execution_id)
+                
+            else:
+                # Generic viewer
+                print(f"[MainWindow] Loading execution {execution_id} into generic viewer")
+                if hasattr(viewer, 'load_results_from_execution'):
+                    viewer.load_results_from_execution(db_path, execution_id)
+                else:
+                    print(f"[MainWindow] Viewer does not support loading from execution")
+                    
+        except Exception as e:
+            print(f"[MainWindow] Error loading execution {execution_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                f"Failed to load execution {execution_id}:\n\n{str(e)}"
+            )
+    
+    def _load_identity_results_from_execution(self, viewer: IdentityResultsView, db_path: str, execution_id: int):
+        """Load identity results from a specific execution."""
+        try:
+            from ..engine.database_persistence import ResultsDatabase
+            
+            with ResultsDatabase(db_path) as db:
+                print(f"[MainWindow] Loading results for execution {execution_id}")
+                
+                # Load all results for the execution
+                correlation_results = db.load_execution_results(execution_id)
+                
+                if not correlation_results:
+                    print(f"[MainWindow] No results found for execution {execution_id}")
+                    QMessageBox.information(
+                        self,
+                        "No Results",
+                        f"No correlation results found for execution {execution_id}."
+                    )
+                    return
+                
+                print(f"[MainWindow] Loaded {len(correlation_results)} correlation results from database")
+                
+                # Use the first result or combine multiple results if needed
+                primary_result = correlation_results[0]
+                
+                # If multiple results, combine matches
+                if len(correlation_results) > 1:
+                    print(f"[MainWindow] Combining {len(correlation_results)} result sets...")
+                    for idx, additional_result in enumerate(correlation_results[1:], 2):
+                        print(f"[MainWindow]   Merging result {idx}/{len(correlation_results)}...")
+                        primary_result.matches.extend(additional_result.matches)
+                        primary_result.total_matches += additional_result.total_matches
+                    print(f"[MainWindow]   ✓ Combined into {primary_result.total_matches:,} total matches")
+                
+                print(f"[MainWindow] Loading {len(primary_result.matches):,} matches into identity viewer...")
+                viewer.load_from_correlation_result(primary_result)
+                print(f"[MainWindow] ✓ Successfully loaded into Identity viewer from database")
+                
+        except Exception as e:
+            print(f"[MainWindow] Error loading identity results from execution {execution_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    def _create_results_viewer_for_engine(self, engine_type: str, output_dir: str):
+        """Create the appropriate results viewer for the given engine type"""
+        try:
+            if engine_type == "identity_based":
+                print("[MainWindow] Creating Identity Results Viewer")
+                viewer = IdentityResultsView()
+                return viewer
+            
+            elif engine_type in ["time_window_scanning", "time_based"]:
+                print("[MainWindow] Creating Time-Based Results Viewer")
+                viewer = TimeBasedResultsViewer()
+                
+                # Set database path for hierarchical view if available
+                db_path = Path(output_dir) / "correlation_results.db"
+                if db_path.exists():
+                    viewer.set_database_path(str(db_path))
+                    print(f"[MainWindow] Set database path: {db_path}")
+                
+                return viewer
+            
+            else:
+                print(f"[MainWindow] Unknown engine type: {engine_type}, using generic viewer")
+                return DynamicResultsTabWidget()
+                
+        except Exception as e:
+            print(f"[MainWindow] Error creating viewer for {engine_type}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _switch_results_viewer(self, new_viewer, tab_name="Results"):
+        """Add results viewer as a sub-tab within the Results tab"""
+        try:
+            # Check if a sub-tab with this name already exists
+            existing_index = -1
+            for i in range(self.results_sub_tabs.count()):
+                if self.results_sub_tabs.tabText(i) == tab_name:
+                    existing_index = i
+                    break
+            
+            if existing_index >= 0:
+                # Sub-tab exists - replace its content
+                old_widget = self.results_sub_tabs.widget(existing_index)
+                self.results_sub_tabs.removeTab(existing_index)
+                if old_widget:
+                    old_widget.setParent(None)
+                    old_widget.deleteLater()
+                
+                # Add new viewer at the same position
+                self.results_sub_tabs.insertTab(existing_index, new_viewer, tab_name)
+                self.results_sub_tabs.setCurrentIndex(existing_index)
+            else:
+                # Sub-tab doesn't exist - add new sub-tab
+                new_index = self.results_sub_tabs.addTab(new_viewer, tab_name)
+                self.results_sub_tabs.setCurrentIndex(new_index)
+            
+            # Switch to Results tab (main tab)
+            self.tab_widget.setCurrentWidget(self.results_tab)
+            
+            self.current_results_viewer = new_viewer
+            print(f"[MainWindow] Added {tab_name} sub-tab in Results")
+            
+        except Exception as e:
+            print(f"[MainWindow] Error switching viewer: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            print(f"[MainWindow] Switched to {type(new_viewer).__name__}")
+            
+        except Exception as e:
+            print(f"[MainWindow] Error switching viewers: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _load_results_into_viewer(self, viewer, engine_type: str, output_dir: str):
+        """Load results into the appropriate viewer"""
+        try:
+            if isinstance(viewer, IdentityResultsView):
+                # Identity viewer expects CorrelationResult objects
+                print("[MainWindow] Loading results into Identity Results Viewer")
+                self._load_identity_results(viewer, output_dir)
+                
+            elif isinstance(viewer, TimeBasedResultsViewer):
+                # Time-based viewer can load from directory with database integration
+                print("[MainWindow] Loading results into Time-Based Results Viewer")
+                from pathlib import Path
+                db_path = Path(output_dir) / "correlation_results.db"
+                
+                # Call load_results with output_dir and db_path
+                viewer.load_results(
+                    output_dir=output_dir,
+                    db_path=str(db_path) if db_path.exists() else None
+                )
+                
+            else:
+                # Generic viewer
+                print("[MainWindow] Loading results into generic viewer")
+                viewer.set_engine_type(engine_type)
+                viewer.load_results(output_dir)
+                
+        except Exception as e:
+            print(f"[MainWindow] Error loading results into viewer: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _load_identity_results(self, viewer: IdentityResultsView, output_dir: str):
+        """Load results specifically for Identity Results Viewer from database"""
+        try:
+            from ..engine.database_persistence import ResultsDatabase
+            
+            output_path = Path(output_dir)
+            db_path = output_path / "correlation_results.db"
+            
+            if not db_path.exists():
+                print(f"[MainWindow] Database not found: {db_path}")
+                QMessageBox.warning(
+                    self,
+                    "Database Not Found",
+                    f"Correlation results database not found:\n{db_path}\n\n"
+                    "Please ensure the correlation engine has been executed and results saved to database."
+                )
+                return
+            
+            print(f"[MainWindow] Loading identity results from database: {db_path}")
+            
+            with ResultsDatabase(str(db_path)) as db:
+                # Get the latest execution
+                latest_execution_id = db.get_latest_execution_id()
+                
+                if not latest_execution_id:
+                    print("[MainWindow] No executions found in database")
+                    QMessageBox.information(
+                        self,
+                        "No Results",
+                        "No correlation results found in database."
+                    )
+                    return
+                
+                print(f"[MainWindow] Loading results for execution {latest_execution_id}")
+                
+                # Load all results for the latest execution
+                correlation_results = db.load_execution_results(latest_execution_id)
+                
+                if not correlation_results:
+                    print("[MainWindow] No results found for latest execution")
+                    QMessageBox.information(
+                        self,
+                        "No Results",
+                        f"No correlation results found for execution {latest_execution_id}."
+                    )
+                    return
+                
+                print(f"[MainWindow] Loaded {len(correlation_results)} correlation results from database")
+                
+                # Use the first result or combine multiple results if needed
+                primary_result = correlation_results[0]
+                
+                # If multiple results, combine matches
+                if len(correlation_results) > 1:
+                    print(f"[MainWindow] Combining {len(correlation_results)} result sets...")
+                    for idx, additional_result in enumerate(correlation_results[1:], 2):
+                        print(f"[MainWindow]   Merging result {idx}/{len(correlation_results)}...")
+                        primary_result.matches.extend(additional_result.matches)
+                        primary_result.total_matches += additional_result.total_matches
+                    print(f"[MainWindow]   ✓ Combined into {primary_result.total_matches:,} total matches")
+                
+                print(f"[MainWindow] Loading {len(primary_result.matches):,} matches into identity viewer...")
+                viewer.load_from_correlation_result(primary_result)
+                print(f"[MainWindow] ✓ Successfully loaded into Identity viewer from database")
+                
+        except Exception as e:
+            print(f"[MainWindow] Error loading identity results from database: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self,
+                "Database Error",
+                f"Failed to load results from database:\n\n{str(e)}"
+            )
     
     def closeEvent(self, event):
         """Handle window close event"""

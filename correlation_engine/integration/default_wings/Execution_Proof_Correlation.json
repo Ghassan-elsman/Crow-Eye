@@ -111,7 +111,7 @@
     }
   ],
   
-  "time_window_minutes": 5,
+  "time_window_minutes": 180,
   "minimum_matches": 1,
   "target_application": "",
   "target_file_path": "",

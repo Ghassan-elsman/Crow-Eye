@@ -264,6 +264,7 @@ class CorrelationResult:
             matches_truncated = True
         
         return {
+            'format_version': '2.0',  # Include format version for future compatibility
             'wing_id': self.wing_id,
             'wing_name': self.wing_name,
             'execution_time': self.execution_time,
@@ -293,10 +294,10 @@ class CorrelationResult:
         try:
             return json.dumps(self.to_dict(), indent=indent, default=str)
         except MemoryError:
-            print(f"[CorrelationResult] MemoryError: Result too large for JSON string ({self.total_matches} matches)")
+            # print(f"[CorrelationResult] MemoryError: Result too large for JSON string ({self.total_matches} matches)")
             raise
         except Exception as e:
-            print(f"[CorrelationResult] Error in to_json: {e}")
+            # print(f"[CorrelationResult] Error in to_json: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -315,7 +316,7 @@ class CorrelationResult:
         try:
             # For large result sets, save summary only to avoid memory issues
             if self.total_matches > max_matches_for_json:
-                print(f"[CorrelationResult] Large result set ({self.total_matches:,} matches) - saving summary only")
+                # print(f"[CorrelationResult] Large result set ({self.total_matches:,} matches) - saving summary only")
                 
                 # Create summary-only dict
                 summary_dict = {
@@ -343,19 +344,20 @@ class CorrelationResult:
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(summary_dict, f, indent=2, default=str)
                 
-                print(f"[CorrelationResult] Saved summary to {file_path}")
+                # print(f"[CorrelationResult] Saved summary to {file_path}")
             else:
                 # Normal save for smaller result sets
                 json_content = self.to_json()
                 if not json_content:
-                    print(f"[CorrelationResult] Warning: to_json returned empty content")
+                    # print(f"[CorrelationResult] Warning: to_json returned empty content")
+                    pass
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(json_content)
-                print(f"[CorrelationResult] Saved {len(json_content)} bytes to {file_path}")
+                # print(f"[CorrelationResult] Saved {len(json_content)} bytes to {file_path}")
                 
         except MemoryError:
             # Fallback: save summary only on memory error
-            print(f"[CorrelationResult] MemoryError - falling back to summary-only save")
+            # print(f"[CorrelationResult] MemoryError - falling back to summary-only save")
             summary_dict = {
                 'wing_id': self.wing_id,
                 'wing_name': self.wing_name,
@@ -368,32 +370,111 @@ class CorrelationResult:
             }
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(summary_dict, f, indent=2, default=str)
-            print(f"[CorrelationResult] Saved fallback summary to {file_path}")
+            # print(f"[CorrelationResult] Saved fallback summary to {file_path}")
             
         except Exception as e:
-            print(f"[CorrelationResult] Error saving to file {file_path}: {e}")
+            # print(f"[CorrelationResult] Error saving to file {file_path}: {e}")
             import traceback
             traceback.print_exc()
             raise
     
     @classmethod
     def load_from_file(cls, file_path: str) -> 'CorrelationResult':
-        """Load results from JSON file"""
-        with open(file_path, 'r') as f:
+        """
+        Load results from JSON file with legacy format support.
+        
+        Handles:
+        - Current format with all fields
+        - Legacy format without weighted_score (calculates simple score)
+        - Legacy format without semantic_mappings (marks as unavailable)
+        - Both dictionary and object formats for feather_records
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        # Reconstruct matches
+        # Detect format version
+        format_version = data.get('format_version', '1.0')
+        
+        # Detect engine type from metadata
+        engine_type = None
+        if 'feather_metadata' in data:
+            engine_type = data['feather_metadata'].get('engine_type')
+        if not engine_type and 'summary' in data:
+            engine_type = data['summary'].get('engine_type')
+        
+        # Reconstruct matches with legacy format handling
         matches = []
         for match_data in data.get('matches', []):
-            matches.append(CorrelationMatch(**match_data))
+            try:
+                # Handle legacy format without weighted_score
+                if 'weighted_score' not in match_data or match_data.get('weighted_score') is None:
+                    # Calculate simple score from feather count
+                    feather_count = match_data.get('feather_count', 1)
+                    match_data['weighted_score'] = {
+                        'score': feather_count,
+                        'interpretation': f'{feather_count} Feathers Matched',
+                        'scoring_mode': 'simple_count_legacy'
+                    }
+                    logger.debug(f"Applied legacy scoring for match {match_data.get('match_id', 'unknown')}")
+                
+                # Handle legacy format without semantic_mappings
+                if 'semantic_data' not in match_data or match_data.get('semantic_data') is None:
+                    match_data['semantic_data'] = {
+                        '_unavailable': True,
+                        '_reason': 'Legacy format - semantic mappings not available'
+                    }
+                
+                # Handle both dictionary and object formats for feather_records
+                feather_records = match_data.get('feather_records', {})
+                if isinstance(feather_records, list):
+                    # Convert list format to dictionary
+                    converted_records = {}
+                    for i, record in enumerate(feather_records):
+                        if isinstance(record, dict):
+                            feather_id = record.get('feather_id', f'feather_{i}')
+                            converted_records[feather_id] = record
+                        else:
+                            converted_records[f'feather_{i}'] = {'data': str(record)}
+                    match_data['feather_records'] = converted_records
+                
+                # Use sensible defaults for missing required fields
+                match_data.setdefault('match_id', f"legacy_{len(matches)}")
+                match_data.setdefault('timestamp', '')
+                match_data.setdefault('feather_records', {})
+                match_data.setdefault('match_score', 0.0)
+                match_data.setdefault('feather_count', 0)
+                match_data.setdefault('time_spread_seconds', 0.0)
+                match_data.setdefault('anchor_feather_id', '')
+                match_data.setdefault('anchor_artifact_type', '')
+                
+                # Remove any fields not in CorrelationMatch
+                valid_fields = {
+                    'match_id', 'timestamp', 'feather_records', 'match_score', 'feather_count',
+                    'time_spread_seconds', 'anchor_feather_id', 'anchor_artifact_type',
+                    'matched_application', 'matched_file_path', 'matched_event_id',
+                    'score_breakdown', 'confidence_score', 'confidence_category', 'weighted_score',
+                    'time_deltas', 'field_similarity_scores', 'candidate_counts',
+                    'algorithm_version', 'wing_config_hash', 'is_duplicate', 'duplicate_info',
+                    'semantic_data'
+                }
+                filtered_data = {k: v for k, v in match_data.items() if k in valid_fields}
+                
+                matches.append(CorrelationMatch(**filtered_data))
+                
+            except Exception as e:
+                logger.warning(f"Error loading match from {file_path}: {e}, skipping match")
+                continue
         
         result = cls(
-            wing_id=data['wing_id'],
-            wing_name=data['wing_name'],
+            wing_id=data.get('wing_id', 'unknown'),
+            wing_name=data.get('wing_name', 'Unknown Wing'),
             execution_time=data.get('execution_time', ''),
             execution_duration_seconds=data.get('execution_duration_seconds', 0.0),
             matches=matches,
-            total_matches=data.get('total_matches', 0),
+            total_matches=data.get('total_matches', len(matches)),
             feathers_processed=data.get('feathers_processed', 0),
             total_records_scanned=data.get('total_records_scanned', 0),
             duplicates_prevented=data.get('duplicates_prevented', 0),
@@ -407,5 +488,12 @@ class CorrelationResult:
             errors=data.get('errors', []),
             warnings=data.get('warnings', [])
         )
+        
+        # Store detected engine type in metadata
+        if engine_type:
+            result.feather_metadata['engine_type'] = engine_type
+        
+        # Store format version for reference
+        result.feather_metadata['loaded_format_version'] = format_version
         
         return result

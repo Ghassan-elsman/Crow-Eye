@@ -104,12 +104,26 @@ class FeatherSpec:
         return cls(**filtered_data)
 
 
+def _get_wing_anchor_priority_from_registry() -> List[str]:
+    """Get anchor priority list from artifact type registry"""
+    try:
+        from ...config.artifact_type_registry import get_registry
+        return get_registry().get_anchor_priority_list()
+    except Exception:
+        # Fallback to hard-coded defaults if registry fails
+        return [
+            "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
+            "Jumplists", "LNK", "MFT", "USN"
+        ]
+
+
 @dataclass
 class CorrelationRules:
     """Correlation rules for the wing"""
-    time_window_minutes: int = 5
+    time_window_minutes: int = 180  # Default: 3 hours for better correlation accuracy
     minimum_matches: int = 1
     show_partial_matches: bool = True
+    max_time_range_years: int = 20  # Maximum time span to prevent false timestamps from expanding range
     
     # Wing-level filters (apply to ALL feathers)
     target_application: str = ""  # e.g., "chrome.exe", "notepad.exe", or "*" for all
@@ -119,10 +133,7 @@ class CorrelationRules:
     
     # Anchor configuration
     anchor_feather_override: str = ""  # Optional: manually specify anchor feather_id
-    anchor_priority: List[str] = field(default_factory=lambda: [
-        "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
-        "Jumplists", "LNK", "MFT", "USN"
-    ])
+    anchor_priority: List[str] = field(default_factory=lambda: _get_wing_anchor_priority_from_registry())
     timestamp_fields: Dict[str, str] = field(default_factory=lambda: {
         "Prefetch": "last_run_time",
         "SRUM": "timestamp",

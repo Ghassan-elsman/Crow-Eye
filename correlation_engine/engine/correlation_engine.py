@@ -133,8 +133,9 @@ class CorrelationEngine:
         ]
         
         if self.debug_mode:
-            print("[DEBUG] Correlation Engine initialized in DEBUG MODE")
-            print(f"[DEBUG] Loaded {len(self.forensic_timestamp_patterns)} forensic timestamp patterns")
+            # print("[DEBUG] Correlation Engine initialized in DEBUG MODE")
+            # print(f"[DEBUG] Loaded {len(self.forensic_timestamp_patterns)} forensic timestamp patterns")
+            pass
     
     def register_progress_listener(self, listener):
         """
@@ -165,9 +166,10 @@ class CorrelationEngine:
             except Exception as e:
                 # Log error but continue execution
                 if self.debug_mode:
-                    print(f"[DEBUG] Progress listener error: {str(e)}")
+                    # print(f"[DEBUG] Progress listener error: {str(e)}")
+                    pass
                 # Fallback to console output
-                print(f"[Progress] {event_type}: {data}")
+                # print(f"[Progress] {event_type}: {data}")
     
     def execute_wing(self, wing: Wing, feather_paths: Dict[str, str]) -> CorrelationResult:
         """
@@ -288,10 +290,16 @@ class CorrelationEngine:
                 )
         
         # Validate anchor_priority list contains valid artifact types
-        valid_artifact_types = {
-            "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
-            "Jumplists", "LNK", "MFT", "USN", "Registry", "Browser"
-        }
+        try:
+            from ..config.artifact_type_registry import get_registry
+            registry = get_registry()
+            valid_artifact_types = set(registry.get_all_types())
+        except Exception:
+            # Fallback to hard-coded set if registry fails
+            valid_artifact_types = {
+                "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
+                "Jumplists", "LNK", "MFT", "USN", "Registry", "Browser"
+            }
         
         for artifact_type in rules.anchor_priority:
             if artifact_type not in valid_artifact_types:
@@ -351,16 +359,19 @@ class CorrelationEngine:
                 if detected_cols.timestamp_columns:
                     self.timestamp_columns[feather_id] = detected_cols.timestamp_columns[0]
                     if self.debug_mode:
-                        print(f"[DEBUG] {feather_id}: Detected timestamp column = '{detected_cols.timestamp_columns[0]}'")
+                        # print(f"[DEBUG] {feather_id}: Detected timestamp column = '{detected_cols.timestamp_columns[0]}'")
+                        pass
                         if len(detected_cols.timestamp_columns) > 1:
-                            print(f"[DEBUG] {feather_id}: Additional timestamp columns: {detected_cols.timestamp_columns[1:]}")
-                        print(f"[DEBUG] {feather_id}: Name columns = {detected_cols.name_columns}")
-                        print(f"[DEBUG] {feather_id}: Path columns = {detected_cols.path_columns}")
+                            # print(f"[DEBUG] {feather_id}: Additional timestamp columns: {detected_cols.timestamp_columns[1:]}")
+                            pass
+                        # print(f"[DEBUG] {feather_id}: Name columns = {detected_cols.name_columns}")
+                        # print(f"[DEBUG] {feather_id}: Path columns = {detected_cols.path_columns}")
                 else:
                     # Fallback: look for 'timestamp' column
                     self.timestamp_columns[feather_id] = 'timestamp'
                     if self.debug_mode:
-                        print(f"[DEBUG] {feather_id}: No timestamp column detected, using fallback 'timestamp'")
+                        # print(f"[DEBUG] {feather_id}: No timestamp column detected, using fallback 'timestamp'")
+                        pass
                 
                 # Collect feather metadata
                 result.feather_metadata[feather_id] = {
@@ -372,7 +383,8 @@ class CorrelationEngine:
                 }
                 
                 if self.debug_mode:
-                    print(f"[DEBUG] {feather_id}: Loaded {loader.get_record_count()} records, artifact_type={loader.artifact_type}")
+                    # print(f"[DEBUG] {feather_id}: Loaded {loader.get_record_count()} records, artifact_type={loader.artifact_type}")
+                    pass
                 
                 # Validate artifact type consistency
                 if loader.artifact_type and loader.artifact_type != feather_spec.artifact_type:
@@ -506,9 +518,11 @@ class CorrelationEngine:
         matches_limited_count = 0
         
         # STEP 1: Collect ALL anchors from ALL feathers in the wing
-        print(f"\n[Correlation] Collecting anchors from all feathers in wing...")
-        print(f"[Correlation] Wing: {wing.wing_name} (ID: {wing.wing_id})")
-        print(f"[Correlation] Feathers in wing: {len(filtered_records)}")
+        if self.debug_mode:
+            # print(f"\n[Correlation] Collecting anchors from all feathers in wing...")
+            # print(f"[Correlation] Wing: {wing.wing_name} (ID: {wing.wing_id})")
+            # print(f"[Correlation] Feathers in wing: {len(filtered_records)}")
+            pass
         
         # Emit wing start event
         self._emit_progress_event("wing_start", {
@@ -530,7 +544,9 @@ class CorrelationEngine:
             timestamp_columns = self._detect_forensic_timestamp_columns(feather_id, records)
             
             if not timestamp_columns:
-                print(f"[Correlation]   • {feather_id} ({artifact_type}): 0 anchors (no valid timestamp columns)")
+                if self.debug_mode:
+                    # print(f"[Correlation]   • {feather_id} ({artifact_type}): 0 anchors (no valid timestamp columns)")
+                    pass
                 anchors_per_feather[feather_id] = 0
                 self._emit_progress_event("anchor_collection", {
                     'feather_id': feather_id,
@@ -572,13 +588,17 @@ class CorrelationEngine:
             
             anchors_per_feather[feather_id] = feather_anchor_count
             
-            # Enhanced logging for forensic audit trail
-            if feather_anchor_count > 0:
-                print(f"[Correlation]   • {feather_id} ({artifact_type}): {feather_anchor_count} anchors (using {primary_timestamp_col})")
-                if invalid_timestamps > 0:
-                    print(f"[Correlation]     └─ Filtered {invalid_timestamps} invalid timestamps")
-            else:
-                print(f"[Correlation]   • {feather_id} ({artifact_type}): 0 anchors (all timestamps invalid)")
+            # Enhanced logging for forensic audit trail (only in debug mode)
+            if self.debug_mode:
+                if feather_anchor_count > 0:
+                    # print(f"[Correlation]   • {feather_id} ({artifact_type}): {feather_anchor_count} anchors (using {primary_timestamp_col})")
+                    pass
+                    if invalid_timestamps > 0:
+                        # print(f"[Correlation]     └─ Filtered {invalid_timestamps} invalid timestamps")
+                        pass
+                else:
+                    # print(f"[Correlation]   • {feather_id} ({artifact_type}): 0 anchors (all timestamps invalid)")
+                    pass
             
             # Emit anchor collection event
             self._emit_progress_event("anchor_collection", {
@@ -593,10 +613,12 @@ class CorrelationEngine:
         all_anchors.sort(key=lambda x: x['timestamp'])
         
         total_anchors = len(all_anchors)
-        print(f"[Correlation] Total anchors collected: {total_anchors}")
-        print(f"[Correlation] Time window: {rules.time_window_minutes} minutes")
-        print(f"[Correlation] Minimum matches required: {rules.minimum_matches}")
-        print(f"[Correlation] Starting correlation analysis...")
+        if self.debug_mode:
+            # print(f"[Correlation] Total anchors collected: {total_anchors}")
+            # print(f"[Correlation] Time window: {rules.time_window_minutes} minutes")
+            # print(f"[Correlation] Minimum matches required: {rules.minimum_matches}")
+            # print(f"[Correlation] Starting correlation analysis...")
+            pass
         
         # Emit correlation start event
         self._emit_progress_event("correlation_start", {
@@ -611,18 +633,19 @@ class CorrelationEngine:
         
         # STEP 2: For each anchor, find matching records from OTHER feathers
         invalid_timestamps_count = 0
-        PROGRESS_INTERVAL = 1000
+        PROGRESS_INTERVAL = 100  # Emit summary progress every 100 anchors
+        ANCHOR_PROGRESS_INTERVAL = 50  # Emit anchor progress every 50 anchors
         
         if self.debug_mode:
-            print(f"[DEBUG] Starting correlation with {total_anchors} total anchors")
-            print(f"[DEBUG] Time window: {rules.time_window_minutes} minutes")
-            print(f"[DEBUG] Minimum matches required: {rules.minimum_matches}")
+            # print(f"[DEBUG] Starting correlation with {total_anchors} total anchors")
+            # print(f"[DEBUG] Time window: {rules.time_window_minutes} minutes")
+            # print(f"[DEBUG] Minimum matches required: {rules.minimum_matches}")
+            pass
         
         for anchor_index, anchor_data in enumerate(all_anchors):
-            # Progress tracking
+            # Progress tracking - emit event but don't print (let GUI handle display)
             if anchor_index > 0 and anchor_index % PROGRESS_INTERVAL == 0:
-                print(f"    Progress: {anchor_index}/{total_anchors} anchors processed, {len(matches)} matches found")
-                # Emit summary progress event
+                # Emit summary progress event (GUI will display this)
                 self._emit_progress_event("summary_progress", {
                     'anchors_processed': anchor_index,
                     'total_anchors': total_anchors,
@@ -637,7 +660,8 @@ class CorrelationEngine:
             
             # Debug first few anchor records
             if self.debug_mode and anchor_index < 3:
-                print(f"[DEBUG] Anchor {anchor_index}: feather={anchor_feather_id}, time={anchor_time}, data={str(anchor_record)[:100]}...")
+                # print(f"[DEBUG] Anchor {anchor_index}: feather={anchor_feather_id}, time={anchor_time}, data={str(anchor_record)[:100]}...")
+                pass
             
             # Generate unique identifier for anchor record
             # IMPORTANT: Include timestamp to make multi-timestamp records unique
@@ -664,14 +688,15 @@ class CorrelationEngine:
             )
             
             if self.debug_mode and anchor_index < 3:
-                print(f"[DEBUG] Anchor {anchor_index}: Generated {len(match_combinations)} match combinations")
+                # print(f"[DEBUG] Anchor {anchor_index}: Generated {len(match_combinations)} match combinations")
+                pass
             
             # Track if we hit the limit for this anchor
             if len(match_combinations) >= max_matches_per_anchor:
                 matches_limited_count += 1
             
             # Emit anchor progress event (GUI will display this)
-            if anchor_index % 100 == 0:
+            if anchor_index % ANCHOR_PROGRESS_INTERVAL == 0:
                 self._emit_progress_event("anchor_progress", {
                     'anchor_index': anchor_index,
                     'total_anchors': total_anchors,
@@ -784,15 +809,18 @@ class CorrelationEngine:
         
         # Log statistics
         if self.debug_mode:
-            print(f"[DEBUG] Correlation complete:")
-            print(f"[DEBUG]   - Total anchor records: {total_anchors}")
-            print(f"[DEBUG]   - Invalid timestamps: {invalid_timestamps_count}")
-            print(f"[DEBUG]   - Matches found: {len(matches)}")
-            print(f"[DEBUG]   - Duplicates prevented: {self.duplicates_prevented}")
+            # print(f"[DEBUG] Correlation complete:")
+            # print(f"[DEBUG]   - Total anchor records: {total_anchors}")
+            # print(f"[DEBUG]   - Invalid timestamps: {invalid_timestamps_count}")
+            # print(f"[DEBUG]   - Matches found: {len(matches)}")
+            # print(f"[DEBUG]   - Duplicates prevented: {self.duplicates_prevented}")
+            pass
             if self.duplicates_by_feather:
-                print(f"[DEBUG]   - Duplicates by feather:")
+                # print(f"[DEBUG]   - Duplicates by feather:")
+                pass
                 for feather_id, count in sorted(self.duplicates_by_feather.items()):
-                    print(f"[DEBUG]     • {feather_id}: {count} duplicates")
+                    # print(f"[DEBUG]     • {feather_id}: {count} duplicates")
+                    pass
         
         if invalid_timestamps_count > 0:
             result.warnings.append(
@@ -922,7 +950,8 @@ class CorrelationEngine:
         available_columns = list(sample_record.keys())
         
         if self.debug_mode:
-            print(f"[DEBUG] {feather_id}: Analyzing {len(available_columns)} columns for timestamps")
+            # print(f"[DEBUG] {feather_id}: Analyzing {len(available_columns)} columns for timestamps")
+            pass
         
         # Find potential timestamp columns using forensic patterns
         potential_columns = []
@@ -934,9 +963,11 @@ class CorrelationEngine:
                     break  # Found match for this pattern, move to next
         
         if self.debug_mode and potential_columns:
-            print(f"[DEBUG] {feather_id}: Found {len(potential_columns)} potential timestamp columns")
+            # print(f"[DEBUG] {feather_id}: Found {len(potential_columns)} potential timestamp columns")
+            pass
             for col_name, pattern in potential_columns[:5]:  # Show first 5
-                print(f"[DEBUG] {feather_id}:   • {col_name} (matched pattern: {pattern})")
+                # print(f"[DEBUG] {feather_id}:   • {col_name} (matched pattern: {pattern})")
+                pass
         
         # Validate each potential column by checking actual data
         valid_columns = []
@@ -957,11 +988,13 @@ class CorrelationEngine:
                 valid_columns.append((col_name, valid_count, total_checked, percentage))
                 
                 if self.debug_mode:
-                    print(f"[DEBUG] {feather_id}: ✅ {col_name} has {valid_count}/{total_checked} valid timestamps ({percentage:.1f}%)")
+                    # print(f"[DEBUG] {feather_id}: ✅ {col_name} has {valid_count}/{total_checked} valid timestamps ({percentage:.1f}%)")
+                    pass
         
         if not valid_columns:
             if self.debug_mode:
-                print(f"[DEBUG] {feather_id}: ❌ No valid timestamp columns found")
+                # print(f"[DEBUG] {feather_id}: ❌ No valid timestamp columns found")
+                pass
             return []
         
         # Sort by percentage of valid timestamps (best first)
@@ -972,9 +1005,11 @@ class CorrelationEngine:
         
         if self.debug_mode:
             best_col, best_valid, best_total, best_pct = valid_columns[0]
-            print(f"[DEBUG] {feather_id}: 🎯 Selected '{best_col}' as primary timestamp column ({best_valid}/{best_total} valid, {best_pct:.1f}%)")
+            # print(f"[DEBUG] {feather_id}: 🎯 Selected '{best_col}' as primary timestamp column ({best_valid}/{best_total} valid, {best_pct:.1f}%)")
+            pass
             if len(valid_columns) > 1:
-                print(f"[DEBUG] {feather_id}: 📋 {len(valid_columns)-1} backup timestamp columns available")
+                # print(f"[DEBUG] {feather_id}: 📋 {len(valid_columns)-1} backup timestamp columns available")
+                pass
         
         return result
     
@@ -1208,13 +1243,17 @@ class CorrelationEngine:
         
         # Log filter statistics
         if len(filtered) < len(records):
-            print(f"    [Time Period Filter] {feather_id}: {len(records)} → {len(filtered)} records")
+            # print(f"    [Time Period Filter] {feather_id}: {len(records)} → {len(filtered)} records")
+            pass
             if skipped_invalid > 0:
-                print(f"      • Skipped {skipped_invalid} records with invalid timestamps")
+                # print(f"      • Skipped {skipped_invalid} records with invalid timestamps")
+                pass
             if skipped_before_start > 0:
-                print(f"      • Skipped {skipped_before_start} records before start time")
+                # print(f"      • Skipped {skipped_before_start} records before start time")
+                pass
             if skipped_after_end > 0:
-                print(f"      • Skipped {skipped_after_end} records after end time")
+                # print(f"      • Skipped {skipped_after_end} records after end time")
+                pass
         
         return filtered
     

@@ -6,7 +6,7 @@ Complete end-to-end configuration for the entire correlation process.
 import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from .feather_config import FeatherConfig
 from .wing_config import WingConfig
 
@@ -36,11 +36,17 @@ class PipelineConfig:
     auto_run_correlation: bool = True  # Automatically run correlation after feathers
     
     # NEW: Engine selection and filtering
-    engine_type: str = "time_based"  # "time_based" or "identity_based"
+    engine_type: str = "time_window_scanning"  # "time_window_scanning" or "identity_based"
     time_period_start: Optional[str] = None  # ISO format datetime string
     time_period_end: Optional[str] = None  # ISO format datetime string
     identity_filters: Optional[List[str]] = None  # List of identity patterns (for identity engine)
     identity_filter_case_sensitive: bool = False  # Case-sensitive identity matching
+    
+    # NEW: Semantic mapping and scoring configuration
+    semantic_mapping_config: Optional[Dict[str, Any]] = None  # Semantic mapping settings
+    weighted_scoring_config: Optional[Dict[str, Any]] = None  # Weighted scoring settings
+    debug_mode: bool = False  # Enable debug output
+    verbose_logging: bool = False  # Enable verbose logging
     
     # Output settings
     output_directory: str = ""
@@ -75,6 +81,10 @@ class PipelineConfig:
             'time_period_end': self.time_period_end,  # NEW
             'identity_filters': self.identity_filters,  # NEW
             'identity_filter_case_sensitive': self.identity_filter_case_sensitive,  # NEW
+            'semantic_mapping_config': self.semantic_mapping_config,  # NEW
+            'weighted_scoring_config': self.weighted_scoring_config,  # NEW
+            'debug_mode': self.debug_mode,  # NEW
+            'verbose_logging': self.verbose_logging,  # NEW
             'output_directory': self.output_directory,
             'generate_report': self.generate_report,
             'report_format': self.report_format,
@@ -123,6 +133,14 @@ class PipelineConfig:
             data['identity_filters'] = None
         if 'identity_filter_case_sensitive' not in data:
             data['identity_filter_case_sensitive'] = False
+        if 'semantic_mapping_config' not in data:
+            data['semantic_mapping_config'] = None
+        if 'weighted_scoring_config' not in data:
+            data['weighted_scoring_config'] = None
+        if 'debug_mode' not in data:
+            data['debug_mode'] = False
+        if 'verbose_logging' not in data:
+            data['verbose_logging'] = False
         
         return cls(**data)
     

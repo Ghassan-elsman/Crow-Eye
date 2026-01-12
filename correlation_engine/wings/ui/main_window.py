@@ -330,7 +330,7 @@ class WingsCreatorWindow(QMainWindow):
         self.time_window_spin = QSpinBox()
         self.time_window_spin.setMinimum(1)
         self.time_window_spin.setMaximum(1440)
-        self.time_window_spin.setValue(5)
+        self.time_window_spin.setValue(180)  # Default: 3 hours for better correlation accuracy
         self.time_window_spin.setSuffix(" minutes")
         self.time_window_spin.valueChanged.connect(self.on_time_window_changed)
         time_help = QLabel("(±tolerance for matching)")

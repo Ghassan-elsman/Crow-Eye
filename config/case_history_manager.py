@@ -1,4 +1,4 @@
-"""Case history manager ."""
+"""Case history manager for Crow Eye forensic investigation tool."""
 
 import json
 import os

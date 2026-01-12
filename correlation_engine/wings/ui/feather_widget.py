@@ -38,7 +38,7 @@ class FeatherWidget(QWidget):
     def set_case_directory(self, case_directory: str):
         """Set the case directory for feather path resolution"""
         self.case_directory = case_directory
-        print(f"[FeatherWidget] Case directory set to: {case_directory}")
+        # print(f"[FeatherWidget] Case directory set to: {case_directory}")
         
         # If we already have a feather_spec, re-resolve paths
         if self.feather_spec and self.feather_spec.database_filename:
@@ -74,17 +74,39 @@ class FeatherWidget(QWidget):
         # Priority 1: Case directory paths
         if self.case_directory:
             case_path = Path(self.case_directory)
-            correlation_dir = case_path / "Correlation" / "feathers"
+            
+            # Handle different case directory structures
+            # If case_directory ends with 'output', go up one level for feathers
+            if case_path.name == "output":
+                correlation_base = case_path.parent
+                correlation_dir = correlation_base / "feathers"
+            else:
+                correlation_dir = case_path / "Correlation" / "feathers"
+            
+            # Also try direct feathers subdirectory
+            direct_feathers_dir = case_path / "feathers"
+            
+            # print(f"[FeatherWidget] Trying to resolve: {current_path}")
+            # print(f"[FeatherWidget] Case directory: {case_path}")
+            # print(f"[FeatherWidget] Correlation dir: {correlation_dir}")
             
             # Try with database_filename as-is
             if current_path:
                 # Remove any leading path components to get just the filename
                 filename_only = Path(current_path).name
                 potential_paths.append(correlation_dir / filename_only)
+                potential_paths.append(direct_feathers_dir / filename_only)
                 
                 # Also try the full relative path from case root
                 potential_paths.append(case_path / current_path)
                 potential_paths.append(case_path / "Correlation" / current_path)
+                
+                # Try resolving relative path from correlation base
+                if case_path.name == "output":
+                    potential_paths.append(correlation_base / current_path)
+                    
+                # Try resolving from parent of case directory (in case case_directory is nested)
+                potential_paths.append(case_path.parent / current_path)
             
             # Try with feather_config_name (from default wings)
             if hasattr(self.feather_spec, 'feather_config_name') and self.feather_spec.feather_config_name:
@@ -92,6 +114,8 @@ class FeatherWidget(QWidget):
                 potential_paths.extend([
                     correlation_dir / f"{config_name}.db",
                     correlation_dir / config_name,  # In case it already has .db
+                    direct_feathers_dir / f"{config_name}.db",
+                    direct_feathers_dir / config_name,
                 ])
             
             # Try with feather_id
@@ -100,6 +124,8 @@ class FeatherWidget(QWidget):
                 potential_paths.extend([
                     correlation_dir / f"{fid}.db",
                     correlation_dir / f"{fid}_CrowEyeFeather.db",
+                    direct_feathers_dir / f"{fid}.db",
+                    direct_feathers_dir / f"{fid}_CrowEyeFeather.db",
                 ])
         
         # Priority 2: Relative to current working directory
@@ -110,11 +136,16 @@ class FeatherWidget(QWidget):
                 Path("Correlation") / "feathers" / Path(current_path).name,
             ])
         
+        # Debug: Print first few paths being tried
+        # print(f"[FeatherWidget] Trying {len(potential_paths)} potential paths (showing first 3):")
+        # for i, path in enumerate(potential_paths[:3]):
+        #     print(f"[FeatherWidget]   {i+1}. {path}")
+        
         # Try each path
         for path in potential_paths:
             if path.exists():
                 resolved_path = str(path.absolute())
-                print(f"[FeatherWidget] ✓ Resolved path: {resolved_path}")
+                # print(f"[FeatherWidget] ✓ Resolved path: {resolved_path}")
                 self.db_path_edit.setText(resolved_path)
                 self.db_path_edit.setStyleSheet("color: #00FF00;")  # Green = found
                 
@@ -123,8 +154,8 @@ class FeatherWidget(QWidget):
                 return
         
         # Not found - show original path in orange
-        print(f"[FeatherWidget] ✗ Could not resolve path for: {current_path}")
-        print(f"[FeatherWidget]   Tried {len(potential_paths)} locations")
+        # print(f"[FeatherWidget] ✗ Could not resolve path for: {current_path}")
+        # print(f"[FeatherWidget]   Tried {len(potential_paths)} locations")
         if current_path:
             self.db_path_edit.setText(current_path)
         else:
