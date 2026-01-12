@@ -235,30 +235,13 @@ class WindowMemoryManager:
         """
         Determine if streaming mode should be enabled.
         
+        Streaming mode is now ALWAYS enabled for optimal performance and memory usage.
+        
         Returns:
-            Tuple of (should_enable, reason)
+            Tuple of (should_enable, reason) - always returns (True, reason)
         """
-        report = self.check_memory_pressure()
-        
-        # Enable streaming if over memory limit
-        if report.is_over_limit:
-            return True, f"Memory usage ({report.current_memory_mb:.1f}MB) exceeds limit"
-        
-        # Enable streaming if usage is very high
-        if report.usage_percentage > 85:
-            return True, f"Memory usage is {report.usage_percentage:.1f}% of limit"
-        
-        # Enable streaming if system memory is low
-        if report.available_memory_mb < 500:  # Less than 500MB available
-            return True, f"Low system memory available ({report.available_memory_mb:.1f}MB)"
-        
-        # Enable streaming if efficiency is poor
-        if len(self.efficiency_history) > 5:
-            recent_efficiency = sum(self.efficiency_history[-5:]) / 5
-            if recent_efficiency > 10.0:  # More than 10MB per 1000 records
-                return True, f"Poor memory efficiency ({recent_efficiency:.1f}MB/1000 records)"
-        
-        return False, "Memory usage within acceptable limits"
+        # ALWAYS enable streaming mode for optimal performance
+        return True, "Streaming mode enabled for optimal performance"
     
     def get_optimization_suggestions(self) -> List[str]:
         """

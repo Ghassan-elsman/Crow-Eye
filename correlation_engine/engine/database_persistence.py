@@ -75,9 +75,20 @@ class StreamingMatchWriter:
                 execution_duration_seconds REAL,
                 anchor_feather_id TEXT,
                 anchor_selection_reason TEXT,
-                filters_applied TEXT
+                filters_applied TEXT,
+                feather_metadata TEXT
             )
         """)
+        
+        # Migration: Add feather_metadata column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("SELECT feather_metadata FROM results LIMIT 1")
+        except:
+            try:
+                cursor.execute("ALTER TABLE results ADD COLUMN feather_metadata TEXT")
+                print("[Database] Migration: Added feather_metadata column to results table")
+            except:
+                pass  # Column might already exist or table doesn't exist yet
         
         # Create matches table if not exists
         cursor.execute("""
@@ -107,9 +118,23 @@ class StreamingMatchWriter:
             )
         """)
         
+        # Create feather_metadata table if not exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS feather_metadata (
+                metadata_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER,
+                feather_id TEXT,
+                artifact_type TEXT,
+                database_path TEXT,
+                total_records INTEGER,
+                FOREIGN KEY (result_id) REFERENCES results(result_id)
+            )
+        """)
+        
         # Create indexes
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_results_execution ON results(execution_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_result ON matches(result_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_feather_metadata_result ON feather_metadata(result_id)")
         
         self.conn.commit()
     
@@ -235,15 +260,23 @@ class StreamingMatchWriter:
             feather_metadata: Feather metadata dictionary
         """
         cursor = self.conn.cursor()
+        
+        # Serialize feather_metadata to JSON if provided
+        feather_metadata_json = None
+        if feather_metadata:
+            import json
+            feather_metadata_json = json.dumps(feather_metadata)
+        
         cursor.execute("""
             UPDATE results SET 
                 total_matches = ?,
                 execution_duration_seconds = ?,
-                duplicates_prevented = ?
+                duplicates_prevented = ?,
+                feather_metadata = ?
             WHERE result_id = ?
-        """, (total_matches, execution_duration, duplicates_prevented, result_id))
+        """, (total_matches, execution_duration, duplicates_prevented, feather_metadata_json, result_id))
         
-        # Save feather metadata if provided
+        # Also save to feather_metadata table for backwards compatibility
         if feather_metadata:
             for feather_id, metadata in feather_metadata.items():
                 cursor.execute("""
@@ -255,7 +288,7 @@ class StreamingMatchWriter:
                     feather_id,
                     metadata.get('artifact_type', ''),
                     metadata.get('database_path', ''),
-                    metadata.get('records_loaded', metadata.get('total_records', 0))
+                    metadata.get('records_processed', metadata.get('total_records', 0))
                 ))
         
         self.conn.commit()
@@ -376,6 +409,7 @@ class ResultsDatabase:
                 anchor_feather_id TEXT,
                 anchor_selection_reason TEXT,
                 filters_applied TEXT,
+                feather_metadata TEXT,
                 FOREIGN KEY (execution_id) REFERENCES executions(execution_id)
             )
         """)
@@ -482,6 +516,18 @@ class ResultsDatabase:
                 print("[Database] Migration: Added semantic_data column")
             except Exception as e:
                 pass
+        
+        # Check if feather_metadata column exists in results table
+        cursor.execute("PRAGMA table_info(results)")
+        results_columns = {row[1] for row in cursor.fetchall()}
+        
+        # Add feather_metadata if missing
+        if 'feather_metadata' not in results_columns:
+            try:
+                cursor.execute("ALTER TABLE results ADD COLUMN feather_metadata TEXT")
+                print("[Database] Migration: Added feather_metadata column to results table")
+            except Exception as e:
+                pass  # Column might already exist
         
         # Add compressed flag if missing (for feather_records compression)
         if 'compressed' not in existing_columns:
@@ -789,6 +835,11 @@ class ResultsDatabase:
             # Result was streamed - update the existing result record to link to this execution
             print(f"[Database] Result was streamed (result_id={streamed_result_id}) - updating execution link")
             
+            # Serialize feather_metadata to JSON
+            feather_metadata_json = None
+            if result.feather_metadata:
+                feather_metadata_json = json.dumps(result.feather_metadata)
+            
             # Update the existing result record to point to the new execution
             cursor.execute("""
                 UPDATE results SET 
@@ -801,7 +852,8 @@ class ResultsDatabase:
                     execution_duration_seconds = ?,
                     anchor_feather_id = ?,
                     anchor_selection_reason = ?,
-                    filters_applied = ?
+                    filters_applied = ?,
+                    feather_metadata = ?
                 WHERE result_id = ?
             """, (
                 execution_id,
@@ -814,6 +866,7 @@ class ResultsDatabase:
                 result.anchor_feather_id,
                 result.anchor_selection_reason,
                 json.dumps(result.filters_applied),
+                feather_metadata_json,
                 streamed_result_id
             ))
             
@@ -823,13 +876,19 @@ class ResultsDatabase:
             cursor.execute("DELETE FROM feather_metadata WHERE result_id = ?", (result_id,))
         else:
             # Normal case - insert new result record
+            # Serialize feather_metadata to JSON
+            feather_metadata_json = None
+            if result.feather_metadata:
+                feather_metadata_json = json.dumps(result.feather_metadata)
+            
             cursor.execute("""
                 INSERT INTO results (
                     execution_id, wing_id, wing_name, total_matches,
                     feathers_processed, total_records_scanned, duplicates_prevented,
                     matches_failed_validation, execution_duration_seconds,
-                    anchor_feather_id, anchor_selection_reason, filters_applied
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    anchor_feather_id, anchor_selection_reason, filters_applied,
+                    feather_metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 execution_id,
                 result.wing_id,
@@ -842,7 +901,8 @@ class ResultsDatabase:
                 result.execution_duration_seconds,
                 result.anchor_feather_id,
                 result.anchor_selection_reason,
-                json.dumps(result.filters_applied)
+                json.dumps(result.filters_applied),
+                feather_metadata_json
             ))
             
             result_id = cursor.lastrowid
@@ -874,6 +934,10 @@ class ResultsDatabase:
         # Save all matches (only if not already streamed)
         if streamed_result_id == 0:
             total_matches = len(result.matches)
+            
+            # DEBUG: Verify matches before saving
+            print(f"[Database] 🔍 DEBUG: Saving {total_matches} matches for result_id {result_id}")
+            
             batch_size = 1000  # Commit every 1000 matches for better performance
             
             for i, match in enumerate(result.matches):

@@ -252,7 +252,8 @@ Crow_Eye_Requirements = [
     'tqdm',
     'colorama',
     'wmi',
-    'pyyaml'
+    'pyyaml',
+    'matplotlib'  # Optional: Enhanced chart rendering (PyQt5 native charts work without it)
 ]
 
 def check_and_install_requirements():

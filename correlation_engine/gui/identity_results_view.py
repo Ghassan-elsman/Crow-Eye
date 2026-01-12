@@ -10,6 +10,7 @@ Features:
 - Semantic mapping information
 """
 
+from collections import defaultdict
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QLabel, QLineEdit, QPushButton, QGroupBox, QDialog, QSplitter,
@@ -182,14 +183,15 @@ class IdentityResultsView(QWidget):
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and score column."""
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Identity / Anchor / Evidence", "Feathers", "Time", "Score", "Ev", "Artifact"])
+        tree.setHeaderLabels(["Identity / Anchor / Evidence", "Feathers", "Time", "Score", "Semantic", "Ev", "Artifact"])
         
         tree.setColumnWidth(0, 280)
         tree.setColumnWidth(1, 150)
         tree.setColumnWidth(2, 140)
         tree.setColumnWidth(3, 60)  # Score column
-        tree.setColumnWidth(4, 40)
-        tree.setColumnWidth(5, 80)
+        tree.setColumnWidth(4, 120)  # Semantic column
+        tree.setColumnWidth(5, 40)  # Evidence count
+        tree.setColumnWidth(6, 80)  # Artifact
         
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
@@ -563,7 +565,9 @@ class IdentityResultsView(QWidget):
                     feathers.update(anchor.get('feathers', []))
         
         for f in sorted(feathers):
-            self.feather_filter.addItem(f)
+            # Remove path prefix (e.g., "feathers/") from display name
+            display_name = f.split('/')[-1] if '/' in f else f
+            self.feather_filter.addItem(display_name)
     
     def _populate_tree(self, identities: List[Dict]):
         """Populate tree with given identities (used internally)."""
@@ -644,12 +648,13 @@ class IdentityResultsView(QWidget):
         avg_score = self._calculate_identity_score(identity)
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Main identity item with blue diamond icon (6 columns now)
+        # Main identity item with blue diamond icon (7 columns now - added Semantic)
         item = QTreeWidgetItem([
             f"🔷 {name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
             feather_str, 
             "", 
             score_str,
+            "-",  # Semantic column (identities don't have semantic values)
             str(total_evidence), 
             f"{total_anchors} anchors"
         ])
@@ -720,12 +725,13 @@ class IdentityResultsView(QWidget):
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Sub-identity item with folder icon (orange/yellow) - 6 columns
+        # Sub-identity item with folder icon (orange/yellow) - 7 columns now
         item = QTreeWidgetItem([
             f"📁 {original_name}",
             feather_str,
             "",
             score_str,
+            "-",  # Semantic column (sub-identities don't have semantic values)
             str(evidence),
             f"{len(anchors)} anchors"
         ])
@@ -780,7 +786,20 @@ class IdentityResultsView(QWidget):
             interpretation = ''
             score_str = "-"
         
-        # 6 columns now - show record count in artifact column
+        # Get semantic value for display
+        semantic_value = "-"
+        semantic_data = anchor.get('semantic_data')
+        if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
+            # Extract first semantic value for display
+            for key, value in semantic_data.items():
+                if not key.startswith('_') and value:
+                    if isinstance(value, dict) and 'semantic_value' in value:
+                        semantic_value = str(value['semantic_value'])
+                    elif isinstance(value, str):
+                        semantic_value = value
+                    break
+        
+        # 7 columns now - added Semantic column
         artifact_info = anchor.get('primary_artifact', '-')
         if record_count > 0:
             artifact_info = f"{artifact_info} ({record_count} rec)"
@@ -790,6 +809,7 @@ class IdentityResultsView(QWidget):
             ", ".join(feathers[:2]) + ("..." if len(feathers) > 2 else ""),
             time_display,
             score_str,
+            semantic_value,  # New semantic column
             str(count),
             artifact_info
         ])
@@ -882,12 +902,22 @@ class IdentityResultsView(QWidget):
         semantic_info = evidence.get('semantic_info', {})
         has_semantic = bool(semantic_info)
         
-        # 6 columns now
+        # Extract semantic value for display
+        semantic_value = "-"
+        if has_semantic:
+            # Get first semantic value
+            for field, value in semantic_info.items():
+                if value:
+                    semantic_value = str(value)
+                    break
+        
+        # 7 columns now - added Semantic column
         item = QTreeWidgetItem([
             f"📄 {original_name}" + (" 🔍" if has_semantic else ""),
             evidence.get('feather_id', ''),
             ts,
             "-",  # Score column (evidence doesn't have individual scores)
+            semantic_value,  # New semantic column
             "1",
             evidence.get('artifact', '-')
         ])
@@ -933,7 +963,9 @@ class IdentityResultsView(QWidget):
             for row, (base_name, meta) in enumerate(sorted(grouped_metadata.items(), 
                                                       key=lambda x: x[1]['records_loaded'], 
                                                       reverse=True)):
-                self.feather_table.setItem(row, 0, QTableWidgetItem(base_name))
+                # Remove path prefix (e.g., "feathers/") from display name
+                display_name = base_name.split('/')[-1] if '/' in base_name else base_name
+                self.feather_table.setItem(row, 0, QTableWidgetItem(display_name))
                 records = meta['records_loaded']
                 self.feather_table.setItem(row, 1, QTableWidgetItem(f"{records:,}"))
                 identities = sum(meta['identities_found'])
@@ -966,7 +998,9 @@ class IdentityResultsView(QWidget):
             
             self.feather_table.setRowCount(len(feather_stats))
             for row, (f, s) in enumerate(sorted(feather_stats.items())):
-                self.feather_table.setItem(row, 0, QTableWidgetItem(f))
+                # Remove path prefix (e.g., "feathers/") from display name
+                display_name = f.split('/')[-1] if '/' in f else f
+                self.feather_table.setItem(row, 0, QTableWidgetItem(display_name))
                 self.feather_table.setItem(row, 1, QTableWidgetItem(str(s['records'])))
                 self.feather_table.setItem(row, 2, QTableWidgetItem(str(len(s['identities']))))
         

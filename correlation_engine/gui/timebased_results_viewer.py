@@ -231,14 +231,15 @@ class TimeBasedResultsViewer(QWidget):
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and hierarchical structure."""
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Time Window / Identity / Evidence", "Feathers", "Time", "Score", "Records", "Artifact"])
+        tree.setHeaderLabels(["Time Window / Identity / Evidence", "Feathers", "Time", "Score", "Semantic", "Records", "Artifact"])
         
         tree.setColumnWidth(0, 300)
         tree.setColumnWidth(1, 150)
         tree.setColumnWidth(2, 140)
         tree.setColumnWidth(3, 60)
-        tree.setColumnWidth(4, 60)
-        tree.setColumnWidth(5, 80)
+        tree.setColumnWidth(4, 120)  # Semantic column
+        tree.setColumnWidth(5, 60)   # Records column
+        tree.setColumnWidth(6, 80)   # Artifact column
         
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
@@ -770,7 +771,8 @@ class TimeBasedResultsViewer(QWidget):
         self.results_tree.clear()
         
         if not windows:
-            empty_item = QTreeWidgetItem(["No time windows found", "", "", "", "", ""])
+            # Empty item with 7 columns
+            empty_item = QTreeWidgetItem(["No time windows found", "", "", "", "", "", ""])
             empty_item.setForeground(0, QBrush(QColor("#888888")))
             empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
             self.results_tree.addTopLevelItem(empty_item)
@@ -783,6 +785,43 @@ class TimeBasedResultsViewer(QWidget):
         # Expand first 3 windows
         for i in range(min(3, self.results_tree.topLevelItemCount())):
             self.results_tree.topLevelItem(i).setExpanded(True)
+
+    def _get_semantic_value(self, match) -> str:
+        """
+        Extract semantic value from match data.
+        
+        Checks:
+        1. Match-level semantic_data field
+        2. Feather records for _semantic_mappings key
+        
+        Returns:
+            Semantic value string or "-" if not available
+        """
+        # Check match-level semantic data
+        if hasattr(match, 'semantic_data') and match.semantic_data:
+            # Skip unavailable marker
+            if match.semantic_data.get('_unavailable'):
+                pass
+            else:
+                for field_name, field_info in match.semantic_data.items():
+                    if isinstance(field_info, dict) and 'semantic_value' in field_info:
+                        return str(field_info['semantic_value'])
+                    elif isinstance(field_info, str) and field_name != '_reason':
+                        return field_info
+        
+        # Check feather records for semantic mappings
+        if hasattr(match, 'feather_records') and match.feather_records:
+            for feather_id, record in match.feather_records.items():
+                if isinstance(record, dict):
+                    semantic_mappings = record.get('_semantic_mappings', {})
+                    if isinstance(semantic_mappings, dict):
+                        for field_name, mapping_info in semantic_mappings.items():
+                            if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
+                                return str(mapping_info['semantic_value'])
+                            elif isinstance(mapping_info, str):
+                                return mapping_info
+        
+        return "-"  # Default when no semantic data available
 
     def _create_window_item(self, window: Dict) -> QTreeWidgetItem:
         """Create time window tree item (Level 1) with visual indicators."""
@@ -839,6 +878,7 @@ class TimeBasedResultsViewer(QWidget):
             feather_str,
             start_str,
             score_str,
+            "-",  # Semantic column (windows don't have semantic values)
             str(total_records),
             status
         ])
@@ -910,12 +950,13 @@ class TimeBasedResultsViewer(QWidget):
             temporal_indicator = "🔷"  # Blue diamond default
             tooltip = identity_name
         
-        # Identity item with temporal indicator
+        # Identity item with temporal indicator (7 columns including semantic)
         item = QTreeWidgetItem([
             f"{temporal_indicator} {identity_name}" + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
             feather_str,
             "",
             score_str,
+            "-",  # Semantic column - placeholder for identity level
             str(total_matches),
             f"{len(feathers)} feathers"
         ])
@@ -966,12 +1007,13 @@ class TimeBasedResultsViewer(QWidget):
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Sub-identity item with folder icon
+        # Sub-identity item with folder icon (7 columns including semantic)
         item = QTreeWidgetItem([
             f"📁 {original_name}",
             feather_str,
             "",
             score_str,
+            "-",  # Semantic column - placeholder for sub-identity level
             str(len(matches)),
             f"{len(matches)} matches"
         ])
@@ -1014,12 +1056,16 @@ class TimeBasedResultsViewer(QWidget):
             score = 0
             score_str = "-"
         
-        # Evidence item with document icon
+        # Extract semantic value from match
+        semantic_value = self._get_semantic_value(match)
+        
+        # Evidence item with document icon (7 columns including semantic)
         item = QTreeWidgetItem([
             f"📄 Evidence",
             feather_str,
             ts,
             score_str,
+            semantic_value,  # Semantic column
             str(len(feathers)),
             match.anchor_artifact_type
         ])

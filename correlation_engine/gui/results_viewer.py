@@ -13,20 +13,634 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLabel, QGroupBox, QFormLayout,
     QPushButton, QLineEdit, QSlider, QCheckBox, QComboBox,
     QSplitter, QTextEdit, QMessageBox, QFileDialog, QDateTimeEdit,
-    QFrame, QGridLayout, QProgressDialog
+    QFrame, QGridLayout, QProgressDialog, QToolTip, QScrollArea
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QRect, QPoint
+from PyQt5.QtGui import QColor, QPainter, QBrush, QPen, QFont, QFontMetrics, QPalette
 
-# Matplotlib imports for chart rendering
+# Matplotlib imports for chart rendering (optional)
 try:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
     from matplotlib.figure import Figure
     import matplotlib.pyplot as plt
     MATPLOTLIB_AVAILABLE = True
-except ImportError:
+    print("[Info] matplotlib Qt5Agg backend loaded successfully")
+except ImportError as e:
     MATPLOTLIB_AVAILABLE = False
-    print("[Warning] matplotlib not available - charts will not be rendered")
+    print(f"[Info] matplotlib not available, using PyQt5 native charts")
+except Exception as e:
+    MATPLOTLIB_AVAILABLE = False
+    print(f"[Info] matplotlib not available, using PyQt5 native charts")
+
+
+class PyQt5BarChart(QWidget):
+    """
+    A simple bar chart widget using pure PyQt5.
+    No external dependencies required.
+    """
+    
+    # Color palette for bars
+    COLORS = [
+        QColor("#2196F3"),  # Blue
+        QColor("#4CAF50"),  # Green
+        QColor("#FF9800"),  # Orange
+        QColor("#9C27B0"),  # Purple
+        QColor("#F44336"),  # Red
+        QColor("#00BCD4"),  # Cyan
+        QColor("#FFEB3B"),  # Yellow
+        QColor("#795548"),  # Brown
+        QColor("#607D8B"),  # Blue Grey
+        QColor("#E91E63"),  # Pink
+        QColor("#3F51B5"),  # Indigo
+        QColor("#009688"),  # Teal
+    ]
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.data = {}  # {label: value}
+        self.title = "Bar Chart"
+        self.ylabel = "Count"
+        self.setMinimumHeight(250)
+        self.setMinimumWidth(400)
+        self.hovered_bar = -1
+        self.setMouseTracking(True)
+        
+        # Store bar rectangles for hover detection
+        self.bar_rects = []
+        
+    def set_data(self, data: Dict[str, float], title: str = "Bar Chart", ylabel: str = "Count"):
+        """Set chart data and labels."""
+        self.data = data
+        self.title = title
+        self.ylabel = ylabel
+        self.update()
+    
+    def paintEvent(self, event):
+        """Draw the bar chart."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Get widget dimensions
+        width = self.width()
+        height = self.height()
+        
+        # Margins
+        left_margin = 80
+        right_margin = 20
+        top_margin = 40
+        bottom_margin = 80
+        
+        # Chart area
+        chart_width = width - left_margin - right_margin
+        chart_height = height - top_margin - bottom_margin
+        
+        if not self.data or chart_width <= 0 or chart_height <= 0:
+            painter.drawText(self.rect(), Qt.AlignCenter, "No data available")
+            return
+        
+        # Calculate max value for scaling
+        max_value = max(self.data.values()) if self.data.values() else 1
+        if max_value == 0:
+            max_value = 1
+        
+        # Draw background
+        painter.fillRect(self.rect(), QColor("#1a1a2e"))
+        
+        # Draw title
+        painter.setPen(QPen(QColor("#ffffff")))
+        title_font = QFont()
+        title_font.setPointSize(12)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.drawText(QRect(0, 5, width, 30), Qt.AlignCenter, self.title)
+        
+        # Draw Y-axis label
+        painter.save()
+        painter.translate(15, height // 2)
+        painter.rotate(-90)
+        label_font = QFont()
+        label_font.setPointSize(9)
+        painter.setFont(label_font)
+        painter.drawText(QRect(-50, -10, 100, 20), Qt.AlignCenter, self.ylabel)
+        painter.restore()
+        
+        # Draw Y-axis grid lines and labels
+        num_grid_lines = 5
+        painter.setPen(QPen(QColor("#444444")))
+        small_font = QFont()
+        small_font.setPointSize(8)
+        painter.setFont(small_font)
+        
+        for i in range(num_grid_lines + 1):
+            y = top_margin + chart_height - (i * chart_height // num_grid_lines)
+            value = int(max_value * i / num_grid_lines)
+            
+            # Grid line
+            painter.setPen(QPen(QColor("#333333")))
+            painter.drawLine(left_margin, y, width - right_margin, y)
+            
+            # Y-axis label
+            painter.setPen(QPen(QColor("#aaaaaa")))
+            painter.drawText(QRect(5, y - 10, left_margin - 10, 20), 
+                           Qt.AlignRight | Qt.AlignVCenter, f"{value:,}")
+        
+        # Calculate bar dimensions
+        num_bars = len(self.data)
+        if num_bars == 0:
+            return
+            
+        bar_spacing = 10
+        total_spacing = bar_spacing * (num_bars + 1)
+        bar_width = max(20, (chart_width - total_spacing) // num_bars)
+        
+        # Clear bar rectangles
+        self.bar_rects = []
+        
+        # Draw bars
+        for i, (label, value) in enumerate(self.data.items()):
+            # Calculate bar position and size
+            x = left_margin + bar_spacing + i * (bar_width + bar_spacing)
+            bar_height = int((value / max_value) * chart_height) if max_value > 0 else 0
+            y = top_margin + chart_height - bar_height
+            
+            # Store bar rectangle for hover detection
+            bar_rect = QRect(x, y, bar_width, bar_height)
+            self.bar_rects.append((bar_rect, label, value))
+            
+            # Get color
+            color = self.COLORS[i % len(self.COLORS)]
+            
+            # Highlight hovered bar
+            if i == self.hovered_bar:
+                color = color.lighter(130)
+            
+            # Draw bar
+            painter.setBrush(QBrush(color))
+            painter.setPen(QPen(color.darker(120), 1))
+            painter.drawRect(bar_rect)
+            
+            # Draw value on top of bar
+            painter.setPen(QPen(QColor("#ffffff")))
+            value_text = f"{int(value):,}"
+            painter.drawText(QRect(x, y - 20, bar_width, 20), 
+                           Qt.AlignCenter, value_text)
+            
+            # Draw label below bar (rotated if needed)
+            painter.save()
+            label_x = x + bar_width // 2
+            label_y = top_margin + chart_height + 5
+            
+            # Truncate long labels
+            display_label = label if len(label) <= 12 else label[:10] + "..."
+            
+            painter.translate(label_x, label_y)
+            painter.rotate(45)
+            painter.setPen(QPen(QColor("#cccccc")))
+            painter.drawText(QRect(0, 0, 100, 20), Qt.AlignLeft, display_label)
+            painter.restore()
+        
+        # Draw axes
+        painter.setPen(QPen(QColor("#666666"), 2))
+        # Y-axis
+        painter.drawLine(left_margin, top_margin, left_margin, top_margin + chart_height)
+        # X-axis
+        painter.drawLine(left_margin, top_margin + chart_height, 
+                        width - right_margin, top_margin + chart_height)
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse movement for hover effects."""
+        pos = event.pos()
+        new_hovered = -1
+        
+        for i, (rect, label, value) in enumerate(self.bar_rects):
+            if rect.contains(pos):
+                new_hovered = i
+                # Show tooltip
+                total = sum(self.data.values())
+                percentage = (value / total * 100) if total > 0 else 0
+                QToolTip.showText(
+                    self.mapToGlobal(pos),
+                    f"{label}\nCount: {int(value):,}\nPercentage: {percentage:.1f}%"
+                )
+                break
+        
+        if new_hovered != self.hovered_bar:
+            self.hovered_bar = new_hovered
+            self.update()
+    
+    def leaveEvent(self, event):
+        """Handle mouse leaving widget."""
+        self.hovered_bar = -1
+        self.update()
+
+
+class PyQt5PieChart(QWidget):
+    """
+    A simple pie chart widget using pure PyQt5.
+    No external dependencies required.
+    """
+    
+    # Color palette for slices
+    COLORS = [
+        QColor("#2196F3"),  # Blue
+        QColor("#4CAF50"),  # Green
+        QColor("#FF9800"),  # Orange
+        QColor("#9C27B0"),  # Purple
+        QColor("#F44336"),  # Red
+        QColor("#00BCD4"),  # Cyan
+        QColor("#FFEB3B"),  # Yellow
+        QColor("#795548"),  # Brown
+        QColor("#607D8B"),  # Blue Grey
+        QColor("#E91E63"),  # Pink
+        QColor("#3F51B5"),  # Indigo
+        QColor("#009688"),  # Teal
+    ]
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.data = {}  # {label: value}
+        self.title = "Pie Chart"
+        self.setMinimumHeight(300)
+        self.setMinimumWidth(400)
+        self.hovered_slice = -1
+        self.setMouseTracking(True)
+        
+        # Store slice angles for hover detection
+        self.slice_angles = []
+        
+    def set_data(self, data: Dict[str, float], title: str = "Pie Chart"):
+        """Set chart data and labels."""
+        self.data = data
+        self.title = title
+        self.update()
+    
+    def paintEvent(self, event):
+        """Draw the pie chart."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Get widget dimensions
+        width = self.width()
+        height = self.height()
+        
+        if not self.data:
+            painter.drawText(self.rect(), Qt.AlignCenter, "No data available")
+            return
+        
+        # Draw background
+        painter.fillRect(self.rect(), QColor("#1a1a2e"))
+        
+        # Draw title
+        painter.setPen(QPen(QColor("#ffffff")))
+        title_font = QFont()
+        title_font.setPointSize(12)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.drawText(QRect(0, 5, width, 30), Qt.AlignCenter, self.title)
+        
+        # Calculate pie dimensions
+        margin = 60
+        legend_width = 180
+        pie_size = min(width - legend_width - margin * 2, height - margin * 2 - 40)
+        pie_x = margin
+        pie_y = 40 + (height - 40 - pie_size) // 2
+        
+        # Calculate total
+        total = sum(self.data.values())
+        if total == 0:
+            painter.drawText(self.rect(), Qt.AlignCenter, "No data available")
+            return
+        
+        # Clear slice angles
+        self.slice_angles = []
+        
+        # Draw pie slices
+        start_angle = 0
+        for i, (label, value) in enumerate(self.data.items()):
+            # Calculate angle (in 1/16th of a degree for Qt)
+            span_angle = int((value / total) * 360 * 16)
+            
+            # Store slice info for hover detection
+            self.slice_angles.append((start_angle, span_angle, label, value))
+            
+            # Get color
+            color = self.COLORS[i % len(self.COLORS)]
+            
+            # Highlight hovered slice
+            if i == self.hovered_slice:
+                color = color.lighter(130)
+            
+            # Draw slice
+            painter.setBrush(QBrush(color))
+            painter.setPen(QPen(QColor("#1a1a2e"), 2))
+            painter.drawPie(pie_x, pie_y, pie_size, pie_size, start_angle, span_angle)
+            
+            start_angle += span_angle
+        
+        # Draw legend
+        legend_x = pie_x + pie_size + 20
+        legend_y = pie_y + 10
+        legend_item_height = 25
+        
+        small_font = QFont()
+        small_font.setPointSize(9)
+        painter.setFont(small_font)
+        
+        for i, (label, value) in enumerate(self.data.items()):
+            if legend_y + legend_item_height > height - 10:
+                break  # Stop if we run out of space
+            
+            # Color box
+            color = self.COLORS[i % len(self.COLORS)]
+            painter.setBrush(QBrush(color))
+            painter.setPen(QPen(color.darker(120)))
+            painter.drawRect(legend_x, legend_y, 15, 15)
+            
+            # Label and percentage
+            percentage = (value / total * 100) if total > 0 else 0
+            display_label = label if len(label) <= 15 else label[:12] + "..."
+            legend_text = f"{display_label} ({percentage:.1f}%)"
+            
+            painter.setPen(QPen(QColor("#cccccc")))
+            painter.drawText(QRect(legend_x + 20, legend_y, legend_width - 25, 20), 
+                           Qt.AlignLeft | Qt.AlignVCenter, legend_text)
+            
+            legend_y += legend_item_height
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse movement for hover effects."""
+        pos = event.pos()
+        
+        # Calculate pie center and radius
+        width = self.width()
+        height = self.height()
+        margin = 60
+        legend_width = 180
+        pie_size = min(width - legend_width - margin * 2, height - margin * 2 - 40)
+        center_x = margin + pie_size // 2
+        center_y = 40 + (height - 40 - pie_size) // 2 + pie_size // 2
+        radius = pie_size // 2
+        
+        # Check if mouse is within pie
+        dx = pos.x() - center_x
+        dy = pos.y() - center_y
+        distance = (dx * dx + dy * dy) ** 0.5
+        
+        new_hovered = -1
+        
+        if distance <= radius:
+            # Calculate angle from center
+            import math
+            angle = math.atan2(-dy, dx)  # Negative dy because Qt y-axis is inverted
+            angle_deg = math.degrees(angle)
+            if angle_deg < 0:
+                angle_deg += 360
+            
+            # Convert to Qt angle (starts at 3 o'clock, counter-clockwise)
+            qt_angle = int(angle_deg * 16)
+            
+            # Find which slice contains this angle
+            for i, (start, span, label, value) in enumerate(self.slice_angles):
+                # Normalize angles
+                end = start + span
+                if start <= qt_angle < end:
+                    new_hovered = i
+                    total = sum(self.data.values())
+                    percentage = (value / total * 100) if total > 0 else 0
+                    QToolTip.showText(
+                        self.mapToGlobal(pos),
+                        f"{label}\nCount: {int(value):,}\nPercentage: {percentage:.1f}%"
+                    )
+                    break
+        
+        if new_hovered != self.hovered_slice:
+            self.hovered_slice = new_hovered
+            self.update()
+    
+    def leaveEvent(self, event):
+        """Handle mouse leaving widget."""
+        self.hovered_slice = -1
+        self.update()
+
+
+class PyQt5GroupedBarChart(QWidget):
+    """
+    A grouped bar chart widget using pure PyQt5.
+    Shows multiple data series side by side for comparison.
+    """
+    
+    # Color palette for series
+    SERIES_COLORS = [
+        QColor("#2196F3"),  # Blue - Records
+        QColor("#4CAF50"),  # Green - Identities Extracted
+        QColor("#F44336"),  # Red - Invalid Identities
+        QColor("#FF9800"),  # Orange
+        QColor("#9C27B0"),  # Purple
+    ]
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.data = {}  # {label: {series1: value, series2: value, ...}}
+        self.series_names = []  # ["Records", "Identities", "Invalid"]
+        self.title = "Grouped Bar Chart"
+        self.setMinimumHeight(300)
+        self.setMinimumWidth(500)
+        self.hovered_bar = (-1, -1)  # (group_index, series_index)
+        self.setMouseTracking(True)
+        
+        # Store bar rectangles for hover detection
+        self.bar_rects = []
+        
+    def set_data(self, data: Dict[str, Dict[str, float]], series_names: List[str], title: str = "Grouped Bar Chart"):
+        """
+        Set chart data with multiple series.
+        
+        Args:
+            data: {label: {series_name: value, ...}}
+            series_names: List of series names for legend
+            title: Chart title
+        """
+        self.data = data
+        self.series_names = series_names
+        self.title = title
+        self.update()
+    
+    def paintEvent(self, event):
+        """Draw the grouped bar chart."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Get widget dimensions
+        width = self.width()
+        height = self.height()
+        
+        # Margins
+        left_margin = 80
+        right_margin = 20
+        top_margin = 60
+        bottom_margin = 100
+        
+        # Chart area
+        chart_width = width - left_margin - right_margin
+        chart_height = height - top_margin - bottom_margin
+        
+        if not self.data or chart_width <= 0 or chart_height <= 0:
+            painter.drawText(self.rect(), Qt.AlignCenter, "No data available")
+            return
+        
+        # Calculate max value for scaling
+        max_value = 0
+        for label_data in self.data.values():
+            for value in label_data.values():
+                max_value = max(max_value, value)
+        if max_value == 0:
+            max_value = 1
+        
+        # Draw background
+        painter.fillRect(self.rect(), QColor("#1a1a2e"))
+        
+        # Draw title
+        painter.setPen(QPen(QColor("#ffffff")))
+        title_font = QFont()
+        title_font.setPointSize(12)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.drawText(QRect(0, 5, width, 30), Qt.AlignCenter, self.title)
+        
+        # Draw legend
+        legend_y = 35
+        legend_x = left_margin
+        small_font = QFont()
+        small_font.setPointSize(9)
+        painter.setFont(small_font)
+        
+        for i, series_name in enumerate(self.series_names):
+            color = self.SERIES_COLORS[i % len(self.SERIES_COLORS)]
+            painter.setBrush(QBrush(color))
+            painter.setPen(QPen(color.darker(120)))
+            painter.drawRect(legend_x, legend_y, 12, 12)
+            
+            painter.setPen(QPen(QColor("#cccccc")))
+            painter.drawText(QRect(legend_x + 16, legend_y - 2, 100, 16), 
+                           Qt.AlignLeft | Qt.AlignVCenter, series_name)
+            legend_x += 120
+        
+        # Draw Y-axis grid lines and labels
+        num_grid_lines = 5
+        painter.setPen(QPen(QColor("#444444")))
+        
+        for i in range(num_grid_lines + 1):
+            y = top_margin + chart_height - (i * chart_height // num_grid_lines)
+            value = int(max_value * i / num_grid_lines)
+            
+            # Grid line
+            painter.setPen(QPen(QColor("#333333")))
+            painter.drawLine(left_margin, y, width - right_margin, y)
+            
+            # Y-axis label
+            painter.setPen(QPen(QColor("#aaaaaa")))
+            painter.drawText(QRect(5, y - 10, left_margin - 10, 20), 
+                           Qt.AlignRight | Qt.AlignVCenter, f"{value:,}")
+        
+        # Calculate bar dimensions
+        num_groups = len(self.data)
+        num_series = len(self.series_names)
+        if num_groups == 0 or num_series == 0:
+            return
+            
+        group_spacing = 20
+        bar_spacing = 2
+        total_group_spacing = group_spacing * (num_groups + 1)
+        group_width = (chart_width - total_group_spacing) // num_groups
+        bar_width = max(10, (group_width - bar_spacing * (num_series - 1)) // num_series)
+        
+        # Clear bar rectangles
+        self.bar_rects = []
+        
+        # Draw bars
+        for group_idx, (label, series_data) in enumerate(self.data.items()):
+            group_x = left_margin + group_spacing + group_idx * (group_width + group_spacing)
+            
+            for series_idx, series_name in enumerate(self.series_names):
+                value = series_data.get(series_name, 0)
+                
+                # Calculate bar position and size
+                x = group_x + series_idx * (bar_width + bar_spacing)
+                bar_height = int((value / max_value) * chart_height) if max_value > 0 else 0
+                y = top_margin + chart_height - bar_height
+                
+                # Store bar rectangle for hover detection
+                bar_rect = QRect(x, y, bar_width, bar_height)
+                self.bar_rects.append((bar_rect, label, series_name, value, group_idx, series_idx))
+                
+                # Get color
+                color = self.SERIES_COLORS[series_idx % len(self.SERIES_COLORS)]
+                
+                # Highlight hovered bar
+                if (group_idx, series_idx) == self.hovered_bar:
+                    color = color.lighter(130)
+                
+                # Draw bar
+                painter.setBrush(QBrush(color))
+                painter.setPen(QPen(color.darker(120), 1))
+                painter.drawRect(bar_rect)
+                
+                # Draw value on top of bar (only if bar is tall enough)
+                if bar_height > 20:
+                    painter.setPen(QPen(QColor("#ffffff")))
+                    value_text = f"{int(value):,}"
+                    tiny_font = QFont()
+                    tiny_font.setPointSize(7)
+                    painter.setFont(tiny_font)
+                    painter.drawText(QRect(x, y - 15, bar_width, 15), 
+                                   Qt.AlignCenter, value_text)
+            
+            # Draw label below group (rotated)
+            painter.save()
+            label_x = group_x + group_width // 2
+            label_y = top_margin + chart_height + 5
+            
+            # Truncate long labels
+            display_label = label if len(label) <= 12 else label[:10] + "..."
+            
+            painter.translate(label_x, label_y)
+            painter.rotate(45)
+            painter.setPen(QPen(QColor("#cccccc")))
+            painter.setFont(small_font)
+            painter.drawText(QRect(0, 0, 100, 20), Qt.AlignLeft, display_label)
+            painter.restore()
+        
+        # Draw axes
+        painter.setPen(QPen(QColor("#666666"), 2))
+        # Y-axis
+        painter.drawLine(left_margin, top_margin, left_margin, top_margin + chart_height)
+        # X-axis
+        painter.drawLine(left_margin, top_margin + chart_height, 
+                        width - right_margin, top_margin + chart_height)
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse movement for hover effects."""
+        pos = event.pos()
+        new_hovered = (-1, -1)
+        
+        for rect, label, series_name, value, group_idx, series_idx in self.bar_rects:
+            if rect.contains(pos):
+                new_hovered = (group_idx, series_idx)
+                QToolTip.showText(
+                    self.mapToGlobal(pos),
+                    f"{label}\n{series_name}: {int(value):,}"
+                )
+                break
+        
+        if new_hovered != self.hovered_bar:
+            self.hovered_bar = new_hovered
+            self.update()
+    
+    def leaveEvent(self, event):
+        """Handle mouse leaving widget."""
+        self.hovered_bar = (-1, -1)
+        self.update()
+
 
 from .ui_styling import CorrelationEngineStyles
 
@@ -425,64 +1039,38 @@ class DynamicResultsTabWidget(QWidget):
             delattr(self, 'chart_container')
     
     def _render_identity_charts(self, feather_metadata: Dict):
-        """Render charts for Identity Engine results."""
-        if not MATPLOTLIB_AVAILABLE:
-            print("[Warning] Cannot render charts - matplotlib not available")
-            return None
-        
+        """Render charts for Identity Engine results using PyQt5 native chart."""
         try:
             # Extract data from feather_metadata
-            feathers = []
-            identities_counts = []
+            chart_data = {}
             
-            for feather_id, metadata in sorted(feather_metadata.items()):
-                if isinstance(metadata, dict):
-                    feathers.append(feather_id)
-                    identities_counts.append(metadata.get('identities_found', 0))
+            for feather_id, metadata in feather_metadata.items():
+                if isinstance(metadata, dict) and not feather_id.startswith('_'):
+                    count = metadata.get('identities_found', metadata.get('identities_final', metadata.get('matches_created', 0)))
+                    if count > 0:
+                        chart_data[feather_id] = count
             
-            if not feathers:
+            if not chart_data:
+                print("[DynamicResultsTabWidget] No chart data available")
                 return None
             
-            # Create figure and canvas
-            fig = Figure(figsize=(8, 4))
-            canvas = FigureCanvasQTAgg(fig)
-            ax = fig.add_subplot(111)
+            # Sort by value descending and limit to top 15
+            sorted_data = dict(sorted(chart_data.items(), key=lambda x: x[1], reverse=True)[:15])
             
-            # Create bar chart with distinct colors
-            colors = plt.cm.Set3(range(len(feathers)))
-            bars = ax.bar(feathers, identities_counts, color=colors)
-            
-            ax.set_xlabel('Feather')
-            ax.set_ylabel('Identities Found')
-            ax.set_title('Identity Extraction by Feather')
-            ax.tick_params(axis='x', rotation=45)
-            fig.tight_layout()
-            
-            # Add hover tooltips (via matplotlib events)
-            def on_hover(event):
-                if event.inaxes == ax:
-                    for i, bar in enumerate(bars):
-                        if bar.contains(event)[0]:
-                            total = sum(identities_counts)
-                            percentage = (identities_counts[i] / total * 100) if total > 0 else 0
-                            ax.set_title(f'{feathers[i]}: {identities_counts[i]} identities ({percentage:.1f}%)')
-                            canvas.draw()
-                            return
-                    ax.set_title('Identity Extraction by Feather')
-                    canvas.draw()
-            
-            canvas.mpl_connect('motion_notify_event', on_hover)
+            # Create PyQt5 native bar chart
+            chart = PyQt5BarChart()
+            chart.set_data(sorted_data, "Identity Extraction by Feather", "Identities Found")
             
             # Store chart data for export
-            canvas.chart_data = {
-                'feathers': feathers,
-                'counts': identities_counts,
+            chart.chart_data = {
+                'feathers': list(sorted_data.keys()),
+                'counts': list(sorted_data.values()),
                 'title': 'Identity Extraction by Feather',
                 'ylabel': 'Identities Found'
             }
-            canvas.figure = fig  # Store figure reference for export
             
-            return canvas
+            print(f"[DynamicResultsTabWidget] Created PyQt5 bar chart with {len(sorted_data)} bars")
+            return chart
             
         except Exception as e:
             print(f"[Error] Failed to render identity charts: {e}")
@@ -490,12 +1078,8 @@ class DynamicResultsTabWidget(QWidget):
             traceback.print_exc()
             return None
     
-    def _render_timebased_charts(self, time_windows: List):
-        """Render charts for Time-Based Engine results."""
-        if not MATPLOTLIB_AVAILABLE:
-            print("[Warning] Cannot render charts - matplotlib not available")
-            return None
-        
+    def _render_timebased_charts(self, time_windows: List, feather_metadata: Dict = None):
+        """Render charts for Time-Based Engine results using PyQt5 native chart."""
         try:
             # Extract timestamp counts per feather from time windows
             feather_timestamps = {}
@@ -507,57 +1091,138 @@ class DynamicResultsTabWidget(QWidget):
                             feather_timestamps[feather] = 0
                         feather_timestamps[feather] += identity.get('total_matches', 0)
             
+            # If no time window data, try to use feather_metadata
+            if not feather_timestamps and feather_metadata:
+                print("[DynamicResultsTabWidget] Using feather_metadata for time-based chart")
+                for feather_id, metadata in feather_metadata.items():
+                    if isinstance(metadata, dict) and not feather_id.startswith('_'):
+                        count = metadata.get('matches_created', metadata.get('identities_found', 0))
+                        if count > 0:
+                            feather_timestamps[feather_id] = count
+            
             if not feather_timestamps:
+                print("[DynamicResultsTabWidget] No time window data available")
                 return None
             
-            # Sort by count
-            sorted_feathers = sorted(feather_timestamps.items(), key=lambda x: x[1], reverse=True)
-            feathers = [f[0] for f in sorted_feathers]
-            counts = [f[1] for f in sorted_feathers]
+            # Sort by value descending and limit to top 15
+            sorted_data = dict(sorted(feather_timestamps.items(), key=lambda x: x[1], reverse=True)[:15])
             
-            # Create figure and canvas
-            fig = Figure(figsize=(8, 4))
-            canvas = FigureCanvasQTAgg(fig)
-            ax = fig.add_subplot(111)
-            
-            # Create bar chart with distinct colors
-            colors = plt.cm.Set3(range(len(feathers)))
-            bars = ax.bar(feathers, counts, color=colors)
-            
-            ax.set_xlabel('Feather')
-            ax.set_ylabel('Timestamp Records')
-            ax.set_title('Timestamp Extraction by Feather')
-            ax.tick_params(axis='x', rotation=45)
-            fig.tight_layout()
-            
-            # Add hover tooltips
-            def on_hover(event):
-                if event.inaxes == ax:
-                    for i, bar in enumerate(bars):
-                        if bar.contains(event)[0]:
-                            total = sum(counts)
-                            percentage = (counts[i] / total * 100) if total > 0 else 0
-                            ax.set_title(f'{feathers[i]}: {counts[i]} timestamps ({percentage:.1f}%)')
-                            canvas.draw()
-                            return
-                    ax.set_title('Timestamp Extraction by Feather')
-                    canvas.draw()
-            
-            canvas.mpl_connect('motion_notify_event', on_hover)
+            # Create PyQt5 native bar chart
+            chart = PyQt5BarChart()
+            chart.set_data(sorted_data, "Matches by Feather", "Match Count")
             
             # Store chart data for export
-            canvas.chart_data = {
-                'feathers': feathers,
-                'counts': counts,
-                'title': 'Timestamp Extraction by Feather',
-                'ylabel': 'Timestamp Records'
+            chart.chart_data = {
+                'feathers': list(sorted_data.keys()),
+                'counts': list(sorted_data.values()),
+                'title': 'Matches by Feather',
+                'ylabel': 'Match Count'
             }
-            canvas.figure = fig  # Store figure reference for export
             
-            return canvas
+            print(f"[DynamicResultsTabWidget] Created PyQt5 bar chart with {len(sorted_data)} bars")
+            return chart
             
         except Exception as e:
             print(f"[Error] Failed to render time-based charts: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _render_text_summary(self, feather_data: Dict, engine_name: str):
+        """
+        Render a text-based summary when matplotlib charts are not available.
+        
+        Args:
+            feather_data: Dictionary of feather_id -> metadata or feather_id -> count
+            engine_name: Name of the engine for display
+            
+        Returns:
+            QWidget containing the text summary
+        """
+        try:
+            # Create summary widget
+            summary_widget = QWidget()
+            layout = QVBoxLayout(summary_widget)
+            layout.setContentsMargins(10, 10, 10, 10)
+            
+            # Title
+            title_label = QLabel(f"📊 {engine_name} - Feather Statistics")
+            title_label.setStyleSheet("""
+                QLabel {
+                    font-size: 14pt;
+                    font-weight: bold;
+                    color: #2196F3;
+                    padding: 10px;
+                }
+            """)
+            layout.addWidget(title_label)
+            
+            # Note about charts
+            note_label = QLabel("ℹ️ Charts unavailable (matplotlib Qt5Agg backend not loaded)")
+            note_label.setStyleSheet("color: #ff9800; font-style: italic; padding: 5px;")
+            layout.addWidget(note_label)
+            
+            # Create table for feather statistics
+            table = QTableWidget()
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["Feather", "Count", "Percentage"])
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            table.setAlternatingRowColors(True)
+            table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #2a2a2a;
+                    gridline-color: #444;
+                    color: white;
+                }
+                QTableWidget::item {
+                    padding: 5px;
+                }
+                QHeaderView::section {
+                    background-color: #3a3a3a;
+                    color: white;
+                    padding: 5px;
+                    font-weight: bold;
+                }
+            """)
+            
+            # Extract and sort data
+            sorted_data = []
+            total_count = 0
+            
+            for feather_id, data in feather_data.items():
+                if feather_id.startswith('_'):  # Skip metadata entries
+                    continue
+                if isinstance(data, dict):
+                    count = data.get('identities_found', data.get('matches_created', 0))
+                else:
+                    count = data
+                sorted_data.append((feather_id, count))
+                total_count += count
+            
+            # Sort by count descending
+            sorted_data.sort(key=lambda x: x[1], reverse=True)
+            
+            # Populate table
+            table.setRowCount(len(sorted_data))
+            for row, (feather_id, count) in enumerate(sorted_data):
+                percentage = (count / total_count * 100) if total_count > 0 else 0
+                
+                table.setItem(row, 0, QTableWidgetItem(feather_id))
+                table.setItem(row, 1, QTableWidgetItem(f"{count:,}"))
+                table.setItem(row, 2, QTableWidgetItem(f"{percentage:.1f}%"))
+            
+            layout.addWidget(table)
+            
+            # Total summary
+            total_label = QLabel(f"Total: {total_count:,} items across {len(sorted_data)} feathers")
+            total_label.setStyleSheet("font-weight: bold; padding: 10px; color: #4CAF50;")
+            layout.addWidget(total_label)
+            
+            print(f"[DynamicResultsTabWidget] Text summary created for {len(sorted_data)} feathers")
+            return summary_widget
+            
+        except Exception as e:
+            print(f"[Error] Failed to render text summary: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -621,17 +1286,97 @@ class DynamicResultsTabWidget(QWidget):
                 f"An error occurred during export:\n{str(e)}"
             )
     
+    def _show_error_message(self, message: str):
+        """Display error message in the tab with retry functionality."""
+        from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton
+        from PyQt5.QtCore import Qt
+        
+        # Create error widget
+        error_widget = QWidget()
+        error_layout = QVBoxLayout(error_widget)
+        error_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Error message
+        error_label = QLabel(f"⚠️ {message}")
+        error_label.setStyleSheet("""
+            QLabel {
+                color: #ff9800;
+                font-size: 14pt;
+                padding: 20px;
+                font-weight: bold;
+                background-color: #2a2a2a;
+                border: 2px solid #ff9800;
+                border-radius: 5px;
+            }
+        """)
+        error_label.setAlignment(Qt.AlignCenter)
+        error_label.setWordWrap(True)
+        error_layout.addWidget(error_label)
+        
+        # Retry button
+        retry_btn = QPushButton("🔄 Retry Loading")
+        retry_btn.clicked.connect(self._retry_load_results)
+        retry_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ff9800;
+                color: white;
+                padding: 10px 20px;
+                font-size: 12pt;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #f57c00;
+            }
+        """)
+        retry_btn.setMaximumWidth(200)
+        error_layout.addWidget(retry_btn, alignment=Qt.AlignCenter)
+        
+        error_layout.addStretch()
+        
+        # Add to main layout
+        self.layout().insertWidget(0, error_widget)
+        print(f"[DynamicResultsTabWidget] Error message displayed: {message}")
+    
+    def _retry_load_results(self):
+        """Retry loading results."""
+        print("[DynamicResultsTabWidget] Retrying result load...")
+        if hasattr(self, 'output_dir') and self.output_dir:
+            # Clear any existing error widgets
+            for i in reversed(range(self.layout().count())):
+                widget = self.layout().itemAt(i).widget()
+                if widget and isinstance(widget, QWidget):
+                    # Check if it's an error widget (has the warning style)
+                    if "⚠️" in widget.findChild(QLabel).text() if widget.findChild(QLabel) else False:
+                        widget.setParent(None)
+                        widget.deleteLater()
+            
+            # Retry loading
+            self.load_results(self.output_dir)
+        else:
+            print("[DynamicResultsTabWidget] ERROR: No output_dir set for retry")
+            QMessageBox.warning(
+                self,
+                "Cannot Retry",
+                "No output directory is set. Please run a correlation first."
+            )
+    
     def load_results(self, output_dir: str, wing_id: Optional[str] = None, pipeline_id: Optional[str] = None, engine_type: Optional[str] = None):
         """
         Load results from output directory with enhanced semantic and scoring support.
         
         Args:
-            output_dir: Directory containing result files
+            output_dir: Directory containing result files (typically Case/Correlation/output)
             wing_id: Optional Wing ID for Wing-specific semantic mappings
             pipeline_id: Optional Pipeline ID for Pipeline-specific semantic mappings
             engine_type: Optional engine type to render appropriate charts
         """
         try:
+            # Store output_dir for database queries (Requirement 4.6)
+            # Database is located at: output_dir/correlation_results.db
+            # Typical path: E:\Cases\CaseName\Correlation\output\correlation_results.db
+            self.output_dir = output_dir
+            
             # Set engine type if provided
             if engine_type:
                 self.set_engine_type(engine_type)
@@ -659,71 +1404,241 @@ class DynamicResultsTabWidget(QWidget):
     def _render_charts_for_results(self):
         """Render charts based on loaded results and engine type."""
         try:
-            # Get first result to extract metadata
+            print("[DynamicResultsTabWidget] DEBUG: _render_charts_for_results() called")
+            
+            # CRITICAL CHECK: Verify results_data is populated
             if not self.results_data:
+                print("[DynamicResultsTabWidget] ERROR: results_data is EMPTY")
+                print("[DynamicResultsTabWidget] ERROR: Cannot render charts without data")
+                self._show_error_message("No correlation results available")
                 return
             
+            print(f"[DynamicResultsTabWidget] DEBUG: results_data has {len(self.results_data)} entries")
+            print(f"[DynamicResultsTabWidget] DEBUG: results_data keys: {list(self.results_data.keys())}")
+            
             first_result = next(iter(self.results_data.values()))
+            print(f"[DynamicResultsTabWidget] DEBUG: first_result type: {type(first_result)}")
             
             # Check if we have feather_metadata
+            # Requirement 4.7: Check for feather_metadata in CorrelationResult
             feather_metadata = getattr(first_result, 'feather_metadata', {})
+            print(f"[DynamicResultsTabWidget] DEBUG: feather_metadata found: {bool(feather_metadata)}")
+            if feather_metadata:
+                print(f"[DynamicResultsTabWidget] DEBUG: feather_metadata has {len(feather_metadata)} feathers")
+                print(f"[DynamicResultsTabWidget] DEBUG: feather_metadata keys: {list(feather_metadata.keys())}")
+            
+            # Requirement 4.3, 4.5, 4.7: If no feather_metadata and streaming mode, query database
+            if not feather_metadata:
+                print("[DynamicResultsTabWidget] No feather_metadata found, attempting database fallback...")
+                # Try to query database for feather statistics
+                feather_metadata = self._query_feather_metadata_from_database(first_result)
+                print(f"[DynamicResultsTabWidget] DEBUG: Database query returned {len(feather_metadata)} feathers")
+                
+                if not feather_metadata:
+                    print("[DynamicResultsTabWidget] ERROR: No feather_metadata available from any source")
+                    self._show_error_message("Feather statistics unavailable - charts cannot be rendered")
+                    return
+            
+            # Update the feather stats table and summary statistics in the enhanced_tab_widget
+            if feather_metadata and hasattr(self.enhanced_tab_widget, 'update_feather_stats_from_data'):
+                total_matches = first_result.total_matches if hasattr(first_result, 'total_matches') else len(first_result.matches) if hasattr(first_result, 'matches') else 0
+                self.enhanced_tab_widget.update_feather_stats_from_data(feather_metadata, total_matches)
+                print(f"[DynamicResultsTabWidget] Updated feather stats table with {len(feather_metadata)} feathers")
+            
+            # Update the full summary from the result
+            if hasattr(self.enhanced_tab_widget, 'update_summary_from_result'):
+                self.enhanced_tab_widget.update_summary_from_result(first_result, self.engine_type)
+                print(f"[DynamicResultsTabWidget] Updated summary from result")
             
             chart_widget = None
             
+            print(f"[DynamicResultsTabWidget] DEBUG: engine_type = {self.engine_type}")
+            
             if self.engine_type == "identity_based" and feather_metadata:
                 print("[DynamicResultsTabWidget] Rendering Identity Engine charts...")
-                chart_widget = self._render_identity_charts(feather_metadata)
+                try:
+                    chart_widget = self._render_identity_charts(feather_metadata)
+                    print(f"[DynamicResultsTabWidget] DEBUG: chart_widget created: {chart_widget is not None}")
+                except Exception as e:
+                    print(f"[DynamicResultsTabWidget] ERROR rendering identity charts: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             elif self.engine_type in ["time_window_scanning", "time_based"]:
                 # Try to get time_windows data
                 print("[DynamicResultsTabWidget] Rendering Time-Based Engine charts...")
-                # For time-based, we need to extract time windows from results
-                # This might be in a different format, so we'll handle it
-                time_windows = self._extract_time_windows_from_results()
-                if time_windows:
-                    chart_widget = self._render_timebased_charts(time_windows)
+                try:
+                    # For time-based, we need to extract time windows from results
+                    # This might be in a different format, so we'll handle it
+                    time_windows = self._extract_time_windows_from_results()
+                    if time_windows:
+                        chart_widget = self._render_timebased_charts(time_windows, feather_metadata)
+                    elif feather_metadata:
+                        # Fallback: use feather_metadata directly if no time windows
+                        print("[DynamicResultsTabWidget] Using feather_metadata fallback for time-based charts")
+                        chart_widget = self._render_timebased_charts([], feather_metadata)
+                    else:
+                        print("[DynamicResultsTabWidget] WARNING: No time windows extracted")
+                except Exception as e:
+                    print(f"[DynamicResultsTabWidget] ERROR rendering time-based charts: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             # Add chart to layout if created
             if chart_widget:
+                print(f"[DynamicResultsTabWidget] Chart widget created successfully: {type(chart_widget)}")
+                
                 # Setup context menu for export
                 self._setup_chart_context_menu(chart_widget)
                 
-                # Create chart container if it doesn't exist
-                if not hasattr(self, 'chart_container'):
-                    self.chart_container = QWidget()
-                    chart_layout = QVBoxLayout(self.chart_container)
-                    chart_layout.setContentsMargins(5, 5, 5, 5)
-                    
-                    # Add engine type label
-                    engine_label = QLabel(f"Engine: {self.engine_type.replace('_', ' ').title()}")
-                    engine_label.setStyleSheet("font-weight: bold; font-size: 10pt; color: #2196F3;")
-                    chart_layout.addWidget(engine_label)
-                    
-                    chart_layout.addWidget(chart_widget)
-                    
-                    # Add export buttons
-                    export_layout = QHBoxLayout()
-                    export_png_btn = QPushButton("Export as PNG")
-                    export_png_btn.clicked.connect(lambda: self._handle_export_png(chart_widget))
-                    export_layout.addWidget(export_png_btn)
-                    
-                    export_csv_btn = QPushButton("Export Data as CSV")
-                    export_csv_btn.clicked.connect(lambda: self._handle_export_csv(chart_widget))
-                    export_layout.addWidget(export_csv_btn)
-                    
-                    export_layout.addStretch()
-                    chart_layout.addLayout(export_layout)
-                    
-                    # Insert at top of main layout
-                    main_layout = self.layout()
-                    main_layout.insertWidget(0, self.chart_container)
+                # Remove existing chart container if present
+                if hasattr(self, 'chart_container') and self.chart_container:
+                    self.chart_container.setParent(None)
+                    self.chart_container.deleteLater()
                 
-                print("[DynamicResultsTabWidget] Charts rendered successfully")
-            
+                # Create new chart container
+                self.chart_container = QWidget()
+                chart_layout = QVBoxLayout(self.chart_container)
+                chart_layout.setContentsMargins(5, 5, 5, 5)
+                
+                # Add engine type label
+                engine_display = self.engine_type.replace('_', ' ').title()
+                engine_label = QLabel(f"📊 {engine_display} - Feather Statistics")
+                engine_label.setStyleSheet("font-weight: bold; font-size: 12pt; color: #2196F3; padding: 5px;")
+                chart_layout.addWidget(engine_label)
+                
+                # Create horizontal layout for bar chart and pie chart side by side
+                charts_row = QHBoxLayout()
+                
+                # Add the bar chart widget
+                chart_widget.setMinimumHeight(300)
+                charts_row.addWidget(chart_widget, stretch=3)
+                
+                # Create and add pie chart if we have feather_metadata
+                if feather_metadata:
+                    try:
+                        # Extract data for pie chart (top 10 feathers)
+                        pie_data = {}
+                        for feather_id, metadata in feather_metadata.items():
+                            if isinstance(metadata, dict) and not feather_id.startswith('_'):
+                                count = metadata.get('identities_found', metadata.get('identities_final', metadata.get('matches_created', 0)))
+                                if count > 0:
+                                    pie_data[feather_id] = count
+                        
+                        if pie_data:
+                            # Sort and limit to top 10
+                            sorted_pie_data = dict(sorted(pie_data.items(), key=lambda x: x[1], reverse=True)[:10])
+                            
+                            # Create pie chart
+                            pie_chart = PyQt5PieChart()
+                            pie_chart.set_data(sorted_pie_data, "Distribution by Feather")
+                            pie_chart.setMinimumHeight(300)
+                            
+                            # Store chart data for export
+                            pie_chart.chart_data = {
+                                'feathers': list(sorted_pie_data.keys()),
+                                'counts': list(sorted_pie_data.values()),
+                                'title': 'Distribution by Feather'
+                            }
+                            
+                            # Setup context menu for pie chart
+                            self._setup_chart_context_menu(pie_chart)
+                            
+                            charts_row.addWidget(pie_chart, stretch=2)
+                            print("[DynamicResultsTabWidget] ✓ Pie chart added")
+                    except Exception as e:
+                        print(f"[DynamicResultsTabWidget] Warning: Could not create pie chart: {e}")
+                
+                chart_layout.addLayout(charts_row)
+                
+                # Add second row with Records vs Identities grouped bar chart
+                if feather_metadata:
+                    try:
+                        # Prepare data for grouped bar chart
+                        grouped_data = {}
+                        for feather_id, metadata in feather_metadata.items():
+                            if isinstance(metadata, dict) and not feather_id.startswith('_'):
+                                records = metadata.get('records_processed', metadata.get('total_records', 0))
+                                identities = metadata.get('identities_final', metadata.get('identities_found', 0))
+                                invalid = metadata.get('identities_filtered', metadata.get('invalid_identities', 0))
+                                
+                                if records > 0 or identities > 0:
+                                    grouped_data[feather_id] = {
+                                        'Records': records,
+                                        'Identities': identities,
+                                        'Invalid': invalid
+                                    }
+                        
+                        if grouped_data:
+                            # Sort by records descending and limit to top 10
+                            sorted_grouped = dict(sorted(grouped_data.items(), 
+                                                        key=lambda x: x[1]['Records'], 
+                                                        reverse=True)[:10])
+                            
+                            # Create grouped bar chart
+                            grouped_chart = PyQt5GroupedBarChart()
+                            grouped_chart.set_data(sorted_grouped, 
+                                                  ['Records', 'Identities', 'Invalid'],
+                                                  "Records vs Identities Extracted vs Invalid")
+                            grouped_chart.setMinimumHeight(300)
+                            
+                            # Store chart data for export
+                            grouped_chart.chart_data = {
+                                'feathers': list(sorted_grouped.keys()),
+                                'series': ['Records', 'Identities', 'Invalid'],
+                                'data': sorted_grouped,
+                                'title': 'Records vs Identities Extracted vs Invalid'
+                            }
+                            
+                            # Setup context menu
+                            self._setup_chart_context_menu(grouped_chart)
+                            
+                            # Add label and chart
+                            grouped_label = QLabel("📈 Records vs Identities Comparison")
+                            grouped_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #4CAF50; padding: 5px; margin-top: 10px;")
+                            chart_layout.addWidget(grouped_label)
+                            chart_layout.addWidget(grouped_chart)
+                            
+                            print("[DynamicResultsTabWidget] ✓ Grouped bar chart added")
+                    except Exception as e:
+                        print(f"[DynamicResultsTabWidget] Warning: Could not create grouped bar chart: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                # Add export buttons
+                export_layout = QHBoxLayout()
+                export_png_btn = QPushButton("📷 Export Bar Chart as PNG")
+                export_png_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px 15px; border-radius: 3px;")
+                export_png_btn.clicked.connect(lambda: self._handle_export_png(chart_widget))
+                export_layout.addWidget(export_png_btn)
+                
+                export_csv_btn = QPushButton("📊 Export Data as CSV")
+                export_csv_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 5px 15px; border-radius: 3px;")
+                export_csv_btn.clicked.connect(lambda: self._handle_export_csv(chart_widget))
+                export_layout.addWidget(export_csv_btn)
+                
+                export_layout.addStretch()
+                chart_layout.addLayout(export_layout)
+                
+                # Insert at top of main layout
+                main_layout = self.layout()
+                if main_layout:
+                    main_layout.insertWidget(0, self.chart_container)
+                    print("[DynamicResultsTabWidget] ✓ Chart container added to layout")
+                else:
+                    print("[DynamicResultsTabWidget] ERROR: No main layout found!")
+                
+                print("[DynamicResultsTabWidget] ✓ Charts rendered successfully")
+            else:
+                # Requirement 4.8: Display error message if no data available
+                print("[DynamicResultsTabWidget] WARNING: No chart widget was created")
+                self._show_error_message("Unable to render charts")
+        
         except Exception as e:
-            print(f"[Error] Failed to render charts: {e}")
+            print(f"[DynamicResultsTabWidget] CRITICAL ERROR in _render_charts_for_results: {e}")
             import traceback
             traceback.print_exc()
+            self._show_error_message(f"Chart rendering failed: {str(e)}")
     
     def _extract_time_windows_from_results(self) -> List:
         """Extract time windows data from results for chart rendering."""
@@ -748,17 +1663,179 @@ class DynamicResultsTabWidget(QWidget):
             print(f"[Error] Failed to extract time windows: {e}")
             return []
     
-    def _export_chart_as_png(self, chart_widget, filepath: str):
-        """Export chart to PNG file."""
-        try:
-            if not hasattr(chart_widget, 'figure'):
-                QMessageBox.warning(self, "Export Error", "Chart figure not available for export")
-                return False
+    def _query_feather_metadata_from_database(self, result) -> Dict:
+        """
+        Query database to reconstruct feather_metadata when not available in result.
+        
+        Requirements: 4.3, 4.4, 4.5, 4.7
+        
+        Args:
+            result: CorrelationResult object
             
-            # Save figure to file
-            chart_widget.figure.savefig(filepath, dpi=300, bbox_inches='tight')
-            print(f"[Export] Chart saved to: {filepath}")
-            return True
+        Returns:
+            Dictionary of feather_id -> metadata
+        """
+        try:
+            # Requirement 4.6: Get database path from result or output directory
+            db_path = getattr(result, 'database_path', None)
+            
+            # Try to get from output_dir if database_path not set
+            if not db_path and hasattr(self, 'output_dir') and self.output_dir:
+                from pathlib import Path
+                db_path = str(Path(self.output_dir) / "correlation_results.db")
+            
+            if not db_path:
+                print("[DynamicResultsTabWidget] No database path available to query feather metadata")
+                return {}
+            
+            # Check if database file exists
+            from pathlib import Path
+            if not Path(db_path).exists():
+                print(f"[DynamicResultsTabWidget] Database file not found: {db_path}")
+                return {}
+            
+            import sqlite3
+            print(f"[DynamicResultsTabWidget] Querying database for feather statistics: {db_path}")
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Get execution_id from result
+            execution_id = getattr(result, 'execution_id', None)
+            
+            if not execution_id:
+                # Try to get the most recent execution
+                cursor.execute("SELECT MAX(execution_id) FROM executions")
+                row = cursor.fetchone()
+                if row and row[0]:
+                    execution_id = row[0]
+                    print(f"[DynamicResultsTabWidget] Using most recent execution_id: {execution_id}")
+                else:
+                    print("[DynamicResultsTabWidget] No execution_id found in database")
+                    conn.close()
+                    return {}
+            
+            # Requirement 4.4: Query feather_metadata table first, then fall back to matches
+            # First try the feather_metadata table which has proper feather info
+            cursor.execute("""
+                SELECT 
+                    fm.feather_id,
+                    fm.artifact_type,
+                    fm.total_records,
+                    COUNT(m.match_id) as matches_count
+                FROM feather_metadata fm
+                LEFT JOIN results r ON fm.result_id = r.result_id
+                LEFT JOIN matches m ON m.result_id = r.result_id AND m.anchor_feather_id = fm.feather_id
+                WHERE r.execution_id = ?
+                GROUP BY fm.feather_id
+            """, (execution_id,))
+            
+            feather_metadata = {}
+            rows = cursor.fetchall()
+            
+            if rows:
+                for row in rows:
+                    feather_id, artifact_type, total_records, matches_count = row
+                    if feather_id:  # Skip None feather_ids
+                        feather_metadata[feather_id] = {
+                            'feather_name': feather_id,
+                            'artifact_type': artifact_type or 'Unknown',
+                            'identities_found': matches_count,
+                            'identities_final': matches_count,
+                            'matches_created': matches_count,
+                            'records_processed': total_records or 0,
+                            'identities_extracted': matches_count,
+                            'identities_filtered': 0
+                        }
+            
+            # If no feather_metadata found, fall back to querying matches table directly
+            if not feather_metadata:
+                print("[DynamicResultsTabWidget] No feather_metadata table data, trying results.feather_metadata JSON column...")
+                
+                # Try to get feather_metadata from results table JSON column
+                cursor.execute("""
+                    SELECT feather_metadata FROM results WHERE execution_id = ? AND feather_metadata IS NOT NULL
+                """, (execution_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    try:
+                        feather_metadata = json.loads(row[0])
+                        # Filter out engine metadata
+                        feather_metadata = {k: v for k, v in feather_metadata.items() if not k.startswith('_')}
+                        print(f"[DynamicResultsTabWidget] Loaded {len(feather_metadata)} feathers from results.feather_metadata JSON")
+                    except:
+                        pass
+            
+            # Final fallback: query matches table directly
+            if not feather_metadata:
+                print("[DynamicResultsTabWidget] Falling back to matches table query...")
+                cursor.execute("""
+                    SELECT 
+                        m.anchor_feather_id,
+                        m.anchor_artifact_type,
+                        COUNT(*) as matches_count
+                    FROM matches m
+                    JOIN results r ON m.result_id = r.result_id
+                    WHERE r.execution_id = ?
+                    GROUP BY m.anchor_feather_id
+                """, (execution_id,))
+                
+                for row in cursor.fetchall():
+                    feather_id, artifact_type, matches_count = row
+                    if feather_id:
+                        feather_metadata[feather_id] = {
+                            'feather_name': feather_id,
+                            'artifact_type': artifact_type or 'Unknown',
+                            'identities_found': matches_count,
+                            'identities_final': matches_count,
+                            'matches_created': matches_count,
+                            'records_processed': 0,
+                            'identities_extracted': matches_count,
+                            'identities_filtered': 0
+                        }
+            
+            conn.close()
+            
+            print(f"[DynamicResultsTabWidget] Reconstructed metadata for {len(feather_metadata)} feathers from database")
+            return feather_metadata
+            
+        except Exception as e:
+            print(f"[DynamicResultsTabWidget] Failed to query feather metadata from database: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+    
+    def _export_chart_as_png(self, chart_widget, filepath: str):
+        """Export chart to PNG file using QWidget.grab() for PyQt5 native charts."""
+        try:
+            # For PyQt5BarChart (native widget), use grab() to capture as pixmap
+            if isinstance(chart_widget, PyQt5BarChart):
+                pixmap = chart_widget.grab()
+                if pixmap.save(filepath, "PNG"):
+                    print(f"[Export] PyQt5 chart saved to: {filepath}")
+                    return True
+                else:
+                    print(f"[Error] Failed to save pixmap to: {filepath}")
+                    return False
+            
+            # For matplotlib charts (if available)
+            elif hasattr(chart_widget, 'figure'):
+                chart_widget.figure.savefig(filepath, dpi=300, bbox_inches='tight')
+                print(f"[Export] Matplotlib chart saved to: {filepath}")
+                return True
+            
+            # Fallback: try grab() on any QWidget
+            elif hasattr(chart_widget, 'grab'):
+                pixmap = chart_widget.grab()
+                if pixmap.save(filepath, "PNG"):
+                    print(f"[Export] Widget captured and saved to: {filepath}")
+                    return True
+                else:
+                    print(f"[Error] Failed to save widget capture to: {filepath}")
+                    return False
+            else:
+                QMessageBox.warning(self, "Export Error", "Chart widget does not support export")
+                return False
             
         except Exception as e:
             print(f"[Error] Failed to export chart as PNG: {e}")
@@ -806,21 +1883,44 @@ class DynamicResultsTabWidget(QWidget):
             from PyQt5.QtWidgets import QMenu
             from PyQt5.QtCore import QPoint
             
-            def show_context_menu(event):
-                if event.button == 3:  # Right click
+            # For PyQt5BarChart, use standard Qt context menu
+            if isinstance(chart_widget, PyQt5BarChart):
+                chart_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+                
+                def show_context_menu(pos):
                     menu = QMenu(self)
                     
-                    export_png_action = menu.addAction("Export as PNG")
-                    export_csv_action = menu.addAction("Export Data as CSV")
+                    export_png_action = menu.addAction("📷 Export as PNG")
+                    export_csv_action = menu.addAction("📊 Export Data as CSV")
                     
-                    action = menu.exec_(chart_widget.mapToGlobal(QPoint(int(event.x), int(event.y))))
+                    action = menu.exec_(chart_widget.mapToGlobal(pos))
                     
                     if action == export_png_action:
                         self._handle_export_png(chart_widget)
                     elif action == export_csv_action:
                         self._handle_export_csv(chart_widget)
+                
+                chart_widget.customContextMenuRequested.connect(show_context_menu)
+                print("[DynamicResultsTabWidget] Context menu setup for PyQt5BarChart")
             
-            chart_widget.mpl_connect('button_press_event', show_context_menu)
+            # For matplotlib charts
+            elif hasattr(chart_widget, 'mpl_connect'):
+                def show_mpl_context_menu(event):
+                    if event.button == 3:  # Right click
+                        menu = QMenu(self)
+                        
+                        export_png_action = menu.addAction("📷 Export as PNG")
+                        export_csv_action = menu.addAction("📊 Export Data as CSV")
+                        
+                        action = menu.exec_(chart_widget.mapToGlobal(QPoint(int(event.x), int(event.y))))
+                        
+                        if action == export_png_action:
+                            self._handle_export_png(chart_widget)
+                        elif action == export_csv_action:
+                            self._handle_export_csv(chart_widget)
+                
+                chart_widget.mpl_connect('button_press_event', show_mpl_context_menu)
+                print("[DynamicResultsTabWidget] Context menu setup for matplotlib chart")
             
         except Exception as e:
             print(f"[Error] Failed to setup context menu: {e}")

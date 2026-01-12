@@ -1038,57 +1038,66 @@ class ResultsTabWidget(QWidget):
         self.tab_widget.addTab(self.summary_tab, "📊 Summary")
     
     def _create_summary_tab(self) -> QWidget:
-        """Create summary statistics tab."""
+        """Create summary tab - charts are added dynamically by DynamicResultsTabWidget."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
-        # Overall statistics
-        stats_group = QGroupBox("Overall Statistics")
-        stats_layout = QFormLayout()
-        
+        # Create hidden labels for data storage (used by update methods)
+        # These are not displayed but hold the data
         self.total_matches_label = QLabel("0")
-        stats_layout.addRow("Total Matches:", self.total_matches_label)
+        self.total_matches_label.setVisible(False)
+        layout.addWidget(self.total_matches_label)
         
         self.total_tabs_label = QLabel("0")
-        stats_layout.addRow("Active Tabs:", self.total_tabs_label)
+        self.total_tabs_label.setVisible(False)
+        layout.addWidget(self.total_tabs_label)
         
         self.avg_score_label = QLabel("0.00")
-        stats_layout.addRow("Average Score:", self.avg_score_label)
+        self.avg_score_label.setVisible(False)
+        layout.addWidget(self.avg_score_label)
         
         self.engine_type_label = QLabel("Time-Based")
-        stats_layout.addRow("Engine Type:", self.engine_type_label)
+        self.engine_type_label.setVisible(False)
+        layout.addWidget(self.engine_type_label)
         
-        stats_group.setLayout(stats_layout)
-        layout.addWidget(stats_group)
+        self.total_identities_label = QLabel("0")
+        self.total_identities_label.setVisible(False)
+        layout.addWidget(self.total_identities_label)
         
-        # Integration status
-        integration_group = QGroupBox("Integration Status")
-        integration_layout = QFormLayout()
+        self.total_records_label = QLabel("0")
+        self.total_records_label.setVisible(False)
+        layout.addWidget(self.total_records_label)
         
         self.semantic_status_label = QLabel("Not configured")
-        integration_layout.addRow("Semantic Mappings:", self.semantic_status_label)
+        self.semantic_status_label.setVisible(False)
+        layout.addWidget(self.semantic_status_label)
         
         self.scoring_status_label = QLabel("Not configured")
-        integration_layout.addRow("Weighted Scoring:", self.scoring_status_label)
+        self.scoring_status_label.setVisible(False)
+        layout.addWidget(self.scoring_status_label)
         
-        integration_group.setLayout(integration_layout)
-        layout.addWidget(integration_group)
+        # Hidden feather stats table for data storage
+        self.feather_stats_table = QTableWidget()
+        self.feather_stats_table.setColumnCount(6)
+        self.feather_stats_table.setHorizontalHeaderLabels([
+            "Feather", "Records", "Identities Extracted", "Invalid", "Matches", "Percentage"
+        ])
+        self.feather_stats_table.setVisible(False)
+        layout.addWidget(self.feather_stats_table)
         
-        # Tab breakdown table
-        breakdown_group = QGroupBox("Tab Breakdown")
-        breakdown_layout = QVBoxLayout()
-        
+        # Hidden breakdown table for data storage
         self.breakdown_table = QTableWidget()
         self.breakdown_table.setColumnCount(6)
         self.breakdown_table.setHorizontalHeaderLabels([
             "Tab", "Wing", "Matches", "Avg Score", "Semantic", "Last Accessed"
         ])
-        self.breakdown_table.horizontalHeader().setStretchLastSection(True)
-        breakdown_layout.addWidget(self.breakdown_table)
+        self.breakdown_table.setVisible(False)
+        layout.addWidget(self.breakdown_table)
         
-        breakdown_group.setLayout(breakdown_layout)
-        layout.addWidget(breakdown_group)
-        
+        # Charts will be added here dynamically by DynamicResultsTabWidget._render_charts_for_results()
+        # The layout stretches to fill available space for charts
         layout.addStretch()
         
         return widget
@@ -1188,6 +1197,149 @@ class ResultsTabWidget(QWidget):
                 tab_widget.update_scoring_configuration(scoring_config)
         
         self._update_summary()
+    
+    def update_feather_stats_from_data(self, feather_data: Dict[str, Dict], total_matches: int = 0):
+        """
+        Update feather statistics table from external data (e.g., database query).
+        
+        Args:
+            feather_data: Dictionary of feather_id -> {records, identities, matches, ...}
+            total_matches: Total matches for percentage calculation
+        """
+        self.feather_stats_table.setRowCount(0)
+        
+        if not feather_data:
+            return
+        
+        # Calculate total if not provided
+        if total_matches == 0:
+            total_matches = sum(
+                d.get('matches_created', d.get('matches', d.get('identities_found', 0)))
+                for d in feather_data.values() if isinstance(d, dict) and not str(d).startswith('_')
+            )
+        
+        # Sort by matches/identities descending
+        sorted_feathers = sorted(
+            [(fid, data) for fid, data in feather_data.items() if isinstance(data, dict) and not fid.startswith('_')],
+            key=lambda x: x[1].get('matches_created', x[1].get('matches', x[1].get('identities_found', 0))),
+            reverse=True
+        )
+        
+        # Calculate totals
+        total_identities = 0
+        total_records = 0
+        total_invalid = 0
+        
+        for fid, stats in sorted_feathers:
+            row = self.feather_stats_table.rowCount()
+            self.feather_stats_table.insertRow(row)
+            
+            # Feather name
+            self.feather_stats_table.setItem(row, 0, QTableWidgetItem(fid))
+            
+            # Records processed
+            records = stats.get('records_processed', stats.get('records', stats.get('total_records', 0)))
+            self.feather_stats_table.setItem(row, 1, QTableWidgetItem(f"{records:,}"))
+            total_records += records
+            
+            # Identities extracted
+            identities = stats.get('identities_final', stats.get('identities_found', stats.get('identities', 0)))
+            self.feather_stats_table.setItem(row, 2, QTableWidgetItem(f"{identities:,}"))
+            total_identities += identities
+            
+            # Invalid identities
+            invalid = stats.get('identities_filtered', stats.get('invalid_identities', 0))
+            invalid_item = QTableWidgetItem(f"{invalid:,}")
+            if invalid > 0:
+                invalid_item.setForeground(QColor("#F44336"))  # Red for invalid
+            self.feather_stats_table.setItem(row, 3, invalid_item)
+            total_invalid += invalid
+            
+            # Matches
+            matches = stats.get('matches_created', stats.get('matches', stats.get('identities_found', 0)))
+            self.feather_stats_table.setItem(row, 4, QTableWidgetItem(f"{matches:,}"))
+            
+            # Percentage
+            percentage = (matches / total_matches * 100) if total_matches > 0 else 0
+            self.feather_stats_table.setItem(row, 5, QTableWidgetItem(f"{percentage:.1f}%"))
+        
+        # Update the total labels
+        self.total_identities_label.setText(f"{total_identities:,}")
+        self.total_records_label.setText(f"{total_records:,}")
+        self.total_matches_label.setText(f"{total_matches:,}")
+        
+        # Store for chart rendering
+        self._feather_stats_data = {
+            'feather_data': feather_data,
+            'total_matches': total_matches,
+            'total_identities': total_identities,
+            'total_records': total_records,
+            'total_invalid': total_invalid
+        }
+        
+        print(f"[ResultsTabWidget] Updated feather stats: {len(sorted_feathers)} feathers, {total_matches:,} matches, {total_identities:,} identities, {total_records:,} records, {total_invalid:,} invalid")
+    
+    def update_summary_from_result(self, result: 'CorrelationResult', engine_type: str = "identity_based"):
+        """
+        Update all summary statistics from a single CorrelationResult.
+        
+        This is called when loading results directly from database without creating tabs.
+        
+        Args:
+            result: CorrelationResult object with matches and feather_metadata
+            engine_type: Engine type for display
+        """
+        # Update engine type
+        if engine_type == "identity_based":
+            self.engine_type_label.setText("Identity-Based")
+        else:
+            self.engine_type_label.setText("Time-Based")
+        
+        # Update total matches
+        total_matches = result.total_matches if hasattr(result, 'total_matches') else len(result.matches)
+        self.total_matches_label.setText(f"{total_matches:,}")
+        
+        # Update active tabs (1 for single result)
+        self.total_tabs_label.setText("1")
+        
+        # Calculate average score
+        if result.matches:
+            avg_score = sum(m.match_score for m in result.matches) / len(result.matches)
+            self.avg_score_label.setText(f"{avg_score:.2f}")
+        else:
+            self.avg_score_label.setText("0.00")
+        
+        # Update feather statistics if available
+        if hasattr(result, 'feather_metadata') and result.feather_metadata:
+            self.update_feather_stats_from_data(result.feather_metadata, total_matches)
+        
+        # Update breakdown table with single result
+        self.breakdown_table.setRowCount(0)
+        row = self.breakdown_table.rowCount()
+        self.breakdown_table.insertRow(row)
+        
+        wing_name = result.wing_name if hasattr(result, 'wing_name') and result.wing_name else "Correlation"
+        
+        self.breakdown_table.setItem(row, 0, QTableWidgetItem("Result"))
+        self.breakdown_table.setItem(row, 1, QTableWidgetItem(wing_name))
+        self.breakdown_table.setItem(row, 2, QTableWidgetItem(f"{total_matches:,}"))
+        
+        if result.matches:
+            avg_score = sum(m.match_score for m in result.matches) / len(result.matches)
+            self.breakdown_table.setItem(row, 3, QTableWidgetItem(f"{avg_score:.2f}"))
+        else:
+            self.breakdown_table.setItem(row, 3, QTableWidgetItem("0.00"))
+        
+        # Semantic status
+        semantic_count = len(self.global_semantic_mappings)
+        semantic_text = f"{semantic_count} mappings" if semantic_count > 0 else "None"
+        self.breakdown_table.setItem(row, 4, QTableWidgetItem(semantic_text))
+        
+        # Last accessed
+        from datetime import datetime
+        self.breakdown_table.setItem(row, 5, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+        
+        print(f"[ResultsTabWidget] Updated summary from result: {wing_name}, {total_matches:,} matches")
     
     def add_result_tab(self, wing_name: str, result: CorrelationResult, 
                       semantic_mappings: Optional[Dict[str, Any]] = None,
@@ -1318,6 +1470,19 @@ class ResultsTabWidget(QWidget):
         self.total_tabs_label.setText(str(total_tabs))
         self.avg_score_label.setText(f"{avg_score:.2f}")
         
+        # Calculate identity and record totals from feather_metadata
+        total_identities = 0
+        total_records = 0
+        for state in self.tab_states.values():
+            if hasattr(state.result, 'feather_metadata') and state.result.feather_metadata:
+                for fid, metadata in state.result.feather_metadata.items():
+                    if isinstance(metadata, dict) and not fid.startswith('_'):
+                        total_identities += metadata.get('identities_final', metadata.get('identities_found', 0))
+                        total_records += metadata.get('records_processed', 0)
+        
+        self.total_identities_label.setText(f"{total_identities:,}")
+        self.total_records_label.setText(f"{total_records:,}")
+        
         # Update integration status
         semantic_count = len(self.global_semantic_mappings)
         if semantic_count > 0:
@@ -1334,8 +1499,57 @@ class ResultsTabWidget(QWidget):
             self.scoring_status_label.setText("Not configured")
             self.scoring_status_label.setStyleSheet("color: #9E9E9E;")
         
+        # Update feather statistics table
+        self._update_feather_stats_table()
+        
         # Update breakdown table
         self._update_breakdown_table()
+    
+    def _update_feather_stats_table(self):
+        """Update the feather statistics table with data from all results."""
+        self.feather_stats_table.setRowCount(0)
+        
+        # Aggregate feather stats from all tab states
+        aggregated_stats = {}
+        total_matches_all = 0
+        
+        for state in self.tab_states.values():
+            if hasattr(state.result, 'feather_metadata') and state.result.feather_metadata:
+                for fid, metadata in state.result.feather_metadata.items():
+                    if isinstance(metadata, dict) and not fid.startswith('_'):
+                        if fid not in aggregated_stats:
+                            aggregated_stats[fid] = {
+                                'records': 0,
+                                'identities': 0,
+                                'matches': 0
+                            }
+                        aggregated_stats[fid]['records'] += metadata.get('records_processed', 0)
+                        aggregated_stats[fid]['identities'] += metadata.get('identities_final', metadata.get('identities_found', 0))
+                        aggregated_stats[fid]['matches'] += metadata.get('matches_created', 0)
+                        total_matches_all += metadata.get('matches_created', 0)
+        
+        # Sort by matches descending
+        sorted_feathers = sorted(aggregated_stats.items(), key=lambda x: x[1]['matches'], reverse=True)
+        
+        for fid, stats in sorted_feathers:
+            row = self.feather_stats_table.rowCount()
+            self.feather_stats_table.insertRow(row)
+            
+            # Feather name
+            self.feather_stats_table.setItem(row, 0, QTableWidgetItem(fid))
+            
+            # Records processed
+            self.feather_stats_table.setItem(row, 1, QTableWidgetItem(f"{stats['records']:,}"))
+            
+            # Identities extracted
+            self.feather_stats_table.setItem(row, 2, QTableWidgetItem(f"{stats['identities']:,}"))
+            
+            # Matches
+            self.feather_stats_table.setItem(row, 3, QTableWidgetItem(f"{stats['matches']:,}"))
+            
+            # Percentage
+            percentage = (stats['matches'] / total_matches_all * 100) if total_matches_all > 0 else 0
+            self.feather_stats_table.setItem(row, 4, QTableWidgetItem(f"{percentage:.1f}%"))
     
     def _update_breakdown_table(self):
         """Update the tab breakdown table."""

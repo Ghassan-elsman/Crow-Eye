@@ -81,6 +81,7 @@ class CorrelationEngineWrapper(QObject):
     progress_updated = pyqtSignal(int, int, str)  # wing_index, total, status
     anchor_progress_updated = pyqtSignal(int, int)  # NEW: anchor_index, total_anchors
     execution_completed = pyqtSignal(dict)  # results summary
+    wing_completed = pyqtSignal(dict)  # NEW: Signal for individual wing completion
     execution_failed = pyqtSignal(str)  # error message
     log_message = pyqtSignal(str)  # NEW: Signal for log messages from worker thread
     
@@ -92,11 +93,17 @@ class CorrelationEngineWrapper(QObject):
         self.progress_handler = None  # Reference to progress handler method
         self._original_stdout = None
         self._log_widget = None
+        self.selected_wings = []  # NEW: List of wings to execute sequentially
+        self.current_wing_index = 0  # NEW: Track current wing being executed
+        self._cancelled = False  # NEW: Cancellation flag
     
-    def set_pipeline(self, pipeline_config: PipelineConfig, output_dir: str):
+    def set_pipeline(self, pipeline_config: PipelineConfig, output_dir: str, selected_wings=None):
         """Set pipeline configuration and output directory"""
         self.pipeline_config = pipeline_config
         self.output_dir = output_dir
+        self.selected_wings = selected_wings or pipeline_config.wing_configs
+        self.current_wing_index = 0
+        self._cancelled = False
     
     def set_log_widget(self, widget):
         """Set the log widget for output redirection"""
@@ -159,7 +166,7 @@ class CorrelationEngineWrapper(QObject):
                 self.anchor_progress_updated.emit(anchors_processed, total_anchors)
     
     def run(self):
-        """Execute correlation in worker thread"""
+        """Execute correlation in worker thread - runs wings sequentially"""
         try:
             # Redirect stdout in this thread to emit signals
             class ThreadOutputRedirector:
@@ -195,24 +202,84 @@ class CorrelationEngineWrapper(QObject):
             # Set output directory
             self.pipeline_config.output_directory = self.output_dir
             
-            # Create executor
-            self.executor = PipelineExecutor(self.pipeline_config)
+            total_wings = len(self.selected_wings)
             
-            # Register our progress handler to receive events
-            self.executor.engine.register_progress_listener(self.handle_engine_progress)
+            # Execute each wing sequentially
+            for wing_index, wing_config in enumerate(self.selected_wings, start=1):
+                # Check for cancellation
+                if self._cancelled:
+                    self.log_message.emit(f"\n❌ Execution cancelled after {wing_index - 1} of {total_wings} wings")
+                    break
+                
+                wing_name = getattr(wing_config, 'wing_name', f'Wing {wing_index}')
+                
+                self.progress_updated.emit(wing_index - 1, total_wings, f"Executing Wing {wing_index} of {total_wings}: {wing_name}")
+                self.log_message.emit(f"\n{'='*60}")
+                self.log_message.emit(f"EXECUTING WING {wing_index} OF {total_wings}: {wing_name}")
+                self.log_message.emit(f"{'='*60}")
+                
+                # Create a copy of pipeline config with only this wing
+                from copy import deepcopy
+                single_wing_pipeline = deepcopy(self.pipeline_config)
+                single_wing_pipeline.wing_configs = [wing_config]
+                
+                # CRITICAL FIX: Force generate_report to True to ensure execution_id is created
+                # Without this, execution_id will be None and Summary tab won't load
+                single_wing_pipeline.generate_report = True
+                
+                # Create executor for this wing
+                self.executor = PipelineExecutor(single_wing_pipeline)
+                
+                # Register our progress handler to receive events
+                self.executor.engine.register_progress_listener(self.handle_engine_progress)
+                
+                # Execute this wing
+                summary = self.executor.execute()
+                
+                # DEBUG: Log what execute() returned
+                self.log_message.emit(f"[DEBUG] execute() returned summary with keys: {list(summary.keys())}")
+                self.log_message.emit(f"[DEBUG] generate_report config: {self.pipeline_config.generate_report}")
+                self.log_message.emit(f"[DEBUG] execution_id in summary: {summary.get('execution_id')}")
+                self.log_message.emit(f"[DEBUG] database_path in summary: {summary.get('database_path')}")
+                self.log_message.emit(f"[DEBUG] engine_type in summary: {summary.get('engine_type')}")
+                
+                # Add wing-specific information to summary
+                summary['wing_name'] = wing_name
+                summary['wing_index'] = wing_index
+                summary['total_wings'] = total_wings
+                
+                # Emit wing completion signal (for creating separate tab)
+                self.wing_completed.emit(summary)
+                
+                self.log_message.emit(f"\n✓ Wing {wing_index} completed: {summary.get('total_matches', 0)} matches found")
             
-            # Execute pipeline
-            total_wings = len(self.pipeline_config.wing_configs)
-            
-            self.progress_updated.emit(0, total_wings, "Starting execution...")
-            
-            # Execute
-            summary = self.executor.execute()
-            
-            self.progress_updated.emit(total_wings, total_wings, "Execution complete")
-            
-            # Emit completion
-            self.execution_completed.emit(summary)
+            # All wings complete
+            if not self._cancelled:
+                self.progress_updated.emit(total_wings, total_wings, "All wings executed successfully")
+                
+                # DEBUG: Log summary contents before creating final_summary
+                self.log_message.emit(f"\n[DEBUG] Last wing summary keys: {list(summary.keys())}")
+                self.log_message.emit(f"[DEBUG] execution_id from summary: {summary.get('execution_id')}")
+                self.log_message.emit(f"[DEBUG] database_path from summary: {summary.get('database_path')}")
+                self.log_message.emit(f"[DEBUG] engine_type from summary: {summary.get('engine_type')}")
+                
+                # Emit final completion signal with last wing's execution info
+                final_summary = {
+                    'pipeline_name': self.pipeline_config.pipeline_name,
+                    'total_wings_executed': total_wings,
+                    'execution_complete': True,
+                    # Include last wing's execution info for Summary tab
+                    'execution_id': summary.get('execution_id'),
+                    'database_path': summary.get('database_path'),
+                    'engine_type': summary.get('engine_type', 'time_window_scanning')
+                }
+                
+                # DEBUG: Log final_summary contents
+                self.log_message.emit(f"[DEBUG] final_summary execution_id: {final_summary.get('execution_id')}")
+                self.log_message.emit(f"[DEBUG] final_summary database_path: {final_summary.get('database_path')}")
+                self.log_message.emit(f"[DEBUG] final_summary engine_type: {final_summary.get('engine_type')}")
+                
+                self.execution_completed.emit(final_summary)
             
         except Exception as e:
             import traceback
@@ -222,6 +289,15 @@ class CorrelationEngineWrapper(QObject):
             # Restore original stdout
             if self._original_stdout:
                 sys.stdout = self._original_stdout
+    
+    def cancel(self):
+        """Request cancellation of execution"""
+        self._cancelled = True
+        if self.executor:
+            if hasattr(self.executor, '_cancelled'):
+                self.executor._cancelled = True
+            if hasattr(self.executor, 'request_cancellation'):
+                self.executor.request_cancellation("User requested cancellation")
 
 
 class ExecutionControlWidget(QWidget):
@@ -229,6 +305,7 @@ class ExecutionControlWidget(QWidget):
     
     execution_started = pyqtSignal()
     execution_completed = pyqtSignal(dict)
+    wing_completed = pyqtSignal(dict)  # NEW: Signal for individual wing completion
     load_results_requested = pyqtSignal(dict)  # Signal to request loading results
     progress_message = pyqtSignal(str)  # Signal for thread-safe progress messages
     
@@ -885,15 +962,19 @@ class ExecutionControlWidget(QWidget):
             # NEW: Apply time period filter
             if hasattr(self, 'start_enabled') and self.start_enabled.isChecked():
                 execution_pipeline.time_period_start = self.start_datetime.dateTime().toString("yyyy-MM-ddTHH:mm:ss")
-                # print(f"[ExecutionControl] Time period start: {execution_pipeline.time_period_start}")
+                self.log_output.append(f"Time Filter Start: {execution_pipeline.time_period_start}")
             else:
                 execution_pipeline.time_period_start = None
             
             if hasattr(self, 'end_enabled') and self.end_enabled.isChecked():
                 execution_pipeline.time_period_end = self.end_datetime.dateTime().toString("yyyy-MM-ddTHH:mm:ss")
-                # print(f"[ExecutionControl] Time period end: {execution_pipeline.time_period_end}")
+                self.log_output.append(f"Time Filter End: {execution_pipeline.time_period_end}")
             else:
                 execution_pipeline.time_period_end = None
+            
+            # Log if time filter is applied
+            if execution_pipeline.time_period_start or execution_pipeline.time_period_end:
+                self.log_output.append(f"✓ Time period filter enabled")
             
             # NEW: Apply identity filter
             if hasattr(self, 'identity_filter_input') and self.identity_filter_section.isVisible():
@@ -935,7 +1016,7 @@ class ExecutionControlWidget(QWidget):
             # print("[ExecutionControl] Setting pipeline on engine wrapper...")
             
             # Set pipeline (use filtered pipeline with only selected wings)
-            self.engine_wrapper.set_pipeline(execution_pipeline, output_dir)
+            self.engine_wrapper.set_pipeline(execution_pipeline, output_dir, selected_wings)
             
             # Set progress handler for detailed progress display in log_output
             self.engine_wrapper.set_progress_handler(self._handle_progress_event)
@@ -946,6 +1027,7 @@ class ExecutionControlWidget(QWidget):
             self.worker_thread.started.connect(self.engine_wrapper.run)
             self.engine_wrapper.progress_updated.connect(self._update_progress)
             self.engine_wrapper.anchor_progress_updated.connect(self._update_anchor_progress)  # NEW
+            self.engine_wrapper.wing_completed.connect(self._on_wing_completed)  # NEW: Connect wing completion
             self.engine_wrapper.log_message.connect(self._append_to_log, Qt.QueuedConnection)  # NEW: Connect log messages
             self.engine_wrapper.execution_completed.connect(self._on_execution_completed)
             self.engine_wrapper.execution_failed.connect(self._on_execution_failed)
@@ -981,17 +1063,12 @@ class ExecutionControlWidget(QWidget):
         """Cancel execution and save partial results."""
         if self.worker_thread and self.worker_thread.isRunning():
             # Request graceful shutdown
-            if self.engine_wrapper and self.engine_wrapper.executor:
+            if self.engine_wrapper:
                 self.log_output.append("\n⚠️ Cancellation requested - saving partial results...")
                 self.status_label.setText("Cancelling execution...")
                 
-                # Set cancellation flag on executor
-                if hasattr(self.engine_wrapper.executor, '_cancelled'):
-                    self.engine_wrapper.executor._cancelled = True
-                
-                # Also try to cancel through the engine's cancellation manager
-                if hasattr(self.engine_wrapper.executor, 'request_cancellation'):
-                    self.engine_wrapper.executor.request_cancellation("User requested cancellation")
+                # Set cancellation flag on wrapper
+                self.engine_wrapper.cancel()
                 
                 # Give it time to save partial results
                 self.worker_thread.quit()
@@ -1051,80 +1128,46 @@ class ExecutionControlWidget(QWidget):
             self.progress_bar.setFormat(f"{anchor_index:,}/{total_anchors:,} ({percentage:.1f}%)")
             self.status_label.setText(f"Processing... {anchor_index:,} items processed")
     
+    def _on_wing_completed(self, summary: dict):
+        """Handle individual wing completion - emit signal for parent to create separate tab"""
+        wing_name = summary.get('wing_name', 'Unknown Wing')
+        wing_index = summary.get('wing_index', 0)
+        total_wings = summary.get('total_wings', 1)
+        total_matches = summary.get('total_matches', 0)
+        
+        # Log wing completion
+        self.log_output.append(f"\n✓ Wing {wing_index}/{total_wings} completed: {wing_name}")
+        self.log_output.append(f"  Matches found: {total_matches}")
+        
+        # Emit signal for parent widget to create separate result tab
+        self.wing_completed.emit(summary)
+    
     def _on_execution_completed(self, summary: dict):
-        """Handle execution completion"""
+        """Handle execution completion - all wings finished"""
         # Set to determinate mode and show complete
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat("Complete")
-        self.status_label.setText("✓ Execution completed successfully")
+        self.status_label.setText("✓ All wings executed successfully")
         
         # Log summary
         self.log_output.append("\n" + "=" * 60)
-        self.log_output.append("EXECUTION COMPLETE")
+        self.log_output.append("ALL WINGS EXECUTION COMPLETE")
         self.log_output.append("=" * 60)
         self.log_output.append(f"Pipeline: {summary.get('pipeline_name', 'Unknown')}")
-        self.log_output.append(f"Execution Time: {summary.get('execution_time', 0):.2f} seconds")
-        self.log_output.append(f"Feathers Used: {summary.get('feathers_used', summary.get('feathers_created', 0))}")
-        self.log_output.append(f"Wings Executed: {summary.get('wings_executed', 0)}")
-        self.log_output.append(f"Total Matches: {summary.get('total_matches', 0)}")
+        self.log_output.append(f"Total Wings Executed: {summary.get('total_wings_executed', 0)}")
         
-        # Log execution_id if available
-        execution_id = summary.get('execution_id')
-        if execution_id:
-            self.log_output.append(f"Execution ID: {execution_id}")
-            db_path = summary.get('database_path', 'N/A')
-            self.log_output.append(f"Database: {db_path}")
-            if db_path != 'N/A':
-                self.log_output.append(f"Tables: executions, results, matches")
+        # Show completion message
+        QMessageBox.information(
+            self,
+            "Execution Complete",
+            f"All wings executed successfully!\n\n"
+            f"Total Wings: {summary.get('total_wings_executed', 0)}\n\n"
+            f"Results have been saved to separate tabs."
+        )
         
-        if summary.get('errors'):
-            self.log_output.append(f"\n⚠ Errors: {len(summary['errors'])}")
-            for error in summary['errors']:
-                self.log_output.append(f"  • {error}")
-        
-        if summary.get('warnings'):
-            self.log_output.append(f"\n⚠ Warnings: {len(summary['warnings'])}")
-            for warning in summary['warnings']:
-                self.log_output.append(f"  • {warning}")
-        
-        # Emit signal for parent widget to handle (e.g., open results viewer)
+        # Emit signal for parent widget
         self.execution_completed.emit(summary)
-        
-        # Show completion message with option to open results
-        if execution_id:
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("Execution Complete")
-            msg_box.setIcon(QMessageBox.Information)
-            msg_box.setText(
-                f"Correlation execution completed successfully!\n\n"
-                f"Total Matches: {summary.get('total_matches', 0)}\n"
-                f"Execution Time: {summary.get('execution_time', 0):.2f} seconds\n"
-                f"Execution ID: {execution_id}"
-            )
-            msg_box.setInformativeText("Results have been saved to the database.")
-            
-            # Add buttons
-            open_results_btn = msg_box.addButton("Open Results Viewer", QMessageBox.AcceptRole)
-            close_btn = msg_box.addButton("Close", QMessageBox.RejectRole)
-            
-            msg_box.exec_()
-            
-            # Check which button was clicked
-            if msg_box.clickedButton() == open_results_btn:
-                # Emit signal with execution_id for parent to open results viewer
-                # print(f"[ExecutionControl] User requested to open results for execution_id: {execution_id}")
-                # Parent widget should connect to execution_completed signal to handle this
-                pass  # Signal already emitted above
-        else:
-            QMessageBox.information(
-                self,
-                "Execution Complete",
-                f"Correlation execution completed successfully!\n\n"
-                f"Total Matches: {summary.get('total_matches', 0)}\n"
-                f"Execution Time: {summary.get('execution_time', 0):.2f} seconds\n\n"
-                f"⚠ Note: Results were not saved (no execution ID generated)"
-            )
     
     def _on_execution_failed(self, error_message: str):
         """Handle execution failure"""
@@ -1260,7 +1303,7 @@ class ExecutionControlWidget(QWidget):
         scrollbar.setValue(scrollbar.maximum())
     
     def _load_last_results(self):
-        """Load results from database using enhanced loader dialog."""
+        """Load results from database using enhanced loader dialog with robust error handling."""
         output_dir = self.output_dir_input.text().strip()
         
         if not output_dir:
@@ -1272,8 +1315,20 @@ class ExecutionControlWidget(QWidget):
             return
         
         output_path = Path(output_dir)
+        
+        # Check if output directory exists
+        if not output_path.exists():
+            QMessageBox.warning(
+                self,
+                "Directory Not Found",
+                f"Output directory does not exist:\n{output_dir}\n\n"
+                "Please run a correlation first or select a different output directory."
+            )
+            return
+        
         db_file = output_path / "correlation_results.db"
         
+        # Check if database file exists
         if not db_file.exists():
             QMessageBox.warning(
                 self,
@@ -1287,6 +1342,31 @@ class ExecutionControlWidget(QWidget):
             # Import and show the enhanced database loader dialog
             from .database_results_loader import DatabaseResultsLoaderDialog
             
+            # Verify database is accessible before opening dialog
+            try:
+                from ..engine.database_persistence import ResultsDatabase
+                with ResultsDatabase(str(db_file)) as db:
+                    # Quick check to see if database has any executions
+                    latest_id = db.get_latest_execution_id()
+                    if not latest_id:
+                        QMessageBox.information(
+                            self,
+                            "No Results Found",
+                            f"The database exists but contains no execution results:\n{db_file}\n\n"
+                            "Please run a correlation first."
+                        )
+                        return
+            except Exception as db_error:
+                QMessageBox.critical(
+                    self,
+                    "Database Error",
+                    f"Failed to access database:\n{db_file}\n\n"
+                    f"Error: {str(db_error)}\n\n"
+                    "The database may be corrupted or in use by another process."
+                )
+                return
+            
+            # Database is valid, show the loader dialog
             dialog = DatabaseResultsLoaderDialog(self, str(db_file))
             
             if dialog.exec_() == QDialog.Accepted:
@@ -1303,12 +1383,24 @@ class ExecutionControlWidget(QWidget):
                         'selected_executions': selected_executions,
                         'output_dir': output_dir
                     })
+                else:
+                    self.log_output.append("\n⚠️ No executions selected")
             
+        except ImportError as e:
+            QMessageBox.critical(
+                self,
+                "Import Error",
+                f"Failed to import database loader:\n\n{str(e)}\n\n"
+                "This may indicate a missing dependency or installation issue."
+            )
+            import traceback
+            traceback.print_exc()
         except Exception as e:
             QMessageBox.critical(
                 self,
                 "Error Loading Results",
-                f"Failed to load results:\n\n{str(e)}"
+                f"Failed to load results:\n\n{str(e)}\n\n"
+                "Check the console for detailed error information."
             )
             import traceback
             traceback.print_exc()

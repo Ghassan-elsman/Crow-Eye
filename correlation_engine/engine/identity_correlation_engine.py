@@ -37,6 +37,11 @@ class IdentityCorrelationEngine:
         self.debug_mode = debug_mode
         self.identity_index: Dict[str, Identity] = {}  # Hash index for O(1) lookup
         
+        # Initialize identity validator for filtering invalid values
+        # Requirements: 1.1, 1.2, 1.5, 1.6
+        from .identity_validator import IdentityValidator
+        self.identity_validator = IdentityValidator()
+        
         # Common field name variations for identity extraction
         # ENHANCED: More comprehensive field patterns for better identity extraction
         self.name_field_patterns = [
@@ -371,13 +376,15 @@ class IdentityCorrelationEngine:
     
     def extract_identity_info(self, record: Dict[str, Any]) -> Tuple[str, str, str, str]:
         """
-        Extract identity information from a forensic record.
+        Extract identity information from a forensic record with enhanced validation.
         
-        IMPROVED: Uses artifact-specific field mappings first, then falls back
-        to case-insensitive generic pattern matching.
-        
-        Handles different field naming conventions across artifact types.
-        Detects identity type based on available fields.
+        ENHANCED: Implements comprehensive field validation and prioritization:
+        - Validates all extracted values before use
+        - Prioritizes fields by quality (executable_name > filename > path)
+        - Extracts filename from generic paths
+        - Extracts executable from command lines
+        - Skips records with all-invalid fields
+        - Logs validation decisions with field names and reasons
         
         Args:
             record: Forensic record dictionary
@@ -386,8 +393,11 @@ class IdentityCorrelationEngine:
             Tuple of (name, path, hash, identity_type)
             identity_type is one of: "name", "path", "hash", "composite"
         
-        Requirements: 1.1, 1.2
+        Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8
         """
+        # Track extraction attempts for validation logging
+        extraction_attempts = []  # List of (field_name, value, is_valid, reason)
+        
         name = ""
         path = ""
         hash_value = ""
@@ -399,80 +409,104 @@ class IdentityCorrelationEngine:
         # Build lowercase key map for case-insensitive lookup
         record_keys_lower = {k.lower(): k for k in record.keys()}
         
-        # STEP 1: Try artifact-specific field mappings FIRST
+        # STEP 1: Try artifact-specific field mappings FIRST with prioritization
+        # Requirements: 8.5 - Field prioritization
         if artifact_type_normalized in self.artifact_field_mappings:
             mapping = self.artifact_field_mappings[artifact_type_normalized]
             
-            # Extract name using artifact-specific fields
+            # Extract name using artifact-specific fields (prioritized order)
             for field in mapping.get('name', []):
                 # Try exact match first
                 if field in record and record[field]:
-                    name = str(record[field])
-                    break
+                    extracted_value = str(record[field])
+                    is_valid, reason = self.identity_validator.is_valid_identity(extracted_value, field_name=field)
+                    extraction_attempts.append((field, extracted_value, is_valid, reason))
+                    
+                    if is_valid:
+                        name = extracted_value
+                        break
+                    elif self.debug_mode:
+                        print(f"[Identity Engine] ⚠️ Rejected field '{field}': '{extracted_value}' (reason: {reason})")
+                    continue
+                    
                 # Try case-insensitive match
                 if field.lower() in record_keys_lower:
                     actual_key = record_keys_lower[field.lower()]
                     if record.get(actual_key):
-                        name = str(record[actual_key])
-                        break
+                        extracted_value = str(record[actual_key])
+                        is_valid, reason = self.identity_validator.is_valid_identity(extracted_value, field_name=actual_key)
+                        extraction_attempts.append((actual_key, extracted_value, is_valid, reason))
+                        
+                        if is_valid:
+                            name = extracted_value
+                            break
+                        elif self.debug_mode:
+                            print(f"[Identity Engine] ⚠️ Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
             
             # Extract path using artifact-specific fields
             for field in mapping.get('path', []):
                 if field in record and record[field]:
-                    path = str(record[field])
-                    break
+                    extracted_value = str(record[field])
+                    is_valid, reason = self.identity_validator.is_valid_identity(extracted_value, field_name=field)
+                    extraction_attempts.append((field, extracted_value, is_valid, reason))
+                    
+                    if is_valid:
+                        path = extracted_value
+                        break
+                    elif self.debug_mode:
+                        print(f"[Identity Engine] ⚠️ Rejected field '{field}': '{extracted_value}' (reason: {reason})")
+                    continue
+                    
                 if field.lower() in record_keys_lower:
                     actual_key = record_keys_lower[field.lower()]
                     if record.get(actual_key):
-                        path = str(record[actual_key])
-                        break
+                        extracted_value = str(record[actual_key])
+                        is_valid, reason = self.identity_validator.is_valid_identity(extracted_value, field_name=actual_key)
+                        extraction_attempts.append((actual_key, extracted_value, is_valid, reason))
+                        
+                        if is_valid:
+                            path = extracted_value
+                            break
+                        elif self.debug_mode:
+                            print(f"[Identity Engine] ⚠️ Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
             
             # Extract hash using artifact-specific fields
             for field in mapping.get('hash', []):
                 if field in record and record[field]:
-                    hash_value = str(record[field])
-                    break
+                    extracted_value = str(record[field])
+                    is_valid, reason = self.identity_validator.is_valid_identity(extracted_value)
+                    extraction_attempts.append((field, extracted_value, is_valid, reason))
+                    
+                    if is_valid:
+                        hash_value = extracted_value
+                        break
+                    elif self.debug_mode:
+                        print(f"[Identity Engine] ⚠️ Rejected field '{field}': '{extracted_value}' (reason: {reason})")
+                    continue
+                    
                 if field.lower() in record_keys_lower:
                     actual_key = record_keys_lower[field.lower()]
                     if record.get(actual_key):
-                        hash_value = str(record[actual_key])
-                        break
+                        extracted_value = str(record[actual_key])
+                        is_valid, reason = self.identity_validator.is_valid_identity(extracted_value)
+                        extraction_attempts.append((actual_key, extracted_value, is_valid, reason))
+                        
+                        if is_valid:
+                            hash_value = extracted_value
+                            break
+                        elif self.debug_mode:
+                            print(f"[Identity Engine] ⚠️ Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
         
-        # STEP 2: Fall back to generic patterns with case-insensitive matching
+        # STEP 2: Fall back to generic patterns with prioritization
+        # Requirements: 8.5 - Prioritize fields in order
         if not name:
-            for field_pattern in self.name_field_patterns:
-                # Try exact match
-                if field_pattern in record and record[field_pattern]:
-                    name = str(record[field_pattern])
-                    break
-                # Try case-insensitive match
-                if field_pattern.lower() in record_keys_lower:
-                    actual_key = record_keys_lower[field_pattern.lower()]
-                    if record.get(actual_key):
-                        name = str(record[actual_key])
-                        break
+            name = self._extract_with_prioritization(record, record_keys_lower, self.name_field_patterns, extraction_attempts)
         
         if not path:
-            for field_pattern in self.path_field_patterns:
-                if field_pattern in record and record[field_pattern]:
-                    path = str(record[field_pattern])
-                    break
-                if field_pattern.lower() in record_keys_lower:
-                    actual_key = record_keys_lower[field_pattern.lower()]
-                    if record.get(actual_key):
-                        path = str(record[actual_key])
-                        break
+            path = self._extract_with_prioritization(record, record_keys_lower, self.path_field_patterns, extraction_attempts)
         
         if not hash_value:
-            for field_pattern in self.hash_field_patterns:
-                if field_pattern in record and record[field_pattern]:
-                    hash_value = str(record[field_pattern])
-                    break
-                if field_pattern.lower() in record_keys_lower:
-                    actual_key = record_keys_lower[field_pattern.lower()]
-                    if record.get(actual_key):
-                        hash_value = str(record[actual_key])
-                        break
+            hash_value = self._extract_with_prioritization(record, record_keys_lower, self.hash_field_patterns, extraction_attempts)
         
         # STEP 3: Smart field discovery - look for fields containing key terms
         if not name:
@@ -481,9 +515,62 @@ class IdentityCorrelationEngine:
         if not path:
             path = self._smart_field_discovery(record, record_keys_lower, 'path')
         
-        # STEP 4: Extract name from path if we have path but no name
+        # STEP 4: Extract filename from path if path is too generic
+        # Requirements: 8.3 - Path-to-filename extraction for generic paths
         if path and not name:
-            name = self._extract_name_from_path(path)
+            name = self._extract_filename_from_path(path)
+        
+        # STEP 5: Extract executable from command line
+        # Requirements: 8.4 - Command-line-to-executable extraction
+        if path and self._is_command_line(path):
+            executable = self._extract_executable_from_command_line(path)
+            if executable:
+                if not name:
+                    name = executable
+                # Update path to just the executable path
+                path = executable
+        
+        # STEP 6: Final validation of extracted values
+        # Requirements: 8.2 - Apply validation rules
+        if name:
+            validated_name = self.identity_validator.validate_and_filter(
+                name, 
+                log_filtered=self.debug_mode
+            )
+            if validated_name is None:
+                name = ""  # Clear invalid name
+        
+        if path:
+            validated_path = self.identity_validator.validate_and_filter(
+                path,
+                log_filtered=self.debug_mode
+            )
+            if validated_path is None:
+                path = ""  # Clear invalid path
+        
+        if hash_value:
+            validated_hash = self.identity_validator.validate_and_filter(
+                hash_value,
+                log_filtered=self.debug_mode
+            )
+            if validated_hash is None:
+                hash_value = ""  # Clear invalid hash
+        
+        # STEP 7: Check if all fields are invalid - skip record
+        # Requirements: 8.6 - Skip records with all-invalid fields
+        if not any([name, path, hash_value]):
+            # Log validation failure with field details
+            # Requirements: 8.8 - Validation logging with field names and reasons
+            if self.debug_mode:
+                print(f"[Identity Engine] ⚠️ Skipped record: No valid identity fields")
+                print(f"    Artifact: {artifact_type}")
+                print(f"    Extraction attempts:")
+                for field_name, value, is_valid, reason in extraction_attempts[:5]:  # Show first 5
+                    status = "✓" if is_valid else "✗"
+                    print(f"      {status} {field_name}: '{value[:50]}...' {f'({reason})' if not is_valid else ''}")
+            
+            # Return empty values to signal skip
+            return "", "", "", "name"
         
         # Determine identity type based on available fields
         identity_type = self._determine_identity_type(name, path, hash_value)
@@ -571,6 +658,164 @@ class IdentityCorrelationEngine:
             # Only return if it looks like a filename
             if '.' in filename or filename.endswith('.exe') or filename.endswith('.dll'):
                 return filename
+        
+        return ""
+    
+    def _extract_with_prioritization(self, record: Dict[str, Any], record_keys_lower: Dict[str, str], 
+                                    field_patterns: List[str], extraction_attempts: List) -> str:
+        """
+        Extract value from record using prioritized field patterns with validation.
+        
+        ENHANCED: Now passes field names to validator for context-aware validation.
+        
+        Requirements: 8.5 - Field prioritization
+        
+        Args:
+            record: Record to extract from
+            record_keys_lower: Lowercase key mapping
+            field_patterns: List of field patterns in priority order
+            extraction_attempts: List to track extraction attempts
+        
+        Returns:
+            Extracted and validated value, or empty string
+        """
+        for field_pattern in field_patterns:
+            # Try exact match
+            if field_pattern in record and record[field_pattern]:
+                extracted_value = str(record[field_pattern])
+                is_valid, reason = self.identity_validator.is_valid_identity(extracted_value, field_name=field_pattern)
+                extraction_attempts.append((field_pattern, extracted_value, is_valid, reason))
+                
+                if is_valid:
+                    return extracted_value
+                elif self.debug_mode:
+                    print(f"[Identity Engine] ⚠️ Rejected field '{field_pattern}': '{extracted_value}' (reason: {reason})")
+                continue
+                
+            # Try case-insensitive match
+            if field_pattern.lower() in record_keys_lower:
+                actual_key = record_keys_lower[field_pattern.lower()]
+                if record.get(actual_key):
+                    extracted_value = str(record[actual_key])
+                    is_valid, reason = self.identity_validator.is_valid_identity(extracted_value, field_name=actual_key)
+                    extraction_attempts.append((actual_key, extracted_value, is_valid, reason))
+                    
+                    if is_valid:
+                        return extracted_value
+                    elif self.debug_mode:
+                        print(f"[Identity Engine] ⚠️ Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
+        
+        return ""
+    
+    def _extract_filename_from_path(self, path: str) -> str:
+        """
+        Extract filename from a path, handling generic paths.
+        
+        Requirements: 8.3 - Path-to-filename extraction for generic paths
+        
+        Args:
+            path: File path
+        
+        Returns:
+            Extracted filename or empty string
+        """
+        if not path:
+            return ""
+        
+        # First check if this is a command line - if so, extract executable first
+        if self._is_command_line(path):
+            executable = self._extract_executable_from_command_line(path)
+            if executable:
+                # Now extract filename from the executable path
+                path = executable
+        
+        # Normalize path separators
+        normalized = path.replace('\\', '/')
+        
+        # Get the last component
+        parts = normalized.rstrip('/').split('/')
+        if parts:
+            filename = parts[-1]
+            
+            # Check if it looks like a filename (has extension or known executable names)
+            if '.' in filename:
+                return filename
+            
+            # Check for known executable patterns without extension
+            known_executables = ['cmd', 'powershell', 'explorer', 'svchost', 'rundll32', 
+                               'taskmgr', 'notepad', 'regedit', 'services']
+            if filename.lower() in known_executables:
+                return filename
+        
+        return ""
+    
+    def _is_command_line(self, path: str) -> bool:
+        """
+        Check if a path looks like a command line (contains arguments).
+        
+        Requirements: 8.4 - Command-line detection
+        
+        Args:
+            path: Path string to check
+        
+        Returns:
+            True if looks like command line, False otherwise
+        """
+        if not path:
+            return False
+        
+        # Command lines typically have:
+        # - Spaces followed by dashes (arguments like -flag or /flag)
+        # - Multiple quoted sections
+        # - Common argument patterns
+        
+        indicators = [
+            ' -',      # Unix-style flags
+            ' /',      # Windows-style flags
+            ' --',     # Long flags
+            '" "',     # Multiple quoted sections
+            '.exe ',   # Executable with arguments
+            '.bat ',   # Batch file with arguments
+            '.cmd ',   # Command file with arguments
+            '.ps1 ',   # PowerShell script with arguments
+        ]
+        
+        return any(indicator in path for indicator in indicators)
+    
+    def _extract_executable_from_command_line(self, command_line: str) -> str:
+        """
+        Extract executable path from a command line string.
+        
+        Requirements: 8.4 - Command-line-to-executable extraction
+        
+        Args:
+            command_line: Command line string
+        
+        Returns:
+            Extracted executable path or empty string
+        """
+        if not command_line:
+            return ""
+        
+        # Handle quoted executables: "C:\Program Files\app.exe" -arg1 -arg2
+        if command_line.startswith('"'):
+            end_quote = command_line.find('"', 1)
+            if end_quote > 0:
+                return command_line[1:end_quote]
+        
+        # Handle unquoted executables: C:\Windows\System32\cmd.exe /c command
+        # Split on first space and take the first part
+        parts = command_line.split(' ', 1)
+        if parts:
+            potential_exe = parts[0].strip()
+            
+            # Validate it looks like an executable path
+            if any(potential_exe.lower().endswith(ext) for ext in ['.exe', '.bat', '.cmd', '.ps1', '.com', '.dll']):
+                return potential_exe
+            
+            # If no extension but looks like a path, return it
+            if '\\' in potential_exe or '/' in potential_exe:
+                return potential_exe
         
         return ""
     
@@ -1059,7 +1304,7 @@ class IdentityBasedCorrelationEngine:
         identity_feathers = {}
         
         # IMPROVED: Track extraction success per feather (lightweight)
-        feather_extraction_stats = {}  # feather_id -> {total, extracted, failed, artifact_type}
+        feather_extraction_stats = {}  # feather_id -> {total, extracted, failed, filtered, artifact_type}
         
         for record in records:
             try:
@@ -1073,6 +1318,7 @@ class IdentityBasedCorrelationEngine:
                         'total': 0,
                         'extracted': 0,
                         'failed': 0,
+                        'filtered': 0,
                         'artifact_type': artifact_type
                     }
                 
@@ -1081,10 +1327,20 @@ class IdentityBasedCorrelationEngine:
                 # Extract identity information
                 name, path, hash_value, identity_type = self.identity_engine.extract_identity_info(record)
                 
+                # Check if identity was filtered during extraction
+                # The validator tracks filtered identities, so we can check if extraction returned empty values
+                pre_extraction_filtered_count = self.identity_engine.identity_validator.filtered_count
+                
                 # Skip records without sufficient identity information
                 if not any([name, path, hash_value]):
                     skipped_no_identity += 1
                     feather_extraction_stats[feather_id]['failed'] += 1
+                    
+                    # Check if this was due to filtering (validator count increased)
+                    post_extraction_filtered_count = self.identity_engine.identity_validator.filtered_count
+                    if post_extraction_filtered_count > pre_extraction_filtered_count:
+                        feather_extraction_stats[feather_id]['filtered'] += 1
+                    
                     continue
                 
                 # Get the RAW name (before normalization) for display purposes
@@ -1141,6 +1397,39 @@ class IdentityBasedCorrelationEngine:
         print(f"  Records Skipped (no identity): {skipped_no_identity:,}")
         print(f"  Unique Identities Found: {len(self.identities):,}")
         
+        # Report filtering statistics with validation details
+        # Requirements: 8.7 - Validation logging with counts
+        filter_stats = self.identity_engine.identity_validator.get_statistics()
+        if filter_stats['total_filtered'] > 0:
+            print(f"\n[Identity Engine] Validation: {filter_stats['total_filtered']} invalid identities filtered")
+            print(f"  Breakdown by reason:")
+            for reason, count in sorted(filter_stats['reasons'].items(), key=lambda x: x[1], reverse=True):
+                reason_display = {
+                    'boolean_string': 'Boolean strings (true/false)',
+                    'numeric_value': 'Numeric values (1, 1.0, etc.)',
+                    'empty_value': 'Empty values',
+                    'whitespace_only': 'Whitespace-only strings',
+                    'too_short': 'Too short (< 2 chars)',
+                    'no_alphanumeric': 'No alphanumeric characters'
+                }.get(reason, reason)
+                print(f"    • {reason_display}: {count}")
+        
+        # Calculate validation rate
+        # Requirements: 8.7 - Show validation statistics
+        total_attempts = processed_count + skipped_no_identity
+        valid_count = processed_count
+        invalid_count = skipped_no_identity
+        validation_rate = (valid_count / total_attempts * 100) if total_attempts > 0 else 0
+        
+        print(f"\n[Identity Engine] Validation: {valid_count:,} valid, {invalid_count:,} invalid, {skipped_no_identity:,} skipped")
+        print(f"  Validation rate: {validation_rate:.1f}%")
+        
+        # Store feather extraction stats in correlation_results for later use
+        # Requirements: 7.1, 7.2
+        if not hasattr(self.correlation_results, 'feather_extraction_stats'):
+            self.correlation_results.feather_extraction_stats = {}
+        self.correlation_results.feather_extraction_stats = feather_extraction_stats
+        
         print(f"\n[Identity Engine] 📁 Extraction Statistics by Feather:")
         feathers_with_issues = []
         
@@ -1170,7 +1459,7 @@ class IdentityBasedCorrelationEngine:
                 for identity_key in identities_per_feather.get(fid, set()):
                     if identity_key in self.identities:
                         # Count evidence from this specific feather
-                        count = sum(1 for ev in self.identities[identity_key].evidence 
+                        count = sum(1 for ev in self.identities[identity_key].all_evidence 
                                   if ev.feather_id == fid)
                         identity_counts[identity_key] = count
                 
@@ -2421,13 +2710,24 @@ class IdentityBasedEngineAdapter:
             print(f"[Identity Engine] Summary: {len(feathers_loaded)} feathers loaded, {len(feathers_failed)} failed")
             print(f"[Identity Engine] Total records loaded: {len(all_records):,}")
             
-            # Build feather metadata from loaded records
+            # Build feather metadata from loaded records and extraction stats
+            # Requirements: 7.1, 7.2
             feather_metadata = {}
+            extraction_stats = getattr(correlation_results, 'feather_extraction_stats', {})
+            
             for fid, count, artifact in feathers_loaded:
+                # Get extraction stats for this feather
+                fid_stats = extraction_stats.get(fid, {})
+                
                 feather_metadata[fid] = {
-                    'records_loaded': count,
+                    'feather_name': fid,
+                    'records_processed': count,
                     'artifact_type': artifact,
-                    'identities_found': 0  # Will be updated after correlation
+                    'identities_extracted': fid_stats.get('extracted', 0),
+                    'identities_filtered': fid_stats.get('filtered', 0),
+                    'identities_final': fid_stats.get('extracted', 0),  # Final = extracted (after filtering)
+                    'matches_created': 0,  # Will be updated after match creation
+                    'extraction_success_rate': (fid_stats.get('extracted', 0) / count * 100) if count > 0 else 0
                 }
             
             if not all_records:
@@ -2470,8 +2770,8 @@ class IdentityBasedEngineAdapter:
             
             # Print feather contribution summary
             print(f"[Identity Engine] Feather contribution:")
-            for fid, meta in sorted(feather_metadata.items(), key=lambda x: x[1]['records_loaded'], reverse=True):
-                print(f"  • {fid}: {meta['records_loaded']:,} records, {meta['identities_found']} identities")
+            for fid, meta in sorted(feather_metadata.items(), key=lambda x: x[1]['records_processed'], reverse=True):
+                print(f"  • {fid}: {meta['records_processed']:,} records, {meta['identities_found']} identities")
             
             # Convert to CorrelationResult format for compatibility
             result = CorrelationResult(
@@ -2531,6 +2831,7 @@ class IdentityBasedEngineAdapter:
             # Convert identities to CorrelationMatch objects
             # In streaming mode, matches are written directly to database
             feather_contribution = {}  # Track which feathers contributed
+            feather_matches_created = {}  # Track matches created per feather (Requirements: 7.2)
             matches_created = 0
             matches_skipped = 0
             
@@ -2587,6 +2888,12 @@ class IdentityBasedEngineAdapter:
                     
                     matches_created += 1
                     
+                    # Track matches created per feather (Requirements: 7.2)
+                    for feather_id in feather_records.keys():
+                        if feather_id not in feather_matches_created:
+                            feather_matches_created[feather_id] = 0
+                        feather_matches_created[feather_id] += 1
+                    
                     # Calculate time spread
                     time_spread = 0.0
                     if anchor.start_time and anchor.end_time:
@@ -2625,6 +2932,10 @@ class IdentityBasedEngineAdapter:
             
             # Final progress log
             print(f"[Identity Engine] ✓ Processing complete: {identities_processed:,} identities → {matches_created:,} matches")
+            
+            # Update feather_metadata with matches_created counts (Requirements: 7.2)
+            for fid in feather_metadata:
+                feather_metadata[fid]['matches_created'] = feather_matches_created.get(fid, 0)
             
             # Finalize streaming if enabled
             if use_streaming and db_writer:

@@ -523,10 +523,16 @@ class MainWindow(QMainWindow):
         self.pipeline_builder.set_case_directory(case_directory)
         print(f"[Main Window] Case directory set in Pipeline Builder: {case_directory}")
         
-        # Set default output directory to case's results directory
-        results_dir = str(Path(directory) / "results")
-        self.pipeline_builder.output_dir_input.setText(results_dir)
-        print(f"[Main Window] Output directory set to: {results_dir}")
+        # Set default output directory to case's output directory (NOT results subdirectory)
+        # This ensures streaming results go to the case directory
+        output_dir = str(Path(directory) / "output")
+        self.pipeline_builder.output_dir_input.setText(output_dir)
+        print(f"[Main Window] Pipeline Builder output directory set to: {output_dir}")
+        
+        # IMPORTANT: Also set output directory in Execution Control widget
+        # This ensures the execution control uses the case directory, not Crow-Eye directory
+        self.execution_control.output_dir_input.setText(output_dir)
+        print(f"[Main Window] Execution Control output directory set to: {output_dir}")
         
         # Initialize default wings for the case
         try:
@@ -621,6 +627,7 @@ class MainWindow(QMainWindow):
         # Add execution control widget
         self.execution_control = ExecutionControlWidget()
         self.execution_control.execution_completed.connect(self._on_execution_completed)
+        self.execution_control.wing_completed.connect(self._on_wing_completed)  # NEW: Handle individual wing completion
         self.execution_control.load_results_requested.connect(self._on_load_results_requested)
         execution_layout.addWidget(self.execution_control)
         
@@ -1322,33 +1329,111 @@ class MainWindow(QMainWindow):
         self.is_modified = True
         self._update_window_title()
     
-    def _on_execution_completed(self, summary: dict):
-        """Handle execution completion and open appropriate results viewer"""
-        # Get engine type from summary
+    def _on_wing_completed(self, summary: dict):
+        """Handle individual wing completion - create separate result tab for this wing"""
+        wing_name = summary.get('wing_name', 'Unknown Wing')
+        wing_index = summary.get('wing_index', 0)
         engine_type = summary.get('engine_type', 'time_window_scanning')
         output_dir = self.current_pipeline.output_directory if self.current_pipeline else "output"
+        execution_id = summary.get('execution_id', None)
+        database_path = summary.get('database_path', None)
         
-        print(f"[MainWindow] Execution completed with engine type: {engine_type}")
-        
-        # Pass engine type to Summary Tab
-        self.summary_viewer.set_engine_type(engine_type)
-        self.summary_viewer.load_results(output_dir)
+        print(f"[MainWindow] Wing {wing_index} completed: {wing_name} (engine: {engine_type}, execution_id: {execution_id})")
         
         # Create appropriate results viewer based on engine type
         new_viewer = self._create_results_viewer_for_engine(engine_type, output_dir)
         
         if new_viewer:
-            # Add as sub-tab with engine-specific name
-            tab_name = engine_type.replace('_', ' ').title()
-            self._switch_results_viewer(new_viewer, tab_name)
+            # Create unique tab name with wing name and run number
+            tab_name = f"{wing_name} - Run {wing_index}"
+            
+            # Add as new sub-tab
+            self._add_results_viewer(new_viewer, tab_name)
             
             # Load results into the new viewer
-            self._load_results_into_viewer(new_viewer, engine_type, output_dir)
+            if database_path and execution_id:
+                print(f"[MainWindow] Loading wing {wing_index} results from database")
+                self._load_results_into_viewer(new_viewer, engine_type, output_dir, execution_id)
+            else:
+                print(f"[MainWindow] Loading wing {wing_index} results from output directory")
+                new_viewer.set_engine_type(engine_type)
+                new_viewer.load_results(output_dir)
+        else:
+            print(f"[MainWindow] Failed to create viewer for wing {wing_index} (engine type: {engine_type})")
+    
+    def _on_execution_completed(self, summary: dict):
+        """Handle execution completion and open appropriate results viewer"""
+        # CRITICAL DEBUG: Log immediately to confirm method is called
+        print("=" * 80)
+        print("[MainWindow] _on_execution_completed() CALLED")
+        print("=" * 80)
+        
+        try:
+            # Get engine type from summary
+            print(f"[MainWindow] DEBUG: summary type: {type(summary)}")
+            print(f"[MainWindow] DEBUG: summary keys: {list(summary.keys()) if isinstance(summary, dict) else 'NOT A DICT'}")
+            
+            engine_type = summary.get('engine_type', 'time_window_scanning')
+            output_dir = self.current_pipeline.output_directory if self.current_pipeline else "output"
+            execution_id = summary.get('execution_id', None)
+            database_path = summary.get('database_path', None)
+            
+            print(f"[MainWindow] Execution completed with engine type: {engine_type}, execution_id: {execution_id}")
+            print(f"[MainWindow] database_path: {database_path}")
+            print(f"[MainWindow] output_dir: {output_dir}")
+        except Exception as e:
+            print(f"[MainWindow] ERROR in _on_execution_completed (variable extraction): {e}")
+            import traceback
+            traceback.print_exc()
+            return
+        
+        # Pass engine type to Summary Tab
+        self.summary_viewer.set_engine_type(engine_type)
+        
+        # Load results into Summary Tab from database
+        if database_path and execution_id:
+            print(f"[MainWindow] Loading execution {execution_id} into Summary tab from database")
+            self._load_summary_from_execution(database_path, execution_id, engine_type)
+        else:
+            # Fallback to loading from output directory
+            print(f"[MainWindow] Loading results into Summary tab from output directory")
+            self.summary_viewer.load_results(output_dir)
+        
+        # Create appropriate results viewer based on engine type
+        new_viewer = self._create_results_viewer_for_engine(engine_type, output_dir)
+        
+        if new_viewer:
+            # Create unique tab name with timestamp or execution ID
+            if execution_id:
+                # Use execution ID for unique naming
+                tab_name = f"{self._get_engine_display_name(engine_type)} - Run {execution_id}"
+            else:
+                # Fallback to timestamp-based naming
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                tab_name = f"{self._get_engine_display_name(engine_type)} - {timestamp}"
+            
+            # Add as new sub-tab (don't replace existing ones)
+            self._add_results_viewer(new_viewer, tab_name)
+            
+            # Load results into the new viewer
+            self._load_results_into_viewer(new_viewer, engine_type, output_dir, execution_id)
         else:
             # Fallback to current viewer
             print(f"[MainWindow] Using fallback viewer for engine type: {engine_type}")
             self.current_results_viewer.set_engine_type(engine_type)
             self.current_results_viewer.load_results(output_dir)
+    
+    def _get_engine_display_name(self, engine_type: str) -> str:
+        """Get user-friendly display name for engine type"""
+        if engine_type == "time_window_scanning":
+            return "Time-Based"
+        elif engine_type == "identity_based":
+            return "Identity-Based"
+        elif engine_type == "time_based":
+            return "Time-Based"
+        else:
+            return engine_type.replace('_', ' ').title()
     
     def _on_load_results_requested(self, request: dict):
         """Handle request to load results from execution control (enhanced for multiple selections)."""
@@ -1392,8 +1477,8 @@ class MainWindow(QMainWindow):
             
             if new_viewer:
                 # Add as sub-tab with execution-specific name
-                tab_name = f"{engine_type.replace('_', ' ').title()} - Exec {execution_id}"
-                self._switch_results_viewer(new_viewer, tab_name)
+                tab_name = f"{self._get_engine_display_name(engine_type)} - Run {execution_id}"
+                self._add_results_viewer(new_viewer, tab_name)
                 
                 # Load results from specific execution
                 self._load_results_from_execution(new_viewer, engine_type, db_path, execution_id)
@@ -1482,6 +1567,182 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
             raise
     
+    def _load_summary_from_execution(self, db_path: str, execution_id: int, engine_type: str):
+        """Load summary data from a specific execution into the Summary tab."""
+        try:
+            from ..engine.database_persistence import ResultsDatabase
+            from pathlib import Path
+            
+            # Check if database exists
+            if not Path(db_path).exists():
+                print(f"[MainWindow] ERROR: Database not found at {db_path}")
+                self._show_summary_error(f"Database not found: {db_path}")
+                return
+            
+            print(f"[MainWindow] Loading summary for execution {execution_id} from {db_path}")
+            
+            with ResultsDatabase(db_path) as db:
+                # Load all results for the execution
+                correlation_results = db.load_execution_results(execution_id)
+                
+                if not correlation_results:
+                    print(f"[MainWindow] No results found for execution {execution_id}")
+                    return
+                
+                print(f"[MainWindow] Loaded {len(correlation_results)} correlation results for summary")
+                
+                # Use the first result or combine multiple results if needed
+                primary_result = correlation_results[0]
+                
+                # If multiple results, combine matches
+                if len(correlation_results) > 1:
+                    print(f"[MainWindow] Combining {len(correlation_results)} result sets for summary...")
+                    for additional_result in correlation_results[1:]:
+                        primary_result.matches.extend(additional_result.matches)
+                        primary_result.total_matches += additional_result.total_matches
+                
+                # Validate the correlation result before proceeding
+                if not self._validate_correlation_result(primary_result):
+                    print(f"[MainWindow] ERROR: Invalid correlation result, cannot load summary")
+                    return
+                
+                # Load the result into the summary viewer
+                print(f"[MainWindow] Loading {primary_result.total_matches:,} matches into Summary tab...")
+                print(f"[MainWindow] DEBUG: primary_result type: {type(primary_result)}")
+                print(f"[MainWindow] DEBUG: primary_result.wing_name: {getattr(primary_result, 'wing_name', 'N/A')}")
+                print(f"[MainWindow] DEBUG: primary_result.total_matches: {primary_result.total_matches}")
+                print(f"[MainWindow] DEBUG: primary_result has feather_metadata: {hasattr(primary_result, 'feather_metadata')}")
+                if hasattr(primary_result, 'feather_metadata'):
+                    fm = primary_result.feather_metadata
+                    print(f"[MainWindow] DEBUG: feather_metadata keys: {list(fm.keys()) if fm else 'None'}")
+                
+                # Set engine type first
+                self.summary_viewer.set_engine_type(engine_type)
+                print(f"[MainWindow] DEBUG: Set engine_type to: {engine_type}")
+                
+                # CRITICAL FIX: Directly populate results_data dictionary
+                # This is the key fix - we must populate results_data directly
+                self.summary_viewer.results_data.clear()
+                print(f"[MainWindow] DEBUG: Cleared results_data")
+                
+                # Use wing_name as key, fallback to "default" if None
+                key = primary_result.wing_name if hasattr(primary_result, 'wing_name') and primary_result.wing_name else "default"
+                self.summary_viewer.results_data[key] = primary_result
+                print(f"[MainWindow] DEBUG: Added result to results_data with key: '{key}'")
+                print(f"[MainWindow] DEBUG: results_data now has {len(self.summary_viewer.results_data)} entries")
+                
+                # Set output_dir for database queries
+                output_dir = str(Path(db_path).parent)
+                self.summary_viewer.output_dir = output_dir
+                print(f"[MainWindow] DEBUG: Set output_dir to: {output_dir}")
+                
+                # Verify results_data is populated before rendering
+                if not self.summary_viewer.results_data:
+                    print(f"[MainWindow] ERROR: results_data is still empty after population!")
+                    return
+                
+                # Now render charts with the populated data
+                print(f"[MainWindow] DEBUG: Calling _render_charts_for_results()...")
+                self.summary_viewer._render_charts_for_results()
+                print(f"[MainWindow] DEBUG: _render_charts_for_results() completed")
+                
+                print(f"[MainWindow] ✓ Successfully loaded summary from database")
+                
+        except Exception as e:
+            print(f"[MainWindow] Error loading summary from execution {execution_id}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _validate_correlation_result(self, result) -> bool:
+        """Validate that a CorrelationResult has all required attributes.
+        
+        Args:
+            result: CorrelationResult object to validate
+            
+        Returns:
+            bool: True if validation passed, False otherwise
+        """
+        print(f"[MainWindow] Validating correlation result...")
+        
+        # Check for wing_name attribute
+        if not hasattr(result, 'wing_name'):
+            print(f"[MainWindow] ❌ Validation failed: Missing 'wing_name' attribute")
+            return False
+        
+        # Check for total_matches attribute
+        if not hasattr(result, 'total_matches'):
+            print(f"[MainWindow] ❌ Validation failed: Missing 'total_matches' attribute")
+            return False
+        
+        # Check for feather_metadata attribute
+        if not hasattr(result, 'feather_metadata'):
+            print(f"[MainWindow] ⚠️  Warning: Missing 'feather_metadata' attribute")
+            # Don't fail validation, but warn - feather_metadata can be queried from database
+        
+        # Check if feather_metadata is populated
+        if hasattr(result, 'feather_metadata'):
+            if result.feather_metadata is None or (isinstance(result.feather_metadata, dict) and len(result.feather_metadata) == 0):
+                print(f"[MainWindow] ⚠️  Warning: feather_metadata is empty or None")
+                # Don't fail validation - can be queried from database
+        
+        # Check total_matches is valid
+        if result.total_matches < 0:
+            print(f"[MainWindow] ❌ Validation failed: Invalid total_matches value: {result.total_matches}")
+            return False
+        
+        print(f"[MainWindow] ✓ Validation passed")
+        print(f"[MainWindow]   - wing_name: {result.wing_name}")
+        print(f"[MainWindow]   - total_matches: {result.total_matches}")
+        print(f"[MainWindow]   - feather_metadata: {'Present' if hasattr(result, 'feather_metadata') and result.feather_metadata else 'Empty/None'}")
+        
+        return True
+    
+    def _show_summary_error(self, error_message: str):
+        """Display a user-friendly error message in the Summary tab.
+        
+        Args:
+            error_message: The error message to display
+        """
+        from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
+        from PyQt5.QtCore import Qt
+        
+        print(f"[MainWindow] Displaying error in Summary tab: {error_message}")
+        
+        # Create error widget
+        error_widget = QWidget()
+        error_layout = QVBoxLayout(error_widget)
+        error_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Create error label with warning styling
+        error_label = QLabel(f"⚠️  {error_message}")
+        error_label.setAlignment(Qt.AlignCenter)
+        error_label.setWordWrap(True)
+        error_label.setStyleSheet("""
+            QLabel {
+                color: #d97706;
+                background-color: #fef3c7;
+                border: 2px solid #f59e0b;
+                border-radius: 8px;
+                padding: 20px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+        """)
+        
+        error_layout.addWidget(error_label)
+        
+        # Clear the summary viewer and add error widget
+        # Get the summary viewer's main layout
+        if hasattr(self.summary_viewer, 'layout') and self.summary_viewer.layout():
+            # Clear existing widgets
+            while self.summary_viewer.layout().count():
+                item = self.summary_viewer.layout().takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            
+            # Add error widget
+            self.summary_viewer.layout().addWidget(error_widget)
+    
     def _create_results_viewer_for_engine(self, engine_type: str, output_dir: str):
         """Create the appropriate results viewer for the given engine type"""
         try:
@@ -1512,69 +1773,58 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
             return None
     
-    def _switch_results_viewer(self, new_viewer, tab_name="Results"):
-        """Add results viewer as a sub-tab within the Results tab"""
+    def _add_results_viewer(self, new_viewer, tab_name="Results"):
+        """Add a new results viewer as a sub-tab within the Results tab (always creates new tab)"""
         try:
-            # Check if a sub-tab with this name already exists
-            existing_index = -1
-            for i in range(self.results_sub_tabs.count()):
-                if self.results_sub_tabs.tabText(i) == tab_name:
-                    existing_index = i
-                    break
-            
-            if existing_index >= 0:
-                # Sub-tab exists - replace its content
-                old_widget = self.results_sub_tabs.widget(existing_index)
-                self.results_sub_tabs.removeTab(existing_index)
-                if old_widget:
-                    old_widget.setParent(None)
-                    old_widget.deleteLater()
-                
-                # Add new viewer at the same position
-                self.results_sub_tabs.insertTab(existing_index, new_viewer, tab_name)
-                self.results_sub_tabs.setCurrentIndex(existing_index)
-            else:
-                # Sub-tab doesn't exist - add new sub-tab
-                new_index = self.results_sub_tabs.addTab(new_viewer, tab_name)
-                self.results_sub_tabs.setCurrentIndex(new_index)
+            # Always add as new sub-tab (don't replace existing ones)
+            new_index = self.results_sub_tabs.addTab(new_viewer, tab_name)
+            self.results_sub_tabs.setCurrentIndex(new_index)
             
             # Switch to Results tab (main tab)
             self.tab_widget.setCurrentWidget(self.results_tab)
             
             self.current_results_viewer = new_viewer
-            print(f"[MainWindow] Added {tab_name} sub-tab in Results")
+            print(f"[MainWindow] Added new {tab_name} sub-tab in Results")
             
         except Exception as e:
-            print(f"[MainWindow] Error switching viewer: {e}")
+            print(f"[MainWindow] Error adding viewer: {e}")
             import traceback
             traceback.print_exc()
-            
+    
+    def _switch_results_viewer(self, new_viewer, tab_name="Results"):
+        """Legacy method - redirects to _add_results_viewer for backward compatibility"""
+        try:
+            self._add_results_viewer(new_viewer, tab_name)
             print(f"[MainWindow] Switched to {type(new_viewer).__name__}")
-            
         except Exception as e:
             print(f"[MainWindow] Error switching viewers: {e}")
             import traceback
             traceback.print_exc()
     
-    def _load_results_into_viewer(self, viewer, engine_type: str, output_dir: str):
+    def _load_results_into_viewer(self, viewer, engine_type: str, output_dir: str, execution_id: int = None):
         """Load results into the appropriate viewer"""
         try:
             if isinstance(viewer, IdentityResultsView):
                 # Identity viewer expects CorrelationResult objects
-                print("[MainWindow] Loading results into Identity Results Viewer")
-                self._load_identity_results(viewer, output_dir)
+                print(f"[MainWindow] Loading results into Identity Results Viewer (execution_id: {execution_id})")
+                self._load_identity_results(viewer, output_dir, execution_id)
                 
             elif isinstance(viewer, TimeBasedResultsViewer):
                 # Time-based viewer can load from directory with database integration
-                print("[MainWindow] Loading results into Time-Based Results Viewer")
+                print(f"[MainWindow] Loading results into Time-Based Results Viewer (execution_id: {execution_id})")
                 from pathlib import Path
                 db_path = Path(output_dir) / "correlation_results.db"
                 
-                # Call load_results with output_dir and db_path
-                viewer.load_results(
-                    output_dir=output_dir,
-                    db_path=str(db_path) if db_path.exists() else None
-                )
+                # If execution_id is provided, load specific execution
+                if execution_id and db_path.exists():
+                    viewer.set_database_path(str(db_path))
+                    viewer.load_results_from_execution(execution_id)
+                else:
+                    # Call load_results with output_dir and db_path
+                    viewer.load_results(
+                        output_dir=output_dir,
+                        db_path=str(db_path) if db_path.exists() else None
+                    )
                 
             else:
                 # Generic viewer
@@ -1587,7 +1837,7 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
     
-    def _load_identity_results(self, viewer: IdentityResultsView, output_dir: str):
+    def _load_identity_results(self, viewer: IdentityResultsView, output_dir: str, execution_id: int = None):
         """Load results specifically for Identity Results Viewer from database"""
         try:
             from ..engine.database_persistence import ResultsDatabase
@@ -1608,10 +1858,11 @@ class MainWindow(QMainWindow):
             print(f"[MainWindow] Loading identity results from database: {db_path}")
             
             with ResultsDatabase(str(db_path)) as db:
-                # Get the latest execution
-                latest_execution_id = db.get_latest_execution_id()
+                # Use provided execution_id or get the latest
+                if execution_id is None:
+                    execution_id = db.get_latest_execution_id()
                 
-                if not latest_execution_id:
+                if not execution_id:
                     print("[MainWindow] No executions found in database")
                     QMessageBox.information(
                         self,
@@ -1620,17 +1871,17 @@ class MainWindow(QMainWindow):
                     )
                     return
                 
-                print(f"[MainWindow] Loading results for execution {latest_execution_id}")
+                print(f"[MainWindow] Loading results for execution {execution_id}")
                 
-                # Load all results for the latest execution
-                correlation_results = db.load_execution_results(latest_execution_id)
+                # Load all results for the execution
+                correlation_results = db.load_execution_results(execution_id)
                 
                 if not correlation_results:
-                    print("[MainWindow] No results found for latest execution")
+                    print("[MainWindow] No results found for execution")
                     QMessageBox.information(
                         self,
                         "No Results",
-                        f"No correlation results found for execution {latest_execution_id}."
+                        f"No correlation results found for execution {execution_id}."
                     )
                     return
                 

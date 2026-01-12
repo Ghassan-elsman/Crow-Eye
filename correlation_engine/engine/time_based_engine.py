@@ -25,7 +25,8 @@ from .two_phase_correlation import (
     TimeWindow,
     WindowDataCollector,
     WindowDataStorage,
-    TwoPhaseConfig
+    TwoPhaseConfig,
+    Phase1ErrorHandler
 )
 from .memory_manager import WindowMemoryManager
 from .database_persistence import StreamingMatchWriter, ResultsDatabase
@@ -912,10 +913,15 @@ class WindowQueryManager:
     Manages efficient querying of feathers for time windows.
     
     Coordinates queries across multiple feathers and provides caching.
+    Applies identity filters if configured.
     """
     
-    def __init__(self, feather_queries: Dict[str, OptimizedFeatherQuery]):
+    def __init__(self, feather_queries: Dict[str, OptimizedFeatherQuery], 
+                 filters: Optional[FilterConfig] = None,
+                 debug_mode: bool = False):
         self.feather_queries = feather_queries
+        self.filters = filters
+        self.debug_mode = debug_mode
         self.query_cache: Dict[str, List[Dict[str, Any]]] = {}
         self.cache_hits = 0
         self.cache_misses = 0
@@ -923,6 +929,7 @@ class WindowQueryManager:
     def query_window(self, window: TimeWindow, progress_tracker: Optional['ProgressTracker'] = None) -> TimeWindow:
         """
         Query all feathers for records in the given time window.
+        Applies identity filters if configured.
         
         Args:
             window: TimeWindow to populate with records
@@ -934,6 +941,7 @@ class WindowQueryManager:
         total_feathers = len(self.feather_queries)
         feathers_queried = 0
         total_records = 0
+        total_filtered = 0  # Track filtered records
         query_start_time = time.time()
         
         # Report query start
@@ -958,6 +966,16 @@ class WindowQueryManager:
                 
                 self.cache_misses += 1
             
+            # APPLY IDENTITY FILTERS
+            if records and self.filters and self.filters.identity_filters:
+                original_count = len(records)
+                records = [r for r in records if not self._should_filter_record(r)]
+                filtered_count = original_count - len(records)
+                total_filtered += filtered_count
+                
+                if filtered_count > 0 and self.debug_mode:
+                    print(f"[WindowQueryManager] Filtered {filtered_count}/{original_count} records from {feather_id}")
+            
             # Add records to window
             if records:
                 window.add_records(feather_id, records)
@@ -977,6 +995,10 @@ class WindowQueryManager:
             progress_tracker.report_database_query_complete(
                 window.window_id, total_feathers, total_records, query_time
             )
+        
+        # Log filter statistics
+        if total_filtered > 0:
+            print(f"[WindowQueryManager] Identity filters excluded {total_filtered:,} records from window {window.window_id}")
         
         return window
     
@@ -1026,6 +1048,69 @@ class WindowQueryManager:
         latest = max(latest_times) if latest_times else None
         
         return earliest, latest
+    
+    def _should_filter_record(self, record: Dict[str, Any]) -> bool:
+        """
+        Check if a record should be filtered out based on identity filters.
+        
+        Args:
+            record: Record to check
+            
+        Returns:
+            True if record should be filtered out (excluded), False if it should be kept
+        """
+        if not self.filters or not self.filters.identity_filters:
+            return False  # No filters, keep all records
+        
+        # Extract identity information from record
+        # Check common identity fields across all artifact types
+        identity_fields = [
+            # Names
+            'name', 'filename', 'executable_name', 'app_name', 'application',
+            'fn_filename', 'Source_Name', 'original_filename', 'program_name',
+            'display_name', 'product_name', 'Source', 'FileName', 'Name',
+            'ProductName', 'FileDescription', 'OriginalFileName', 'value',
+            'Value', 'entry_name', 'program', 'executable', 'Executable',
+            'service_name', 'ServiceName', 'task_name', 'TaskName', 'process',
+            'Process', 'application_name',
+            # Paths
+            'path', 'file_path', 'app_path', 'Local_Path', 'reconstructed_path',
+            'original_path', 'lower_case_long_path', 'install_location',
+            'root_dir_path', 'ShortcutTargetPath', 'Source_Path', 'folder_path',
+            'registry_path', 'FullPath', 'Path', 'FilePath', 'LowerCaseLongPath',
+            'focus_path', 'run_path', 'ExecutablePath', 'executable_path',
+            'image_path', 'ImagePath', 'binary_path', 'BinaryPath',
+            'full_path', 'application_path', 'program_path', 'command_line',
+            'exe_path', 'exepath', 'target_path', 'TargetPath'
+        ]
+        
+        identity_values = []
+        for field in identity_fields:
+            if field in record and record[field]:
+                identity_values.append(str(record[field]))
+        
+        # If no identity information found, keep the record (don't filter out)
+        if not identity_values:
+            return False
+        
+        # Check if any identity value matches the filter patterns
+        import fnmatch
+        for filter_pattern in self.filters.identity_filters:
+            # Prepare comparison strings
+            if self.filters.case_sensitive:
+                pattern_cmp = filter_pattern
+                values_cmp = identity_values
+            else:
+                pattern_cmp = filter_pattern.lower()
+                values_cmp = [v.lower() for v in identity_values]
+            
+            # Check if pattern matches any identity value
+            for value in values_cmp:
+                if fnmatch.fnmatch(value, pattern_cmp):
+                    return False  # Match found, keep record
+        
+        # No match found, filter out
+        return True
     
     def clear_cache(self):
         """Clear the query cache"""
@@ -1200,10 +1285,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Memory management and streaming
         self.memory_manager: Optional[WindowMemoryManager] = None
-        # self.streaming_writer: Optional[StreamingMatchWriter] = None
-        self.streaming_writer = None  # Temporarily disabled
+        self.streaming_writer: Optional[StreamingMatchWriter] = None
         self.streaming_mode_active = False
         self.memory_limit_mb = self.scanning_config.memory_limit_mb
+        
+        # Output directory for streaming mode (set by pipeline)
+        self._output_dir: Optional[str] = None
+        self._execution_id: Optional[int] = None
         
         # Parallel processing configuration
         self.enable_parallel_processing = self.scanning_config.parallel_window_processing
@@ -1466,6 +1554,25 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             }
         }
     
+    def set_output_directory(self, output_dir: str, execution_id: int = None):
+        """
+        Set output directory for streaming results to database.
+        
+        This method is called by the pipeline executor to enable streaming mode.
+        When set, matches will be written directly to the database instead of
+        being stored in memory.
+        
+        Args:
+            output_dir: Directory where correlation_results.db will be created
+            execution_id: Execution ID for this correlation run
+        """
+        self._output_dir = output_dir
+        self._execution_id = execution_id
+        
+        if self.debug_mode:
+            print(f"[Time-Window Engine] Output directory set: {output_dir}")
+            print(f"[Time-Window Engine] Execution ID: {execution_id}")
+    
     def execute_wing(self, wing: Any, feather_paths: Dict[str, str]) -> Any:
         """
         Execute correlation for a single wing (backward compatibility method).
@@ -1502,6 +1609,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             print(msg)
             sys.stdout.flush()
         
+        # Requirement 6.1: Log time range at engine start
         log(f"\n[Time-Window Engine] 🚀 Starting correlation...")
         log(f"[Time-Window Engine] Wing: {wing.wing_name}")
         log(f"[Time-Window Engine] Feathers: {len(feather_paths)}")
@@ -1655,7 +1763,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     )
                 
                 # Create window query manager
-                self.window_query_manager = WindowQueryManager(self.feather_queries)
+                self.window_query_manager = WindowQueryManager(
+                    self.feather_queries,
+                    filters=self.filters,
+                    debug_mode=self.debug_mode
+                )
                 
                 # Initialize Two-Phase Architecture components
                 # Phase 1: WindowDataStorage for persisting window data
@@ -1672,11 +1784,18 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 )
                 
                 # Phase 1: WindowDataCollector for fast data collection
-                self.window_data_collector = WindowDataCollector(
-                    wing=wing,
-                    storage=self.window_data_storage,
-                    debug_mode=self.debug_mode
-                )
+                # Note: WindowDataCollector expects feather_loader and error_handler
+                # Create error handler for Phase 1
+                phase1_error_handler = Phase1ErrorHandler(debug_mode=self.debug_mode)
+                
+                # WindowDataCollector is not currently used in the simplified architecture
+                # The window_query_manager handles data collection directly
+                # Commenting out for now to avoid initialization errors
+                # self.window_data_collector = WindowDataCollector(
+                #     feather_loader=None,  # Would need to pass appropriate loader
+                #     error_handler=phase1_error_handler,
+                #     debug_mode=self.debug_mode
+                # )
                 
                 print(f"[Time-Window Engine]   ✓ Two-phase architecture initialized")
                 print(f"[Time-Window Engine]   📁 Correlation DB: {correlation_db_path}")
@@ -1688,18 +1807,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             with PhaseTimer(self.performance_monitor, ProcessingPhase.TIME_RANGE_DETERMINATION) as timer:
                 start_epoch, end_epoch = self._determine_time_range(result)
                 
-                # Calculate and display comprehensive time range information
+                # Requirement 6.1: Log time range at engine start
                 duration_hours = (end_epoch - start_epoch).total_seconds() / 3600
                 duration_days = (end_epoch - start_epoch).total_seconds() / 86400
                 
                 print(f"[Time-Window Engine]   ✓ Time range determined successfully")
-                print(f"[Time-Window Engine]   📅 Start: {start_epoch.strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"[Time-Window Engine]   📅 End: {end_epoch.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"[Time-Window Engine] 🕐 Time Range: {start_epoch.strftime('%Y-%m-%d %H:%M:%S')} to {end_epoch.strftime('%Y-%m-%d %H:%M:%S')}")
                 print(f"[Time-Window Engine]   📅 Data Span: {duration_days:.1f} days ({duration_hours:.1f} hours)")
                 
-                # Calculate estimated window count
+                # Requirement 6.2: Log time window generation summary
                 estimated_windows = self._calculate_total_windows(start_epoch, end_epoch)
-                print(f"[Time-Window Engine]   🔢 Estimated windows: {estimated_windows:,}")
+                print(f"[Time-Window Engine] 📊 Generated {estimated_windows:,} time windows ({self.window_size_minutes} minutes each)")
                 
                 # Calculate and display estimated processing time
                 # Rough estimate: 0.5 seconds per window on average
@@ -1783,6 +1901,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 result.matches = matches
                 print(f"[Time-Window Engine]   ⏭️ Semantic mappings disabled")
             
+            # DEBUG: Verify matches are in result
+            print(f"[Time-Window Engine] 🔍 DEBUG: result.matches count = {len(result.matches)}")
+            
             # Apply weighted scoring to all matches if enabled
             print(f"[Time-Window Engine] 📊 Applying weighted scoring...")
             if self.scoring_integration.is_enabled():
@@ -1810,50 +1931,6 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             print(f"\n[Time-Window Engine] ✅ Phase 1 Complete: Data Collection")
             print(f"[Time-Window Engine]   📊 Windows processed: {total_windows:,}")
             print(f"[Time-Window Engine]   💾 Data saved to database")
-            
-            # Step 6: Phase 2 - Correlation Processing (if enabled by configuration)
-            if self.two_phase_config.should_run_phase2():
-                print(f"\n[Time-Window Engine] 🔗 Step 6: Phase 2 - Correlation Processing...")
-                
-                if self.window_data_storage and self.window_data_collector:
-                    try:
-                        # Import PostCorrelationProcessor
-                        from .post_correlation_processor import PostCorrelationProcessor
-                        
-                        # Create processor
-                        processor = PostCorrelationProcessor(
-                            wing=wing,
-                            storage=self.window_data_storage,
-                            debug_mode=self.debug_mode
-                        )
-                        
-                        # Process all windows
-                        phase2_stats = processor.process_all_windows()
-                        
-                        print(f"[Time-Window Engine] ✅ Phase 2 Complete: Correlation Analysis")
-                        print(f"[Time-Window Engine]   📊 Windows analyzed: {phase2_stats['windows_processed']:,}")
-                        print(f"[Time-Window Engine]   🔗 Correlations found: {phase2_stats['correlations_found']:,}")
-                        print(f"[Time-Window Engine]   ⏱️ Phase 2 time: {phase2_stats['processing_time_seconds']:.1f}s")
-                        
-                        # Store Phase 2 statistics in result
-                        result.phase2_statistics = phase2_stats
-                        
-                    except Exception as phase2_error:
-                        error_msg = f"Phase 2 correlation processing failed: {phase2_error}"
-                        result.errors.append(error_msg)
-                        print(f"[Time-Window Engine] ⚠️ {error_msg}")
-                        print(f"[Time-Window Engine] ℹ️ Phase 1 data is preserved in database")
-                        
-                        if self.debug_mode:
-                            import traceback
-                            print(f"[Time-Window Engine] Stack trace: {traceback.format_exc()}")
-                else:
-                    print(f"[Time-Window Engine] ⏭️ Phase 2 skipped (two-phase components not initialized)")
-            else:
-                print(f"\n[Time-Window Engine] ⏭️ Phase 2 skipped (disabled by configuration)")
-                print(f"[Time-Window Engine] ℹ️ Mode: {self.two_phase_config.get_execution_mode()}")
-                if self.two_phase_config.run_phase1_only:
-                    print(f"[Time-Window Engine] ℹ️ Run Phase 2 later with run_phase2_only=True")
             
             # Finalize streaming if active
             if self.streaming_mode_active and self.streaming_writer:
@@ -1953,10 +2030,24 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 elif self.debug_mode:
                     print(f"[Time-Window Engine] 📊 Total feather data size: {size_mb:.2f} MB")
             
-            # Print completion summary
+            # Print completion summary (Requirement 6.6)
             print(f"\n[Time-Window Engine] ✅ Complete!")
             print(f"[Time-Window Engine] ✅ Processed {total_windows:,} time windows")
-            print(f"[Time-Window Engine] ✅ Found {result.total_matches:,} correlation matches")
+            
+            # Add window statistics if available
+            if self.scanning_config.track_empty_window_stats:
+                windows_with_data = self.window_processing_stats.windows_with_data
+                empty_windows = self.window_processing_stats.empty_windows_skipped
+                skip_rate = self.window_processing_stats.skip_rate_percentage
+                print(f"[Time-Window Engine] ✅ Windows with correlations: {windows_with_data:,}")
+                print(f"[Time-Window Engine] ⏭️ Empty windows skipped: {empty_windows:,} ({skip_rate:.1f}%)")
+            
+            # Count unique identities from matches
+            if result.total_matches > 0:
+                unique_identities = len(set(match.matched_application for match in result.matches if match.matched_application)) if hasattr(result, 'matches') and result.matches else 0
+                print(f"[Time-Window Engine] 🔗 Total identities found: {unique_identities:,}")
+            
+            print(f"[Time-Window Engine] ✅ Total correlations created: {result.total_matches:,}")
             
             # Display processing time with formatted duration
             processing_time_minutes = result.execution_duration_seconds / 60
@@ -2067,15 +2158,18 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     timestamp_range = query_manager.get_timestamp_range()
                     
                     result.feather_metadata[feather_id] = {
+                        'feather_name': feather_id,  # Requirement 7.2
                         'artifact_type': loader.artifact_type or feather_spec.artifact_type,
                         'database_path': db_path,
-                        'total_records': record_count,
+                        'records_processed': record_count,  # Requirement 7.2 (renamed from total_records)
+                        'total_records': record_count,  # Keep for backward compatibility
                         'timestamp_column': query_manager.timestamp_column,
                         'timestamp_format': query_manager.timestamp_format,
                         'timestamp_range': {
                             'min': timestamp_range[0].isoformat() if timestamp_range[0] else None,
                             'max': timestamp_range[1].isoformat() if timestamp_range[1] else None
                         },
+                        'matches_created': 0,  # Requirement 7.2 - will be updated during correlation
                         'health_status': query_manager.get_health_status(),
                         'error_statistics': query_manager.get_error_statistics()
                     }
@@ -2103,11 +2197,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     
                     # Add minimal metadata
                     result.feather_metadata[feather_id] = {
+                        'feather_name': feather_id,  # Requirement 7.2
                         'artifact_type': feather_spec.artifact_type,
                         'database_path': db_path,
+                        'records_processed': 0,  # Requirement 7.2
                         'total_records': 0,
                         'timestamp_column': None,
                         'timestamp_format': 'unknown',
+                        'matches_created': 0,  # Requirement 7.2
                         'error': str(metadata_error)
                     }
                 
@@ -2198,6 +2295,20 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Normalize to UTC for consistent comparison
             earliest = self._normalize_datetime_to_utc(self.filters.time_period_start)
             latest = self._normalize_datetime_to_utc(self.filters.time_period_end)
+            
+            # CRITICAL: Validate that start is before end
+            if earliest > latest:
+                error_msg = (
+                    f"Invalid time range: Start time ({earliest.strftime('%Y-%m-%d %H:%M:%S')}) "
+                    f"is after end time ({latest.strftime('%Y-%m-%d %H:%M:%S')}). "
+                    f"Please check your time filter settings."
+                )
+                print(f"[Time-Window Engine] ❌ ERROR: {error_msg}")
+                raise ValueError(error_msg)
+            
+            # Requirement 6.7: Log time filter when applied
+            total_span_seconds = (latest - earliest).total_seconds()
+            print(f"[Time-Window Engine] 🔍 Time Filter: {earliest.strftime('%Y-%m-%d %H:%M:%S')} to {latest.strftime('%Y-%m-%d %H:%M:%S')}")
             
             if self.debug_mode:
                 print(f"[TimeWindow] Using FilterConfig time range:")
@@ -2688,12 +2799,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         f"Consider increasing window_size_minutes (currently {self.window_size_minutes}) "
                         f"to reduce processing time if fine-grained temporal analysis is not required."
                     )
-                elif avg_windows_per_day < 24:  # Less than hourly windows
-                    recommendations.append(
-                        f"Low temporal resolution detected ({avg_windows_per_day:.0f} windows/day). "
-                        f"Consider decreasing window_size_minutes (currently {self.window_size_minutes}) "
-                        f"for more fine-grained temporal analysis."
-                    )
+                # Removed: Low temporal resolution warning (user preference)
         
         # Recommendation 3: Parallel processing for large datasets
         if estimated_windows > 1000 and not self.enable_parallel_processing:
@@ -2784,7 +2890,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         window_counter = 0
         
         while current_time < end_time:
+            # Calculate window end
             window_end = current_time + timedelta(minutes=self.window_size_minutes)
+            
+            # CRITICAL FIX: Clip window end to not exceed the overall end_time
+            # This ensures that when a time filter is set, the last window doesn't
+            # extend beyond the filter end time and include records outside the range
+            window_end = min(window_end, end_time)
             
             yield TimeWindow(
                 start_time=current_time,
@@ -2797,19 +2909,171 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             current_time += timedelta(minutes=self.scanning_interval_minutes)
             window_counter += 1
     
+    def _extract_identity_from_record(self, record: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract identity value from a record.
+        
+        Uses the same identity fields as _should_filter_record() for consistency.
+        
+        Args:
+            record: Record to extract identity from
+            
+        Returns:
+            Identity value (normalized to lowercase) or None if no identity found
+        """
+        # Check common identity fields across all artifact types
+        identity_fields = [
+            # Names (higher priority)
+            'name', 'filename', 'executable_name', 'app_name', 'application',
+            'fn_filename', 'Source_Name', 'original_filename', 'program_name',
+            'display_name', 'product_name', 'Source', 'FileName', 'Name',
+            'ProductName', 'FileDescription', 'OriginalFileName', 'value',
+            'Value', 'entry_name', 'program', 'executable', 'Executable',
+            'service_name', 'ServiceName', 'task_name', 'TaskName', 'process',
+            'Process', 'application_name',
+            # Paths (lower priority)
+            'path', 'file_path', 'app_path', 'Local_Path', 'reconstructed_path',
+            'original_path', 'lower_case_long_path', 'install_location',
+            'root_dir_path', 'ShortcutTargetPath', 'Source_Path', 'folder_path',
+            'registry_path', 'FullPath', 'Path', 'FilePath', 'LowerCaseLongPath',
+            'focus_path', 'run_path', 'ExecutablePath', 'executable_path',
+            'image_path', 'ImagePath', 'binary_path', 'BinaryPath',
+            'full_path', 'application_path', 'program_path', 'command_line',
+            'exe_path', 'exepath', 'target_path', 'TargetPath'
+        ]
+        
+        # Try to find first non-empty identity field
+        for field in identity_fields:
+            if field in record and record[field]:
+                value = str(record[field]).strip()
+                if value:
+                    # Normalize to lowercase for case-insensitive grouping
+                    return value.lower()
+        
+        return None
+    
+    def _correlate_window_records(self, window: TimeWindow, wing: Wing) -> List[CorrelationMatch]:
+        """
+        Correlate records in a window by grouping them by identity.
+        
+        This is the core correlation logic:
+        1. Group all records by identity value
+        2. Check minimum feather requirement
+        3. Create CorrelationMatch for each identity group
+        
+        Args:
+            window: TimeWindow with populated records
+            wing: Wing configuration
+            
+        Returns:
+            List of CorrelationMatch objects
+        """
+        import uuid
+        from datetime import datetime
+        
+        # Group records by identity
+        identity_groups = {}  # identity_value -> {feather_id: [records]}
+        
+        for feather_id, records in window.records_by_feather.items():
+            for record in records:
+                # Extract identity from record
+                identity = self._extract_identity_from_record(record)
+                
+                if identity:
+                    # Initialize identity group if needed
+                    if identity not in identity_groups:
+                        identity_groups[identity] = {}
+                    
+                    # Initialize feather list if needed
+                    if feather_id not in identity_groups[identity]:
+                        identity_groups[identity][feather_id] = []
+                    
+                    # Add record to group
+                    identity_groups[identity][feather_id].append(record)
+        
+        # Create matches from identity groups
+        matches = []
+        minimum_feathers = wing.correlation_rules.minimum_matches
+        
+        for identity_value, feather_records in identity_groups.items():
+            # Check if we have enough feathers
+            feather_count = len(feather_records)
+            
+            if feather_count < minimum_feathers:
+                continue  # Skip - not enough feathers
+            
+            # Get timestamp from first record (use any feather)
+            first_feather_id = list(feather_records.keys())[0]
+            first_record = feather_records[first_feather_id][0]
+            
+            # Try to extract timestamp
+            timestamp = None
+            timestamp_fields = ['timestamp', 'event_time', 'last_run_time', 'access_time', 
+                              'creation_time', 'modification_time', 'last_modified']
+            for ts_field in timestamp_fields:
+                if ts_field in first_record and first_record[ts_field]:
+                    timestamp = first_record[ts_field]
+                    break
+            
+            # Use window start time if no timestamp found
+            if not timestamp:
+                timestamp = window.start_time
+            
+            # Convert timestamp to ISO format string
+            if isinstance(timestamp, datetime):
+                timestamp_str = timestamp.isoformat()
+            else:
+                timestamp_str = str(timestamp)
+            
+            # Calculate time spread (earliest to latest record in group)
+            earliest_time = window.start_time
+            latest_time = window.end_time
+            time_spread = (latest_time - earliest_time).total_seconds()
+            
+            # Prepare feather_records dict for CorrelationMatch
+            match_feather_records = {}
+            for fid, records_list in feather_records.items():
+                # Use first record from each feather (could be enhanced to include all)
+                match_feather_records[fid] = records_list[0] if records_list else {}
+            
+            # Create CorrelationMatch
+            match = CorrelationMatch(
+                match_id=str(uuid.uuid4()),
+                timestamp=timestamp_str,
+                feather_records=match_feather_records,
+                match_score=1.0,  # Identity matches are high confidence
+                feather_count=feather_count,
+                time_spread_seconds=time_spread,
+                anchor_feather_id=first_feather_id,
+                anchor_artifact_type='Unknown',  # Will be set by semantic mapping
+                matched_application=identity_value,
+                confidence_score=1.0,
+                confidence_category="High",
+                semantic_data={
+                    'identity_value': identity_value,
+                    'window_id': window.window_id,
+                    'feathers_matched': list(feather_records.keys()),
+                    'total_records': sum(len(recs) for recs in feather_records.values())
+                }
+            )
+            
+            matches.append(match)
+        
+        return matches
+    
     def _process_window(self, window: TimeWindow, wing: Wing) -> List[CorrelationMatch]:
         """
-        Process a single time window - Phase 1: Fast data collection only.
+        Process a single time window - Create correlations by grouping records by identity.
         
-        NO correlation, NO semantic matching, NO scoring - just collect and save data.
-        Phase 2 (correlation processing) will be done separately after all windows are collected.
+        Phase 1: Collect data and create matches by grouping records by identity
+        Phase 2: Apply semantic mappings and scoring (done in _apply_semantic_mappings_to_matches)
         
         Args:
             window: TimeWindow to process
             wing: Wing configuration
             
         Returns:
-            Empty list (Phase 1 doesn't create matches, just saves data)
+            List of CorrelationMatch objects
         """
         # Start window performance monitoring
         window_metrics = self.performance_monitor.start_window_processing(
@@ -2859,35 +3123,28 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     )
                 return []
             
-            # Step 3: PHASE 1 - Collect and save window data (NO correlation)
-            collection_start_time = time.time()
+            # Step 3: PHASE 1 - Create correlations by grouping records by identity
+            correlation_start_time = time.time()
             
-            # Use WindowDataCollector to organize and save data
-            success = self.window_data_collector.collect_and_save(
-                window_id=window.window_id,
-                start_time=window.start_time,
-                end_time=window.end_time,
-                records_by_feather=populated_window.records_by_feather
-            )
+            # Correlate records by identity
+            matches = self._correlate_window_records(populated_window, wing)
             
-            collection_duration = time.time() - collection_start_time
+            correlation_duration = time.time() - correlation_start_time
             
-            # Record collection timing (replaces correlation timing)
+            # Record correlation timing
             if window_metrics:
                 self.performance_monitor.record_correlation_timing(
-                    window.window_id, collection_duration, 0  # No semantic comparisons in Phase 1
+                    window.window_id, correlation_duration, 0  # No semantic comparisons yet
                 )
             
             # Complete window monitoring
             if window_metrics:
-                # In Phase 1, we don't create matches - just save data
-                # Report 0 matches but track that we processed the window
                 self.performance_monitor.complete_window_processing(
-                    window.window_id, records_found, 0, feathers_queried
+                    window.window_id, records_found, len(matches), feathers_queried
                 )
             
-            # Phase 1 returns empty list - matches will be created in Phase 2
-            return []
+            # Return matches for Phase 2 processing (semantic mappings and scoring)
+            return matches
             
         except Exception as e:
             # Complete window monitoring with error
@@ -2938,17 +3195,24 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 window_end_time=window.end_time
             )
             
-            # Log time-window-specific progress - only every 5%
-            progress_percent = (window_count / total_windows * 100) if total_windows > 0 else 0
-            progress_interval = max(1, total_windows // 20)  # Every 5%
+            # Log per-window processing (Requirement 6.3)
+            window_num = window_count + 1  # 1-indexed for display
+            window_start_str = window.start_time.strftime('%Y-%m-%d %H:%M:%S')
+            window_end_str = window.end_time.strftime('%Y-%m-%d %H:%M:%S')
+            progress_percent = (window_num / total_windows * 100) if total_windows > 0 else 0
             
-            # Print progress every 5%
-            if window_count % progress_interval == 0:
+            # Log time-window-specific progress summary - only every 10%
+            # Calculate which 10% milestone we're at
+            current_percentage = int((window_num / total_windows) * 100)
+            previous_percentage = int(((window_num - 1) / total_windows) * 100) if window_num > 1 else -1
+            
+            # Print progress summary when we cross a 10% boundary
+            if current_percentage % 10 == 0 and current_percentage != previous_percentage and current_percentage > 0:
                 # Get current progress stats
                 progress_stats = self.progress_tracker._create_overall_progress()
                 
                 # Format progress message with enhanced statistics
-                progress_msg = f"[Time-Window Engine]   Progress: {progress_percent:.0f}% ({window_count:,}/{total_windows:,} windows, {len(matches):,} matches)"
+                progress_msg = f"[Time-Window Engine] Progress Summary: {progress_percent:.0f}% ({window_count:,}/{total_windows:,} windows, {len(matches):,} matches)"
                 
                 # Add empty window statistics if significant
                 if progress_stats.empty_windows_skipped > 0:
@@ -2971,14 +3235,40 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Check memory pressure before processing window (silently)
             self._check_memory_and_enable_streaming(result, wing)
             
-            # Process this time window
-            window_matches = self._process_window(window, wing)
+            # Process this time window with error handling (Requirement 6.8)
+            try:
+                window_matches = self._process_window(window, wing)
+            except Exception as e:
+                # Log error for window processing failure (Requirement 6.8)
+                error_msg = str(e)
+                print(f"[Time-Window Engine] ❌ Error in window {window.window_id}: {error_msg}")
+                
+                # Add error to result
+                result.errors.append(f"Window {window.window_id}: {error_msg}")
+                
+                # Continue with next window instead of failing completely
+                window_matches = []
+                
+                if self.debug_mode:
+                    import traceback
+                    print(f"[Time-Window Engine] DEBUG: Full traceback:")
+                    traceback.print_exc()
             
             # Calculate processing metrics
             window_processing_time = time.time() - window_start_time
             records_found = sum(len(records) for records in window.records_by_feather.values())
             feathers_with_records = list(window.records_by_feather.keys())
             is_empty_window = (records_found == 0)
+            
+            # Log window results (Requirements 6.4 and 6.5)
+            if is_empty_window:
+                # Log empty window skip (Requirement 6.5)
+                print(f"[Time-Window Engine] ⏭️ Skipped empty window: {window_start_str} to {window_end_str}")
+            else:
+                # Count unique identities in this window
+                identity_count = len(set(match.matched_application for match in window_matches if match.matched_application))
+                # Log window correlation results (Requirement 6.4)
+                print(f"[Time-Window Engine] ✓ Window {window.window_id}: {identity_count} identities, {len(window_matches)} correlations")
             
             # Update window processing statistics (if enabled)
             if self.scanning_config.track_empty_window_stats:
@@ -3232,7 +3522,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         should_stream, reason = self.memory_manager.should_enable_streaming_mode()
         
         if should_stream:
-            print(f"[Time-Window Engine] 💾 Enabling streaming mode: Memory usage ({memory_report.current_memory_mb:.0f}MB) exceeds limit")
+            print(f"[Time-Window Engine] 💾 Streaming mode enabled")
             
             # Create streaming database path
             streaming_db_path = self._get_streaming_database_path(wing)
@@ -3254,9 +3544,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     batch_size=1000
                 )
                 
-                # Create result session
+                # Create result session with proper execution_id
                 result_id = self.streaming_writer.create_result(
-                    execution_id=0,  # Will be updated later
+                    execution_id=self._execution_id if self._execution_id else 0,  # Use pipeline execution_id
                     wing_id=wing.wing_id,
                     wing_name=wing.wing_name,
                     feathers_processed=result.feathers_processed,
@@ -3309,16 +3599,47 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         Returns:
             Path to streaming database file
         """
-        # Create streaming directory in same location as wing
-        wing_dir = Path(wing.wing_path).parent if hasattr(wing, 'wing_path') else Path.cwd()
-        streaming_dir = wing_dir / "streaming_results"
-        streaming_dir.mkdir(exist_ok=True)
+        # Priority 1: Use pipeline-provided output directory (set via set_output_directory)
+        if self._output_dir:
+            output_dir = Path(self._output_dir)
+            db_path = output_dir / "correlation_results.db"
+            if self.debug_mode:
+                print(f"[TimeWindow] Using pipeline output directory: {output_dir}")
+                print(f"[TimeWindow] Database path: {db_path}")
+            return str(db_path)
+        
+        # Priority 2: Use pipeline config's output_directory if available
+        if hasattr(self, 'config') and hasattr(self.config, 'output_directory') and self.config.output_directory:
+            output_dir = Path(self.config.output_directory)
+            db_path = output_dir / "correlation_results.db"
+            if self.debug_mode:
+                print(f"[TimeWindow] Using pipeline config output directory: {output_dir}")
+            return str(db_path)
+        
+        # Priority 3: Use wing path parent directory
+        elif hasattr(wing, 'wing_path') and wing.wing_path:
+            output_dir = Path(wing.wing_path).parent
+            if self.debug_mode:
+                print(f"[TimeWindow] Using wing path parent directory: {output_dir}")
+        # Priority 4: Fall back to current working directory
+        else:
+            output_dir = Path.cwd()
+            if self.debug_mode:
+                print(f"[TimeWindow] WARNING: Falling back to current working directory: {output_dir}")
+        
+        # Create streaming_results subdirectory (fallback mode only)
+        streaming_dir = output_dir / "streaming_results"
+        streaming_dir.mkdir(parents=True, exist_ok=True)
         
         # Create unique database name with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         db_name = f"{wing.wing_id}_{timestamp}_streaming.db"
         
-        return str(streaming_dir / db_name)
+        db_path = streaming_dir / db_name
+        if self.debug_mode:
+            print(f"[TimeWindow] Streaming database path: {db_path}")
+        
+        return str(db_path)
     
     def _cleanup_memory_between_windows(self, window_count: int):
         """

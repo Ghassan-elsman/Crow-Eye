@@ -603,6 +603,10 @@ class PipelineExecutor:
                 
                 # Execute wing
                 result = self.engine.execute_wing(wing, wing_feather_paths)
+                
+                # DEBUG: Verify matches before appending
+                print(f"[Pipeline] 🔍 DEBUG: Appending result '{result.wing_name}' with {len(result.matches)} matches")
+                
                 self.results.append(result)
                 
                 # Store execution_id for later use
@@ -1002,6 +1006,11 @@ class PipelineExecutor:
                 # Non-streaming mode: save everything to database
                 print(f"\n      📁 Saving results to database...")
                 print(f"      " + "=" * 60)
+                
+                # DEBUG: Verify matches before saving
+                print(f"[Pipeline] 🔍 DEBUG: Saving {len(self.results)} result(s) to database")
+                for i, r in enumerate(self.results):
+                    print(f"[Pipeline] 🔍 DEBUG:   Result {i+1}: {r.wing_name} - {len(r.matches)} matches")
                 
                 with ResultsDatabase(str(db_file)) as db:
                     execution_id = db.save_execution(

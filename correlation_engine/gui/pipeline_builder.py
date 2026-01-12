@@ -1058,7 +1058,7 @@ class PipelineBuilderWidget(QWidget):
                     
                     tooltip = f"From Wing: {wing_config.wing_name}\nDatabase: {feather_db_path}"
                     if not db_exists:
-                        tooltip = f"⚠ Placeholder - Config/DB not found\n{tooltip}"
+                        tooltip = f"⚠ Feather not created yet - Click 'Create Feather' to build it\n{tooltip}"
                     item.setToolTip(tooltip)
                     
                     self.feathers_list.addItem(item)
@@ -1089,7 +1089,7 @@ class PipelineBuilderWidget(QWidget):
                     
                     tooltip = f"From Wing: {wing_config.wing_name}\nDatabase: {feather_db_path}"
                     if not db_exists:
-                        tooltip = f"⚠ Placeholder - Config/DB not found\n{tooltip}"
+                        tooltip = f"⚠ Feather not created yet - Click 'Create Feather' to build it\n{tooltip}"
                     item.setToolTip(tooltip)
                     
                     self.feathers_list.addItem(item)

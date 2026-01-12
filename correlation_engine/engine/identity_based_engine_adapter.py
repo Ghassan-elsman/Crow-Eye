@@ -56,6 +56,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         
         # Initialize core engine with debug mode only
         # (semantic mapping and scoring are handled by the adapter, not the core engine)
+        # Note: IdentityCorrelationEngine doesn't accept filters parameter
+        # Filters are stored in the adapter and applied during execution
         self.core_engine = IdentityCorrelationEngine(
             debug_mode=self.debug_mode
         )
@@ -119,7 +121,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         
         # Always print which engine is being used
         print("\n" + "="*70)
-        print("🔧 CORRELATION ENGINE: Identity-Based")
+        print("CORRELATION ENGINE: Identity-Based")
         print("="*70)
         
         try:
@@ -146,11 +148,23 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             all_matches = []
             total_identities = 0
             total_match_count = 0  # Track total matches even when streaming
+            all_feather_stats = {}  # Collect feather stats from all wings
             
             for wing_idx, wing_config in enumerate(wing_configs, 1):
                 wing_name = getattr(wing_config, 'wing_name', 'Unknown')
                 print(f"[Identity Engine] Wing {wing_idx}/{len(wing_configs)}: {wing_name}")
-                wing_matches, wing_identity_count = self._process_wing(wing_config, 0, 1)
+                wing_matches, wing_identity_count, wing_feather_stats = self._process_wing(wing_config, 0, 1)
+                
+                # Merge feather stats from this wing
+                for feather_id, stats in wing_feather_stats.items():
+                    if feather_id not in all_feather_stats:
+                        all_feather_stats[feather_id] = stats
+                    else:
+                        # Merge stats if feather appears in multiple wings
+                        all_feather_stats[feather_id]['total'] += stats['total']
+                        all_feather_stats[feather_id]['extracted'] += stats['extracted']
+                        all_feather_stats[feather_id]['filtered'] += stats.get('filtered', 0)
+                        all_feather_stats[feather_id]['identities'].update(stats['identities'])
                 
                 if streaming_enabled:
                     # In streaming mode, matches are written to DB, wing_matches is empty
@@ -224,6 +238,31 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 'lowest_score': getattr(scoring_stats, 'lowest_score', 0.0)
             }
             
+            # Build feather_metadata from collected statistics
+            # Requirements: 7.1, 7.2
+            feather_metadata = {}
+            for feather_id, stats in all_feather_stats.items():
+                feather_metadata[feather_id] = {
+                    'feather_name': feather_id,
+                    'records_processed': stats['total'],
+                    'identities_extracted': stats['extracted'],
+                    'identities_filtered': stats.get('filtered', 0),
+                    'identities_final': len(stats['identities']),
+                    'matches_created': 0  # Will be calculated from matches if needed
+                }
+            
+            # Add engine metadata as a special entry
+            feather_metadata['_engine_metadata'] = {
+                'engine_type': 'identity_based',
+                'streaming_mode': streaming_enabled,
+                'semantic_mapping_enabled': self.semantic_integration.is_enabled(),
+                'semantic_stats': semantic_stats_dict,
+                'weighted_scoring_enabled': self.scoring_integration.is_enabled(),
+                'scoring_stats': scoring_stats_dict,
+                'identities_processed': total_identities,
+                'core_engine_stats': self._get_core_engine_stats()
+            }
+            
             self.last_results = CorrelationResult(
                 wing_id=wing_configs[0].wing_id if wing_configs else "unknown",
                 wing_name=wing_configs[0].wing_name if wing_configs else "unknown",
@@ -231,19 +270,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 total_matches=total_match_count,  # Use tracked count (works for both streaming and non-streaming)
                 execution_duration_seconds=execution_time,
                 filters_applied=self._get_applied_filters(),
-                feather_metadata={
-                    # Engine metadata stored as a single dict entry with key '_engine_metadata'
-                    '_engine_metadata': {
-                        'engine_type': 'identity_based',
-                        'streaming_mode': streaming_enabled,
-                        'semantic_mapping_enabled': self.semantic_integration.is_enabled(),
-                        'semantic_stats': semantic_stats_dict,
-                        'weighted_scoring_enabled': self.scoring_integration.is_enabled(),
-                        'scoring_stats': scoring_stats_dict,
-                        'identities_processed': total_identities,
-                        'core_engine_stats': self._get_core_engine_stats()
-                    }
-                }
+                feather_metadata=feather_metadata
             )
             
             # Debug: Verify matches are set
@@ -257,12 +284,12 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             self.progress_tracker.complete_scanning()
             
             # Print simple completion summary
-            print("[Identity Engine] ✓ Complete!")
-            print(f"[Identity Engine] ✓ Processed {total_identities:,} identities")
-            print(f"[Identity Engine] ✓ Created {total_match_count:,} matches")
+            print("[Identity Engine] Complete!")
+            print(f"[Identity Engine] Processed {total_identities:,} identities")
+            print(f"[Identity Engine] Created {total_match_count:,} matches")
             if streaming_enabled:
-                print(f"[Identity Engine] ✓ Matches saved to database via streaming")
-            print(f"[Identity Engine] ✓ Time: {execution_time:.2f}s")
+                print(f"[Identity Engine] Matches saved to database via streaming")
+            print(f"[Identity Engine] Time: {execution_time:.2f}s")
             print("="*70 + "\n")
             
             # Store statistics
@@ -293,6 +320,32 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             logger.error(f"Identity-based correlation failed: {error_msg}")
             print(f"[Identity Engine] CRITICAL ERROR: {error_msg}")
             raise
+    
+    def _smart_truncate_path(self, name: str, max_length: int = 60) -> str:
+        """
+        Smart truncation for long identity names and paths.
+        
+        Preserves important information (filename) by showing first 30 and last 27 characters
+        with "..." in the middle for names longer than max_length.
+        
+        Args:
+            name: Identity name or path to truncate
+            max_length: Maximum length before truncation (default: 60)
+            
+        Returns:
+            Truncated string if longer than max_length, otherwise original string
+            
+        Requirements: 3.1, 3.2, 3.3, 3.7, 3.8
+        """
+        if not name or len(name) <= max_length:
+            return name
+        
+        # For long names (>60 chars), show first 30 and last 27 with "..." in middle
+        # This preserves the filename at the end for paths
+        first_part = name[:30]
+        last_part = name[-27:]
+        
+        return f"{first_part}...{last_part}"
     
     def _get_core_engine_stats(self) -> Dict[str, Any]:
         """
@@ -394,7 +447,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             
             return error_result
     
-    def _process_wing(self, wing_config: Any, processed_identities_offset: int, total_identities_global: int) -> Tuple[List[CorrelationMatch], int]:
+    def _process_wing(self, wing_config: Any, processed_identities_offset: int, total_identities_global: int) -> Tuple[List[CorrelationMatch], int, Dict[str, Dict]]:
         """
         Process a single wing configuration with identity-specific progress tracking.
         Supports streaming mode for incremental database writes.
@@ -405,7 +458,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             total_identities_global: Total estimated identities across all wings
             
         Returns:
-            Tuple of (list of correlation matches, number of identities processed in this wing)
+            Tuple of (list of correlation matches, number of identities processed in this wing, feather statistics dict)
         """
         import sqlite3
         import uuid
@@ -485,17 +538,12 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         for feather_id, db_path in feather_paths.items():
             feather_count += 1
             try:
-                # Show progress for each feather
-                print(f"[Identity Engine]   [{feather_count}/{total_feathers}] {feather_id}")
-                
-                if self.verbose_logging:
-                    logger.info(f"Loading feather: {feather_id} from {db_path}")
-                
                 # Initialize stats for this feather
                 feather_stats[feather_id] = {
                     'total': 0,
                     'extracted': 0,
-                    'identities': set()
+                    'identities': set(),
+                    'filtered': 0  # Track filtered identities
                 }
                 
                 conn = sqlite3.connect(db_path)
@@ -506,7 +554,24 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 tables = [row[0] for row in cursor.fetchall()]
                 
+                # Count total records first for logging
+                total_feather_records = 0
+                for table in tables:
+                    if not table.startswith('sqlite_'):
+                        try:
+                            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                            total_feather_records += cursor.fetchone()[0]
+                        except:
+                            pass
+                
+                # Requirement 5.1: Log feather processing start with record count
+                print(f"[Identity Engine] 📊 Processing feather: {feather_id} ({total_feather_records} records)")
+                
+                if self.verbose_logging:
+                    logger.info(f"Loading feather: {feather_id} from {db_path}")
+                
                 feather_records = 0
+                feather_identities_before_filter = 0
                 
                 for table in tables:
                     if table.startswith('sqlite_'):
@@ -524,12 +589,19 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                             
                             feather_stats[feather_id]['total'] += 1
                             
+                            # Apply filters - skip record if it should be filtered out
+                            if self._should_filter_record(record):
+                                continue
+                            
                             # Extract identity using core engine
                             name, path, hash_val, id_type = self.core_engine.extract_identity_info(record)
                             
                             if name or path or hash_val:
                                 # Normalize identity key
                                 identity_key = self.core_engine.normalize_identity_key(name, path, hash_val)
+                                
+                                # Track if this is a new identity for this feather
+                                is_new_identity = identity_key not in feather_stats[feather_id]['identities']
                                 
                                 if identity_key not in identity_index:
                                     identity_index[identity_key] = {
@@ -553,6 +625,21 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 
                 conn.close()
                 
+                # Calculate filtered count (records that didn't produce identities)
+                feather_stats[feather_id]['filtered'] = feather_stats[feather_id]['total'] - feather_stats[feather_id]['extracted']
+                
+                # Requirement 5.2: Log extraction completion with identity count
+                unique_identities = len(feather_stats[feather_id]['identities'])
+                print(f"[Identity Engine] ✓ Extracted {unique_identities} unique identities from {feather_id}")
+                
+                # Requirement 5.3: Log filtering summary if any were filtered
+                if feather_stats[feather_id]['filtered'] > 0:
+                    print(f"[Identity Engine] Filtered {feather_stats[feather_id]['filtered']} invalid identities from {feather_id}")
+                
+                # Requirement 5.6: Log if feather was skipped due to no valid identities
+                if unique_identities == 0:
+                    print(f"[Identity Engine]       Skipped {feather_id}: No valid identities found")
+                
                 if feather_records > 0:
                     feathers_with_records.append(feather_id)
                     
@@ -560,60 +647,78 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                         logger.info(f"  Loaded {feather_records} records from {feather_id}")
                     
             except Exception as e:
-                if self.debug_mode:
-                    print(f"[Identity Engine]   ✗ Error loading {feather_id}: {e}")
+                # Requirement 5.5: Log errors processing feather
+                print(f"[Identity Engine]       Error processing {feather_id}: {e}")
                 logger.error(f"Error loading feather {feather_id}: {e}")
         
-        # Show detailed extraction statistics
-        print(f"\n[Identity Engine] 📊 Identity Extraction Summary:")
+        # Requirement 5.4 & 5.8: Show detailed extraction statistics summary
+        total_filtered = sum(stats.get('filtered', 0) for stats in feather_stats.values())
+        
+        print(f"\n[Identity Engine] Identity Extraction Summary:")
         print(f"  Total Records Processed: {total_records:,}")
         print(f"  Unique Identities Found: {len(identity_index):,}")
+        print(f"  Identities Filtered: {total_filtered:,}")
         
-        print(f"\n[Identity Engine] 📁 Extraction Statistics by Feather:")
+        print(f"\n[Identity Engine] Extraction Statistics by Feather:")
+        print(f"  {'Feather':<30} {'Records':<15} {'Extracted':<15} {'Filtered':<15} {'Identities':<15}")
+        print(f"  {'-'*30} {'-'*15} {'-'*15} {'-'*15} {'-'*15}")
+        
         for fid, stats in sorted(feather_stats.items(), key=lambda x: x[1]['total'], reverse=True):
             if stats['total'] == 0:
                 continue
-            success_rate = (stats['extracted'] / stats['total'] * 100) if stats['total'] > 0 else 0
-            status_icon = "✓" if success_rate >= 90 else "+" if success_rate >= 50 else "!" if success_rate > 0 else "✗"
+            
+            records_str = f"{stats['total']:,}"
+            extracted_str = f"{stats['extracted']:,}"
+            filtered_str = f"{stats.get('filtered', 0):,}"
             unique_identities = len(stats['identities'])
+            identities_str = f"{unique_identities:,}"
             
-            print(f"  {status_icon} {fid}")
-            print(f"      Records: {stats['extracted']}/{stats['total']} extracted ({success_rate:.1f}%)")
-            print(f"      Identities: {unique_identities} unique")
+            # Truncate feather name if too long
+            display_fid = fid if len(fid) <= 28 else fid[:25] + "..."
             
-            # Show top 3 identities from this feather
-            if unique_identities > 0:
-                identity_counts = {}
-                for identity_key in stats['identities']:
-                    if identity_key in identity_index:
-                        count = sum(1 for r in identity_index[identity_key]['records'] 
-                                  if r.get('_feather_id') == fid)
-                        identity_counts[identity_key] = count
-                
-                top_identities = sorted(identity_counts.items(), key=lambda x: x[1], reverse=True)[:3]
-                if top_identities:
-                    top_names = []
-                    for k, v in top_identities:
-                        name = identity_index[k]['name'] or identity_index[k]['path'] or 'unknown'
-                        if len(name) > 20:
-                            name = name[:17] + "..."
-                        top_names.append(f"{name} ({v})")
-                    print(f"      Top: {', '.join(top_names)}")
+            print(f"  {display_fid:<30} {records_str:<15} {extracted_str:<15} {filtered_str:<15} {identities_str:<15}")
         
-        # Show cross-feather correlations
-        print(f"\n[Identity Engine] 🔗 Cross-Feather Correlations:")
+        # Requirement 3.6: Show cross-feather correlations with enhanced header
+        print(f"\n[Identity Engine] 🔗 Cross-Feather Correlations (identities in 2+ feathers):")
+        
+        # Requirement 3.4: Filter to show only identities in 2+ feathers
         multi_feather = [(k, v) for k, v in identity_feathers.items() if len(v) > 1]
         multi_feather.sort(key=lambda x: len(x[1]), reverse=True)
         
         if multi_feather:
+            # Show top 10 cross-feather identities
             for identity_key, feather_set in multi_feather[:10]:
                 name = identity_index[identity_key]['name'] or identity_index[identity_key]['path'] or 'unknown'
-                if len(name) > 30:
-                    name = name[:27] + "..."
-                feather_names = [f.split('_')[0] for f in sorted(feather_set)]
-                print(f"  {name}: Found in {len(feather_set)} feathers ({', '.join(feather_names)})")
+                
+                # Requirement 3.1, 3.2, 3.3: Apply smart truncation to identity names
+                name = self._smart_truncate_path(name, max_length=60)
+                
+                # Requirement 2.1, 2.2, 2.3: Deduplicate feather names
+                # Extract base feather name (before first underscore or hyphen)
+                feather_base_names = set()
+                for f in feather_set:
+                    # Split on underscore or hyphen and take first part
+                    base_name = f.split('_')[0].split('-')[0]
+                    feather_base_names.add(base_name)
+                
+                # Requirement 2.2: Sort alphabetically
+                feather_names = sorted(feather_base_names)
+                
+                # Requirement 2.4, 2.5, 3.7: Consistent formatting with count matching displayed names
+                print(f"  {name}: Found in {len(feather_names)} feathers ({', '.join(feather_names)})")
         else:
+            # Requirement 3.5: Don't log identities found in only 1 feather
             print(f"  No identities found across multiple feathers")
+        
+        # Requirement 2.6, 3.6: Add cross-feather summary with totals
+        # Calculate unique feathers across all multi-feather identities
+        all_unique_feathers = set()
+        for _, feather_set in multi_feather:
+            for f in feather_set:
+                base_name = f.split('_')[0].split('-')[0]
+                all_unique_feathers.add(base_name)
+        
+        print(f"[Identity Engine] Cross-Feather Summary: {len(multi_feather)} identities across {len(all_unique_feathers)} unique feathers")
         
         print(f"\n[Identity Engine]   Correlating {len(identity_index):,} identities...")
         
@@ -690,10 +795,10 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             )
             
             streaming_writer.close()
-            print(f"[Identity Engine]   ✓ Saved {match_count:,} matches to database")
+            print(f"[Identity Engine]   Saved {match_count:,} matches to database")
         
         # Show completion
-        print(f"[Identity Engine]   ✓ Created {total_anchors:,} anchors")
+        print(f"[Identity Engine]   Created {total_anchors:,} anchors")
         
         if self.debug_mode:
             print(f"[Identity Engine]   Breakdown:")
@@ -716,7 +821,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         )
         
         print(f"[Identity Engine] DEBUG: Returning {len(matches)} matches from _process_wing (streaming={streaming_enabled})")
-        return matches, total_identities
+        return matches, total_identities, feather_stats
     
     def _create_temporal_anchors(self, records: List[Dict[str, Any]], identity_data: Dict[str, Any],
                                 time_window_minutes: int, feather_paths: Dict[str, str]) -> List[CorrelationMatch]:
@@ -1451,6 +1556,68 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         """
         # Simple estimation - in real implementation would analyze wing contents
         return len(wing_configs) * 100  # Assume 100 identities per wing
+    
+    def _should_filter_record(self, record: Dict[str, Any]) -> bool:
+        """
+        Check if a record should be filtered out based on time period and identity filters.
+        
+        Args:
+            record: Record to check
+            
+        Returns:
+            True if record should be filtered out (excluded), False if it should be kept
+        """
+        # Apply time period filter
+        if self.filters.time_period_start or self.filters.time_period_end:
+            # Extract timestamp from record
+            timestamp = None
+            for ts_field in self.core_engine.timestamp_field_patterns:
+                if ts_field in record and record[ts_field]:
+                    # Use base engine's timestamp parsing method
+                    timestamp = self._parse_timestamp(record[ts_field])
+                    if timestamp:
+                        break
+            
+            # If we have a timestamp, check if it's within the filter range
+            if timestamp:
+                if self.filters.time_period_start and timestamp < self.filters.time_period_start:
+                    return True  # Filter out (too early)
+                if self.filters.time_period_end and timestamp > self.filters.time_period_end:
+                    return True  # Filter out (too late)
+        
+        # Apply identity filter
+        if self.filters.identity_filters:
+            # Extract identity from record
+            name, path, hash_val, _ = self.core_engine.extract_identity_info(record)
+            
+            # Check if any identity component matches the filter patterns
+            identity_matches = False
+            for filter_pattern in self.filters.identity_filters:
+                # Support wildcards
+                import fnmatch
+                
+                # Prepare comparison strings
+                if self.filters.case_sensitive:
+                    name_cmp = name
+                    path_cmp = path
+                    pattern_cmp = filter_pattern
+                else:
+                    name_cmp = name.lower() if name else ""
+                    path_cmp = path.lower() if path else ""
+                    pattern_cmp = filter_pattern.lower()
+                
+                # Check if pattern matches name, path, or hash
+                if (fnmatch.fnmatch(name_cmp, pattern_cmp) or
+                    fnmatch.fnmatch(path_cmp, pattern_cmp) or
+                    (hash_val and fnmatch.fnmatch(hash_val.lower(), pattern_cmp.lower()))):
+                    identity_matches = True
+                    break
+            
+            # If identity filters are specified but no match found, filter out
+            if not identity_matches:
+                return True  # Filter out (doesn't match identity filter)
+        
+        return False  # Keep record
     
     def _get_applied_filters(self) -> Dict[str, Any]:
         """Get dictionary of applied filters"""
