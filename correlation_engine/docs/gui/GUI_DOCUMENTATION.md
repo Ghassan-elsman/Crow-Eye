@@ -197,6 +197,108 @@ The **gui/** directory provides all user interface components for the correlatio
 
 ---
 
+### timebased_results_viewer.py
+
+**Purpose**: Display Time-Window Scanning Engine results in hierarchical tree format.
+
+**Key Classes**:
+- `TimeBasedResultsViewer`: Main viewer widget for time-window results
+- `TimeWindowTreeItem`: Tree item representing a time window
+- `FeatherGroupTreeItem`: Tree item for feather groups
+- `EvidenceTreeItem`: Tree item for individual evidence records
+
+**Features**:
+- Hierarchical display: Window → Feather → Evidence
+- Semantic column showing semantic mappings
+- Time-based filtering and sorting
+- Export to CSV/JSON
+- Match detail dialogs
+- Progress tracking integration
+- Streaming mode support
+
+**Tree Structure**:
+```
+Time Window (2024-01-15 10:30:00 - 10:35:00)
+├── Prefetch (5 records)
+│   ├── chrome.exe - Execution
+│   ├── firefox.exe - Execution
+│   └── ...
+├── SRUM (3 records)
+│   ├── chrome.exe - Network Activity
+│   └── ...
+└── EventLogs (8 records)
+    ├── User Login
+    └── ...
+```
+
+**Columns**:
+1. **Item** - Window/Feather/Evidence name
+2. **Timestamp** - Record timestamp
+3. **Type** - Artifact type
+4. **Semantic** - Semantic mapping value
+5. **Score** - Correlation score
+6. **Details** - Additional information
+
+**Dependencies**: `engine/time_based_engine.py`, `engine/correlation_result.py`
+
+**Impact**: HIGH - Primary viewer for Time-Window Scanning Engine
+
+---
+
+### identity_results_view.py
+
+**Purpose**: Display Identity-Based Engine results in hierarchical tree format.
+
+**Key Classes**:
+- `IdentityResultsView`: Main viewer widget for identity-based results
+- `IdentityTreeItem`: Tree item representing an identity
+- `SubIdentityTreeItem`: Tree item for sub-identities (paths/hashes)
+- `AnchorTreeItem`: Tree item for temporal anchors
+- `EvidenceTreeItem`: Tree item for evidence records
+
+**Features**:
+- Hierarchical display: Identity → Sub-Identity → Anchor → Evidence
+- Semantic column showing semantic mappings
+- Identity filtering and search
+- Export to CSV/JSON
+- Identity detail dialogs
+- Anchor detail dialogs
+- Evidence classification (primary/secondary/supporting)
+
+**Tree Structure**:
+```
+Identity: chrome.exe (Application)
+├── Sub-Identity: c:/program files/google/chrome/application/chrome.exe
+│   ├── Anchor 1 (2024-01-15 10:30:00)
+│   │   ├── Prefetch: chrome.exe [PRIMARY]
+│   │   ├── SRUM: chrome.exe [PRIMARY]
+│   │   └── EventLogs: Process Creation [SECONDARY]
+│   └── Anchor 2 (2024-01-15 14:45:00)
+│       ├── Prefetch: chrome.exe [PRIMARY]
+│       └── AmCache: chrome.exe [SUPPORTING]
+└── Sub-Identity: [hash: abc123...]
+    └── ...
+```
+
+**Columns**:
+1. **Item** - Identity/Sub-Identity/Anchor/Evidence name
+2. **Timestamp** - Anchor or evidence timestamp
+3. **Type** - Identity type or artifact type
+4. **Semantic** - Semantic mapping value
+5. **Count** - Number of anchors/evidence
+6. **Details** - Additional information
+
+**Evidence Classification**:
+- **PRIMARY**: One representative record per feather per anchor (green icon)
+- **SECONDARY**: Additional timestamped records (blue icon)
+- **SUPPORTING**: Non-timestamped context records (gray icon)
+
+**Dependencies**: `engine/identity_correlation_engine.py`, `engine/data_structures.py`
+
+**Impact**: HIGH - Primary viewer for Identity-Based Engine
+
+---
+
 ### Dialog Components
 
 **Files**:

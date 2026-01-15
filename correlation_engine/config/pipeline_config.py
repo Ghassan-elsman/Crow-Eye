@@ -44,7 +44,29 @@ class PipelineConfig:
     
     # NEW: Semantic mapping and scoring configuration
     semantic_mapping_config: Optional[Dict[str, Any]] = None  # Semantic mapping settings
-    weighted_scoring_config: Optional[Dict[str, Any]] = None  # Weighted scoring settings
+    weighted_scoring_config: Optional[Dict[str, Any]] = None  # Weighted scoring settings (legacy)
+    
+    # Pipeline-specific semantic rules (advanced multi-value rules with AND/OR logic)
+    semantic_rules: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Pipeline-level scoring configuration
+    scoring_config: Dict[str, Any] = field(default_factory=lambda: {
+        'enabled': True,
+        'use_weighted_scoring': True,
+        'thresholds': {
+            'low': 0.3,
+            'medium': 0.5,
+            'high': 0.7,
+            'critical': 0.9
+        },
+        'default_tier_weights': {
+            'tier1': 1.0,   # Primary evidence (Logs, Prefetch)
+            'tier2': 0.8,   # Secondary evidence (Registry, AmCache)
+            'tier3': 0.6,   # Supporting evidence (LNK, Jumplists)
+            'tier4': 0.4    # Contextual evidence (MFT, USN)
+        }
+    })
+    
     debug_mode: bool = False  # Enable debug output
     verbose_logging: bool = False  # Enable verbose logging
     
@@ -82,7 +104,9 @@ class PipelineConfig:
             'identity_filters': self.identity_filters,  # NEW
             'identity_filter_case_sensitive': self.identity_filter_case_sensitive,  # NEW
             'semantic_mapping_config': self.semantic_mapping_config,  # NEW
-            'weighted_scoring_config': self.weighted_scoring_config,  # NEW
+            'weighted_scoring_config': self.weighted_scoring_config,  # NEW (legacy)
+            'semantic_rules': self.semantic_rules,  # Pipeline-specific semantic rules
+            'scoring_config': self.scoring_config,  # Pipeline-level scoring configuration
             'debug_mode': self.debug_mode,  # NEW
             'verbose_logging': self.verbose_logging,  # NEW
             'output_directory': self.output_directory,
@@ -141,6 +165,25 @@ class PipelineConfig:
             data['debug_mode'] = False
         if 'verbose_logging' not in data:
             data['verbose_logging'] = False
+        if 'semantic_rules' not in data:
+            data['semantic_rules'] = []
+        if 'scoring_config' not in data:
+            data['scoring_config'] = {
+                'enabled': True,
+                'use_weighted_scoring': True,
+                'thresholds': {
+                    'low': 0.3,
+                    'medium': 0.5,
+                    'high': 0.7,
+                    'critical': 0.9
+                },
+                'default_tier_weights': {
+                    'tier1': 1.0,
+                    'tier2': 0.8,
+                    'tier3': 0.6,
+                    'tier4': 0.4
+                }
+            }
         
         return cls(**data)
     

@@ -68,9 +68,26 @@ class WingConfig:
     # Anchor priority
     anchor_priority: List[str] = field(default_factory=lambda: _get_anchor_priority_from_registry())
     
-    # Weighted scoring configuration
-    use_weighted_scoring: bool = False
-    scoring: Dict = field(default_factory=dict)  # Scoring configuration with thresholds
+    # Weighted scoring configuration - ENABLED BY DEFAULT
+    use_weighted_scoring: bool = True  # Default to True for better correlation accuracy
+    scoring: Dict = field(default_factory=lambda: {
+        'enabled': True,
+        'thresholds': {
+            'low': 0.3,
+            'medium': 0.5,
+            'high': 0.7,
+            'critical': 0.9
+        },
+        'default_tier_weights': {
+            'tier1': 1.0,   # Primary evidence (Logs, Prefetch)
+            'tier2': 0.8,   # Secondary evidence (Registry, AmCache)
+            'tier3': 0.6,   # Supporting evidence (LNK, Jumplists)
+            'tier4': 0.4    # Contextual evidence (MFT, USN)
+        }
+    })
+    
+    # Wing-specific semantic rules
+    semantic_rules: List[Dict] = field(default_factory=list)
     
     # Metadata
     created_date: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -173,6 +190,60 @@ class WingConfig:
                 data['tags'] = metadata['tags']
             if 'case_types' in metadata:
                 data['case_types'] = metadata['case_types']
+        
+        # Backward compatibility: Apply default scoring config if not present
+        if 'scoring' not in data or not data.get('scoring'):
+            data['scoring'] = {
+                'enabled': True,
+                'thresholds': {
+                    'low': 0.3,
+                    'medium': 0.5,
+                    'high': 0.7,
+                    'critical': 0.9
+                },
+                'default_tier_weights': {
+                    'tier1': 1.0,
+                    'tier2': 0.8,
+                    'tier3': 0.6,
+                    'tier4': 0.4
+                }
+            }
+            print(f"[WingConfig] Applied default scoring configuration")
+        
+        # Backward compatibility: Enable weighted scoring by default for wings without explicit setting
+        if 'use_weighted_scoring' not in data:
+            data['use_weighted_scoring'] = True
+            print(f"[WingConfig] Enabled weighted scoring by default")
+        
+        # Load default semantic rules for default wings
+        # This ensures default wings ALWAYS have the latest semantic rules
+        wing_id = data.get('wing_id', '')
+        if wing_id in ['default_wing_execution_001', 'default_wing_activity_001']:
+            # Always load semantic rules from default wing files for default wings
+            try:
+                from pathlib import Path
+                default_wings_dir = Path(__file__).parent.parent / "integration" / "default_wings"
+                
+                # Map wing_id to filename
+                wing_files = {
+                    'default_wing_execution_001': 'Execution_Proof_Correlation.json',
+                    'default_wing_activity_001': 'User_Activity_Correlation.json'
+                }
+                
+                wing_file = default_wings_dir / wing_files.get(wing_id, '')
+                if wing_file.exists():
+                    import json as json_module
+                    with open(wing_file, 'r') as f:
+                        default_data = json_module.load(f)
+                        if 'semantic_rules' in default_data and default_data['semantic_rules']:
+                            data['semantic_rules'] = default_data['semantic_rules']
+                            print(f"[WingConfig] Loaded {len(data['semantic_rules'])} default semantic rules for {wing_id}")
+            except Exception as e:
+                print(f"[WingConfig] Could not load default semantic rules: {e}")
+        
+        # Initialize empty semantic_rules if not present (for non-default wings)
+        if 'semantic_rules' not in data:
+            data['semantic_rules'] = []
         
         # Ensure required fields have defaults
         if 'config_name' not in data and 'wing_name' in data:

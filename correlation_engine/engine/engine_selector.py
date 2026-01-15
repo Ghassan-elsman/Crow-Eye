@@ -265,10 +265,10 @@ class EngineSelector:
         engines.append((
             EngineType.TIME_WINDOW_SCANNING,
             "Time Engine",
-            "O(N) time-window scanning correlation with systematic temporal analysis. "
+            "O(N log N) time-window scanning correlation with systematic temporal analysis. "
             "Uses wing's time window size, handles any timestamp format, and provides "
             "excellent performance for large datasets.",
-            "O(N)",
+            "O(N log N)",
             [
                 "Large datasets (>1,000 records)",
                 "Performance-critical environments", 

@@ -115,6 +115,213 @@
     }
   },
   
+  "semantic_rules": [
+    {
+      "rule_id": "user_file_access",
+      "name": "User File Access (OR)",
+      "semantic_value": "User Accessed File",
+      "description": "RecentDocs OR OpenSaveMRU indicates user accessed a file",
+      "conditions": [
+        {
+          "feather_id": "recentdocs",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "opensavemru",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_folder_navigation",
+      "name": "User Folder Navigation",
+      "semantic_value": "User Navigated Folders",
+      "description": "ShellBags indicate user browsed folders",
+      "conditions": [
+        {
+          "feather_id": "shellbags",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_app_interaction",
+      "name": "User Application Interaction",
+      "semantic_value": "User Interacted with Application",
+      "description": "UserAssist shows user launched or interacted with an application",
+      "conditions": [
+        {
+          "feather_id": "userassist",
+          "field_name": "name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_typed_path",
+      "name": "User Typed Path",
+      "semantic_value": "User Manually Typed Path",
+      "description": "TypedPaths shows user manually entered a path in Explorer",
+      "conditions": [
+        {
+          "feather_id": "typedpaths",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "low"
+    },
+    {
+      "rule_id": "user_file_save",
+      "name": "User File Save Activity (AND)",
+      "semantic_value": "User Saved File",
+      "description": "LastSaveMRU AND OpenSaveMRU together indicate user saved a file",
+      "conditions": [
+        {
+          "feather_id": "lastsavemru",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "opensavemru",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "user_login_activity",
+      "name": "User Login with Activity (AND)",
+      "semantic_value": "User Logged In and Active",
+      "description": "Security logs show login AND user activity artifacts",
+      "conditions": [
+        {
+          "feather_id": "security_logs",
+          "field_name": "event_id",
+          "operator": "equals",
+          "value": "4624"
+        },
+        {
+          "feather_id": "userassist",
+          "field_name": "name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "authentication",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "user_any_activity",
+      "name": "Any User Activity (OR)",
+      "semantic_value": "User Activity Detected",
+      "description": "UserAssist OR RecentDocs OR ShellBags indicates user activity",
+      "conditions": [
+        {
+          "feather_id": "userassist",
+          "field_name": "name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "recentdocs",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "shellbags",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "user_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_document_work",
+      "name": "Document Work Activity (AND)",
+      "semantic_value": "User Working on Documents",
+      "description": "RecentDocs AND OpenSaveMRU together indicate document work",
+      "conditions": [
+        {
+          "feather_id": "recentdocs",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "opensavemru",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_navigation_evidence",
+      "name": "Navigation Evidence (OR)",
+      "semantic_value": "User Navigation Detected",
+      "description": "ShellBags OR TypedPaths indicates user navigation",
+      "conditions": [
+        {
+          "feather_id": "shellbags",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "typedpaths",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "info"
+    }
+  ],
+  
   "tags": [
     "user_activity",
     "default",

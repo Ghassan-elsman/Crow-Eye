@@ -153,7 +153,15 @@ class CorrelationRules:
     @classmethod
     def from_dict(cls, data: dict) -> 'CorrelationRules':
         """Create from dictionary"""
-        return cls(**data)
+        # Filter to only valid fields to avoid errors from extra keys
+        valid_fields = {
+            'time_window_minutes', 'minimum_matches', 'show_partial_matches',
+            'max_time_range_years', 'target_application', 'target_file_path',
+            'target_event_id', 'apply_to', 'anchor_feather_override',
+            'anchor_priority', 'timestamp_fields'
+        }
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered_data)
 
 
 @dataclass
@@ -172,7 +180,10 @@ class WingMetadata:
     @classmethod
     def from_dict(cls, data: dict) -> 'WingMetadata':
         """Create from dictionary"""
-        return cls(**data)
+        # Filter to only valid fields to avoid errors from extra keys
+        valid_fields = {'tags', 'case_types', 'confidence_level', 'tested_on', 'notes'}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered_data)
 
 
 @dataclass
@@ -189,6 +200,19 @@ class Wing:
     correlation_rules: CorrelationRules = field(default_factory=CorrelationRules)
     metadata: WingMetadata = field(default_factory=WingMetadata)
     semantic_mappings: List[Dict[str, str]] = field(default_factory=list)
+    # Advanced semantic rules with AND/OR logic and wildcard support
+    semantic_rules: List[Dict[str, Any]] = field(default_factory=list)
+    # Weighted scoring configuration - ENABLED BY DEFAULT
+    use_weighted_scoring: bool = True
+    scoring: Dict[str, Any] = field(default_factory=lambda: {
+        'enabled': True,
+        'score_interpretation': {
+            'confirmed': {'min': 0.70, 'label': 'Confirmed Evidence'},
+            'probable': {'min': 0.40, 'label': 'Probable Match'},
+            'weak': {'min': 0.20, 'label': 'Weak / Partial Evidence'},
+            'insufficient': {'min': 0.0, 'label': 'Insufficient Evidence'}
+        }
+    })
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
@@ -203,7 +227,10 @@ class Wing:
             'feathers': [f.to_dict() for f in self.feathers],
             'correlation_rules': self.correlation_rules.to_dict(),
             'metadata': self.metadata.to_dict(),
-            'semantic_mappings': self.semantic_mappings
+            'semantic_mappings': self.semantic_mappings,
+            'semantic_rules': self.semantic_rules,
+            'use_weighted_scoring': self.use_weighted_scoring,
+            'scoring': self.scoring
         }
     
     def to_json(self, indent: int = 2) -> str:
@@ -258,6 +285,26 @@ class Wing:
         metadata = WingMetadata.from_dict(data.get('metadata', {}))
         semantic_mappings = data.get('semantic_mappings', [])
         
+        # Load advanced semantic rules
+        semantic_rules = data.get('semantic_rules', [])
+        print(f"[Wing.from_dict] Semantic rules in data: {len(semantic_rules)}")
+        if semantic_rules:
+            print(f"[Wing.from_dict] First rule: {semantic_rules[0].get('name', 'unknown')}")
+        
+        # Load weighted scoring configuration
+        use_weighted_scoring = data.get('use_weighted_scoring', True)
+        print(f"[Wing.from_dict] use_weighted_scoring: {use_weighted_scoring}")
+        scoring = data.get('scoring', {
+            'enabled': True,
+            'score_interpretation': {
+                'confirmed': {'min': 0.70, 'label': 'Confirmed Evidence'},
+                'probable': {'min': 0.40, 'label': 'Probable Match'},
+                'weak': {'min': 0.20, 'label': 'Weak / Partial Evidence'},
+                'insufficient': {'min': 0.0, 'label': 'Insufficient Evidence'}
+            }
+        })
+        print(f"[Wing.from_dict] scoring keys: {list(scoring.keys()) if scoring else 'None'}")
+        
         wing = cls(
             wing_id=data.get('wing_id', str(uuid.uuid4())),
             wing_name=data.get('wing_name', ''),
@@ -269,10 +316,15 @@ class Wing:
             feathers=feathers,
             correlation_rules=correlation_rules,
             metadata=metadata,
-            semantic_mappings=semantic_mappings
+            semantic_mappings=semantic_mappings,
+            semantic_rules=semantic_rules,
+            use_weighted_scoring=use_weighted_scoring,
+            scoring=scoring
         )
         
         print(f"[Wing.from_dict] Created wing '{wing.wing_name}' with {len(wing.feathers)} feathers")
+        print(f"[Wing.from_dict] Loaded {len(semantic_rules)} semantic rules")
+        print(f"[Wing.from_dict] Weighted scoring: {use_weighted_scoring}")
         return wing
     
     @classmethod

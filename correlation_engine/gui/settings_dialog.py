@@ -141,10 +141,22 @@ class SettingsDialog(QDialog):
         self.case_semantic_path_edit.setToolTip("Path template for case-specific mappings (use {case_id} placeholder)")
         case_layout.addRow("Case mappings path template:", self.case_semantic_path_edit)
         
+        # Mapping management group
+        mapping_mgmt_group = QGroupBox("Mapping Management")
+        mapping_mgmt_layout = QHBoxLayout(mapping_mgmt_group)
+        
+        self.add_mapping_btn = QPushButton("Add Semantic Mapping...")
+        self.add_mapping_btn.setToolTip("Create a new semantic mapping (simple or advanced with AND/OR logic)")
+        self.add_mapping_btn.clicked.connect(self._open_add_mapping_dialog)
+        mapping_mgmt_layout.addWidget(self.add_mapping_btn)
+        
+        mapping_mgmt_layout.addStretch()
+        
         # Add groups to layout
         layout.addWidget(main_group)
         layout.addWidget(global_group)
         layout.addWidget(case_group)
+        layout.addWidget(mapping_mgmt_group)
         layout.addStretch()
         
         self.tab_widget.addTab(tab, "Semantic Mapping")
@@ -1037,3 +1049,77 @@ class SettingsDialog(QDialog):
                 "Configuration Update Error",
                 f"Failed to update configuration after case changes: {e}"
             )
+
+    def _open_add_mapping_dialog(self):
+        """Open the SemanticMappingDialog to add a new global mapping"""
+        try:
+            from ..wings.ui.semantic_mapping_dialog import SemanticMappingDialog
+            
+            # Open dialog with global scope - user can choose simple or advanced mode
+            dialog = SemanticMappingDialog(
+                parent=self,
+                mapping=None,
+                scope='global',
+                wing_id=None,
+                mode='simple'  # Default to simple, user can switch to advanced
+            )
+            
+            if dialog.exec_() == QDialog.Accepted:
+                # Check if it's an advanced rule or simple mapping
+                rule = dialog.get_rule()
+                
+                if rule and len(rule.conditions) > 0:
+                    # Advanced rule with conditions
+                    try:
+                        from ..config.semantic_mapping import SemanticMappingManager
+                        
+                        manager = SemanticMappingManager()
+                        manager.add_rule(rule)
+                        
+                        QMessageBox.information(
+                            self,
+                            "Rule Added",
+                            f"Semantic rule added:\n{rule.name} → {rule.semantic_value}"
+                        )
+                        logger.info(f"Added global semantic rule: {rule.name}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to add semantic rule: {e}")
+                        QMessageBox.warning(self, "Error", f"Failed to add rule: {e}")
+                else:
+                    # Simple mapping
+                    mapping_data = dialog.get_mapping()
+                    if mapping_data:
+                        try:
+                            from ..config.semantic_mapping import SemanticMapping, SemanticMappingManager
+                            
+                            mapping = SemanticMapping(
+                                source=mapping_data.get('source', ''),
+                                field=mapping_data.get('field', ''),
+                                technical_value=mapping_data.get('technical_value', ''),
+                                semantic_value=mapping_data.get('semantic_value', ''),
+                                description=mapping_data.get('description', ''),
+                                scope='global'
+                            )
+                            
+                            manager = SemanticMappingManager()
+                            manager.add_mapping(mapping)
+                            
+                            QMessageBox.information(
+                                self,
+                                "Mapping Added",
+                                f"Semantic mapping added:\n{mapping_data.get('technical_value')} → {mapping_data.get('semantic_value')}"
+                            )
+                            logger.info(f"Added global semantic mapping: {mapping_data.get('source')}.{mapping_data.get('field')}")
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to add semantic mapping: {e}")
+                            QMessageBox.warning(self, "Error", f"Failed to add mapping: {e}")
+                    
+        except ImportError as e:
+            logger.error(f"Failed to import SemanticMappingDialog: {e}")
+            QMessageBox.critical(self, "Import Error", "Failed to load Semantic Mapping Dialog.")
+        except Exception as e:
+            logger.error(f"Failed to open semantic mapping dialog: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to open dialog: {e}")
+    

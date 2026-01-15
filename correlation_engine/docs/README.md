@@ -2,33 +2,38 @@
 
 Welcome to the Crow-Eye Correlation Engine documentation! This directory contains comprehensive documentation for developers and contributors.
 
-## 🚀 What's New: Structural Improvements (v2.1)
+## 🚀 What's New: Latest Features (v0.7.1)
 
-The Correlation Engine has been enhanced with significant structural improvements:
+The Correlation Engine is production-ready with dual-engine architecture for optimal performance:
 
-- **Artifact Type Registry** - Centralized, configuration-driven artifact type management
-- **Integration Interfaces** - ABC-based interfaces for dependency injection and testing
-- **Configuration Live Reload** - Update configuration without application restart
-- **Weight Precedence System** - Clear wing > case > global > default weight hierarchy
-- **Observer Pattern** - Configuration change notifications for reactive components
+### ⭐ Time-Window Scanning Engine (Production-Ready!)
+- **O(N log N) Performance** - Indexed timestamp queries for efficient time-based correlation
+- **76x Faster** - Batch processing delivers 2,567 windows per second
+- **Systematic Temporal Analysis** - Scans through time from year 2000 in fixed intervals
+- **Universal Timestamp Support** - Handles any timestamp format automatically with robust indexing
+- **Memory Efficient** - Optimized for large datasets with intelligent caching
+- **Production-Ready** - Battle-tested for time-based artifact analysis
+
+### Identity-Based Engine (Production-Ready)
+- **O(N log N) Performance** - Fast, scalable correlation for large datasets
+- **Identity Tracking** - Comprehensive identity extraction and normalization
+- **Streaming Mode** - Memory-efficient processing for millions of records
+- **Advanced Validation** - Field-aware validation with prioritization
+- **Semantic Integration** - Built-in semantic rule evaluation
+- **Production-Ready** - Recommended for identity-centric investigations
+
+### Enhanced GUI Viewers (Production-Ready)
+- **Time-Based Results Viewer** - Hierarchical window-based view with dynamic grouping
+- **Identity Results Viewer** - Compact identity-centric view with pagination
+- **Semantic Columns** - Semantic mapping display in both viewers
+- **Scoring Breakdown** - Detailed confidence score visualization
+- **Multi-Tab Support** - View multiple correlation results simultaneously
 
 **New Documentation**:
-- **[Artifact Type Registry](config/ARTIFACT_TYPE_REGISTRY.md)** - Centralized artifact definitions
-- **[Integration Interfaces](integration/INTEGRATION_INTERFACES.md)** - Dependency injection and testing
-- **[Weight Precedence](config/WEIGHT_PRECEDENCE.md)** - Weight resolution hierarchy
-- **[Configuration Reload](config/CONFIGURATION_RELOAD.md)** - Live configuration updates
-
-## 🚀 Dual-Engine Architecture (v2.0)
-
-The Correlation Engine features a **dual-engine architecture** with two distinct correlation strategies:
-
-- **Time-Based Engine** (O(N²)) - Comprehensive field matching for small datasets (< 1,000 records)
-- **Identity-Based Engine** (O(N log N)) - Fast, scalable correlation for large datasets with identity tracking
-
-**Documentation**:
-- **[Engine Selection Guide](engine/ENGINE_DOCUMENTATION.md#engine-selection-guide)** - Choose the right engine for your needs
-- **[Dual-Engine Architecture](engine/ENGINE_DOCUMENTATION.md#dual-engine-architecture)** - Understand both engines
-- **[Performance Comparison](engine/ENGINE_DOCUMENTATION.md#performance-and-optimization)** - Benchmarks and optimization tips
+- **[Time-Window Scanning Engine](engine/ENGINE_DOCUMENTATION.md#time-window-scanning-engine)** - O(N log N) systematic temporal analysis
+- **[Identity-Based Engine](engine/ENGINE_DOCUMENTATION.md#identity-based-correlation-engine)** - Identity-first clustering
+- **[Engine Selection Guide](engine/ENGINE_DOCUMENTATION.md#engine-selection-guide)** - Choose the right engine
+- **[GUI Viewers](gui/GUI_DOCUMENTATION.md)** - Enhanced results visualization
 
 ## Quick Navigation
 
@@ -87,18 +92,24 @@ If you're new to the Correlation Engine:
 
 ## Engine Selection Quick Guide
 
-**Choose Time-Based Engine when:**
-- ✅ Dataset has < 1,000 records
-- ✅ You need comprehensive field-level analysis
-- ✅ You're debugging or doing research
-- ✅ Detailed semantic matching is critical
+**Choose Time-Window Scanning Engine when:**
+- ⭐ You need time-based artifact analysis (production-ready)
+- ✅ Dataset has any size (optimized for large datasets)
+- ✅ You need O(N log N) performance with indexed queries
+- ✅ You want systematic temporal analysis
+- ✅ Memory efficiency is important
+- ✅ You need universal timestamp format support
+- ✅ You want 76x faster batch processing
 
 **Choose Identity-Based Engine when:**
+- ⭐ You need identity tracking across artifacts (production-ready)
 - ✅ Dataset has > 1,000 records
-- ✅ Performance is critical
-- ✅ You need identity tracking across artifacts
 - ✅ You want to filter by specific applications
+- ✅ You need relationship mapping between identities
 - ✅ Memory constraints require streaming mode
+- ✅ You want O(N log N) performance
+
+**Both engines are production-ready and optimized for large datasets.**
 
 **See the full [Engine Selection Guide](engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) for detailed decision criteria.**
 
@@ -149,9 +160,9 @@ If you're contributing to the Correlation Engine:
 - `engine/base_engine.py` - Common engine interface
 
 **Correlation Engines**:
-- `engine/time_based_engine.py` - Time-Based correlation (O(N²))
+- `engine/time_based_engine.py` - Time-Window Scanning Engine (O(N))
 - `engine/identity_correlation_engine.py` - Identity-Based correlation (O(N log N))
-- `engine/correlation_engine.py` - Original correlation logic (used by Time-Based)
+- `engine/two_phase_correlation.py` - Two-phase architecture components
 - `engine/weighted_scoring.py` - Confidence scoring
 
 **Integration Components**:
@@ -240,22 +251,32 @@ When updating documentation:
 
 ---
 
-**Last Updated**: January 2025  
-**Correlation Engine Version**: 2.1.0 (Structural Improvements)  
-**Documentation Version**: 2.1
+**Last Updated**: January 2026  
+**Correlation Engine Version**: 0.7.1 (Production-Ready Dual-Engine Architecture)  
+**Documentation Version**: 0.7
 
-**Major Updates in v2.1**:
-- ✨ Artifact Type Registry for centralized artifact management
-- 🔌 Integration Interfaces for dependency injection
-- 🔄 Configuration Live Reload without restart
-- ⚖️ Weight Precedence System (wing > case > global > default)
-- 👁️ Observer Pattern for configuration changes
-- 📖 ~3,000 lines of new documentation
+**Major Updates in v0.7.1**:
+- ⭐ Time-Window Scanning Engine - Production-ready with O(N log N) performance (76x faster)
+- ⭐ Identity-Based Engine - Production-ready with advanced validation
+- 📊 Enhanced GUI Viewers (Time-Based and Identity Results)
+- 🔍 Semantic Rule Evaluation at identity level
+- 💾 Streaming Mode for memory-efficient processing
+- 📖 ~10,000 lines of comprehensive documentation
 
-**Major Updates in v2.0**:
-- ✨ Dual-Engine Architecture with Time-Based and Identity-Based engines
-- 📊 Comprehensive Engine Selection Guide
-- ⚡ Performance optimization documentation
-- 🔧 Troubleshooting guide for both engines
-- 🏗️ Enhanced architecture documentation with component integration
-- 📖 ~7,200 lines of new documentation
+## 🚀 Coming Soon Features
+
+### Acquisition & Offline Analysis
+- 💾 **Acquisition Function** - Collect and save artifacts for later parsing without immediate analysis
+  - Batch collection from multiple systems
+  - Preserve artifacts before Windows deletes them
+  - Store for historical forensic analysis
+- 🔧 **Offline Parser** - Parse saved artifacts without live system access
+  - Batch processing of collected artifacts
+  - Remote analysis capabilities
+  - Historical data investigation
+
+### Enhanced Correlation Features
+- 🎯 **Enhanced Semantic Mapping** - Comprehensive field mapping across all artifact types
+- 📈 **Advanced Correlation Scoring** - Refined confidence scoring algorithms with explainability
+- 🔍 **Cross-Machine Correlation** - Correlate artifacts across multiple systems
+- 📊 **Advanced Reporting** - Customizable reports with visual correlation graphs

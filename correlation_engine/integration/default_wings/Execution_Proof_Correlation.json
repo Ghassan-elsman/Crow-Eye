@@ -151,6 +151,177 @@
     }
   },
   
+  "semantic_rules": [
+    {
+      "rule_id": "exec_prefetch_run",
+      "name": "Program Execution via Prefetch",
+      "semantic_value": "Program Executed",
+      "description": "Prefetch file indicates program was executed",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_shimcache_evidence",
+      "name": "ShimCache Execution Evidence",
+      "semantic_value": "Application Compatibility Evidence",
+      "description": "ShimCache entry indicates program was executed or prepared for execution",
+      "conditions": [
+        {
+          "feather_id": "shimcache",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_user_launched",
+      "name": "User-Launched Application (AND)",
+      "semantic_value": "User Launched Application",
+      "description": "LNK file AND Prefetch together indicate user-initiated execution",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "lnk",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "exec_any_evidence",
+      "name": "Execution Evidence (OR)",
+      "semantic_value": "Execution Evidence Found",
+      "description": "Prefetch OR ShimCache OR AmCache indicates execution evidence",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "shimcache",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "amcache_app",
+          "field_name": "name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_user_interaction",
+      "name": "User Interaction Evidence (OR)",
+      "semantic_value": "User Interaction Detected",
+      "description": "LNK OR Jumplist indicates user interacted with application",
+      "conditions": [
+        {
+          "feather_id": "lnk",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "jumplist_auto",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "jumplist_custom",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "user_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_confirmed_run",
+      "name": "Confirmed Execution (AND)",
+      "semantic_value": "Confirmed Program Execution",
+      "description": "Prefetch AND ShimCache together confirm program execution",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "shimcache",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "high"
+    },
+    {
+      "rule_id": "exec_runtime_evidence",
+      "name": "Runtime Evidence (AND)",
+      "semantic_value": "Application Runtime Evidence",
+      "description": "SRUM AND MFT together indicate application runtime activity",
+      "conditions": [
+        {
+          "feather_id": "srum_app",
+          "field_name": "app_id",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "mft_usn",
+          "field_name": "file_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "medium"
+    }
+  ],
+  
   "tags": [
     "execution",
     "default",

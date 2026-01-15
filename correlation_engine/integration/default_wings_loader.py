@@ -199,6 +199,7 @@ class DefaultWingsLoader:
                         'description': wing_data.get('description', ''),
                         'proves': wing_data.get('proves', ''),
                         'feather_count': len(wing_data.get('feathers', [])),
+                        'semantic_rules_count': len(wing_data.get('semantic_rules', [])),
                         'use_weighted_scoring': wing_data.get('use_weighted_scoring', False)
                     })
                 except Exception as e:

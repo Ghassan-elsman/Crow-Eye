@@ -214,7 +214,7 @@ class PipelineBuilderWidget(QWidget):
         layout.addWidget(validation_group)
         
         # Set splitter sizes
-        splitter.setSizes([200, 400])
+        splitter.setSizes([200, 350])
     
     def _create_top_bar(self) -> QWidget:
         """Create top bar with output directory"""
@@ -470,6 +470,25 @@ class PipelineBuilderWidget(QWidget):
             self.current_pipeline.investigator = self.investigator_input.text().strip()
             self.current_pipeline.output_directory = output_dir
             self.current_pipeline.last_modified = datetime.now().isoformat()
+        
+        # Use default scoring config (semantic rules managed elsewhere)
+        if not self.current_pipeline.scoring_config:
+            self.current_pipeline.scoring_config = {
+                'enabled': True,
+                'use_weighted_scoring': True,
+                'thresholds': {
+                    'low': 0.3,
+                    'medium': 0.5,
+                    'high': 0.7,
+                    'critical': 0.9
+                },
+                'default_tier_weights': {
+                    'tier1': 1.0,
+                    'tier2': 0.8,
+                    'tier3': 0.6,
+                    'tier4': 0.4
+                }
+            }
         
         # Create output directory structure
         from pathlib import Path
@@ -1763,6 +1782,14 @@ class PipelineBuilderWidget(QWidget):
         self.wings_list.clear()
         self.validation_label.setText("No pipeline loaded")
         self.validation_label.setStyleSheet("")
+        
+        # Clear semantic configuration
+        self.semantic_rules_list.clear()
+        self.enable_scoring_checkbox.setChecked(True)
+        self.threshold_low.setValue(0.3)
+        self.threshold_medium.setValue(0.5)
+        self.threshold_high.setValue(0.7)
+        self.threshold_critical.setValue(0.9)
 
     def _on_feather_added(self, feather_metadata: dict):
         """

@@ -155,31 +155,35 @@ class IdentityResultsView(QWidget):
         self.results_tree = self._create_tree()
         main_layout.addWidget(self.results_tree, stretch=1)
         
-        # === BOTTOM: Ultra Compact Stats Tables ===
+        # === BOTTOM: Compact Stats Section ===
         stats_frame = QFrame()
-        stats_frame.setMaximumHeight(160)
-        stats_layout = QHBoxLayout(stats_frame)
-        stats_layout.setSpacing(6)
-        stats_layout.setContentsMargins(2, 2, 2, 2)
+        stats_frame.setMaximumHeight(100)
+        stats_main_layout = QVBoxLayout(stats_frame)
+        stats_main_layout.setSpacing(2)
+        stats_main_layout.setContentsMargins(2, 2, 2, 2)
         
-        # Feather Contribution
-        self.feather_table = self._create_compact_table(["Feather", "Rec", "ID"])
-        stats_layout.addWidget(self._wrap_table("Feathers", self.feather_table), stretch=2)
+        # Stats row: Types, Roles, Scores (compact)
+        bottom_stats = QHBoxLayout()
+        bottom_stats.setSpacing(4)
         
         # Identity Types
         self.type_table = self._create_compact_table(["Type", "#"])
-        stats_layout.addWidget(self._wrap_table("Types", self.type_table), stretch=1)
+        self.type_table.setMaximumHeight(60)
+        bottom_stats.addWidget(self._wrap_table("Types", self.type_table), stretch=1)
         
         # Evidence Roles
         self.role_table = self._create_compact_table(["Role", "#"])
-        stats_layout.addWidget(self._wrap_table("Roles", self.role_table), stretch=1)
+        self.role_table.setMaximumHeight(60)
+        bottom_stats.addWidget(self._wrap_table("Roles", self.role_table), stretch=1)
         
-        # Scoring Summary (new)
-        self.scoring_table = self._create_compact_table(["Score Range", "#"])
-        stats_layout.addWidget(self._wrap_table("Scores", self.scoring_table), stretch=1)
+        # Scoring Summary
+        self.scoring_table = self._create_compact_table(["Score", "#"])
+        self.scoring_table.setMaximumHeight(60)
+        bottom_stats.addWidget(self._wrap_table("Scores", self.scoring_table), stretch=1)
         
+        stats_main_layout.addLayout(bottom_stats)
         main_layout.addWidget(stats_frame)
-    
+
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and score column."""
         tree = QTreeWidget()
@@ -648,13 +652,16 @@ class IdentityResultsView(QWidget):
         avg_score = self._calculate_identity_score(identity)
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
+        # Get aggregated semantic value for identity
+        semantic_value, semantic_tooltip = self._get_identity_semantic_value(identity)
+        
         # Main identity item with blue diamond icon (7 columns now - added Semantic)
         item = QTreeWidgetItem([
             f"🔷 {name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
             feather_str, 
             "", 
             score_str,
-            "-",  # Semantic column (identities don't have semantic values)
+            semantic_value,  # Semantic column with aggregated value
             str(total_evidence), 
             f"{total_anchors} anchors"
         ])
@@ -668,6 +675,12 @@ class IdentityResultsView(QWidget):
             item.setForeground(3, QBrush(QColor("#FF9800")))  # Orange - medium score
         elif avg_score > 0:
             item.setForeground(3, QBrush(QColor("#F44336")))  # Red - low score
+        
+        # Color semantic column if value exists
+        if semantic_value != "-":
+            item.setForeground(4, QBrush(QColor("#9C27B0")))  # Purple for semantic values
+            if semantic_tooltip:
+                item.setToolTip(4, semantic_tooltip)
         
         item.setData(0, Qt.UserRole, {'type': 'identity', 'data': identity})
         
@@ -705,6 +718,58 @@ class IdentityResultsView(QWidget):
                         scores.append(score)
         
         return sum(scores) / len(scores) if scores else 0.0
+    
+    def _get_identity_semantic_value(self, identity: Dict) -> tuple:
+        """
+        Extract aggregated semantic value from all anchors in an identity.
+        
+        Returns:
+            Tuple of (display_value, tooltip_text) where:
+            - display_value: Short string for the Semantic column
+            - tooltip_text: Detailed tooltip with all semantic values
+        """
+        semantic_values = []
+        sub_identities = identity.get('sub_identities', [])
+        
+        # Collect semantic data from all anchors
+        anchors_to_check = []
+        if sub_identities:
+            for sub in sub_identities:
+                anchors_to_check.extend(sub.get('anchors', []))
+        else:
+            anchors_to_check = identity.get('anchors', [])
+        
+        for anchor in anchors_to_check:
+            semantic_data = anchor.get('semantic_data')
+            if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
+                for key, value in semantic_data.items():
+                    if key.startswith('_'):
+                        continue
+                    if isinstance(value, dict) and 'semantic_value' in value:
+                        sem_val = str(value['semantic_value'])
+                        rule_name = value.get('rule_name', key)
+                        if sem_val and sem_val not in [v[0] for v in semantic_values]:
+                            semantic_values.append((sem_val, rule_name))
+                    elif isinstance(value, str) and value:
+                        if value not in [v[0] for v in semantic_values]:
+                            semantic_values.append((value, key))
+        
+        if not semantic_values:
+            return ("-", "")
+        
+        # Build display value (first value + count if multiple)
+        first_value = semantic_values[0][0]
+        if len(semantic_values) == 1:
+            display_value = first_value
+        else:
+            display_value = f"{first_value} (+{len(semantic_values)-1})"
+        
+        # Build tooltip with all values
+        tooltip_lines = ["🏷️ Semantic Values:"]
+        for sem_val, rule_name in semantic_values:
+            tooltip_lines.append(f"  • {rule_name}: {sem_val}")
+        
+        return (display_value, "\n".join(tooltip_lines))
     
     def _create_sub_identity_item(self, sub_identity: Dict) -> QTreeWidgetItem:
         """Create sub-identity tree item (original filename)."""
@@ -946,64 +1011,7 @@ class IdentityResultsView(QWidget):
         self.match_selected.emit({'type': item_type, 'data': item_data})
     
     def _update_stats(self, results: Dict):
-        """Update statistics tables."""
-        # Feather contribution - use feather_metadata from results
-        feather_metadata = results.get('feather_metadata', {})
-        
-        if feather_metadata:
-            # Use the pre-calculated feather metadata - group by base name
-            grouped_metadata = defaultdict(lambda: {'records_loaded': 0, 'identities_found': set()})
-            for fid, meta in feather_metadata.items():
-                # Extract base feather name (remove _number suffix)
-                base_name = fid.rsplit('_', 1)[0] if '_' in fid else fid
-                grouped_metadata[base_name]['records_loaded'] += meta.get('records_loaded', meta.get('records', 0))
-                grouped_metadata[base_name]['identities_found'].add(meta.get('identities_found', 0))
-            
-            self.feather_table.setRowCount(len(grouped_metadata))
-            for row, (base_name, meta) in enumerate(sorted(grouped_metadata.items(), 
-                                                      key=lambda x: x[1]['records_loaded'], 
-                                                      reverse=True)):
-                # Remove path prefix (e.g., "feathers/") from display name
-                display_name = base_name.split('/')[-1] if '/' in base_name else base_name
-                self.feather_table.setItem(row, 0, QTableWidgetItem(display_name))
-                records = meta['records_loaded']
-                self.feather_table.setItem(row, 1, QTableWidgetItem(f"{records:,}"))
-                identities = sum(meta['identities_found'])
-                self.feather_table.setItem(row, 2, QTableWidgetItem(str(identities)))
-        else:
-            # Fallback: calculate from identities - group by base name
-            feather_stats = {}
-            for identity in self.identities:
-                # Handle both old and new format
-                sub_identities = identity.get('sub_identities', [])
-                if sub_identities:
-                    for sub in sub_identities:
-                        for anchor in sub.get('anchors', []):
-                            for f in anchor.get('feathers', []):
-                                # Extract base feather name (remove _number suffix)
-                                base_name = f.rsplit('_', 1)[0] if '_' in f else f
-                                if base_name not in feather_stats:
-                                    feather_stats[base_name] = {'records': 0, 'identities': set()}
-                                feather_stats[base_name]['records'] += anchor.get('evidence_count', 0)
-                                feather_stats[base_name]['identities'].add(identity.get('identity_id', ''))
-                else:
-                    for anchor in identity.get('anchors', []):
-                        for f in anchor.get('feathers', []):
-                            # Extract base feather name (remove _number suffix)
-                            base_name = f.rsplit('_', 1)[0] if '_' in f else f
-                            if base_name not in feather_stats:
-                                feather_stats[base_name] = {'records': 0, 'identities': set()}
-                            feather_stats[base_name]['records'] += anchor.get('evidence_count', 0)
-                            feather_stats[base_name]['identities'].add(identity.get('identity_id', ''))
-            
-            self.feather_table.setRowCount(len(feather_stats))
-            for row, (f, s) in enumerate(sorted(feather_stats.items())):
-                # Remove path prefix (e.g., "feathers/") from display name
-                display_name = f.split('/')[-1] if '/' in f else f
-                self.feather_table.setItem(row, 0, QTableWidgetItem(display_name))
-                self.feather_table.setItem(row, 1, QTableWidgetItem(str(s['records'])))
-                self.feather_table.setItem(row, 2, QTableWidgetItem(str(len(s['identities']))))
-        
+        """Update statistics tables (Types, Roles, Scores only - feather stats are in Summary)."""
         # Identity types
         types = {}
         for i in self.identities:
@@ -1282,11 +1290,11 @@ class IdentityDetailDialog(QDialog):
                         feather_records[fid] = []
                     feather_records[fid].append(ev)
         
-        # Tab 1: Summary
-        summary_tab = self._create_summary_tab(sub_identities, all_anchors, timestamps, feather_records)
-        tabs.addTab(summary_tab, "📊 Summary")
+        # Tab 1: Summary - REMOVED per user request
+        # summary_tab = self._create_summary_tab(sub_identities, all_anchors, timestamps, feather_records)
+        # tabs.addTab(summary_tab, "📊 Summary")
         
-        # Per-feather tabs
+        # Per-feather tabs (now the only tabs)
         for fid in sorted(feather_records.keys()):
             records = feather_records[fid]
             tab = self._create_feather_tab(fid, records)

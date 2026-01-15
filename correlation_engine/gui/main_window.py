@@ -104,7 +104,9 @@ class PipelineManagerTab(QWidget):
                 "This includes:\n"
                 "• MFT_USN feather support\n"
                 "• System Logs feather support\n"
-                "• Updated anchor priorities\n\n"
+                "• Updated anchor priorities\n"
+                "• Default semantic rules for correlation\n"
+                "• Weighted scoring enabled by default\n\n"
                 "Your custom Wings will NOT be affected.\n\n"
                 "Continue?",
                 QMessageBox.Yes | QMessageBox.No,

@@ -937,6 +937,9 @@ class TimeBasedResultsViewer(QWidget):
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
+        # Get aggregated semantic value for identity
+        semantic_value, semantic_tooltip = self._get_identity_semantic_value(identity)
+        
         # Add temporal relationship indicator
         if window_type == "Correlation":
             # This identity is part of a correlation opportunity
@@ -956,7 +959,7 @@ class TimeBasedResultsViewer(QWidget):
             feather_str,
             "",
             score_str,
-            "-",  # Semantic column - placeholder for identity level
+            semantic_value,  # Semantic column with aggregated value
             str(total_matches),
             f"{len(feathers)} feathers"
         ])
@@ -980,6 +983,12 @@ class TimeBasedResultsViewer(QWidget):
         elif avg_score > 0:
             item.setForeground(3, QBrush(QColor("#F44336")))
         
+        # Color semantic column if value exists
+        if semantic_value != "-":
+            item.setForeground(4, QBrush(QColor("#9C27B0")))  # Purple for semantic values
+            if semantic_tooltip:
+                item.setToolTip(4, semantic_tooltip)
+        
         item.setData(0, Qt.UserRole, {'type': 'identity', 'data': identity, 'window_type': window_type})
         
         # Add sub-identities
@@ -988,6 +997,52 @@ class TimeBasedResultsViewer(QWidget):
             item.addChild(sub_item)
         
         return item
+    
+    def _get_identity_semantic_value(self, identity: Dict) -> tuple:
+        """
+        Extract aggregated semantic value from all matches in an identity.
+        
+        Returns:
+            Tuple of (display_value, tooltip_text) where:
+            - display_value: Short string for the Semantic column
+            - tooltip_text: Detailed tooltip with all semantic values
+        """
+        semantic_values = []
+        sub_identities = identity.get('sub_identities', [])
+        
+        # Collect semantic data from all matches
+        for sub in sub_identities:
+            for match in sub.get('matches', []):
+                semantic_data = getattr(match, 'semantic_data', None)
+                if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
+                    for key, value in semantic_data.items():
+                        if key.startswith('_'):
+                            continue
+                        if isinstance(value, dict) and 'semantic_value' in value:
+                            sem_val = str(value['semantic_value'])
+                            rule_name = value.get('rule_name', key)
+                            if sem_val and sem_val not in [v[0] for v in semantic_values]:
+                                semantic_values.append((sem_val, rule_name))
+                        elif isinstance(value, str) and value:
+                            if value not in [v[0] for v in semantic_values]:
+                                semantic_values.append((value, key))
+        
+        if not semantic_values:
+            return ("-", "")
+        
+        # Build display value (first value + count if multiple)
+        first_value = semantic_values[0][0]
+        if len(semantic_values) == 1:
+            display_value = first_value
+        else:
+            display_value = f"{first_value} (+{len(semantic_values)-1})"
+        
+        # Build tooltip with all values
+        tooltip_lines = ["🏷️ Semantic Values:"]
+        for sem_val, rule_name in semantic_values:
+            tooltip_lines.append(f"  • {rule_name}: {sem_val}")
+        
+        return (display_value, "\n".join(tooltip_lines))
     
     def _create_sub_identity_item(self, sub_identity: Dict) -> QTreeWidgetItem:
         """Create sub-identity tree item (Level 3)."""

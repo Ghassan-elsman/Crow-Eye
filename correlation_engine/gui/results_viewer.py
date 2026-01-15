@@ -1401,6 +1401,78 @@ class DynamicResultsTabWidget(QWidget):
             import traceback
             traceback.print_exc()
     
+    def _create_feather_stat_row(self, feather_name: str, total_records: int, identity_records: int) -> QWidget:
+        """Create a compact horizontal stat row for a feather."""
+        row = QWidget()
+        row.setMaximumHeight(20)
+        layout = QHBoxLayout(row)
+        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Feather name (truncated)
+        display_name = feather_name.split('/')[-1] if '/' in feather_name else feather_name
+        if len(display_name) > 18:
+            display_name = display_name[:15] + "..."
+        name_lbl = QLabel(display_name)
+        name_lbl.setFixedWidth(110)
+        name_lbl.setStyleSheet("font-size: 8pt; color: #00FFFF; font-weight: bold;")
+        name_lbl.setToolTip(feather_name)
+        layout.addWidget(name_lbl)
+        
+        # Total records
+        total_lbl = QLabel(f"📄 {total_records:,}")
+        total_lbl.setFixedWidth(70)
+        total_lbl.setStyleSheet("font-size: 8pt; color: #aaa;")
+        total_lbl.setToolTip(f"Total Records: {total_records:,}")
+        layout.addWidget(total_lbl)
+        
+        # Identity records (green)
+        id_lbl = QLabel(f"✓ {identity_records:,}")
+        id_lbl.setFixedWidth(60)
+        id_lbl.setStyleSheet("font-size: 8pt; color: #4CAF50;")
+        id_lbl.setToolTip(f"Identity Records: {identity_records:,}")
+        layout.addWidget(id_lbl)
+        
+        # Non-identity records (gray)
+        non_id = total_records - identity_records
+        non_id_lbl = QLabel(f"✗ {non_id:,}")
+        non_id_lbl.setFixedWidth(60)
+        non_id_lbl.setStyleSheet("font-size: 8pt; color: #666;")
+        non_id_lbl.setToolTip(f"Non-Identity Records: {non_id:,}")
+        layout.addWidget(non_id_lbl)
+        
+        # Percentage
+        pct = (identity_records / total_records * 100) if total_records > 0 else 0
+        pct_lbl = QLabel(f"{pct:.1f}%")
+        pct_lbl.setFixedWidth(45)
+        pct_lbl.setStyleSheet("font-size: 8pt; color: #fff;")
+        layout.addWidget(pct_lbl)
+        
+        # Visual progress bar
+        bar = QFrame()
+        bar.setFixedHeight(10)
+        bar.setMinimumWidth(80)
+        bar_pct = min(100, pct)
+        # Color based on percentage
+        if pct >= 50:
+            bar_color = "#4CAF50"  # Green
+        elif pct >= 20:
+            bar_color = "#FF9800"  # Orange
+        else:
+            bar_color = "#f44336"  # Red
+        bar.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {bar_color}, stop:{bar_pct/100} {bar_color},
+                    stop:{bar_pct/100 + 0.001} #333, stop:1 #333);
+                border-radius: 4px;
+                border: 1px solid #444;
+            }}
+        """)
+        layout.addWidget(bar, stretch=1)
+        
+        return row
+
     def _render_charts_for_results(self):
         """Render charts based on loaded results and engine type."""
         try:
@@ -1551,57 +1623,43 @@ class DynamicResultsTabWidget(QWidget):
                 
                 chart_layout.addLayout(charts_row)
                 
-                # Add second row with Records vs Identities grouped bar chart
+                # Add second row with compact horizontal feather stats (replacing grouped bar chart)
                 if feather_metadata:
                     try:
-                        # Prepare data for grouped bar chart
-                        grouped_data = {}
+                        # Create compact feather stats section
+                        feather_stats_widget = QWidget()
+                        feather_stats_layout = QVBoxLayout(feather_stats_widget)
+                        feather_stats_layout.setSpacing(2)
+                        feather_stats_layout.setContentsMargins(5, 5, 5, 5)
+                        
+                        # Header
+                        header_label = QLabel("📊 Records vs Identities by Feather")
+                        header_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #00FFFF; padding: 5px; margin-top: 10px;")
+                        feather_stats_layout.addWidget(header_label)
+                        
+                        # Prepare and sort data
+                        feather_data = []
                         for feather_id, metadata in feather_metadata.items():
                             if isinstance(metadata, dict) and not feather_id.startswith('_'):
-                                records = metadata.get('records_processed', metadata.get('total_records', 0))
+                                records = metadata.get('records_processed', metadata.get('total_records', metadata.get('records_loaded', 0)))
                                 identities = metadata.get('identities_final', metadata.get('identities_found', 0))
-                                invalid = metadata.get('identities_filtered', metadata.get('invalid_identities', 0))
-                                
                                 if records > 0 or identities > 0:
-                                    grouped_data[feather_id] = {
-                                        'Records': records,
-                                        'Identities': identities,
-                                        'Invalid': invalid
-                                    }
+                                    feather_data.append((feather_id, records, identities))
                         
-                        if grouped_data:
-                            # Sort by records descending and limit to top 10
-                            sorted_grouped = dict(sorted(grouped_data.items(), 
-                                                        key=lambda x: x[1]['Records'], 
-                                                        reverse=True)[:10])
-                            
-                            # Create grouped bar chart
-                            grouped_chart = PyQt5GroupedBarChart()
-                            grouped_chart.set_data(sorted_grouped, 
-                                                  ['Records', 'Identities', 'Invalid'],
-                                                  "Records vs Identities Extracted vs Invalid")
-                            grouped_chart.setMinimumHeight(300)
-                            
-                            # Store chart data for export
-                            grouped_chart.chart_data = {
-                                'feathers': list(sorted_grouped.keys()),
-                                'series': ['Records', 'Identities', 'Invalid'],
-                                'data': sorted_grouped,
-                                'title': 'Records vs Identities Extracted vs Invalid'
-                            }
-                            
-                            # Setup context menu
-                            self._setup_chart_context_menu(grouped_chart)
-                            
-                            # Add label and chart
-                            grouped_label = QLabel("📈 Records vs Identities Comparison")
-                            grouped_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #4CAF50; padding: 5px; margin-top: 10px;")
-                            chart_layout.addWidget(grouped_label)
-                            chart_layout.addWidget(grouped_chart)
-                            
-                            print("[DynamicResultsTabWidget] ✓ Grouped bar chart added")
+                        # Sort by records descending
+                        feather_data.sort(key=lambda x: x[1], reverse=True)
+                        
+                        # Create compact horizontal stat rows for each feather (top 10)
+                        for feather_id, records, identities in feather_data[:10]:
+                            row = self._create_feather_stat_row(feather_id, records, identities)
+                            feather_stats_layout.addWidget(row)
+                        
+                        feather_stats_layout.addStretch()
+                        chart_layout.addWidget(feather_stats_widget)
+                        
+                        print(f"[DynamicResultsTabWidget] ✓ Compact feather stats added ({len(feather_data[:10])} feathers)")
                     except Exception as e:
-                        print(f"[DynamicResultsTabWidget] Warning: Could not create grouped bar chart: {e}")
+                        print(f"[DynamicResultsTabWidget] Warning: Could not create feather stats: {e}")
                         import traceback
                         traceback.print_exc()
                 

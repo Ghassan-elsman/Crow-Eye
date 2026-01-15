@@ -469,10 +469,10 @@ class WingsCreatorWindow(QMainWindow):
         
         # Add default interpretation levels
         self.interpretation_levels = [
-            {"level": "confirmed", "label": "Confirmed", "min": 0.70},
-            {"level": "probable", "label": "Probable", "min": 0.40},
-            {"level": "weak", "label": "Weak / Partial", "min": 0.20},
-            {"level": "not_proven", "label": "Not Proven", "min": 0.0}
+            {"level": "confirmed", "label": "Confirmed Evidence", "min": 0.70},
+            {"level": "probable", "label": "Probable Match", "min": 0.40},
+            {"level": "weak", "label": "Weak / Partial Evidence", "min": 0.20},
+            {"level": "insufficient", "label": "Insufficient Evidence", "min": 0.0}
         ]
         
         layout.addWidget(self.interpretation_table)
@@ -480,17 +480,68 @@ class WingsCreatorWindow(QMainWindow):
         # Buttons
         button_layout = QHBoxLayout()
         
-        self.add_level_btn = QPushButton("Add Level")
+        self.add_level_btn = QPushButton("+ Add Level")
         self.add_level_btn.clicked.connect(self.add_interpretation_level)
         self.add_level_btn.setEnabled(False)
+        self.add_level_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #10B981;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #059669;
+            }
+            QPushButton:disabled {
+                background-color: #374151;
+                color: #6B7280;
+            }
+        """)
         
-        self.remove_level_btn = QPushButton("Remove Level")
+        self.remove_level_btn = QPushButton("− Remove Level")
         self.remove_level_btn.clicked.connect(self.remove_interpretation_level)
         self.remove_level_btn.setEnabled(False)
+        self.remove_level_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #EF4444;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #DC2626;
+            }
+            QPushButton:disabled {
+                background-color: #374151;
+                color: #6B7280;
+            }
+        """)
         
-        self.reset_levels_btn = QPushButton("Reset to Defaults")
+        self.reset_levels_btn = QPushButton("↺ Reset to Defaults")
         self.reset_levels_btn.clicked.connect(self.reset_interpretation_levels)
         self.reset_levels_btn.setEnabled(False)
+        self.reset_levels_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3B82F6;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2563EB;
+            }
+            QPushButton:disabled {
+                background-color: #374151;
+                color: #6B7280;
+            }
+        """)
         
         button_layout.addWidget(self.add_level_btn)
         button_layout.addWidget(self.remove_level_btn)
@@ -512,8 +563,11 @@ class WingsCreatorWindow(QMainWindow):
         form_layout = QVBoxLayout(form_widget)
         form_layout.setSpacing(10)
         
-        # Semantic mappings section
+        # Semantic mappings section (basic)
         form_layout.addWidget(self.create_semantic_mappings_section())
+        
+        # Advanced semantic rules section
+        form_layout.addWidget(self.create_advanced_semantic_rules_section())
         
         form_layout.addStretch()
         
@@ -593,6 +647,284 @@ class WingsCreatorWindow(QMainWindow):
         group.setLayout(layout)
         return group
     
+    def create_advanced_semantic_rules_section(self):
+        """Create advanced semantic rules configuration section with AND/OR logic and wildcards"""
+        from PyQt5.QtWidgets import QListWidget, QListWidgetItem
+        
+        group = QGroupBox("Advanced Semantic Rules")
+        layout = QVBoxLayout()
+        
+        # Help text
+        help_text = QLabel(
+            "Define advanced semantic rules with multi-value conditions, AND/OR logic, and wildcard (*) support. "
+            "These rules allow complex matching patterns for identity-level semantic classification."
+        )
+        help_text.setWordWrap(True)
+        help_text.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
+        layout.addWidget(help_text)
+        
+        # Semantic rules list
+        rules_label = QLabel("Wing Semantic Rules:")
+        rules_label.setStyleSheet("font-weight: bold; color: #00d9ff;")
+        layout.addWidget(rules_label)
+        
+        self.semantic_rules_list = QListWidget()
+        self.semantic_rules_list.setMaximumHeight(150)
+        self.semantic_rules_list.setToolTip("Wing-specific semantic rules with AND/OR logic and wildcard support")
+        self.semantic_rules_list.itemSelectionChanged.connect(self._on_semantic_rule_selection_changed)
+        self.semantic_rules_list.itemDoubleClicked.connect(self._edit_semantic_rule)
+        layout.addWidget(self.semantic_rules_list)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.add_semantic_rule_btn = QPushButton("+ Add Rule")
+        self.add_semantic_rule_btn.clicked.connect(self._add_semantic_rule)
+        self.add_semantic_rule_btn.setToolTip("Add a new advanced semantic rule")
+        button_layout.addWidget(self.add_semantic_rule_btn)
+        
+        self.edit_semantic_rule_btn = QPushButton("Edit")
+        self.edit_semantic_rule_btn.clicked.connect(self._edit_semantic_rule)
+        self.edit_semantic_rule_btn.setEnabled(False)
+        self.edit_semantic_rule_btn.setToolTip("Edit the selected semantic rule")
+        button_layout.addWidget(self.edit_semantic_rule_btn)
+        
+        self.remove_semantic_rule_btn = QPushButton("Remove")
+        self.remove_semantic_rule_btn.clicked.connect(self._remove_semantic_rule)
+        self.remove_semantic_rule_btn.setEnabled(False)
+        self.remove_semantic_rule_btn.setToolTip("Remove the selected semantic rule")
+        button_layout.addWidget(self.remove_semantic_rule_btn)
+        
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+        
+        # Info label
+        info_label = QLabel(
+            "💡 Advanced rules support: AND/OR logic operators, wildcard (*) matching, "
+            "and multi-value conditions. Wing rules take priority over global rules."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #00d9ff; font-size: 8pt; margin-top: 10px;")
+        layout.addWidget(info_label)
+        
+        # Initialize wing_semantic_rules list
+        self.wing_semantic_rules = []
+        
+        group.setLayout(layout)
+        return group
+    
+    def _on_semantic_rule_selection_changed(self):
+        """Handle semantic rule selection change"""
+        has_selection = self.semantic_rules_list.currentItem() is not None
+        self.edit_semantic_rule_btn.setEnabled(has_selection)
+        self.remove_semantic_rule_btn.setEnabled(has_selection)
+    
+    def _add_semantic_rule(self):
+        """Add a new advanced semantic rule to the wing"""
+        try:
+            from .semantic_mapping_dialog import SemanticMappingDialog
+            from PyQt5.QtWidgets import QListWidgetItem
+            
+            # Get available feathers from the wing
+            available_feathers = []
+            for feather in self.wing.feathers:
+                available_feathers.append(feather.feather_id)
+            
+            # Open the semantic mapping dialog in advanced mode
+            dialog = SemanticMappingDialog(
+                parent=self,
+                mapping=None,
+                scope='wing',
+                wing_id=self.wing.wing_id,
+                available_feathers=available_feathers,
+                mode='advanced'
+            )
+            
+            if dialog.exec_():
+                rule_data = dialog.get_rule_data()
+                if rule_data:
+                    # Add to list
+                    rule_name = rule_data.get('name', 'Unnamed Rule')
+                    semantic_value = rule_data.get('semantic_value', '')
+                    item = QListWidgetItem(f"{rule_name} → {semantic_value}")
+                    item.setData(Qt.UserRole, rule_data)
+                    item.setToolTip(self._format_rule_tooltip(rule_data))
+                    self.semantic_rules_list.addItem(item)
+                    
+                    # Update wing semantic rules
+                    self._update_wing_semantic_rules()
+                    
+        except ImportError as e:
+            QMessageBox.warning(
+                self,
+                "Import Error",
+                f"Could not import SemanticMappingDialog: {e}\n\nPlease ensure the semantic mapping module is available."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to add semantic rule: {e}"
+            )
+    
+    def _edit_semantic_rule(self):
+        """Edit the selected semantic rule"""
+        current_item = self.semantic_rules_list.currentItem()
+        if not current_item:
+            return
+        
+        try:
+            from .semantic_mapping_dialog import SemanticMappingDialog
+            
+            rule_data = current_item.data(Qt.UserRole)
+            
+            # Get available feathers from the wing
+            available_feathers = []
+            for feather in self.wing.feathers:
+                available_feathers.append(feather.feather_id)
+            
+            # Open the semantic mapping dialog with existing rule
+            dialog = SemanticMappingDialog(
+                parent=self,
+                mapping=rule_data,
+                scope='wing',
+                wing_id=self.wing.wing_id,
+                available_feathers=available_feathers,
+                mode='advanced'
+            )
+            
+            if dialog.exec_():
+                updated_rule = dialog.get_rule_data()
+                if updated_rule:
+                    # Update list item
+                    rule_name = updated_rule.get('name', 'Unnamed Rule')
+                    semantic_value = updated_rule.get('semantic_value', '')
+                    current_item.setText(f"{rule_name} → {semantic_value}")
+                    current_item.setData(Qt.UserRole, updated_rule)
+                    current_item.setToolTip(self._format_rule_tooltip(updated_rule))
+                    
+                    # Update wing semantic rules
+                    self._update_wing_semantic_rules()
+                    
+        except ImportError as e:
+            QMessageBox.warning(
+                self,
+                "Import Error",
+                f"Could not import SemanticMappingDialog: {e}"
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to edit semantic rule: {e}"
+            )
+    
+    def _remove_semantic_rule(self):
+        """Remove the selected semantic rule"""
+        current_item = self.semantic_rules_list.currentItem()
+        if current_item:
+            self.semantic_rules_list.takeItem(self.semantic_rules_list.row(current_item))
+            self._update_wing_semantic_rules()
+    
+    def _format_rule_tooltip(self, rule_data: dict) -> str:
+        """Format a tooltip for a semantic rule"""
+        lines = [
+            f"Name: {rule_data.get('name', 'Unnamed')}",
+            f"Semantic Value: {rule_data.get('semantic_value', '')}",
+            f"Logic: {rule_data.get('logic_operator', 'AND')}",
+            f"Conditions: {len(rule_data.get('conditions', []))}"
+        ]
+        
+        conditions = rule_data.get('conditions', [])
+        if conditions:
+            lines.append("")
+            lines.append("Conditions:")
+            for cond in conditions[:3]:  # Show first 3 conditions
+                feather = cond.get('feather_id', '')
+                field = cond.get('field_name', '')
+                op = cond.get('operator', 'equals')
+                value = cond.get('value', '')
+                lines.append(f"  • {feather}.{field} {op} '{value}'")
+            if len(conditions) > 3:
+                lines.append(f"  ... and {len(conditions) - 3} more")
+        
+        return "\n".join(lines)
+    
+    def _update_wing_semantic_rules(self):
+        """Update the wing's semantic_rules from the list widget"""
+        rules = []
+        for i in range(self.semantic_rules_list.count()):
+            item = self.semantic_rules_list.item(i)
+            rule_data = item.data(Qt.UserRole)
+            if rule_data:
+                rules.append(rule_data)
+        
+        self.wing_semantic_rules = rules
+        self.wing.semantic_rules = rules
+    
+    def _load_semantic_rules_to_ui(self):
+        """Load semantic rules from wing to UI"""
+        from PyQt5.QtWidgets import QListWidgetItem
+        
+        self.semantic_rules_list.clear()
+        self.wing_semantic_rules = self.wing.semantic_rules if hasattr(self.wing, 'semantic_rules') else []
+        
+        print(f"[Wing Creator] _load_semantic_rules_to_ui: Loading {len(self.wing_semantic_rules)} semantic rules")
+        
+        for rule_data in self.wing_semantic_rules:
+            rule_name = rule_data.get('name', 'Unnamed Rule')
+            semantic_value = rule_data.get('semantic_value', '')
+            logic_op = rule_data.get('logic_operator', 'AND')
+            print(f"[Wing Creator]   - Rule: {rule_name} ({logic_op}) → {semantic_value}")
+            item = QListWidgetItem(f"{rule_name} → {semantic_value}")
+            item.setData(Qt.UserRole, rule_data)
+            item.setToolTip(self._format_rule_tooltip(rule_data))
+            self.semantic_rules_list.addItem(item)
+    
+    def _load_scoring_to_ui(self):
+        """Load weighted scoring configuration from wing to UI"""
+        # Load weighted scoring enabled state
+        use_weighted_scoring = getattr(self.wing, 'use_weighted_scoring', True)
+        self.enable_weighted_scoring_cb.setChecked(use_weighted_scoring)
+        
+        # Load feather weights from feathers - use update_weights_table which handles this properly
+        if use_weighted_scoring:
+            self.weights_table.setEnabled(True)
+            self.interpretation_table.setEnabled(True)
+            self.add_level_btn.setEnabled(True)
+            self.remove_level_btn.setEnabled(True)
+            self.reset_levels_btn.setEnabled(True)
+            self.update_weights_table()
+        else:
+            self.weights_table.setEnabled(False)
+            self.interpretation_table.setEnabled(False)
+            self.add_level_btn.setEnabled(False)
+            self.remove_level_btn.setEnabled(False)
+            self.reset_levels_btn.setEnabled(False)
+        
+        # Load score interpretation thresholds
+        scoring = getattr(self.wing, 'scoring', {})
+        if scoring and 'score_interpretation' in scoring:
+            self.interpretation_levels = []
+            for level_key, level_data in scoring['score_interpretation'].items():
+                self.interpretation_levels.append({
+                    'level': level_key,
+                    'label': level_data.get('label', level_key),
+                    'min': level_data.get('min', 0.0)
+                })
+            # Sort by min score descending for proper display
+            self.interpretation_levels.sort(key=lambda x: x['min'], reverse=True)
+            self.update_interpretation_table()
+        else:
+            # Load default interpretation levels
+            self.interpretation_levels = [
+                {'level': 'confirmed', 'label': 'Confirmed Evidence', 'min': 0.70},
+                {'level': 'probable', 'label': 'Probable Match', 'min': 0.40},
+                {'level': 'weak', 'label': 'Weak / Partial Evidence', 'min': 0.20},
+                {'level': 'insufficient', 'label': 'Insufficient Evidence', 'min': 0.0}
+            ]
+            self.update_interpretation_table()
+
     def create_menu_bar(self):
         """Create menu bar"""
         menubar = self.menuBar()
@@ -984,12 +1316,27 @@ class WingsCreatorWindow(QMainWindow):
         
         self.total_weight_label.setText(f"{total:.2f}")
         
-        # Show warning if total > 1.0
+        # Update total weight label color based on value
+        if total > 1.0:
+            self.total_weight_label.setStyleSheet("color: #F59E0B; font-size: 11pt; font-weight: bold;")  # Amber
+        elif total >= 0.8:
+            self.total_weight_label.setStyleSheet("color: #10B981; font-size: 11pt; font-weight: bold;")  # Green
+        else:
+            self.total_weight_label.setStyleSheet("color: #00d9ff; font-size: 11pt; font-weight: bold;")  # Cyan
+        
+        # Show informative message based on total weight
         if total > 1.0:
             self.weight_warning_label.setText(
-                f"⚠ Warning: Total weight ({total:.2f}) exceeds 1.0. "
-                "This may result in scores > 1.0."
+                f"ℹ️ Total weight ({total:.2f}) exceeds 1.0 - Scores will be normalized. "
+                "This is valid for relative scoring where feather importance is compared."
             )
+            self.weight_warning_label.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 9pt;")  # Amber
+            self.weight_warning_label.show()
+        elif total < 0.5:
+            self.weight_warning_label.setText(
+                f"💡 Tip: Total weight ({total:.2f}) is low. Consider increasing weights for more meaningful scores."
+            )
+            self.weight_warning_label.setStyleSheet("color: #60A5FA; font-weight: bold; font-size: 9pt;")  # Blue
             self.weight_warning_label.show()
         else:
             self.weight_warning_label.hide()
@@ -1073,10 +1420,10 @@ class WingsCreatorWindow(QMainWindow):
         
         if reply == QMessageBox.Yes:
             self.interpretation_levels = [
-                {"level": "confirmed", "label": "Confirmed", "min": 0.70},
-                {"level": "probable", "label": "Probable", "min": 0.40},
-                {"level": "weak", "label": "Weak / Partial", "min": 0.20},
-                {"level": "not_proven", "label": "Not Proven", "min": 0.0}
+                {"level": "confirmed", "label": "Confirmed Evidence", "min": 0.70},
+                {"level": "probable", "label": "Probable Match", "min": 0.40},
+                {"level": "weak", "label": "Weak / Partial Evidence", "min": 0.20},
+                {"level": "insufficient", "label": "Insufficient Evidence", "min": 0.0}
             ]
             self.update_interpretation_table()
     
@@ -1084,7 +1431,13 @@ class WingsCreatorWindow(QMainWindow):
         """Add a new semantic mapping"""
         from .semantic_mapping_dialog import SemanticMappingDialog
         
-        dialog = SemanticMappingDialog(self)
+        # Pass wing_id to enable wing-specific scope selection
+        dialog = SemanticMappingDialog(
+            parent=self,
+            mapping=None,
+            scope='wing',  # Default to wing scope when opened from Wings Creator
+            wing_id=self.wing.wing_id
+        )
         if dialog.exec_() == QDialog.Accepted:
             mapping = dialog.get_mapping()
             self.wing_semantic_mappings.append(mapping)
@@ -1103,7 +1456,13 @@ class WingsCreatorWindow(QMainWindow):
         from .semantic_mapping_dialog import SemanticMappingDialog
         
         mapping = self.wing_semantic_mappings[current_row]
-        dialog = SemanticMappingDialog(self, mapping)
+        # Pass wing_id to enable wing-specific scope selection
+        dialog = SemanticMappingDialog(
+            parent=self,
+            mapping=mapping,
+            scope=mapping.get('scope', 'wing'),
+            wing_id=self.wing.wing_id
+        )
         if dialog.exec_() == QDialog.Accepted:
             updated_mapping = dialog.get_mapping()
             self.wing_semantic_mappings[current_row] = updated_mapping
@@ -1384,8 +1743,9 @@ class WingsCreatorWindow(QMainWindow):
         
         if file_path:
             try:
-                # Update wing with semantic mappings before saving
+                # Update wing with semantic mappings and rules before saving
                 self.wing.semantic_mappings = self.wing_semantic_mappings
+                self.wing.semantic_rules = self.wing_semantic_rules if hasattr(self, 'wing_semantic_rules') else []
                 
                 self.wing.save_to_file(file_path)
                 
@@ -1509,7 +1869,24 @@ class WingsCreatorWindow(QMainWindow):
             anchor_priority=wing_config.anchor_priority
         )
         
-        # Create Wing object
+        # Get semantic rules from WingConfig
+        semantic_rules = getattr(wing_config, 'semantic_rules', [])
+        print(f"[Wing Creator] Semantic rules from config: {len(semantic_rules)}")
+        
+        # Get weighted scoring configuration from WingConfig
+        use_weighted_scoring = getattr(wing_config, 'use_weighted_scoring', True)
+        scoring = getattr(wing_config, 'scoring', {
+            'enabled': True,
+            'score_interpretation': {
+                'confirmed': {'min': 0.8, 'label': 'Confirmed Execution'},
+                'probable': {'min': 0.5, 'label': 'Probable Match'},
+                'weak': {'min': 0.2, 'label': 'Weak Evidence'},
+                'minimal': {'min': 0.0, 'label': 'Minimal Evidence'}
+            }
+        })
+        print(f"[Wing Creator] Use weighted scoring: {use_weighted_scoring}")
+        
+        # Create Wing object with all fields including semantic rules and scoring
         wing = Wing(
             wing_id=wing_config.wing_id,
             wing_name=wing_config.wing_name,
@@ -1519,10 +1896,15 @@ class WingsCreatorWindow(QMainWindow):
             description=wing_config.description,
             proves=wing_config.proves,
             feathers=feathers,
-            correlation_rules=correlation_rules
+            correlation_rules=correlation_rules,
+            semantic_rules=semantic_rules,
+            use_weighted_scoring=use_weighted_scoring,
+            scoring=scoring
         )
         
         print(f"[Wing Creator] Created Wing with {len(wing.feathers)} feathers")
+        print(f"[Wing Creator] Wing has {len(wing.semantic_rules)} semantic rules")
+        print(f"[Wing Creator] Wing use_weighted_scoring: {wing.use_weighted_scoring}")
         
         return wing
     
@@ -1597,6 +1979,12 @@ class WingsCreatorWindow(QMainWindow):
         # Load semantic mappings
         self.wing_semantic_mappings = self.wing.semantic_mappings if hasattr(self.wing, 'semantic_mappings') else []
         self.update_semantic_mappings_table()
+        
+        # Load advanced semantic rules
+        self._load_semantic_rules_to_ui()
+        
+        # Load weighted scoring configuration
+        self._load_scoring_to_ui()
     
     def new_wing(self):
         """Create new wing"""
@@ -1610,6 +1998,7 @@ class WingsCreatorWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self.wing = Wing()
             self.wing_semantic_mappings = []
+            self.wing_semantic_rules = []
             self.load_wing_to_ui()
             self.status_bar.showMessage("New wing created")
     

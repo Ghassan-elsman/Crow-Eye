@@ -8,6 +8,7 @@ This module provides the core identity correlation functionality:
 - Identity matching strategies
 - Temporal anchor clustering
 - Primary/secondary/supporting evidence classification
+- Semantic rule evaluation for identity-level semantic results
 """
 
 import re
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 
 from .data_structures import Identity, Anchor, EvidenceRow, CorrelationResults, CorrelationStatistics
 from .cancellation_support import EnhancedCancellationManager
+from .semantic_rule_evaluator import SemanticRuleEvaluator
 
 
 class IdentityCorrelationEngine:
@@ -1112,7 +1114,8 @@ class IdentityBasedCorrelationEngine:
     """
     
     def __init__(self, time_window_minutes: int = 180, debug_mode: bool = False, 
-                 semantic_mapper: Optional[Any] = None, scoring_engine: Optional[Any] = None):
+                 semantic_mapper: Optional[Any] = None, scoring_engine: Optional[Any] = None,
+                 semantic_rule_evaluator: Optional[SemanticRuleEvaluator] = None):
         """
         Initialize Identity-Based Correlation Engine.
         
@@ -1121,6 +1124,7 @@ class IdentityBasedCorrelationEngine:
             debug_mode: Enable debug logging
             semantic_mapper: Optional semantic mapping integration for enriching evidence
             scoring_engine: Optional weighted scoring engine for calculating match scores
+            semantic_rule_evaluator: Optional semantic rule evaluator for identity-level semantic results
         """
         self.time_window_minutes = time_window_minutes
         self.debug_mode = debug_mode
@@ -1132,6 +1136,14 @@ class IdentityBasedCorrelationEngine:
         # Integration components (optional)
         self.semantic_mapper = semantic_mapper
         self.scoring_engine = scoring_engine
+        
+        # Semantic rule evaluator for advanced semantic rules
+        self.semantic_rule_evaluator = semantic_rule_evaluator or SemanticRuleEvaluator(debug_mode=debug_mode)
+        
+        # Wing-specific semantic rules (set during execution)
+        self.wing_semantic_rules: List[Dict] = []
+        self.wing_id: Optional[str] = None
+        self.pipeline_id: Optional[str] = None
         
         # Cancellation support
         self.cancellation_manager = EnhancedCancellationManager(debug_mode=debug_mode)
@@ -2083,21 +2095,21 @@ class IdentityBasedCorrelationEngine:
     def _enrich_semantic_data(self):
         """
         Enrich all evidence with semantic mappings if semantic mapper is available.
+        Also applies semantic rules for identity-level semantic results.
         
         This method processes evidence that wasn't enriched during initial creation,
-        and updates anchor semantic summaries.
+        updates anchor semantic summaries, and evaluates semantic rules.
         """
         if not self.semantic_mapper:
             if self.debug_mode:
                 print("[DEBUG] No semantic mapper available, skipping semantic enrichment")
-            return
         
         enriched_count = 0
         
         for identity in self.identities.values():
             # Enrich evidence that doesn't have semantic data yet
             for evidence in identity.all_evidence:
-                if not evidence.semantic_data:
+                if not evidence.semantic_data and self.semantic_mapper:
                     try:
                         semantic_data = self.semantic_mapper.map_record(
                             evidence.original_data,
@@ -2142,6 +2154,153 @@ class IdentityBasedCorrelationEngine:
         
         if enriched_count > 0:
             print(f"[Identity Engine] Enriched {enriched_count} evidence records with semantic data")
+        
+        # Apply semantic rules for identity-level results
+        self._apply_semantic_rules()
+    
+    def _apply_semantic_rules(self):
+        """
+        Apply semantic rules to all identities for identity-level semantic results.
+        
+        This evaluates advanced semantic rules (with AND/OR logic, wildcards, etc.)
+        against each identity and stores the results in the identity data.
+        """
+        if not self.semantic_rule_evaluator:
+            if self.debug_mode:
+                print("[DEBUG] No semantic rule evaluator available, skipping rule evaluation")
+            return
+        
+        # Reset evaluator statistics
+        self.semantic_rule_evaluator.reset_statistics()
+        
+        identities_with_results = 0
+        total_matches = 0
+        
+        for identity_key, identity in self.identities.items():
+            try:
+                # Build identity data dict for evaluation
+                identity_data = self._build_identity_data_for_evaluation(identity)
+                
+                # Evaluate semantic rules
+                results = self.semantic_rule_evaluator.evaluate_identity(
+                    identity_data,
+                    wing_id=self.wing_id,
+                    pipeline_id=self.pipeline_id,
+                    wing_rules=self.wing_semantic_rules
+                )
+                
+                if results:
+                    identities_with_results += 1
+                    total_matches += len(results)
+                    
+                    # Store results in identity
+                    if not hasattr(identity, 'semantic_rule_results'):
+                        identity.semantic_rule_results = []
+                    identity.semantic_rule_results = [r.to_dict() for r in results]
+                    
+                    # Also update anchor semantic_data with rule results
+                    for anchor in identity.anchors:
+                        if not hasattr(anchor, 'semantic_data') or anchor.semantic_data is None:
+                            anchor.semantic_data = {}
+                        
+                        # Add rule results to anchor semantic_data
+                        anchor.semantic_data['identity_semantic_results'] = [r.to_dict() for r in results]
+                        
+                        # Set primary semantic value from first result
+                        if results:
+                            anchor.semantic_data['semantic_value'] = results[0].semantic_value
+                            anchor.semantic_data['rule_name'] = results[0].rule_name
+                    
+                    if self.debug_mode:
+                        print(f"[DEBUG] Identity '{identity_key}' matched {len(results)} semantic rules")
+                        
+            except Exception as e:
+                if self.debug_mode:
+                    print(f"[DEBUG] Failed to evaluate semantic rules for identity '{identity_key}': {e}")
+        
+        # Log summary
+        stats = self.semantic_rule_evaluator.get_statistics()
+        if stats.rules_matched > 0:
+            print(f"[Identity Engine] Applied semantic rules: {identities_with_results} identities matched {total_matches} rules")
+            if self.debug_mode:
+                print(f"[DEBUG] Semantic rule stats: {stats.to_dict()}")
+    
+    def _build_identity_data_for_evaluation(self, identity: Identity) -> Dict[str, Any]:
+        """
+        Build identity data dictionary for semantic rule evaluation.
+        
+        Args:
+            identity: Identity object
+            
+        Returns:
+            Dictionary with identity data suitable for rule evaluation
+        """
+        identity_data = {
+            'identity_key': identity.identity_key,
+            'identity_type': identity.identity_type,
+            'anchors': [],
+            'evidence': [],
+            'feather_records': {}
+        }
+        
+        # Add anchor data
+        for anchor in identity.anchors:
+            anchor_dict = {
+                'anchor_id': anchor.anchor_id,
+                'start_time': str(anchor.start_time) if anchor.start_time else None,
+                'end_time': str(anchor.end_time) if anchor.end_time else None,
+                'feather_id': anchor.primary_feather_id if hasattr(anchor, 'primary_feather_id') else None,
+                'evidence_rows': []
+            }
+            
+            # Add evidence rows
+            for evidence in anchor.rows:
+                evidence_dict = {
+                    'feather_id': evidence.feather_id,
+                    'artifact': evidence.artifact,
+                    'data': evidence.original_data or {}
+                }
+                anchor_dict['evidence_rows'].append(evidence_dict)
+                
+                # Also add to feather_records for direct access
+                if evidence.feather_id and evidence.feather_id not in identity_data['feather_records']:
+                    identity_data['feather_records'][evidence.feather_id] = evidence.original_data or {}
+            
+            identity_data['anchors'].append(anchor_dict)
+        
+        # Add all evidence
+        for evidence in identity.all_evidence:
+            evidence_dict = {
+                'feather_id': evidence.feather_id,
+                'artifact': evidence.artifact,
+                'data': evidence.original_data or {}
+            }
+            identity_data['evidence'].append(evidence_dict)
+            
+            # Also add to feather_records
+            if evidence.feather_id and evidence.feather_id not in identity_data['feather_records']:
+                identity_data['feather_records'][evidence.feather_id] = evidence.original_data or {}
+        
+        return identity_data
+    
+    def set_execution_context(self, wing_id: Optional[str] = None,
+                              pipeline_id: Optional[str] = None,
+                              wing_semantic_rules: Optional[List[Dict]] = None):
+        """
+        Set execution context for semantic rule evaluation.
+        
+        Args:
+            wing_id: Wing ID for wing-specific rules
+            pipeline_id: Pipeline ID for pipeline-specific rules
+            wing_semantic_rules: Wing-specific semantic rules from WingConfig
+        """
+        self.wing_id = wing_id
+        self.pipeline_id = pipeline_id
+        self.wing_semantic_rules = wing_semantic_rules or []
+        
+        # Clear rule cache when context changes
+        if self.semantic_rule_evaluator:
+            self.semantic_rule_evaluator.clear_cache()
     
     def _calculate_final_statistics(self):
         """
@@ -2381,6 +2540,16 @@ class IdentityBasedEngineAdapter:
             
             wing = wing_configs[0]
             print(f"[Identity Engine] Starting execution for wing: {wing.wing_name}")
+            
+            # Set execution context for semantic rule evaluation
+            wing_semantic_rules = getattr(wing, 'semantic_rules', [])
+            self.engine.set_execution_context(
+                wing_id=wing.wing_id,
+                pipeline_id=getattr(wing, 'pipeline_id', None),
+                wing_semantic_rules=wing_semantic_rules
+            )
+            if self.debug_mode:
+                print(f"[Identity Engine] Semantic context: wing={wing.wing_id}, rules={len(wing_semantic_rules)}")
             
             # Load records from wing
             print(f"[Identity Engine] Loading records from wing...")

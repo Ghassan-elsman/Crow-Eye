@@ -28,6 +28,12 @@ except ImportError:
     SemanticMappingManager = None
     SemanticMapping = None
 
+# Import advanced semantic mapping dialog
+try:
+    from correlation_engine.wings.ui.semantic_mapping_dialog import SemanticMappingDialog as AdvancedSemanticMappingDialog
+except ImportError:
+    AdvancedSemanticMappingDialog = None
+
 # Import pipeline management tab
 try:
     from correlation_engine.gui.pipeline_management_tab import PipelineManagementTab
@@ -1035,29 +1041,62 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.semantic_table.setItem(row, 4, QtWidgets.QTableWidgetItem(mapping.semantic_value))
     
     def add_semantic_mapping(self):
-        """Add a new semantic mapping."""
+        """Add a new semantic mapping using the advanced dialog."""
         if not self.semantic_manager:
             return
         
-        dialog = SemanticMappingDialog(self)
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            mapping_data = dialog.get_mapping_data()
-            
-            # Create new mapping
-            mapping = SemanticMapping(
-                source=mapping_data['source'],
-                field=mapping_data['field'],
-                technical_value=mapping_data['technical_value'],
-                semantic_value=mapping_data['semantic_value'],
-                description=mapping_data.get('description', ''),
-                scope='global'
+        # Use the advanced SemanticMappingDialog if available
+        if AdvancedSemanticMappingDialog:
+            dialog = AdvancedSemanticMappingDialog(
+                parent=self,
+                mapping=None,
+                scope='global',
+                wing_id=None,
+                mode='simple'  # Default to simple, user can switch to advanced
             )
             
-            self.semantic_manager.add_mapping(mapping)
-            self.load_semantic_mappings_table()
+            if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                # Check if it's an advanced rule or simple mapping
+                rule = dialog.get_rule()
+                
+                if rule and len(rule.conditions) > 0:
+                    # Advanced rule with conditions
+                    self.semantic_manager.add_rule(rule)
+                else:
+                    # Simple mapping
+                    mapping_data = dialog.get_mapping()
+                    if mapping_data:
+                        mapping = SemanticMapping(
+                            source=mapping_data.get('source', ''),
+                            field=mapping_data.get('field', ''),
+                            technical_value=mapping_data.get('technical_value', ''),
+                            semantic_value=mapping_data.get('semantic_value', ''),
+                            description=mapping_data.get('description', ''),
+                            scope='global'
+                        )
+                        self.semantic_manager.add_mapping(mapping)
+                
+                self.load_semantic_mappings_table()
+        else:
+            # Fallback to simple dialog
+            dialog = SimpleSemanticMappingDialog(self)
+            if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                mapping_data = dialog.get_mapping_data()
+                
+                mapping = SemanticMapping(
+                    source=mapping_data['source'],
+                    field=mapping_data['field'],
+                    technical_value=mapping_data['technical_value'],
+                    semantic_value=mapping_data['semantic_value'],
+                    description=mapping_data.get('description', ''),
+                    scope='global'
+                )
+                
+                self.semantic_manager.add_mapping(mapping)
+                self.load_semantic_mappings_table()
     
     def edit_semantic_mapping(self):
-        """Edit the selected semantic mapping."""
+        """Edit the selected semantic mapping using the advanced dialog."""
         if not self.semantic_manager:
             return
         
@@ -1073,27 +1112,75 @@ class SettingsDialog(QtWidgets.QDialog):
         if not mapping:
             return
         
-        dialog = SemanticMappingDialog(self, mapping)
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            mapping_data = dialog.get_mapping_data()
-            
-            # Remove old mapping
-            self.semantic_manager.remove_mapping(
-                mapping.source, mapping.field, mapping.technical_value, scope='global'
+        # Convert mapping to dict format for the dialog
+        mapping_dict = {
+            'source': mapping.source,
+            'field': mapping.field,
+            'technical_value': mapping.technical_value,
+            'semantic_value': mapping.semantic_value,
+            'description': mapping.description or ''
+        }
+        
+        # Use the advanced SemanticMappingDialog if available
+        if AdvancedSemanticMappingDialog:
+            dialog = AdvancedSemanticMappingDialog(
+                parent=self,
+                mapping=mapping_dict,
+                scope='global',
+                wing_id=None,
+                mode='simple'
             )
             
-            # Add updated mapping
-            new_mapping = SemanticMapping(
-                source=mapping_data['source'],
-                field=mapping_data['field'],
-                technical_value=mapping_data['technical_value'],
-                semantic_value=mapping_data['semantic_value'],
-                description=mapping_data.get('description', ''),
-                scope='global'
-            )
-            
-            self.semantic_manager.add_mapping(new_mapping)
-            self.load_semantic_mappings_table()
+            if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                # Remove old mapping
+                self.semantic_manager.remove_mapping(
+                    mapping.source, mapping.field, mapping.technical_value, scope='global'
+                )
+                
+                # Check if it's an advanced rule or simple mapping
+                rule = dialog.get_rule()
+                
+                if rule and len(rule.conditions) > 0:
+                    # Advanced rule with conditions
+                    self.semantic_manager.add_rule(rule)
+                else:
+                    # Simple mapping
+                    mapping_data = dialog.get_mapping()
+                    if mapping_data:
+                        new_mapping = SemanticMapping(
+                            source=mapping_data.get('source', ''),
+                            field=mapping_data.get('field', ''),
+                            technical_value=mapping_data.get('technical_value', ''),
+                            semantic_value=mapping_data.get('semantic_value', ''),
+                            description=mapping_data.get('description', ''),
+                            scope='global'
+                        )
+                        self.semantic_manager.add_mapping(new_mapping)
+                
+                self.load_semantic_mappings_table()
+        else:
+            # Fallback to simple dialog
+            dialog = SimpleSemanticMappingDialog(self, mapping)
+            if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                mapping_data = dialog.get_mapping_data()
+                
+                # Remove old mapping
+                self.semantic_manager.remove_mapping(
+                    mapping.source, mapping.field, mapping.technical_value, scope='global'
+                )
+                
+                # Add updated mapping
+                new_mapping = SemanticMapping(
+                    source=mapping_data['source'],
+                    field=mapping_data['field'],
+                    technical_value=mapping_data['technical_value'],
+                    semantic_value=mapping_data['semantic_value'],
+                    description=mapping_data.get('description', ''),
+                    scope='global'
+                )
+                
+                self.semantic_manager.add_mapping(new_mapping)
+                self.load_semantic_mappings_table()
     
     def delete_semantic_mapping(self):
         """Delete the selected semantic mapping."""
@@ -1373,8 +1460,8 @@ class SettingsDialog(QtWidgets.QDialog):
         return str(dt)
 
 
-class SemanticMappingDialog(QtWidgets.QDialog):
-    """Dialog for adding/editing semantic mappings."""
+class SimpleSemanticMappingDialog(QtWidgets.QDialog):
+    """Simple dialog for adding/editing semantic mappings (fallback when advanced dialog not available)."""
     
     def __init__(self, parent=None, mapping=None):
         """

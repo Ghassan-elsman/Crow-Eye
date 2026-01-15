@@ -41,6 +41,7 @@ from .performance_analysis import AdvancedPerformanceAnalyzer, create_performanc
 from .database_error_handler import DatabaseErrorHandler, RetryConfig, FallbackStrategy, DatabaseErrorType
 from .timestamp_parser import ResilientTimestampParser, TimestampFormat, TimestampValidationRule
 from .error_handling_coordinator import ErrorHandlingCoordinator, ErrorCategory, ErrorSeverity
+from .semantic_rule_evaluator import SemanticRuleEvaluator, SemanticMatchResult
 from ..wings.core.wing_model import Wing
 from ..config.semantic_mapping import SemanticMappingManager
 
@@ -1335,6 +1336,32 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         is_valid, error_msg = self.two_phase_config.validate()
         if not is_valid:
             raise ValueError(f"Invalid two-phase configuration: {error_msg}")
+        
+        # Semantic rule evaluator for advanced semantic rules (AND/OR logic, wildcards, etc.)
+        self.semantic_rule_evaluator = SemanticRuleEvaluator(debug_mode=debug_mode)
+        
+        # Execution context for semantic rule evaluation
+        self.wing_id: Optional[str] = None
+        self.pipeline_id: Optional[str] = None
+        self.wing_semantic_rules: List[Dict] = []
+    
+    def set_execution_context(self, wing_id: Optional[str] = None,
+                              pipeline_id: Optional[str] = None,
+                              wing_semantic_rules: Optional[List[Dict]] = None):
+        """
+        Set execution context for semantic rule evaluation.
+        
+        Args:
+            wing_id: Wing ID for wing-specific rules
+            pipeline_id: Pipeline ID for pipeline-specific rules
+            wing_semantic_rules: Wing-specific semantic rules from WingConfig
+        """
+        self.wing_id = wing_id
+        self.pipeline_id = pipeline_id
+        self.wing_semantic_rules = wing_semantic_rules or []
+        
+        # Clear rule cache when context changes
+        self.semantic_rule_evaluator.clear_cache()
     
     def register_progress_listener(self, listener):
         """
@@ -1682,6 +1709,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 if self.debug_mode:
                     print(f"[Time-Window Engine]   📊 Feather priorities: {adaptation_result.feather_priority_mapping}")
             
+            # Set execution context for semantic rule evaluation
+            wing_semantic_rules = getattr(wing, 'semantic_rules', [])
+            self.set_execution_context(
+                wing_id=wing.wing_id,
+                pipeline_id=getattr(wing, 'pipeline_id', None),
+                wing_semantic_rules=wing_semantic_rules
+            )
+            if self.debug_mode:
+                print(f"[Time-Window Engine]   🏷️ Semantic context: wing={wing.wing_id}, rules={len(wing_semantic_rules)}")
+            
             # Step 2: Initialize memory management and error coordination
             print(f"[Time-Window Engine] 🧠 Step 2: Initializing memory management...")
             sys.stdout.flush()
@@ -1900,6 +1937,18 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             else:
                 result.matches = matches
                 print(f"[Time-Window Engine]   ⏭️ Semantic mappings disabled")
+            
+            # Apply advanced semantic rules (AND/OR logic, wildcards, etc.)
+            print(f"[Time-Window Engine] 🏷️ Applying semantic rules...")
+            if self.semantic_rule_evaluator:
+                result.matches = self._apply_semantic_rules_to_matches(result.matches, wing)
+                rule_stats = self.semantic_rule_evaluator.get_statistics()
+                if rule_stats.rules_matched > 0:
+                    print(f"[Time-Window Engine]   ✓ {rule_stats.identities_with_matches} matches matched {rule_stats.rules_matched} rules")
+                else:
+                    print(f"[Time-Window Engine]   ⏭️ No semantic rules matched")
+            else:
+                print(f"[Time-Window Engine]   ⏭️ Semantic rule evaluator not available")
             
             # DEBUG: Verify matches are in result
             print(f"[Time-Window Engine] 🔍 DEBUG: result.matches count = {len(result.matches)}")
@@ -4396,6 +4445,89 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 }
                 
                 enhanced_matches.append(match)
+        
+        return enhanced_matches
+    
+    def _apply_semantic_rules_to_matches(self, 
+                                        matches: List[CorrelationMatch], 
+                                        wing: Any) -> List[CorrelationMatch]:
+        """
+        Apply advanced semantic rules to correlation matches.
+        
+        This evaluates semantic rules with AND/OR logic, wildcards, and multi-condition
+        support against each match and stores the results in the match's semantic_data.
+        
+        Args:
+            matches: List of correlation matches
+            wing: Wing configuration for context
+            
+        Returns:
+            Enhanced matches with semantic rule results
+        """
+        if not self.semantic_rule_evaluator:
+            return matches
+        
+        # Reset evaluator statistics
+        self.semantic_rule_evaluator.reset_statistics()
+        
+        enhanced_matches = []
+        matches_with_results = 0
+        total_rule_matches = 0
+        
+        for match in matches:
+            try:
+                # Evaluate semantic rules against this match
+                results = self.semantic_rule_evaluator.evaluate_match(
+                    match,
+                    wing_id=self.wing_id,
+                    pipeline_id=self.pipeline_id,
+                    wing_rules=self.wing_semantic_rules
+                )
+                
+                if results:
+                    matches_with_results += 1
+                    total_rule_matches += len(results)
+                    
+                    # Update match semantic_data with rule results
+                    if match.semantic_data is None:
+                        match.semantic_data = {}
+                    
+                    # Add rule results
+                    match.semantic_data['semantic_rule_results'] = [r.to_dict() for r in results]
+                    
+                    # Set primary semantic value from first result
+                    match.semantic_data['semantic_value'] = results[0].semantic_value
+                    match.semantic_data['rule_name'] = results[0].rule_name
+                    match.semantic_data['semantic_rules_applied'] = True
+                    
+                    if self.debug_mode:
+                        logger.debug(f"Match {match.match_id} matched {len(results)} semantic rules")
+                else:
+                    # No rules matched
+                    if match.semantic_data is None:
+                        match.semantic_data = {}
+                    match.semantic_data['semantic_rules_applied'] = True
+                    match.semantic_data['semantic_rule_results'] = []
+                
+                enhanced_matches.append(match)
+                
+            except Exception as e:
+                logger.warning(f"Failed to apply semantic rules to match {match.match_id}: {e}")
+                
+                # Add error info to semantic_data
+                if match.semantic_data is None:
+                    match.semantic_data = {}
+                match.semantic_data['semantic_rule_error'] = str(e)
+                match.semantic_data['semantic_rules_applied'] = False
+                
+                enhanced_matches.append(match)
+        
+        # Log summary
+        if matches_with_results > 0:
+            stats = self.semantic_rule_evaluator.get_statistics()
+            logger.info(f"Applied semantic rules: {matches_with_results} matches matched {total_rule_matches} rules")
+            if self.debug_mode:
+                logger.debug(f"Semantic rule stats: {stats.to_dict()}")
         
         return enhanced_matches
     
