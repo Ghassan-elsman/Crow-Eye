@@ -265,14 +265,21 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                 
                 for mapping in matching_mappings:
                     field_name = mapping.field
+                    # Get the actual technical value from the record
+                    actual_technical_value = str(record.get(field_name, ''))
+                    
                     semantic_info[field_name] = {
                         'semantic_value': mapping.semantic_value,
+                        'technical_value': actual_technical_value,  # Actual value from record
                         'description': mapping.description,
                         'category': mapping.category,
                         'severity': mapping.severity,
                         'confidence': mapping.confidence,
-                        'mapping_source': mapping.mapping_source
+                        'mapping_source': mapping.mapping_source,
+                        'rule_name': getattr(mapping, 'source', field_name)  # Rule name for display
                     }
+                    
+                    logger.debug(f"Applied semantic mapping: {field_name}='{actual_technical_value}' -> '{mapping.semantic_value}' (confidence: {mapping.confidence})")
                     
                     # Update statistics
                     self.stats.mappings_applied += 1
@@ -287,15 +294,21 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                         self.stats.case_specific_mappings_used += 1
                 
                 enhanced_record['_semantic_mappings'] = semantic_info
+                logger.debug(f"Record enhanced with {len(semantic_info)} semantic mappings")
             else:
                 # No mappings found - count unmapped fields and create basic fallback
+                unmapped_field_names = []
                 for field_name in record.keys():
                     if not field_name.startswith('_'):  # Skip internal fields
                         self.stats.unmapped_fields += 1
+                        unmapped_field_names.append(field_name)
                 
                 # Create minimal semantic info for unmapped fields
                 enhanced_record['_semantic_mappings'] = {}
                 enhanced_record['_semantic_mapping_status'] = 'no_mappings_found'
+                
+                # Debug logging for troubleshooting
+                logger.debug(f"No semantic mappings found for record. Fields checked: {unmapped_field_names[:5]}{'...' if len(unmapped_field_names) > 5 else ''}")
         
         except Exception as e:
             # Semantic manager failure - attempt recovery
@@ -317,21 +330,28 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                         semantic_info = {}
                         for mapping in matching_mappings:
                             field_name = mapping.field
+                            # Get the actual technical value from the record
+                            actual_technical_value = str(record.get(field_name, ''))
+                            
                             semantic_info[field_name] = {
                                 'semantic_value': mapping.semantic_value,
+                                'technical_value': actual_technical_value,  # Actual value from record
                                 'description': mapping.description,
                                 'category': mapping.category,
                                 'severity': mapping.severity,
                                 'confidence': mapping.confidence,
-                                'mapping_source': mapping.mapping_source
+                                'mapping_source': mapping.mapping_source,
+                                'rule_name': getattr(mapping, 'source', field_name)  # Rule name for display
                             }
                             self.stats.mappings_applied += 1
                         
                         enhanced_record['_semantic_mappings'] = semantic_info
                         enhanced_record['_semantic_mapping_status'] = 'recovered'
+                        logger.debug(f"Record enhanced with {len(semantic_info)} semantic mappings after recovery")
                     else:
                         enhanced_record['_semantic_mappings'] = {}
                         enhanced_record['_semantic_mapping_status'] = 'recovered_no_mappings'
+                        logger.debug("No semantic mappings found after recovery")
                         
                 except Exception as retry_error:
                     # Recovery failed - use fallback
@@ -368,16 +388,20 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             if not field_name.startswith('_'):  # Skip internal fields
                 fallback_semantic_info[field_name] = {
                     'semantic_value': str(field_value),  # Use raw value as semantic value
+                    'technical_value': str(field_value),  # Include technical value for consistency
                     'description': f'Raw value (semantic mapping failed: {error_message})',
                     'category': 'unknown',
                     'severity': 'info',
                     'confidence': 0.0,  # Zero confidence for fallback
-                    'mapping_source': 'fallback'
+                    'mapping_source': 'fallback',
+                    'rule_name': 'fallback'  # Indicate this is a fallback mapping
                 }
         
         fallback_record['_semantic_mappings'] = fallback_semantic_info
         fallback_record['_semantic_mapping_fallback'] = True
         fallback_record['_semantic_mapping_error'] = error_message
+        
+        logger.debug(f"Created fallback result with {len(fallback_semantic_info)} fields due to: {error_message}")
         
         return fallback_record
     

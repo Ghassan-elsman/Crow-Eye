@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QColor
 from ...gui.ui_styling import CorrelationEngineStyles
 
 
@@ -563,11 +563,10 @@ class WingsCreatorWindow(QMainWindow):
         form_layout = QVBoxLayout(form_widget)
         form_layout.setSpacing(10)
         
-        # Semantic mappings section (basic)
+        # Single unified semantic mappings section (shows both Simple and Advanced rules)
         form_layout.addWidget(self.create_semantic_mappings_section())
         
-        # Advanced semantic rules section
-        form_layout.addWidget(self.create_advanced_semantic_rules_section())
+        # Note: Removed separate Advanced Semantic Rules section - all rules now in one table
         
         form_layout.addStretch()
         
@@ -575,33 +574,38 @@ class WingsCreatorWindow(QMainWindow):
         self.tab_widget.addTab(scroll, "Semantic Mappings")
     
     def create_semantic_mappings_section(self):
-        """Create semantic mappings configuration section"""
-        group = QGroupBox("Wing-Specific Semantic Mappings")
+        """Create semantic mappings configuration section - unified table for Simple and Advanced rules"""
+        group = QGroupBox("Semantic Mappings (Simple & Advanced Rules)")
         layout = QVBoxLayout()
         
         # Help text
         help_text = QLabel(
-            "Define semantic mappings specific to this Wing. These mappings will override global mappings "
-            "when displaying correlation results for this Wing. Use semantic mappings to translate technical "
-            "values (like Event IDs) into human-readable meanings."
+            "All semantic mappings for this Wing. Simple mappings translate single values (e.g., Event ID → meaning). "
+            "Advanced rules use AND/OR logic with multiple conditions. Global mappings are loaded automatically."
         )
         help_text.setWordWrap(True)
         help_text.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
         layout.addWidget(help_text)
         
-        # Semantic mappings table
-        table_label = QLabel("Semantic Mappings:")
-        table_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        # Semantic mappings table - unified table showing both Simple and Advanced rules
+        table_label = QLabel("All Semantic Rules (Simple + Advanced):")
+        table_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #00d9ff;")
         layout.addWidget(table_label)
         
         self.semantic_mappings_table = QTableWidget()
-        self.semantic_mappings_table.setColumnCount(5)
+        self.semantic_mappings_table.setColumnCount(8)
         self.semantic_mappings_table.setHorizontalHeaderLabels([
-            "Source", "Field", "Technical Value", "Semantic Value", "Description"
+            "Type", "Name", "Logic", "Conditions/Value", "Semantic Value", "Severity", "Feathers", "Description"
         ])
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.semantic_mappings_table.setMinimumHeight(300)
+        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Type
+        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Name
+        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Logic
+        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)  # Conditions
+        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Semantic
+        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Severity
+        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Feathers
+        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)  # Description
+        self.semantic_mappings_table.setMinimumHeight(450)  # Increased height for all 36 rules
         self.semantic_mappings_table.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.semantic_mappings_table)
         
@@ -632,17 +636,27 @@ class WingsCreatorWindow(QMainWindow):
         
         # Info label
         info_label = QLabel(
-            "💡 Tip: Wing-specific mappings take priority over global mappings. "
-            "Global semantic mappings are automatically loaded. "
-            "You can add Wing-specific mappings or edit existing ones."
+            "💡 Simple mappings (green) translate single values. Advanced rules (cyan) use AND/OR logic with multiple conditions. "
+            "All 36 default rules are loaded automatically. Wing-specific rules take priority over global rules."
         )
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: #00d9ff; font-size: 8pt; margin-top: 10px;")
         layout.addWidget(info_label)
         
-        # Initialize wing_semantic_mappings list and load global mappings by default
+        # Initialize wing_semantic_mappings list and wing_semantic_rules, then load global mappings by default
         self.wing_semantic_mappings = []
+        self.wing_semantic_rules = []
         self.load_global_semantic_mappings_silently()
+        
+        # Show info message if no mappings or rules were loaded
+        if not self.wing_semantic_mappings and not self.wing_semantic_rules:
+            info_msg = QLabel(
+                "ℹ️ No semantic mappings loaded. Click 'Load Global Mappings' to import global mappings, "
+                "or use 'Add Mapping' to create wing-specific mappings."
+            )
+            info_msg.setWordWrap(True)
+            info_msg.setStyleSheet("color: #60A5FA; font-size: 8pt; padding: 5px; background-color: #1E293B; border-radius: 4px;")
+            layout.addWidget(info_msg)
         
         group.setLayout(layout)
         return group
@@ -707,8 +721,8 @@ class WingsCreatorWindow(QMainWindow):
         info_label.setStyleSheet("color: #00d9ff; font-size: 8pt; margin-top: 10px;")
         layout.addWidget(info_label)
         
-        # Initialize wing_semantic_rules list
-        self.wing_semantic_rules = []
+        # Note: wing_semantic_rules is already initialized in create_semantic_mappings_section()
+        # Do NOT reinitialize here as it would clear the loaded rules
         
         group.setLayout(layout)
         return group
@@ -1428,7 +1442,7 @@ class WingsCreatorWindow(QMainWindow):
             self.update_interpretation_table()
     
     def add_semantic_mapping(self):
-        """Add a new semantic mapping"""
+        """Add a new semantic mapping (Simple or Advanced)"""
         from .semantic_mapping_dialog import SemanticMappingDialog
         
         # Pass wing_id to enable wing-specific scope selection
@@ -1440,22 +1454,74 @@ class WingsCreatorWindow(QMainWindow):
         )
         if dialog.exec_() == QDialog.Accepted:
             mapping = dialog.get_mapping()
-            self.wing_semantic_mappings.append(mapping)
+            mode = mapping.get('mode', 'simple')
+            
+            if mode == 'advanced':
+                # Add to advanced rules list
+                print(f"[Wing Creator] Adding new advanced rule: {mapping.get('name', 'Unnamed')}")
+                self.wing_semantic_rules.append(mapping)
+            else:
+                # Add to simple mappings list
+                print(f"[Wing Creator] Adding new simple mapping: {mapping.get('source', '')}.{mapping.get('field', '')}")
+                self.wing_semantic_mappings.append(mapping)
+            
+            # Update the unified table
             self.update_semantic_mappings_table()
+            print(f"[Wing Creator] Total: {len(self.wing_semantic_mappings)} mappings + {len(self.wing_semantic_rules)} rules")
     
     def edit_semantic_mapping(self):
-        """Edit selected semantic mapping"""
+        """Edit selected semantic mapping (Simple or Advanced)"""
         current_row = self.semantic_mappings_table.currentRow()
-        if current_row < 0 or current_row >= len(self.wing_semantic_mappings):
+        if current_row < 0:
             QMessageBox.warning(
                 self, "No Selection",
                 "Please select a semantic mapping to edit."
             )
             return
         
+        # Determine if this is a simple mapping or advanced rule based on row position
+        # Simple mappings are first, then advanced rules
+        num_mappings = len(self.wing_semantic_mappings)
+        num_rules = len(self.wing_semantic_rules)
+        total_rows = num_mappings + num_rules
+        
+        if current_row >= total_rows:
+            QMessageBox.warning(
+                self, "Invalid Selection",
+                "Please select a valid row to edit."
+            )
+            return
+        
         from .semantic_mapping_dialog import SemanticMappingDialog
         
-        mapping = self.wing_semantic_mappings[current_row]
+        if current_row < num_mappings:
+            # Editing a simple mapping
+            mapping = self.wing_semantic_mappings[current_row]
+            mapping['mode'] = 'simple'  # Ensure mode is set
+            print(f"[Wing Creator] Editing simple mapping at row {current_row}")
+        else:
+            # Editing an advanced rule
+            rule_index = current_row - num_mappings
+            mapping = self.wing_semantic_rules[rule_index]
+            # Convert SemanticRule object to dict if needed
+            if hasattr(mapping, 'name'):
+                mapping = {
+                    'rule_id': mapping.rule_id,
+                    'name': mapping.name,
+                    'semantic_value': mapping.semantic_value,
+                    'description': mapping.description if hasattr(mapping, 'description') else '',
+                    'conditions': [{'feather_id': c.feather_id, 'field_name': c.field_name, 'value': c.value, 'operator': c.operator} for c in mapping.conditions],
+                    'logic_operator': mapping.logic_operator,
+                    'scope': mapping.scope if hasattr(mapping, 'scope') else 'global',
+                    'category': mapping.category if hasattr(mapping, 'category') else '',
+                    'severity': mapping.severity if hasattr(mapping, 'severity') else 'info',
+                    'confidence': mapping.confidence if hasattr(mapping, 'confidence') else 1.0,
+                    'mode': 'advanced'
+                }
+            else:
+                mapping['mode'] = 'advanced'  # Ensure mode is set
+            print(f"[Wing Creator] Editing advanced rule at row {current_row} (rule index {rule_index})")
+        
         # Pass wing_id to enable wing-specific scope selection
         dialog = SemanticMappingDialog(
             parent=self,
@@ -1465,29 +1531,87 @@ class WingsCreatorWindow(QMainWindow):
         )
         if dialog.exec_() == QDialog.Accepted:
             updated_mapping = dialog.get_mapping()
-            self.wing_semantic_mappings[current_row] = updated_mapping
+            new_mode = updated_mapping.get('mode', 'simple')
+            
+            if current_row < num_mappings:
+                # Was a simple mapping
+                if new_mode == 'advanced':
+                    # Changed to advanced - remove from mappings, add to rules
+                    self.wing_semantic_mappings.pop(current_row)
+                    self.wing_semantic_rules.append(updated_mapping)
+                    print(f"[Wing Creator] Converted simple mapping to advanced rule")
+                else:
+                    # Still simple - update in place
+                    self.wing_semantic_mappings[current_row] = updated_mapping
+            else:
+                # Was an advanced rule
+                rule_index = current_row - num_mappings
+                if new_mode == 'simple':
+                    # Changed to simple - remove from rules, add to mappings
+                    self.wing_semantic_rules.pop(rule_index)
+                    self.wing_semantic_mappings.append(updated_mapping)
+                    print(f"[Wing Creator] Converted advanced rule to simple mapping")
+                else:
+                    # Still advanced - update in place
+                    self.wing_semantic_rules[rule_index] = updated_mapping
+            
             self.update_semantic_mappings_table()
+            print(f"[Wing Creator] Total: {len(self.wing_semantic_mappings)} mappings + {len(self.wing_semantic_rules)} rules")
     
     def delete_semantic_mapping(self):
-        """Delete selected semantic mapping"""
+        """Delete selected semantic mapping (Simple or Advanced)"""
         current_row = self.semantic_mappings_table.currentRow()
-        if current_row < 0 or current_row >= len(self.wing_semantic_mappings):
+        if current_row < 0:
             QMessageBox.warning(
                 self, "No Selection",
                 "Please select a semantic mapping to delete."
             )
             return
         
-        mapping = self.wing_semantic_mappings[current_row]
+        # Determine if this is a simple mapping or advanced rule based on row position
+        num_mappings = len(self.wing_semantic_mappings)
+        num_rules = len(self.wing_semantic_rules)
+        total_rows = num_mappings + num_rules
+        
+        if current_row >= total_rows:
+            QMessageBox.warning(
+                self, "Invalid Selection",
+                "Please select a valid row to delete."
+            )
+            return
+        
+        if current_row < num_mappings:
+            # Deleting a simple mapping
+            mapping = self.wing_semantic_mappings[current_row]
+            item_name = f"{mapping.get('source', '')}.{mapping.get('field', '')} = {mapping.get('technical_value', '')}"
+            item_type = "simple mapping"
+        else:
+            # Deleting an advanced rule
+            rule_index = current_row - num_mappings
+            rule = self.wing_semantic_rules[rule_index]
+            if hasattr(rule, 'name'):
+                item_name = rule.name
+            else:
+                item_name = rule.get('name', 'Unnamed Rule')
+            item_type = "advanced rule"
+        
         reply = QMessageBox.question(
             self, "Delete Mapping",
-            f"Delete semantic mapping for {mapping['source']}.{mapping['field']} = {mapping['technical_value']}?",
+            f"Delete {item_type}: {item_name}?",
             QMessageBox.Yes | QMessageBox.No
         )
         
         if reply == QMessageBox.Yes:
-            self.wing_semantic_mappings.pop(current_row)
+            if current_row < num_mappings:
+                self.wing_semantic_mappings.pop(current_row)
+                print(f"[Wing Creator] Deleted simple mapping: {item_name}")
+            else:
+                rule_index = current_row - num_mappings
+                self.wing_semantic_rules.pop(rule_index)
+                print(f"[Wing Creator] Deleted advanced rule: {item_name}")
+            
             self.update_semantic_mappings_table()
+            print(f"[Wing Creator] Total: {len(self.wing_semantic_mappings)} mappings + {len(self.wing_semantic_rules)} rules")
     
     def load_global_mappings(self):
         """Load global semantic mappings"""
@@ -1559,7 +1683,7 @@ class WingsCreatorWindow(QMainWindow):
             )
     
     def load_global_semantic_mappings(self):
-        """Load global semantic mappings with user feedback"""
+        """Load global semantic mappings and advanced rules with user feedback"""
         try:
             from ...config.semantic_mapping import SemanticMappingManager
             
@@ -1569,25 +1693,30 @@ class WingsCreatorWindow(QMainWindow):
             # Get all global mappings
             global_mappings = semantic_manager.get_all_mappings(scope="global")
             
-            if not global_mappings:
+            # Get all global rules (advanced semantic rules with AND/OR logic)
+            global_rules = semantic_manager.get_rules(scope="global")
+            
+            if not global_mappings and not global_rules:
                 QMessageBox.information(
                     self,
                     "No Global Mappings",
-                    "No global semantic mappings found.\n\n"
+                    "No global semantic mappings or advanced rules found.\n\n"
                     "You can create global mappings in the Semantic Mapping configuration."
                 )
                 return
             
             # Ask user if they want to replace or merge
-            existing_count = len(self.wing_semantic_mappings)
-            if existing_count > 0:
+            existing_mappings = len(self.wing_semantic_mappings)
+            existing_rules = len(self.wing_semantic_rules) if hasattr(self, 'wing_semantic_rules') else 0
+            
+            if existing_mappings > 0 or existing_rules > 0:
                 reply = QMessageBox.question(
                     self,
                     "Load Global Mappings",
-                    f"Found {len(global_mappings)} global mappings.\n"
-                    f"You currently have {existing_count} mappings.\n\n"
+                    f"Found {len(global_mappings)} global mappings and {len(global_rules)} advanced rules.\n"
+                    f"You currently have {existing_mappings} mappings and {existing_rules} rules.\n\n"
                     "Do you want to:\n"
-                    "• Yes - Replace all existing mappings\n"
+                    "• Yes - Replace all existing mappings and rules\n"
                     "• No - Merge (add new, keep existing)",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
                 )
@@ -1597,10 +1726,15 @@ class WingsCreatorWindow(QMainWindow):
                 elif reply == QMessageBox.Yes:
                     # Replace all
                     self.wing_semantic_mappings = []
+                    self.wing_semantic_rules = []
+            
+            # Initialize wing_semantic_rules if not exists
+            if not hasattr(self, 'wing_semantic_rules'):
+                self.wing_semantic_rules = []
             
             # Add global mappings
-            added_count = 0
-            skipped_count = 0
+            added_mappings = 0
+            skipped_mappings = 0
             
             for mapping in global_mappings:
                 mapping_dict = {
@@ -1618,22 +1752,40 @@ class WingsCreatorWindow(QMainWindow):
                         existing.get('field') == mapping_dict['field'] and
                         existing.get('technical_value') == mapping_dict['technical_value']):
                         exists = True
-                        skipped_count += 1
+                        skipped_mappings += 1
                         break
                 
                 if not exists:
                     self.wing_semantic_mappings.append(mapping_dict)
-                    added_count += 1
+                    added_mappings += 1
+            
+            # Add global rules
+            added_rules = 0
+            skipped_rules = 0
+            
+            for rule in global_rules:
+                # Check if rule already exists (for merge mode)
+                exists = False
+                for existing_rule in self.wing_semantic_rules:
+                    if existing_rule.rule_id == rule.rule_id:
+                        exists = True
+                        skipped_rules += 1
+                        break
+                
+                if not exists:
+                    self.wing_semantic_rules.append(rule)
+                    added_rules += 1
             
             self.update_semantic_mappings_table()
             
             # Show result
-            message = f"✓ Loaded {added_count} global semantic mappings."
-            if skipped_count > 0:
-                message += f"\n⊘ Skipped {skipped_count} duplicate mappings."
+            message = f"✓ Loaded {added_mappings} global semantic mappings.\n"
+            message += f"✓ Loaded {added_rules} advanced semantic rules (with AND/OR logic)."
+            if skipped_mappings > 0 or skipped_rules > 0:
+                message += f"\n⊘ Skipped {skipped_mappings} duplicate mappings and {skipped_rules} duplicate rules."
             
             QMessageBox.information(self, "Global Mappings Loaded", message)
-            self.status_bar.showMessage(f"Loaded {added_count} global semantic mappings")
+            self.status_bar.showMessage(f"Loaded {added_mappings} mappings and {added_rules} rules")
             
         except Exception as e:
             QMessageBox.warning(
@@ -1643,9 +1795,11 @@ class WingsCreatorWindow(QMainWindow):
             )
     
     def load_global_semantic_mappings_silently(self):
-        """Load global semantic mappings silently on initialization"""
+        """Load global semantic mappings and advanced rules silently on initialization"""
         try:
             from ...config.semantic_mapping import SemanticMappingManager
+            
+            print("[Wing Creator] Loading global semantic mappings and rules silently...")
             
             # Create semantic mapping manager
             semantic_manager = SemanticMappingManager()
@@ -1653,59 +1807,217 @@ class WingsCreatorWindow(QMainWindow):
             # Get all global mappings
             global_mappings = semantic_manager.get_all_mappings(scope="global")
             
-            if not global_mappings:
+            # Get all global rules (advanced semantic rules with AND/OR logic)
+            global_rules = semantic_manager.get_rules(scope="global")
+            
+            print(f"[Wing Creator] Found {len(global_mappings)} global semantic mappings")
+            print(f"[Wing Creator] Found {len(global_rules)} global semantic rules (advanced with AND/OR logic)")
+            
+            if not global_mappings and not global_rules:
+                print("[Wing Creator] No global semantic mappings or rules found - table will be empty")
                 return
             
+            # Initialize lists if not already done
+            if not hasattr(self, 'wing_semantic_mappings'):
+                self.wing_semantic_mappings = []
+            if not hasattr(self, 'wing_semantic_rules'):
+                self.wing_semantic_rules = []
+            
             # Add global mappings
+            added_mappings = 0
             for mapping in global_mappings:
                 mapping_dict = {
                     'source': mapping.source,
                     'field': mapping.field,
                     'technical_value': mapping.technical_value,
                     'semantic_value': mapping.semantic_value,
-                    'description': mapping.description
+                    'description': mapping.description,
+                    'severity': mapping.severity if hasattr(mapping, 'severity') else 'info',
+                    'category': mapping.category if hasattr(mapping, 'category') else ''
                 }
                 self.wing_semantic_mappings.append(mapping_dict)
+                added_mappings += 1
             
-            self.update_semantic_mappings_table()
+            # Add global rules (advanced semantic rules)
+            added_rules = 0
+            for rule in global_rules:
+                self.wing_semantic_rules.append(rule)
+                added_rules += 1
+            
+            print(f"[Wing Creator] Added {added_mappings} global semantic mappings to wing")
+            print(f"[Wing Creator] Added {added_rules} global semantic rules to wing")
+            print(f"[Wing Creator] Total: {len(self.wing_semantic_mappings)} mappings + {len(self.wing_semantic_rules)} rules = {len(self.wing_semantic_mappings) + len(self.wing_semantic_rules)} items")
+            
+            # Update the table
+            if hasattr(self, 'semantic_mappings_table'):
+                self.update_semantic_mappings_table()
+                print(f"[Wing Creator] Table updated - now has {self.semantic_mappings_table.rowCount()} rows")
+            else:
+                print("[Wing Creator] WARNING: semantic_mappings_table not yet created!")
             
         except Exception as e:
-            # Silently fail - don't show error on initialization
-            print(f"Note: Could not load global semantic mappings: {e}")
+            # Log the error with full traceback
+            print(f"[Wing Creator] ERROR loading global semantic mappings/rules: {e}")
+            import traceback
+            traceback.print_exc()
     
     def update_semantic_mappings_table(self):
-        """Update the semantic mappings table"""
+        """Update the semantic mappings table to show both simple mappings and advanced rules with detailed columns"""
         self.semantic_mappings_table.blockSignals(True)
         
-        self.semantic_mappings_table.setRowCount(len(self.wing_semantic_mappings))
+        # Clear table
+        self.semantic_mappings_table.setRowCount(0)
         
-        for i, mapping in enumerate(self.wing_semantic_mappings):
-            # Source (read-only)
-            source_item = QTableWidgetItem(mapping.get('source', ''))
-            source_item.setFlags(source_item.flags() & ~Qt.ItemIsEditable)
-            self.semantic_mappings_table.setItem(i, 0, source_item)
+        # Add simple mappings first
+        for mapping in self.wing_semantic_mappings:
+            row = self.semantic_mappings_table.rowCount()
+            self.semantic_mappings_table.insertRow(row)
             
-            # Field (read-only)
-            field_item = QTableWidgetItem(mapping.get('field', ''))
-            field_item.setFlags(field_item.flags() & ~Qt.ItemIsEditable)
-            self.semantic_mappings_table.setItem(i, 1, field_item)
+            # Type (Simple - green)
+            type_item = QTableWidgetItem("Simple")
+            type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+            type_item.setForeground(QColor("#10B981"))
+            self.semantic_mappings_table.setItem(row, 0, type_item)
             
-            # Technical Value (read-only)
-            tech_item = QTableWidgetItem(mapping.get('technical_value', ''))
-            tech_item.setFlags(tech_item.flags() & ~Qt.ItemIsEditable)
-            self.semantic_mappings_table.setItem(i, 2, tech_item)
+            # Name (Source.Field)
+            name_item = QTableWidgetItem(f"{mapping.get('source', '')}.{mapping.get('field', '')}")
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            self.semantic_mappings_table.setItem(row, 1, name_item)
             
-            # Semantic Value (read-only)
+            # Logic (N/A for simple)
+            logic_item = QTableWidgetItem("-")
+            logic_item.setFlags(logic_item.flags() & ~Qt.ItemIsEditable)
+            logic_item.setForeground(QColor("#64748B"))
+            self.semantic_mappings_table.setItem(row, 2, logic_item)
+            
+            # Conditions/Value
+            value_item = QTableWidgetItem(f"= {mapping.get('technical_value', '')}")
+            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
+            self.semantic_mappings_table.setItem(row, 3, value_item)
+            
+            # Semantic Value (cyan)
             semantic_item = QTableWidgetItem(mapping.get('semantic_value', ''))
             semantic_item.setFlags(semantic_item.flags() & ~Qt.ItemIsEditable)
-            self.semantic_mappings_table.setItem(i, 3, semantic_item)
+            semantic_item.setForeground(QColor("#00FFFF"))
+            self.semantic_mappings_table.setItem(row, 4, semantic_item)
             
-            # Description (read-only)
+            # Severity
+            severity = mapping.get('severity', 'info')
+            severity_item = QTableWidgetItem(severity)
+            severity_item.setFlags(severity_item.flags() & ~Qt.ItemIsEditable)
+            severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
+            severity_item.setForeground(QColor(severity_colors.get(severity, "#64748B")))
+            self.semantic_mappings_table.setItem(row, 5, severity_item)
+            
+            # Feathers
+            feather_item = QTableWidgetItem(mapping.get('source', ''))
+            feather_item.setFlags(feather_item.flags() & ~Qt.ItemIsEditable)
+            self.semantic_mappings_table.setItem(row, 6, feather_item)
+            
+            # Description
             desc_item = QTableWidgetItem(mapping.get('description', ''))
             desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)
-            self.semantic_mappings_table.setItem(i, 4, desc_item)
+            self.semantic_mappings_table.setItem(row, 7, desc_item)
+        
+        # Add advanced rules (if they exist)
+        if hasattr(self, 'wing_semantic_rules') and self.wing_semantic_rules:
+            for rule in self.wing_semantic_rules:
+                row = self.semantic_mappings_table.rowCount()
+                self.semantic_mappings_table.insertRow(row)
+                
+                # Handle both SemanticRule objects and dicts
+                is_dict = isinstance(rule, dict)
+                
+                # Type (Advanced - cyan bold)
+                type_item = QTableWidgetItem("Advanced")
+                type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+                type_item.setForeground(QColor("#00FFFF"))
+                font = type_item.font()
+                font.setBold(True)
+                type_item.setFont(font)
+                self.semantic_mappings_table.setItem(row, 0, type_item)
+                
+                # Name (rule name - bold)
+                rule_name = rule.get('name', 'Unnamed') if is_dict else rule.name
+                name_item = QTableWidgetItem(rule_name)
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                name_item.setFont(font)
+                self.semantic_mappings_table.setItem(row, 1, name_item)
+                
+                # Logic (AND/OR with color)
+                logic_op = rule.get('logic_operator', 'AND') if is_dict else rule.logic_operator
+                logic_item = QTableWidgetItem(logic_op)
+                logic_item.setFlags(logic_item.flags() & ~Qt.ItemIsEditable)
+                logic_color = "#10B981" if logic_op == "AND" else "#F59E0B"
+                logic_item.setForeground(QColor(logic_color))
+                logic_item.setFont(font)
+                self.semantic_mappings_table.setItem(row, 2, logic_item)
+                
+                # Conditions (detailed format with tooltip)
+                conditions = rule.get('conditions', []) if is_dict else rule.conditions
+                conditions_parts = []
+                tooltip_parts = []
+                for c in conditions:
+                    if is_dict:
+                        feather_id = c.get('feather_id', '')
+                        field_name = c.get('field_name', '')
+                        value = c.get('value', '')
+                        operator = c.get('operator', 'equals')
+                    else:
+                        feather_id = c.feather_id
+                        field_name = c.field_name
+                        value = c.value
+                        operator = c.operator
+                    op_symbol = {"equals": "=", "contains": "~", "wildcard": "*", "regex": "≈"}.get(operator, "=")
+                    conditions_parts.append(f"{feather_id}.{field_name}{op_symbol}{value}")
+                    tooltip_parts.append(f"• {feather_id}.{field_name} {operator} '{value}'")
+                conditions_str = f" {logic_op} ".join(conditions_parts)
+                conditions_item = QTableWidgetItem(conditions_str)
+                conditions_item.setFlags(conditions_item.flags() & ~Qt.ItemIsEditable)
+                conditions_item.setToolTip(f"Conditions ({len(conditions)}):\n" + "\n".join(tooltip_parts))
+                self.semantic_mappings_table.setItem(row, 3, conditions_item)
+                
+                # Semantic Value (cyan bold)
+                semantic_value = rule.get('semantic_value', '') if is_dict else rule.semantic_value
+                semantic_item = QTableWidgetItem(semantic_value)
+                semantic_item.setFlags(semantic_item.flags() & ~Qt.ItemIsEditable)
+                semantic_item.setForeground(QColor("#00FFFF"))
+                semantic_item.setFont(font)
+                self.semantic_mappings_table.setItem(row, 4, semantic_item)
+                
+                # Severity (color-coded)
+                if is_dict:
+                    severity = rule.get('severity', 'info')
+                else:
+                    severity = rule.severity if hasattr(rule, 'severity') else 'info'
+                severity_item = QTableWidgetItem(severity)
+                severity_item.setFlags(severity_item.flags() & ~Qt.ItemIsEditable)
+                severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
+                severity_item.setForeground(QColor(severity_colors.get(severity, "#64748B")))
+                severity_item.setFont(font)
+                self.semantic_mappings_table.setItem(row, 5, severity_item)
+                
+                # Feathers (unique list)
+                if is_dict:
+                    feathers = set([c.get('feather_id', '') for c in conditions])
+                else:
+                    feathers = set([c.feather_id for c in conditions])
+                feathers_str = ", ".join(sorted(feathers))
+                feather_item = QTableWidgetItem(feathers_str)
+                feather_item.setFlags(feather_item.flags() & ~Qt.ItemIsEditable)
+                self.semantic_mappings_table.setItem(row, 6, feather_item)
+                
+                # Description
+                if is_dict:
+                    description = rule.get('description', '')
+                else:
+                    description = rule.description if hasattr(rule, 'description') else ''
+                desc_item = QTableWidgetItem(description)
+                desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)
+                self.semantic_mappings_table.setItem(row, 7, desc_item)
         
         self.semantic_mappings_table.blockSignals(False)
+        print(f"[Wing Creator] update_semantic_mappings_table completed - {self.semantic_mappings_table.rowCount()} rows in table")
     
     def update_status(self):
         """Update status bar"""
@@ -1976,12 +2288,45 @@ class WingsCreatorWindow(QMainWindow):
         # Update Event ID visibility
         self.update_event_id_visibility()
         
-        # Load semantic mappings
-        self.wing_semantic_mappings = self.wing.semantic_mappings if hasattr(self.wing, 'semantic_mappings') else []
-        self.update_semantic_mappings_table()
+        # Load semantic mappings - ALWAYS load global rules first, then add wing-specific
+        print("[Wing Creator] Loading semantic mappings for wing...")
         
-        # Load advanced semantic rules
-        self._load_semantic_rules_to_ui()
+        # First, load all global semantic mappings and rules
+        self.wing_semantic_mappings = []
+        self.wing_semantic_rules = []
+        self.load_global_semantic_mappings_silently()
+        
+        # Then, add any wing-specific mappings (if they exist and are different)
+        wing_mappings = self.wing.semantic_mappings if hasattr(self.wing, 'semantic_mappings') else []
+        wing_rules = self.wing.semantic_rules if hasattr(self.wing, 'semantic_rules') else []
+        
+        print(f"[Wing Creator] Wing has {len(wing_mappings)} wing-specific mappings")
+        print(f"[Wing Creator] Wing has {len(wing_rules)} wing-specific rules")
+        
+        # Add wing-specific mappings that aren't already in global
+        for mapping in wing_mappings:
+            # Check if this mapping is already in global (by source.field.technical_value)
+            mapping_key = f"{mapping.get('source', '')}.{mapping.get('field', '')}.{mapping.get('technical_value', '')}"
+            existing_keys = [f"{m.get('source', '')}.{m.get('field', '')}.{m.get('technical_value', '')}" for m in self.wing_semantic_mappings]
+            if mapping_key not in existing_keys:
+                self.wing_semantic_mappings.append(mapping)
+                print(f"[Wing Creator]   Added wing-specific mapping: {mapping_key}")
+        
+        # Add wing-specific rules that aren't already in global
+        for rule in wing_rules:
+            # Check if this rule is already in global (by rule_id or name)
+            rule_id = rule.get('rule_id', '') if isinstance(rule, dict) else getattr(rule, 'rule_id', '')
+            rule_name = rule.get('name', '') if isinstance(rule, dict) else getattr(rule, 'name', '')
+            existing_ids = [r.get('rule_id', '') if isinstance(r, dict) else getattr(r, 'rule_id', '') for r in self.wing_semantic_rules]
+            existing_names = [r.get('name', '') if isinstance(r, dict) else getattr(r, 'name', '') for r in self.wing_semantic_rules]
+            if rule_id not in existing_ids and rule_name not in existing_names:
+                self.wing_semantic_rules.append(rule)
+                print(f"[Wing Creator]   Added wing-specific rule: {rule_name}")
+        
+        print(f"[Wing Creator] Total: {len(self.wing_semantic_mappings)} mappings + {len(self.wing_semantic_rules)} rules")
+        
+        # Update the table with all rules
+        self.update_semantic_mappings_table()
         
         # Load weighted scoring configuration
         self._load_scoring_to_ui()
@@ -1997,8 +2342,10 @@ class WingsCreatorWindow(QMainWindow):
         
         if reply == QMessageBox.Yes:
             self.wing = Wing()
+            # Load global semantic mappings and rules for the new wing
             self.wing_semantic_mappings = []
             self.wing_semantic_rules = []
+            self.load_global_semantic_mappings_silently()
             self.load_wing_to_ui()
             self.status_bar.showMessage("New wing created")
     

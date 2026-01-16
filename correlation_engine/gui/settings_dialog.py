@@ -11,10 +11,11 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QLabel,
     QCheckBox, QSpinBox, QDoubleSpinBox, QLineEdit, QPushButton,
     QGroupBox, QFormLayout, QComboBox, QTextEdit, QMessageBox,
-    QFileDialog, QSlider, QFrame, QScrollArea, QGridLayout
+    QFileDialog, QSlider, QFrame, QScrollArea, QGridLayout,
+    QTableWidget, QHeaderView, QTableWidgetItem
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtGui import QFont, QIcon, QColor
 
 from ..config.integrated_configuration_manager import (
     IntegratedConfigurationManager, IntegratedConfiguration,
@@ -143,21 +144,106 @@ class SettingsDialog(QDialog):
         
         # Mapping management group
         mapping_mgmt_group = QGroupBox("Mapping Management")
-        mapping_mgmt_layout = QHBoxLayout(mapping_mgmt_group)
+        mapping_mgmt_layout = QVBoxLayout(mapping_mgmt_group)
         
-        self.add_mapping_btn = QPushButton("Add Semantic Mapping...")
+        # Semantic mappings table
+        table_label = QLabel("Global Semantic Mappings:")
+        table_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        mapping_mgmt_layout.addWidget(table_label)
+        
+        self.global_mappings_table = QTableWidget()
+        self.global_mappings_table.setColumnCount(9)
+        self.global_mappings_table.setHorizontalHeaderLabels([
+            "Type", "Category", "Name", "Logic", "Conditions/Value", "Semantic Value", "Severity", "Feathers", "Description"
+        ])
+        # Set column widths for better visibility
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Type
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Category
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Name
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Logic
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)  # Conditions/Value
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Semantic Value
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Severity
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Feathers
+        self.global_mappings_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)  # Description
+        self.global_mappings_table.setMinimumHeight(300)
+        self.global_mappings_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.global_mappings_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        mapping_mgmt_layout.addWidget(self.global_mappings_table)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.add_mapping_btn = QPushButton("Add Mapping...")
         self.add_mapping_btn.setToolTip("Create a new semantic mapping (simple or advanced with AND/OR logic)")
         self.add_mapping_btn.clicked.connect(self._open_add_mapping_dialog)
-        mapping_mgmt_layout.addWidget(self.add_mapping_btn)
+        button_layout.addWidget(self.add_mapping_btn)
         
-        mapping_mgmt_layout.addStretch()
+        self.edit_mapping_btn = QPushButton("Edit Mapping...")
+        self.edit_mapping_btn.setToolTip("Edit the selected semantic mapping")
+        self.edit_mapping_btn.clicked.connect(self._edit_selected_mapping)
+        self.edit_mapping_btn.setEnabled(False)
+        button_layout.addWidget(self.edit_mapping_btn)
+        
+        self.delete_mapping_btn = QPushButton("Delete Mapping")
+        self.delete_mapping_btn.setToolTip("Delete the selected semantic mapping")
+        self.delete_mapping_btn.clicked.connect(self._delete_selected_mapping)
+        self.delete_mapping_btn.setEnabled(False)
+        button_layout.addWidget(self.delete_mapping_btn)
+        
+        self.refresh_mappings_btn = QPushButton("Refresh")
+        self.refresh_mappings_btn.setToolTip("Refresh the mappings table")
+        self.refresh_mappings_btn.clicked.connect(self._refresh_global_mappings_table)
+        button_layout.addWidget(self.refresh_mappings_btn)
+        
+        button_layout.addStretch()
+        
+        mapping_mgmt_layout.addLayout(button_layout)
+        
+        # Connect table selection signal
+        self.global_mappings_table.itemSelectionChanged.connect(self._on_mapping_selection_changed)
+        
+        # Rule File Management group
+        rule_file_mgmt_group = QGroupBox("Rule File Management")
+        rule_file_mgmt_layout = QVBoxLayout(rule_file_mgmt_group)
+        
+        # Validation button and results
+        validate_rules_button = QPushButton("Validate Rule Files")
+        validate_rules_button.setToolTip("Validate both default and custom semantic rule JSON files")
+        validate_rules_button.clicked.connect(self._validate_rule_files)
+        rule_file_mgmt_layout.addWidget(validate_rules_button)
+        
+        self.validation_results_text = QTextEdit()
+        self.validation_results_text.setReadOnly(True)
+        self.validation_results_text.setMaximumHeight(150)
+        self.validation_results_text.setPlaceholderText("Validation results will appear here...")
+        rule_file_mgmt_layout.addWidget(self.validation_results_text)
+        
+        # Export/Reload buttons
+        rule_button_layout = QHBoxLayout()
+        
+        export_default_rules_button = QPushButton("Export Default Rules")
+        export_default_rules_button.setToolTip("Export built-in default rules to JSON file")
+        export_default_rules_button.clicked.connect(self._export_default_rules)
+        rule_button_layout.addWidget(export_default_rules_button)
+        
+        reload_rules_button = QPushButton("Reload Rules")
+        reload_rules_button.setToolTip("Reload semantic rules from JSON files without restarting")
+        reload_rules_button.clicked.connect(self._reload_rules)
+        rule_button_layout.addWidget(reload_rules_button)
+        
+        rule_file_mgmt_layout.addLayout(rule_button_layout)
         
         # Add groups to layout
         layout.addWidget(main_group)
         layout.addWidget(global_group)
         layout.addWidget(case_group)
         layout.addWidget(mapping_mgmt_group)
+        layout.addWidget(rule_file_mgmt_group)
         layout.addStretch()
+        
+        # Load global mappings into table
+        self._refresh_global_mappings_table()
         
         self.tab_widget.addTab(tab, "Semantic Mapping")
     
@@ -1074,12 +1160,23 @@ class SettingsDialog(QDialog):
                         from ..config.semantic_mapping import SemanticMappingManager
                         
                         manager = SemanticMappingManager()
+                        
+                        # Save rule to custom JSON file
+                        manager.save_rule_to_custom_json(rule)
+                        
+                        # Add to in-memory rules
                         manager.add_rule(rule)
+                        
+                        # Reload rules to ensure consistency
+                        manager.reload_rules()
+                        
+                        # Refresh the table
+                        self._refresh_global_mappings_table()
                         
                         QMessageBox.information(
                             self,
                             "Rule Added",
-                            f"Semantic rule added:\n{rule.name} → {rule.semantic_value}"
+                            f"Semantic rule added and saved to custom rules:\n{rule.name} → {rule.semantic_value}"
                         )
                         logger.info(f"Added global semantic rule: {rule.name}")
                         
@@ -1105,6 +1202,9 @@ class SettingsDialog(QDialog):
                             manager = SemanticMappingManager()
                             manager.add_mapping(mapping)
                             
+                            # Refresh the table
+                            self._refresh_global_mappings_table()
+                            
                             QMessageBox.information(
                                 self,
                                 "Mapping Added",
@@ -1123,3 +1223,397 @@ class SettingsDialog(QDialog):
             logger.error(f"Failed to open semantic mapping dialog: {e}")
             QMessageBox.critical(self, "Error", f"Failed to open dialog: {e}")
     
+
+    def _refresh_global_mappings_table(self):
+        """Refresh the global semantic mappings table with detailed columns"""
+        try:
+            from ..config.semantic_mapping import SemanticMappingManager
+            
+            manager = SemanticMappingManager()
+            
+            # Get all global mappings
+            global_mappings = manager.get_all_mappings(scope="global")
+            
+            # Get all global rules (advanced mappings with AND/OR logic)
+            global_rules = manager.get_rules(scope="global")
+            
+            # Clear table
+            self.global_mappings_table.setRowCount(0)
+            
+            # Add simple mappings first
+            for mapping in global_mappings:
+                row = self.global_mappings_table.rowCount()
+                self.global_mappings_table.insertRow(row)
+                
+                # Type column with color coding (green for simple)
+                type_item = QTableWidgetItem("Simple")
+                type_item.setForeground(QColor("#10B981"))
+                self.global_mappings_table.setItem(row, 0, type_item)
+                
+                # Category
+                category_item = QTableWidgetItem(mapping.category or "general")
+                self.global_mappings_table.setItem(row, 1, category_item)
+                
+                # Name (Source.Field for simple)
+                name_item = QTableWidgetItem(f"{mapping.source}.{mapping.field}")
+                self.global_mappings_table.setItem(row, 2, name_item)
+                
+                # Logic (N/A for simple)
+                logic_item = QTableWidgetItem("-")
+                logic_item.setForeground(QColor("#64748B"))
+                self.global_mappings_table.setItem(row, 3, logic_item)
+                
+                # Conditions/Value (technical value for simple)
+                value_item = QTableWidgetItem(f"= {mapping.technical_value}")
+                self.global_mappings_table.setItem(row, 4, value_item)
+                
+                # Semantic Value
+                semantic_item = QTableWidgetItem(mapping.semantic_value)
+                semantic_item.setForeground(QColor("#00FFFF"))
+                self.global_mappings_table.setItem(row, 5, semantic_item)
+                
+                # Severity
+                severity = mapping.severity or "info"
+                severity_item = QTableWidgetItem(severity)
+                severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
+                severity_item.setForeground(QColor(severity_colors.get(severity, "#64748B")))
+                self.global_mappings_table.setItem(row, 6, severity_item)
+                
+                # Feathers (source for simple)
+                feather_item = QTableWidgetItem(mapping.source)
+                self.global_mappings_table.setItem(row, 7, feather_item)
+                
+                # Description
+                desc_item = QTableWidgetItem(mapping.description or "")
+                self.global_mappings_table.setItem(row, 8, desc_item)
+            
+            # Add advanced rules
+            for rule in global_rules:
+                row = self.global_mappings_table.rowCount()
+                self.global_mappings_table.insertRow(row)
+                
+                # Type column with color coding (cyan for advanced)
+                type_item = QTableWidgetItem("Advanced")
+                type_item.setForeground(QColor("#00FFFF"))
+                type_item.setFont(QFont("Arial", 9, QFont.Bold))
+                self.global_mappings_table.setItem(row, 0, type_item)
+                
+                # Category
+                category_item = QTableWidgetItem(rule.category or "general")
+                self.global_mappings_table.setItem(row, 1, category_item)
+                
+                # Name
+                name_item = QTableWidgetItem(rule.name)
+                name_item.setFont(QFont("Arial", 9, QFont.Bold))
+                self.global_mappings_table.setItem(row, 2, name_item)
+                
+                # Logic (AND/OR)
+                logic_item = QTableWidgetItem(rule.logic_operator)
+                logic_color = "#10B981" if rule.logic_operator == "AND" else "#F59E0B"
+                logic_item.setForeground(QColor(logic_color))
+                logic_item.setFont(QFont("Arial", 9, QFont.Bold))
+                self.global_mappings_table.setItem(row, 3, logic_item)
+                
+                # Conditions (detailed format)
+                conditions_parts = []
+                for c in rule.conditions:
+                    op_symbol = {"equals": "=", "contains": "~", "wildcard": "*", "regex": "≈"}.get(c.operator, "=")
+                    conditions_parts.append(f"{c.feather_id}.{c.field_name}{op_symbol}{c.value}")
+                conditions_str = f" {rule.logic_operator} ".join(conditions_parts)
+                conditions_item = QTableWidgetItem(conditions_str)
+                conditions_item.setToolTip(f"Conditions ({len(rule.conditions)}):\n" + "\n".join([f"• {c.feather_id}.{c.field_name} {c.operator} '{c.value}'" for c in rule.conditions]))
+                self.global_mappings_table.setItem(row, 4, conditions_item)
+                
+                # Semantic Value
+                semantic_item = QTableWidgetItem(rule.semantic_value)
+                semantic_item.setForeground(QColor("#00FFFF"))
+                semantic_item.setFont(QFont("Arial", 9, QFont.Bold))
+                self.global_mappings_table.setItem(row, 5, semantic_item)
+                
+                # Severity with color coding
+                severity = rule.severity or "info"
+                severity_item = QTableWidgetItem(severity)
+                severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
+                severity_item.setForeground(QColor(severity_colors.get(severity, "#64748B")))
+                severity_item.setFont(QFont("Arial", 9, QFont.Bold))
+                self.global_mappings_table.setItem(row, 6, severity_item)
+                
+                # Feathers (unique list)
+                feathers_str = ", ".join(sorted(set([c.feather_id for c in rule.conditions])))
+                feather_item = QTableWidgetItem(feathers_str)
+                self.global_mappings_table.setItem(row, 7, feather_item)
+                
+                # Description
+                desc_item = QTableWidgetItem(rule.description or "")
+                self.global_mappings_table.setItem(row, 8, desc_item)
+            
+            logger.info(f"Loaded {len(global_mappings)} simple mappings and {len(global_rules)} advanced rules into settings table")
+            
+        except Exception as e:
+            logger.error(f"Failed to refresh global mappings table: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to load semantic mappings: {e}")
+    
+    def _on_mapping_selection_changed(self):
+        """Handle mapping selection change"""
+        has_selection = len(self.global_mappings_table.selectedItems()) > 0
+        self.edit_mapping_btn.setEnabled(has_selection)
+        self.delete_mapping_btn.setEnabled(has_selection)
+    
+    def _edit_selected_mapping(self):
+        """Edit the selected semantic mapping"""
+        selected_rows = set([item.row() for item in self.global_mappings_table.selectedItems()])
+        if not selected_rows:
+            return
+        
+        row = list(selected_rows)[0]
+        mapping_type = self.global_mappings_table.item(row, 0).text()
+        
+        if mapping_type == "Simple":
+            # Edit simple mapping - parse Name column (Source.Field format)
+            name_parts = self.global_mappings_table.item(row, 2).text().split(".", 1)
+            source = name_parts[0] if len(name_parts) > 0 else ""
+            field = name_parts[1] if len(name_parts) > 1 else ""
+            # Parse Conditions/Value column (= value format)
+            value_text = self.global_mappings_table.item(row, 4).text()
+            technical_value = value_text.replace("= ", "") if value_text.startswith("= ") else value_text
+            semantic_value = self.global_mappings_table.item(row, 5).text()
+            description = self.global_mappings_table.item(row, 8).text()
+            
+            mapping_data = {
+                'source': source,
+                'field': field,
+                'technical_value': technical_value,
+                'semantic_value': semantic_value,
+                'description': description,
+                'scope': 'global',
+                'mode': 'simple'
+            }
+            
+            try:
+                from ..wings.ui.semantic_mapping_dialog import SemanticMappingDialog
+                
+                dialog = SemanticMappingDialog(
+                    parent=self,
+                    mapping=mapping_data,
+                    scope='global',
+                    mode='simple'
+                )
+                
+                if dialog.exec_() == QDialog.Accepted:
+                    # Update mapping
+                    updated_mapping = dialog.get_mapping()
+                    # TODO: Implement update logic in SemanticMappingManager
+                    self._refresh_global_mappings_table()
+                    QMessageBox.information(self, "Success", "Mapping updated successfully")
+                    
+            except Exception as e:
+                logger.error(f"Failed to edit mapping: {e}")
+                QMessageBox.warning(self, "Error", f"Failed to edit mapping: {e}")
+        else:
+            # Advanced rule editing
+            QMessageBox.information(
+                self,
+                "Edit Advanced Rule",
+                "Advanced rule editing is not yet implemented.\n\n"
+                "You can delete this rule and create a new one."
+            )
+    
+    def _delete_selected_mapping(self):
+        """Delete the selected semantic mapping"""
+        selected_rows = set([item.row() for item in self.global_mappings_table.selectedItems()])
+        if not selected_rows:
+            return
+        
+        row = list(selected_rows)[0]
+        mapping_type = self.global_mappings_table.item(row, 0).text()
+        name = self.global_mappings_table.item(row, 2).text()  # Name column
+        
+        reply = QMessageBox.question(
+            self,
+            "Confirm Delete",
+            f"Are you sure you want to delete this {mapping_type.lower()} mapping?\n\n{name}",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                from ..config.semantic_mapping import SemanticMappingManager
+                
+                manager = SemanticMappingManager()
+                
+                if mapping_type == "Simple":
+                    # Parse Name column (Source.Field format)
+                    name_parts = name.split(".", 1)
+                    source = name_parts[0] if len(name_parts) > 0 else ""
+                    field = name_parts[1] if len(name_parts) > 1 else ""
+                    # Parse Conditions/Value column (= value format)
+                    value_text = self.global_mappings_table.item(row, 4).text()
+                    technical_value = value_text.replace("= ", "") if value_text.startswith("= ") else value_text
+                    manager.remove_mapping(source, field, technical_value, scope="global")
+                else:
+                    # Advanced rule - need to find rule_id
+                    # For now, show message that it's not implemented
+                    QMessageBox.information(
+                        self,
+                        "Delete Advanced Rule",
+                        "Advanced rule deletion is not yet fully implemented.\n\n"
+                        "Default rules are loaded on startup and cannot be permanently deleted."
+                    )
+                    return
+                
+                self._refresh_global_mappings_table()
+                QMessageBox.information(self, "Success", "Mapping deleted successfully")
+                
+            except Exception as e:
+                logger.error(f"Failed to delete mapping: {e}")
+                QMessageBox.warning(self, "Error", f"Failed to delete mapping: {e}")
+
+    def _validate_rule_files(self):
+        """Validate both default and custom rule files"""
+        try:
+            from ..config.semantic_mapping import SemanticMappingManager
+            from pathlib import Path
+            
+            manager = SemanticMappingManager()
+            
+            results_text = []
+            results_text.append("=== Semantic Rule File Validation ===\n")
+            
+            # Validate default rules file
+            default_rules_path = manager.default_rules_path
+            results_text.append(f"📄 Default Rules: {default_rules_path}")
+            
+            if default_rules_path.exists():
+                is_valid, errors = manager.validate_json_rules(default_rules_path)
+                
+                if is_valid:
+                    results_text.append("✅ Valid - No errors found")
+                else:
+                    results_text.append(f"❌ Invalid - {len(errors)} error(s) found:")
+                    for error in errors:
+                        results_text.append(f"  • {error}")
+            else:
+                results_text.append("⚠️ File does not exist - will be created on first export")
+            
+            results_text.append("")  # Blank line
+            
+            # Validate custom rules file
+            custom_rules_path = manager.custom_rules_path
+            results_text.append(f"📄 Custom Rules: {custom_rules_path}")
+            
+            if custom_rules_path.exists():
+                is_valid, errors = manager.validate_json_rules(custom_rules_path)
+                
+                if is_valid:
+                    results_text.append("✅ Valid - No errors found")
+                else:
+                    results_text.append(f"❌ Invalid - {len(errors)} error(s) found:")
+                    for error in errors:
+                        results_text.append(f"  • {error}")
+            else:
+                results_text.append("ℹ️ File does not exist - no custom rules defined")
+            
+            results_text.append("")
+            results_text.append("Validation complete!")
+            
+            # Set text with color coding
+            validation_text = "\n".join(results_text)
+            self.validation_results_text.setPlainText(validation_text)
+            
+            # Apply color coding based on results
+            if "❌" in validation_text:
+                self.validation_results_text.setStyleSheet("QTextEdit { background-color: #ffe6e6; }")
+            elif "⚠️" in validation_text:
+                self.validation_results_text.setStyleSheet("QTextEdit { background-color: #fff4e6; }")
+            else:
+                self.validation_results_text.setStyleSheet("QTextEdit { background-color: #e6ffe6; }")
+            
+            logger.info("Rule file validation completed")
+            
+        except Exception as e:
+            logger.error(f"Failed to validate rule files: {e}")
+            self.validation_results_text.setPlainText(f"❌ Validation failed: {str(e)}")
+            self.validation_results_text.setStyleSheet("QTextEdit { background-color: #ffe6e6; }")
+    
+    def _export_default_rules(self):
+        """Export built-in default rules to JSON"""
+        try:
+            from ..config.semantic_mapping import SemanticMappingManager
+            
+            manager = SemanticMappingManager()
+            
+            # Export to default location
+            manager.export_default_rules_to_json()
+            
+            # Show success message
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"Default rules exported successfully to:\n{manager.default_rules_path}\n\n"
+                f"You can now edit this file to customize semantic rules."
+            )
+            
+            # Ask if user wants to open the file location
+            reply = QMessageBox.question(
+                self,
+                "Open File Location",
+                "Would you like to open the file location?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                import os
+                import subprocess
+                import platform
+                
+                file_path = str(manager.default_rules_path.parent)
+                
+                # Open file explorer based on platform
+                if platform.system() == "Windows":
+                    os.startfile(file_path)
+                elif platform.system() == "Darwin":  # macOS
+                    subprocess.Popen(["open", file_path])
+                else:  # Linux
+                    subprocess.Popen(["xdg-open", file_path])
+            
+            logger.info(f"Default rules exported to {manager.default_rules_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to export default rules: {e}")
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to export default rules:\n{str(e)}"
+            )
+    
+    def _reload_rules(self):
+        """Reload rules from JSON files"""
+        try:
+            from ..config.semantic_mapping import SemanticMappingManager
+            
+            manager = SemanticMappingManager()
+            
+            # Reload rules
+            manager.reload_rules()
+            
+            # Refresh the mappings table
+            self._refresh_global_mappings_table()
+            
+            # Show success message
+            QMessageBox.information(
+                self,
+                "Reload Successful",
+                "Semantic rules have been reloaded from JSON files.\n\n"
+                "The updated rules will be used for new correlation operations."
+            )
+            
+            logger.info("Semantic rules reloaded successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to reload rules: {e}")
+            QMessageBox.critical(
+                self,
+                "Reload Error",
+                f"Failed to reload rules:\n{str(e)}"
+            )

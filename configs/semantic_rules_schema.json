@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Semantic Rules Schema",
+  "description": "JSON Schema for semantic mapping rules in Crow-Eye Correlation Engine. This schema validates the structure and data types of semantic rules used for mapping technical forensic values to human-readable meanings.",
+  "type": "object",
+  "required": ["rules"],
+  "properties": {
+    "rules": {
+      "type": "array",
+      "description": "Array of semantic rules. Each rule defines conditions for mapping technical values to semantic meanings.",
+      "items": {
+        "$ref": "#/definitions/semanticRule"
+      }
+    }
+  },
+  "definitions": {
+    "semanticRule": {
+      "type": "object",
+      "description": "A semantic rule that maps technical forensic values to human-readable meanings. Rules can have multiple conditions combined with AND/OR logic.",
+      "required": ["rule_id", "name", "semantic_value", "conditions", "logic_operator"],
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "description": "Unique identifier for the rule. Used for rule merging and override logic. Custom rules with the same rule_id as default rules will override the default. Use descriptive names like 'user_login_success' rather than 'rule1'.",
+          "minLength": 1,
+          "examples": ["user_login_success", "suspicious_powershell_execution", "registry_run_key_modification"]
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name for the rule. Displayed in GUI and reports. Should be concise but descriptive.",
+          "minLength": 1,
+          "examples": ["Successful User Login", "Suspicious PowerShell Execution", "Registry Run Key Modification"]
+        },
+        "semantic_value": {
+          "type": "string",
+          "description": "The semantic meaning/interpretation assigned when this rule matches. This is the human-readable value that replaces technical values in correlation results. Keep it concise and meaningful.",
+          "minLength": 1,
+          "examples": ["User Login", "Potential malicious PowerShell activity", "Persistence Mechanism", "Web Browser Usage"]
+        },
+        "conditions": {
+          "type": "array",
+          "description": "Array of conditions that must be evaluated. Each condition checks a specific field in a specific artifact. Multiple conditions are combined using the logic_operator (AND/OR). At least one condition is required.",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/condition"
+          }
+        },
+        "logic_operator": {
+          "type": "string",
+          "description": "Logical operator for combining multiple conditions. 'AND' requires all conditions to match. 'OR' requires at least one condition to match. For single-condition rules, use 'AND'.",
+          "enum": ["AND", "OR"],
+          "examples": ["AND", "OR"]
+        },
+        "scope": {
+          "type": "string",
+          "description": "Scope of the rule application. 'global' applies to all correlations. 'wing' applies only to a specific Wing (requires wing_id). 'pipeline' applies only to a specific pipeline (requires pipeline_id). Default is 'global'.",
+          "enum": ["global", "wing", "pipeline"],
+          "default": "global",
+          "examples": ["global", "wing", "pipeline"]
+        },
+        "category": {
+          "type": "string",
+          "description": "Category classification for the rule. Used for grouping and filtering rules. Common categories include: Authentication, Execution, Persistence, Network, FileActivity, CredentialAccess, LateralMovement, Application. Optional field.",
+          "examples": ["Authentication", "Execution", "Persistence", "Network", "FileActivity", "CredentialAccess"]
+        },
+        "severity": {
+          "type": "string",
+          "description": "Severity level of the rule match. Indicates the importance or threat level. 'info' for informational events, 'low' for minor issues, 'medium' for moderate concerns, 'high' for serious threats, 'critical' for severe security incidents. Default is 'info'.",
+          "enum": ["info", "low", "medium", "high", "critical"],
+          "default": "info",
+          "examples": ["info", "low", "medium", "high", "critical"]
+        },
+        "confidence": {
+          "type": "number",
+          "description": "Confidence score for the rule match, ranging from 0.0 (no confidence) to 1.0 (absolute confidence). Higher values indicate more reliable matches. Use lower values for generic or ambiguous rules. Default is 1.0.",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 1.0,
+          "examples": [1.0, 0.95, 0.85, 0.75, 0.5]
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed description of the rule. Explain what the rule detects, why it's important, and any relevant context. This helps users understand the rule's purpose. Optional but highly recommended.",
+          "examples": [
+            "Detects PowerShell process creation with encoded commands, often used by attackers to obfuscate malicious code",
+            "Successful user logon event (Windows Event ID 4624)",
+            "Modification to registry Run keys, commonly used for persistence"
+          ]
+        },
+        "wing_id": {
+          "type": "string",
+          "description": "Wing ID if scope is 'wing'. This rule will only apply when the specified Wing is executed. Leave empty or omit for global rules. Optional field.",
+          "examples": ["lateral_movement_investigation", "malware_analysis_wing"]
+        },
+        "pipeline_id": {
+          "type": "string",
+          "description": "Pipeline ID if scope is 'pipeline'. This rule will only apply when the specified pipeline is executed. Leave empty or omit for global rules. Optional field.",
+          "examples": ["windows_security_pipeline", "network_analysis_pipeline"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "condition": {
+      "type": "object",
+      "description": "A single condition that checks if a specific field in a specific artifact matches a value using a specified operator. All fields are required.",
+      "required": ["feather_id", "field_name", "value", "operator"],
+      "properties": {
+        "feather_id": {
+          "type": "string",
+          "description": "ID of the feather/artifact this condition applies to. Must match the artifact source name in your data. Common values include: SecurityLogs, Prefetch, Registry, FileSystem, NetworkLogs, ApplicationLogs. Case-sensitive.",
+          "minLength": 1,
+          "examples": ["SecurityLogs", "Prefetch", "Registry", "FileSystem", "NetworkLogs", "ApplicationLogs", "BrowserHistory"]
+        },
+        "field_name": {
+          "type": "string",
+          "description": "Name of the field to match within the artifact. Must match the actual field name in your data. Common examples: EventID, CommandLine, executable_name, KeyPath, FilePath, RemotePort. Case-sensitive.",
+          "minLength": 1,
+          "examples": ["EventID", "CommandLine", "executable_name", "KeyPath", "ValueName", "FilePath", "RemotePort", "ObjectName"]
+        },
+        "value": {
+          "type": "string",
+          "description": "Value to match against the field. For 'equals' and 'contains' operators, this is a literal string (case-insensitive). For 'regex' operator, this is a regular expression pattern. For 'wildcard' operator, use '*' to match any non-empty value. Always a string, even for numeric values.",
+          "examples": ["4624", "chrome.exe", ".*-encodedcommand.*", ".*\\\\Run.*", "*", "4444"]
+        },
+        "operator": {
+          "type": "string",
+          "description": "Match operator that determines how the value is compared. 'equals': exact match (case-insensitive). 'contains': substring match (case-insensitive). 'regex': regular expression match. 'wildcard': matches any non-empty value (use value='*').",
+          "enum": ["equals", "contains", "regex", "wildcard"],
+          "examples": ["equals", "contains", "regex", "wildcard"]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

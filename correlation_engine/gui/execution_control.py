@@ -24,6 +24,11 @@ QMetaType.type("QTextCursor")
 from ..config import PipelineConfig
 from ..pipeline import PipelineExecutor
 
+# Import styles for calendar widget
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from styles import CrowEyeStyles
+
 
 class OutputRedirector(QObject):
     """Redirects stdout/stderr to a QTextEdit widget"""
@@ -96,6 +101,7 @@ class CorrelationEngineWrapper(QObject):
         self.selected_wings = []  # NEW: List of wings to execute sequentially
         self.current_wing_index = 0  # NEW: Track current wing being executed
         self._cancelled = False  # NEW: Cancellation flag
+        self._wing_summaries = []  # NEW: Track all wing summaries for aggregate statistics
     
     def set_pipeline(self, pipeline_config: PipelineConfig, output_dir: str, selected_wings=None):
         """Set pipeline configuration and output directory"""
@@ -168,6 +174,9 @@ class CorrelationEngineWrapper(QObject):
     def run(self):
         """Execute correlation in worker thread - runs wings sequentially"""
         try:
+            # Clear wing summaries from previous execution
+            self._wing_summaries = []
+            
             # Redirect stdout in this thread to emit signals
             class ThreadOutputRedirector:
                 def __init__(self, signal, original):
@@ -248,6 +257,9 @@ class CorrelationEngineWrapper(QObject):
                 summary['wing_index'] = wing_index
                 summary['total_wings'] = total_wings
                 
+                # Store wing summary for aggregate statistics
+                self._wing_summaries.append(summary.copy())
+                
                 # Emit wing completion signal (for creating separate tab)
                 self.wing_completed.emit(summary)
                 
@@ -263,10 +275,17 @@ class CorrelationEngineWrapper(QObject):
                 self.log_message.emit(f"[DEBUG] database_path from summary: {summary.get('database_path')}")
                 self.log_message.emit(f"[DEBUG] engine_type from summary: {summary.get('engine_type')}")
                 
-                # Emit final completion signal with last wing's execution info
+                # Aggregate statistics from all wings
+                total_matches_all_wings = sum(ws.get('total_matches', 0) for ws in self._wing_summaries)
+                execution_times = [ws.get('execution_time', 0) for ws in self._wing_summaries]
+                
+                # Emit final completion signal with aggregate statistics
                 final_summary = {
                     'pipeline_name': self.pipeline_config.pipeline_name,
                     'total_wings_executed': total_wings,
+                    'total_matches_all_wings': total_matches_all_wings,
+                    'execution_times': execution_times,
+                    'wing_summaries': self._wing_summaries,
                     'execution_complete': True,
                     # Include last wing's execution info for Summary tab
                     'execution_id': summary.get('execution_id'),
@@ -278,6 +297,7 @@ class CorrelationEngineWrapper(QObject):
                 self.log_message.emit(f"[DEBUG] final_summary execution_id: {final_summary.get('execution_id')}")
                 self.log_message.emit(f"[DEBUG] final_summary database_path: {final_summary.get('database_path')}")
                 self.log_message.emit(f"[DEBUG] final_summary engine_type: {final_summary.get('engine_type')}")
+                self.log_message.emit(f"[DEBUG] final_summary total_matches_all_wings: {final_summary.get('total_matches_all_wings')}")
                 
                 self.execution_completed.emit(final_summary)
             
@@ -708,19 +728,13 @@ class ExecutionControlWidget(QWidget):
         self.engine_description.setMaximumHeight(40)
         layout.addWidget(self.engine_description)
         
-        # Recommended for (more compact)
+        # Recommended for - hidden (kept for backward compatibility)
         self.engine_recommendations = QLabel()
-        self.engine_recommendations.setWordWrap(True)
-        self.engine_recommendations.setStyleSheet("color: #00d9ff; font-size: 8pt; padding: 3px;")
-        self.engine_recommendations.setMaximumHeight(30)
-        layout.addWidget(self.engine_recommendations)
+        self.engine_recommendations.setVisible(False)
         
-        # Integration features display (new)
+        # Integration features display - hidden (kept for backward compatibility)
         self.integration_features_label = QLabel()
-        self.integration_features_label.setWordWrap(True)
-        self.integration_features_label.setStyleSheet("color: #90EE90; font-size: 8pt; padding: 3px;")
-        self.integration_features_label.setMaximumHeight(30)
-        layout.addWidget(self.integration_features_label)
+        self.integration_features_label.setVisible(False)
         
         # Set initial description for Identity-Based engine (default)
         self._on_engine_changed(1)
@@ -747,6 +761,10 @@ class ExecutionControlWidget(QWidget):
         self.start_datetime.setCalendarPopup(True)
         self.start_datetime.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.start_datetime.setDateTime(QDateTime.currentDateTime().addDays(-30))
+        # Apply dark theme to calendar popup
+        if self.start_datetime.calendarWidget():
+            self.start_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
+        self.start_datetime.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
         start_layout.addWidget(self.start_datetime, stretch=1)
         
         self.start_enabled = QCheckBox("Enable")
@@ -764,6 +782,10 @@ class ExecutionControlWidget(QWidget):
         self.end_datetime.setCalendarPopup(True)
         self.end_datetime.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.end_datetime.setDateTime(QDateTime.currentDateTime())
+        # Apply dark theme to calendar popup
+        if self.end_datetime.calendarWidget():
+            self.end_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
+        self.end_datetime.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
         end_layout.addWidget(self.end_datetime, stretch=1)
         
         self.end_enabled = QCheckBox("Enable")
@@ -1448,18 +1470,7 @@ class ExecutionControlWidget(QWidget):
             
             if et == engine_type:
                 self.engine_description.setText(desc)
-                self.engine_recommendations.setText(f"✓ Best for: {', '.join(use_cases)}")
-                
-                # Update integration features display
-                if hasattr(self, 'integration_features_label'):
-                    feature_names = list(integration_features.keys())
-                    if feature_names:
-                        features_text = f"🔧 Features: {', '.join(feature_names[:3])}"
-                        if len(feature_names) > 3:
-                            features_text += f" (+{len(feature_names) - 3} more)"
-                        self.integration_features_label.setText(features_text)
-                    else:
-                        self.integration_features_label.setText("🔧 Features: Basic correlation")
+                # engine_recommendations and integration_features_label are hidden
                 
                 # Show/hide identity filter based on engine support
                 if hasattr(self, 'identity_filter_group'):

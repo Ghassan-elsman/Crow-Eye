@@ -212,7 +212,12 @@ class SemanticCondition:
     
     def matches(self, record: Dict[str, Any]) -> bool:
         """
-        Check if this condition matches the record.
+        Check if this condition matches the record with SMART field name matching.
+        
+        Smart matching handles field name variations from different forensic tools:
+        - Case-insensitive field names (EventID, eventid, event_id)
+        - Underscore/CamelCase variations (target_path, TargetPath, targetpath)
+        - Common abbreviations and synonyms
         
         Args:
             record: Dictionary containing field values to match against
@@ -220,10 +225,9 @@ class SemanticCondition:
         Returns:
             True if the condition matches, False otherwise
         """
-        if self.field_name not in record:
-            return False
+        # Smart field name lookup - find the actual field in the record
+        field_value = self._smart_field_lookup(record, self.field_name)
         
-        field_value = record[self.field_name]
         if field_value is None:
             return False
         
@@ -251,6 +255,515 @@ class SemanticCondition:
         
         # Default to equals
         return field_value_str.lower() == self.value.lower()
+    
+    def _smart_field_lookup(self, record: Dict[str, Any], field_name: str) -> Optional[Any]:
+        """
+        Smart field lookup that handles field name variations from different tools.
+        
+        Matching strategy (in order of priority):
+        1. Exact match
+        2. Case-insensitive match
+        3. Normalized match (remove underscores, lowercase)
+        4. Synonym/alias match (e.g., 'url' matches 'visited_url', 'address')
+        
+        Args:
+            record: Dictionary containing field values
+            field_name: The field name to look for
+            
+        Returns:
+            The field value if found, None otherwise
+        """
+        # 1. Exact match
+        if field_name in record:
+            return record[field_name]
+        
+        # 2. Case-insensitive match
+        field_name_lower = field_name.lower()
+        for key in record.keys():
+            if key.lower() == field_name_lower:
+                return record[key]
+        
+        # 3. Normalized match (remove underscores, spaces, dashes)
+        normalized_target = self._normalize_field_name(field_name)
+        for key in record.keys():
+            if self._normalize_field_name(key) == normalized_target:
+                return record[key]
+        
+        # 4. Synonym/alias match
+        aliases = self._get_field_aliases(field_name)
+        for alias in aliases:
+            # Try exact alias match
+            if alias in record:
+                return record[alias]
+            # Try normalized alias match
+            normalized_alias = self._normalize_field_name(alias)
+            for key in record.keys():
+                if self._normalize_field_name(key) == normalized_alias:
+                    return record[key]
+        
+        return None
+    
+    @staticmethod
+    def _normalize_field_name(name: str) -> str:
+        """
+        Normalize field name for comparison.
+        
+        Removes underscores, dashes, spaces, dots and converts to lowercase.
+        Examples:
+            'EventID' -> 'eventid'
+            'event_id' -> 'eventid'
+            'Event_ID' -> 'eventid'
+            'target_path' -> 'targetpath'
+            'TargetPath' -> 'targetpath'
+        """
+        return name.lower().replace('_', '').replace('-', '').replace(' ', '').replace('.', '')
+    
+    @staticmethod
+    def _get_field_aliases(field_name: str) -> List[str]:
+        """
+        Get common aliases/synonyms for a field name.
+        
+        Different forensic tools use different names for the same data.
+        This provides a mapping of common variations.
+        """
+        # Normalize the input for lookup
+        normalized = SemanticCondition._normalize_field_name(field_name)
+        
+        # Common field name aliases grouped by semantic meaning
+        alias_groups = {
+            # =================================================================
+            # EVENT/LOG IDENTIFIERS
+            # =================================================================
+            'eventid': [
+                'EventID', 'Event_ID', 'event_id', 'eventid', 'Id', 'ID', 'id',
+                'event_code', 'EventCode', 'eventcode', 'code', 'Code',
+                'event_type', 'EventType', 'eventtype', 'type_id', 'TypeID',
+                'log_id', 'LogID', 'logid', 'record_id', 'RecordID', 'recordid',
+                'message_id', 'MessageID', 'messageid', 'evt_id', 'EvtID',
+                'event_number', 'EventNumber', 'eventnumber', 'evtx_id', 'EvtxID'
+            ],
+            
+            'eventtype': [
+                'EventType', 'event_type', 'eventtype', 'type', 'Type',
+                'log_type', 'LogType', 'logtype', 'category', 'Category',
+                'event_category', 'EventCategory', 'eventcategory'
+            ],
+            
+            'channel': [
+                'Channel', 'channel', 'log_name', 'LogName', 'logname',
+                'source', 'Source', 'provider', 'Provider', 'log_source', 'LogSource'
+            ],
+            
+            # =================================================================
+            # EXECUTABLE/PROCESS NAMES
+            # =================================================================
+            'executablename': [
+                'executable_name', 'ExecutableName', 'executablename', 'Executable', 'executable',
+                'exe_name', 'ExeName', 'exename', 'exe', 'Exe', 'EXE',
+                'filename', 'FileName', 'file_name', 'Filename', 'name', 'Name',
+                'process_name', 'ProcessName', 'processname', 'process', 'Process',
+                'image', 'Image', 'image_name', 'ImageName', 'imagename',
+                'image_path', 'ImagePath', 'imagepath', 'binary', 'Binary',
+                'binary_name', 'BinaryName', 'binaryname', 'app_name', 'AppName', 'appname',
+                'application', 'Application', 'application_name', 'ApplicationName',
+                'program', 'Program', 'program_name', 'ProgramName', 'programname',
+                'command', 'Command', 'cmd', 'Cmd', 'CMD',
+                'new_process_name', 'NewProcessName', 'newprocessname',
+                'target_filename', 'TargetFilename', 'targetfilename'
+            ],
+            
+            'filename': [
+                'filename', 'FileName', 'file_name', 'Filename', 'name', 'Name',
+                'file', 'File', 'fname', 'FName', 'f_name', 'document', 'Document',
+                'document_name', 'DocumentName', 'documentname', 'object_name', 'ObjectName'
+            ],
+            
+            'processid': [
+                'ProcessID', 'process_id', 'processid', 'pid', 'PID', 'Pid',
+                'process_identifier', 'ProcessIdentifier', 'proc_id', 'ProcID',
+                'new_process_id', 'NewProcessID', 'newprocessid'
+            ],
+            
+            'parentprocessid': [
+                'ParentProcessID', 'parent_process_id', 'parentprocessid', 'ppid', 'PPID',
+                'parent_pid', 'ParentPID', 'parentpid', 'creator_process_id', 'CreatorProcessID'
+            ],
+            
+            'commandline': [
+                'CommandLine', 'command_line', 'commandline', 'cmd_line', 'CmdLine', 'cmdline',
+                'command', 'Command', 'arguments', 'Arguments', 'args', 'Args',
+                'parameters', 'Parameters', 'params', 'Params', 'process_command_line',
+                'ProcessCommandLine', 'processcommandline'
+            ],
+            
+            # =================================================================
+            # FILE PATHS
+            # =================================================================
+            'targetpath': [
+                'target_path', 'TargetPath', 'targetpath', 'target', 'Target',
+                'path', 'Path', 'file_path', 'FilePath', 'filepath',
+                'full_path', 'FullPath', 'fullpath', 'absolute_path', 'AbsolutePath',
+                'location', 'Location', 'file_location', 'FileLocation', 'filelocation',
+                'destination', 'Destination', 'dest_path', 'DestPath', 'destpath',
+                'target_file', 'TargetFile', 'targetfile', 'object_path', 'ObjectPath',
+                'link_target', 'LinkTarget', 'linktarget', 'shortcut_target', 'ShortcutTarget'
+            ],
+            
+            'path': [
+                'path', 'Path', 'folder_path', 'FolderPath', 'folderpath',
+                'directory', 'Directory', 'dir', 'Dir', 'folder', 'Folder',
+                'location', 'Location', 'file_path', 'FilePath', 'filepath',
+                'full_path', 'FullPath', 'fullpath', 'absolute_path', 'AbsolutePath',
+                'shell_path', 'ShellPath', 'shellpath', 'accessed_path', 'AccessedPath'
+            ],
+            
+            'sourcepath': [
+                'source_path', 'SourcePath', 'sourcepath', 'source', 'Source',
+                'src_path', 'SrcPath', 'srcpath', 'src', 'Src', 'origin', 'Origin',
+                'original_path', 'OriginalPath', 'originalpath', 'from_path', 'FromPath'
+            ],
+            
+            # =================================================================
+            # REGISTRY
+            # =================================================================
+            'keypath': [
+                'key_path', 'KeyPath', 'keypath', 'registry_key', 'RegistryKey', 'registrykey',
+                'key', 'Key', 'reg_key', 'RegKey', 'regkey', 'hive_path', 'HivePath', 'hivepath',
+                'registry_path', 'RegistryPath', 'registrypath', 'reg_path', 'RegPath', 'regpath',
+                'target_object', 'TargetObject', 'targetobject', 'object', 'Object',
+                'registry_hive', 'RegistryHive', 'registryhive', 'hive', 'Hive'
+            ],
+            
+            'valuename': [
+                'value_name', 'ValueName', 'valuename', 'value', 'Value',
+                'registry_value', 'RegistryValue', 'registryvalue', 'reg_value', 'RegValue',
+                'data_name', 'DataName', 'dataname', 'entry', 'Entry'
+            ],
+            
+            'valuedata': [
+                'value_data', 'ValueData', 'valuedata', 'data', 'Data',
+                'registry_data', 'RegistryData', 'registrydata', 'content', 'Content',
+                'details', 'Details', 'new_value', 'NewValue', 'newvalue'
+            ],
+            
+            # =================================================================
+            # NETWORK
+            # =================================================================
+            'remoteaddress': [
+                'remote_address', 'RemoteAddress', 'remoteaddress', 'remote_ip', 'RemoteIP', 'remoteip',
+                'destination_ip', 'DestinationIP', 'destinationip', 'dest_ip', 'DestIP', 'destip',
+                'dst_ip', 'DstIP', 'dstip', 'dst_addr', 'DstAddr', 'dstaddr',
+                'target_ip', 'TargetIP', 'targetip', 'ip_address', 'IPAddress', 'ipaddress',
+                'ip', 'IP', 'Ip', 'address', 'Address', 'host', 'Host',
+                'destination_address', 'DestinationAddress', 'destinationaddress',
+                'remote_host', 'RemoteHost', 'remotehost', 'server', 'Server',
+                'server_ip', 'ServerIP', 'serverip', 'external_ip', 'ExternalIP', 'externalip'
+            ],
+            
+            'sourceaddress': [
+                'source_address', 'SourceAddress', 'sourceaddress', 'source_ip', 'SourceIP', 'sourceip',
+                'src_ip', 'SrcIP', 'srcip', 'src_addr', 'SrcAddr', 'srcaddr',
+                'local_ip', 'LocalIP', 'localip', 'local_address', 'LocalAddress', 'localaddress',
+                'client_ip', 'ClientIP', 'clientip', 'origin_ip', 'OriginIP', 'originip',
+                'internal_ip', 'InternalIP', 'internalip'
+            ],
+            
+            'remoteport': [
+                'remote_port', 'RemotePort', 'remoteport', 'destination_port', 'DestinationPort',
+                'dest_port', 'DestPort', 'destport', 'dst_port', 'DstPort', 'dstport',
+                'target_port', 'TargetPort', 'targetport', 'server_port', 'ServerPort', 'serverport',
+                'port', 'Port'
+            ],
+            
+            'sourceport': [
+                'source_port', 'SourcePort', 'sourceport', 'src_port', 'SrcPort', 'srcport',
+                'local_port', 'LocalPort', 'localport', 'client_port', 'ClientPort', 'clientport',
+                'origin_port', 'OriginPort', 'originport'
+            ],
+            
+            'protocol': [
+                'protocol', 'Protocol', 'proto', 'Proto', 'network_protocol', 'NetworkProtocol',
+                'ip_protocol', 'IPProtocol', 'ipprotocol', 'transport', 'Transport'
+            ],
+            
+            # =================================================================
+            # URL/WEB
+            # =================================================================
+            'url': [
+                'url', 'URL', 'Url', 'visited_url', 'VisitedUrl', 'visitedurl',
+                'address', 'Address', 'web_address', 'WebAddress', 'webaddress',
+                'link', 'Link', 'uri', 'URI', 'Uri', 'href', 'Href', 'HREF',
+                'site', 'Site', 'website', 'Website', 'web_site', 'WebSite',
+                'page_url', 'PageUrl', 'pageurl', 'page', 'Page',
+                'target_url', 'TargetUrl', 'targeturl', 'destination_url', 'DestinationUrl',
+                'request_url', 'RequestUrl', 'requesturl', 'location', 'Location'
+            ],
+            
+            'domain': [
+                'domain', 'Domain', 'host', 'Host', 'hostname', 'HostName', 'host_name',
+                'server', 'Server', 'server_name', 'ServerName', 'servername',
+                'site', 'Site', 'website', 'Website', 'fqdn', 'FQDN', 'Fqdn'
+            ],
+            
+            # =================================================================
+            # TIMESTAMPS
+            # =================================================================
+            'timestamp': [
+                'timestamp', 'Timestamp', 'TimeStamp', 'time_stamp',
+                'time', 'Time', 'datetime', 'DateTime', 'date_time', 'Datetime',
+                'date', 'Date', 'event_time', 'EventTime', 'eventtime',
+                'log_time', 'LogTime', 'logtime', 'record_time', 'RecordTime', 'recordtime',
+                'generated_time', 'GeneratedTime', 'generatedtime', 'when', 'When',
+                'occurred', 'Occurred', 'occurred_time', 'OccurredTime'
+            ],
+            
+            'createdtime': [
+                'created_time', 'CreatedTime', 'createdtime', 'creation_time', 'CreationTime',
+                'create_time', 'CreateTime', 'createtime', 'birth_time', 'BirthTime', 'birthtime',
+                'created', 'Created', 'created_date', 'CreatedDate', 'createddate',
+                'creation_date', 'CreationDate', 'creationdate', 'date_created', 'DateCreated',
+                'fn_created', 'FNCreated', 'si_created', 'SICreated'
+            ],
+            
+            'modifiedtime': [
+                'modified_time', 'ModifiedTime', 'modifiedtime', 'modification_time', 'ModificationTime',
+                'modify_time', 'ModifyTime', 'modifytime', 'modified', 'Modified',
+                'last_modified', 'LastModified', 'lastmodified', 'modified_date', 'ModifiedDate',
+                'change_time', 'ChangeTime', 'changetime', 'updated', 'Updated',
+                'update_time', 'UpdateTime', 'updatetime', 'last_write', 'LastWrite', 'lastwrite',
+                'fn_modified', 'FNModified', 'si_modified', 'SIModified'
+            ],
+            
+            'accessedtime': [
+                'accessed_time', 'AccessedTime', 'accessedtime', 'access_time', 'AccessTime',
+                'last_accessed', 'LastAccessed', 'lastaccessed', 'accessed', 'Accessed',
+                'last_access', 'LastAccess', 'lastaccess', 'read_time', 'ReadTime', 'readtime',
+                'fn_accessed', 'FNAccessed', 'si_accessed', 'SIAccessed'
+            ],
+            
+            # =================================================================
+            # USER/ACCOUNT
+            # =================================================================
+            'username': [
+                'username', 'UserName', 'user_name', 'Username', 'user', 'User',
+                'account_name', 'AccountName', 'accountname', 'account', 'Account',
+                'logon_name', 'LogonName', 'logonname', 'login_name', 'LoginName', 'loginname',
+                'subject_user_name', 'SubjectUserName', 'subjectusername',
+                'target_user_name', 'TargetUserName', 'targetusername',
+                'owner', 'Owner', 'owner_name', 'OwnerName', 'ownername',
+                'principal', 'Principal', 'identity', 'Identity', 'sid_name', 'SIDName'
+            ],
+            
+            'usersid': [
+                'user_sid', 'UserSID', 'usersid', 'sid', 'SID', 'Sid',
+                'security_id', 'SecurityID', 'securityid', 'subject_user_sid', 'SubjectUserSID',
+                'target_user_sid', 'TargetUserSID', 'account_sid', 'AccountSID', 'accountsid',
+                'owner_sid', 'OwnerSID', 'ownersid'
+            ],
+            
+            'userdomain': [
+                'user_domain', 'UserDomain', 'userdomain', 'domain', 'Domain',
+                'account_domain', 'AccountDomain', 'accountdomain', 'logon_domain', 'LogonDomain',
+                'subject_domain_name', 'SubjectDomainName', 'target_domain_name', 'TargetDomainName',
+                'workgroup', 'Workgroup', 'realm', 'Realm'
+            ],
+            
+            # =================================================================
+            # AUTHENTICATION
+            # =================================================================
+            'logontype': [
+                'LogonType', 'logon_type', 'logontype', 'login_type', 'LoginType', 'logintype',
+                'type', 'Type', 'auth_type', 'AuthType', 'authtype',
+                'authentication_type', 'AuthenticationType', 'authenticationtype',
+                'logon_method', 'LogonMethod', 'logonmethod', 'access_type', 'AccessType'
+            ],
+            
+            'logonid': [
+                'LogonID', 'logon_id', 'logonid', 'login_id', 'LoginID', 'loginid',
+                'session_id', 'SessionID', 'sessionid', 'subject_logon_id', 'SubjectLogonID',
+                'target_logon_id', 'TargetLogonID', 'auth_id', 'AuthID', 'authid'
+            ],
+            
+            'status': [
+                'status', 'Status', 'result', 'Result', 'outcome', 'Outcome',
+                'success', 'Success', 'failure', 'Failure', 'error_code', 'ErrorCode',
+                'return_code', 'ReturnCode', 'returncode', 'exit_code', 'ExitCode', 'exitcode',
+                'status_code', 'StatusCode', 'statuscode', 'response_code', 'ResponseCode'
+            ],
+            
+            # =================================================================
+            # FILE SYSTEM
+            # =================================================================
+            'reason': [
+                'reason', 'Reason', 'action', 'Action', 'operation', 'Operation',
+                'change_reason', 'ChangeReason', 'changereason', 'update_reason', 'UpdateReason',
+                'usn_reason', 'USNReason', 'usnreason', 'file_action', 'FileAction', 'fileaction',
+                'event_action', 'EventAction', 'eventaction', 'activity', 'Activity',
+                'change_type', 'ChangeType', 'changetype', 'modification_type', 'ModificationType'
+            ],
+            
+            'size': [
+                'size', 'Size', 'file_size', 'FileSize', 'filesize',
+                'length', 'Length', 'bytes', 'Bytes', 'byte_count', 'ByteCount', 'bytecount',
+                'data_size', 'DataSize', 'datasize', 'content_length', 'ContentLength',
+                'allocated_size', 'AllocatedSize', 'allocatedsize', 'logical_size', 'LogicalSize'
+            ],
+            
+            'hash': [
+                'hash', 'Hash', 'md5', 'MD5', 'Md5', 'sha1', 'SHA1', 'Sha1',
+                'sha256', 'SHA256', 'Sha256', 'sha512', 'SHA512', 'Sha512',
+                'file_hash', 'FileHash', 'filehash', 'checksum', 'Checksum',
+                'digest', 'Digest', 'imphash', 'ImpHash', 'imphash',
+                'hash_value', 'HashValue', 'hashvalue', 'hashes', 'Hashes'
+            ],
+            
+            'extension': [
+                'extension', 'Extension', 'ext', 'Ext', 'file_extension', 'FileExtension',
+                'file_ext', 'FileExt', 'fileext', 'suffix', 'Suffix'
+            ],
+            
+            # =================================================================
+            # DEVICE/HARDWARE
+            # =================================================================
+            'devicename': [
+                'device_name', 'DeviceName', 'devicename', 'device', 'Device',
+                'hardware_name', 'HardwareName', 'hardwarename', 'drive', 'Drive',
+                'drive_name', 'DriveName', 'drivename', 'volume', 'Volume',
+                'volume_name', 'VolumeName', 'volumename', 'disk', 'Disk',
+                'disk_name', 'DiskName', 'diskname', 'media', 'Media'
+            ],
+            
+            'serialnumber': [
+                'serial_number', 'SerialNumber', 'serialnumber', 'serial', 'Serial',
+                'device_serial', 'DeviceSerial', 'deviceserial', 'sn', 'SN',
+                'hardware_id', 'HardwareID', 'hardwareid', 'device_id', 'DeviceID', 'deviceid',
+                'unique_id', 'UniqueID', 'uniqueid', 'instance_id', 'InstanceID', 'instanceid'
+            ],
+            
+            'vendorid': [
+                'vendor_id', 'VendorID', 'vendorid', 'vendor', 'Vendor',
+                'manufacturer', 'Manufacturer', 'make', 'Make', 'brand', 'Brand',
+                'vid', 'VID', 'Vid'
+            ],
+            
+            'productid': [
+                'product_id', 'ProductID', 'productid', 'product', 'Product',
+                'model', 'Model', 'pid', 'PID', 'Pid', 'device_model', 'DeviceModel'
+            ],
+            
+            # =================================================================
+            # BROWSER/WEB HISTORY
+            # =================================================================
+            'title': [
+                'title', 'Title', 'page_title', 'PageTitle', 'pagetitle',
+                'document_title', 'DocumentTitle', 'documenttitle', 'name', 'Name',
+                'heading', 'Heading', 'subject', 'Subject', 'caption', 'Caption'
+            ],
+            
+            'visitcount': [
+                'visit_count', 'VisitCount', 'visitcount', 'visits', 'Visits',
+                'count', 'Count', 'access_count', 'AccessCount', 'accesscount',
+                'hit_count', 'HitCount', 'hitcount', 'frequency', 'Frequency'
+            ],
+            
+            'referrer': [
+                'referrer', 'Referrer', 'referer', 'Referer', 'referring_url', 'ReferringUrl',
+                'source_url', 'SourceUrl', 'sourceurl', 'from_url', 'FromUrl', 'fromurl',
+                'previous_url', 'PreviousUrl', 'previousurl', 'origin_url', 'OriginUrl'
+            ],
+            
+            # =================================================================
+            # MISCELLANEOUS
+            # =================================================================
+            'description': [
+                'description', 'Description', 'desc', 'Desc', 'details', 'Details',
+                'message', 'Message', 'msg', 'Msg', 'text', 'Text',
+                'comment', 'Comment', 'note', 'Note', 'notes', 'Notes',
+                'info', 'Info', 'information', 'Information', 'summary', 'Summary'
+            ],
+            
+            'version': [
+                'version', 'Version', 'ver', 'Ver', 'file_version', 'FileVersion',
+                'product_version', 'ProductVersion', 'productversion', 'build', 'Build',
+                'revision', 'Revision', 'release', 'Release'
+            ],
+            
+            'company': [
+                'company', 'Company', 'company_name', 'CompanyName', 'companyname',
+                'publisher', 'Publisher', 'vendor', 'Vendor', 'manufacturer', 'Manufacturer',
+                'developer', 'Developer', 'author', 'Author', 'creator', 'Creator'
+            ],
+        }
+        
+        # Find which group this field belongs to
+        for group_key, aliases in alias_groups.items():
+            # Check if the normalized field name matches the group key
+            if normalized == group_key:
+                return aliases
+            # Check if the normalized field name matches any alias in the group
+            for alias in aliases:
+                if SemanticCondition._normalize_field_name(alias) == normalized:
+                    return aliases
+        
+        # No aliases found - try fuzzy matching as fallback
+        return SemanticCondition._fuzzy_find_aliases(field_name, alias_groups)
+    
+    @staticmethod
+    def _fuzzy_find_aliases(field_name: str, alias_groups: Dict[str, List[str]]) -> List[str]:
+        """
+        Fuzzy matching to find aliases when exact match fails.
+        Uses substring matching and common word detection.
+        """
+        normalized = SemanticCondition._normalize_field_name(field_name)
+        
+        # Common words that indicate field type
+        keyword_mappings = {
+            'event': ['eventid', 'eventtype'],
+            'process': ['executablename', 'processid', 'commandline'],
+            'file': ['filename', 'path', 'targetpath', 'size', 'hash', 'extension'],
+            'path': ['path', 'targetpath', 'sourcepath', 'keypath'],
+            'user': ['username', 'usersid', 'userdomain'],
+            'time': ['timestamp', 'createdtime', 'modifiedtime', 'accessedtime'],
+            'date': ['timestamp', 'createdtime', 'modifiedtime'],
+            'ip': ['remoteaddress', 'sourceaddress'],
+            'port': ['remoteport', 'sourceport'],
+            'url': ['url', 'domain'],
+            'registry': ['keypath', 'valuename', 'valuedata'],
+            'reg': ['keypath', 'valuename', 'valuedata'],
+            'hash': ['hash'],
+            'device': ['devicename', 'serialnumber'],
+            'logon': ['logontype', 'logonid', 'username'],
+            'login': ['logontype', 'logonid', 'username'],
+            'address': ['remoteaddress', 'sourceaddress', 'url'],
+            'name': ['filename', 'username', 'executablename', 'devicename'],
+            'id': ['eventid', 'processid', 'logonid', 'usersid'],
+            'exe': ['executablename', 'commandline'],
+            'cmd': ['commandline', 'executablename'],
+            'src': ['sourceaddress', 'sourceport', 'sourcepath'],
+            'dst': ['remoteaddress', 'remoteport', 'targetpath'],
+            'dest': ['remoteaddress', 'remoteport', 'targetpath'],
+            'remote': ['remoteaddress', 'remoteport'],
+            'local': ['sourceaddress', 'sourceport'],
+            'target': ['targetpath', 'remoteaddress'],
+            'source': ['sourcepath', 'sourceaddress'],
+            'created': ['createdtime'],
+            'modified': ['modifiedtime'],
+            'accessed': ['accessedtime'],
+            'account': ['username', 'usersid'],
+            'sid': ['usersid'],
+            'domain': ['userdomain', 'domain'],
+            'host': ['domain', 'remoteaddress'],
+            'server': ['domain', 'remoteaddress'],
+        }
+        
+        # Check if any keyword is in the field name
+        for keyword, group_keys in keyword_mappings.items():
+            if keyword in normalized:
+                for group_key in group_keys:
+                    if group_key in alias_groups:
+                        return alias_groups[group_key]
+        
+        return []
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -478,8 +991,403 @@ class SemanticMappingManager:
         # Compiled pattern cache
         self.pattern_cache: Dict[str, re.Pattern] = {}
         
-        # Load default mappings
+        # JSON configuration paths
+        self.config_dir = Path("Crow-Eye/configs")
+        self.default_rules_path = self.config_dir / "semantic_rules_default.json"
+        self.custom_rules_path = self.config_dir / "semantic_rules_custom.json"
+        
+        # Load default mappings and rules
         self._load_default_mappings()
+        self._load_default_rules()
+        
+        # Load rules from JSON files
+        self._load_rules_from_json()
+    
+    def _load_default_rules(self):
+        """
+        Load default semantic rules for forensic investigators.
+        
+        These rules use AND/OR logic to identify common user activities:
+        - User Activity (login, logoff, session lock/unlock)
+        - File Operations (file access, creation, deletion)
+        - Application Execution (app run, app close)
+        - System Events (startup, shutdown, sleep, wake)
+        - Suspicious Activity (failed logins, privilege escalation)
+        """
+        default_rules = []
+        
+        # =================================================================
+        # USER ACTIVITY RULES
+        # =================================================================
+        
+        # User Login (Interactive)
+        default_rules.append(SemanticRule(
+            rule_id="default-user-login-interactive",
+            name="User Login (Interactive)",
+            semantic_value="User Login - Interactive",
+            description="User logged in interactively (Type 2) - physical access to machine",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4624", "equals"),
+                SemanticCondition("SecurityLogs", "LogonType", "2", "equals"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="authentication",
+            severity="info",
+            confidence=0.95
+        ))
+        
+        # User Login (Remote/RDP)
+        default_rules.append(SemanticRule(
+            rule_id="default-user-login-remote",
+            name="User Login (Remote/RDP)",
+            semantic_value="User Login - Remote Desktop",
+            description="User logged in via Remote Desktop (Type 10)",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4624", "equals"),
+                SemanticCondition("SecurityLogs", "LogonType", "10", "equals"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="authentication",
+            severity="low",
+            confidence=0.95
+        ))
+        
+        # User Login (Network)
+        default_rules.append(SemanticRule(
+            rule_id="default-user-login-network",
+            name="User Login (Network)",
+            semantic_value="User Login - Network",
+            description="User logged in via network (Type 3) - file share access",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4624", "equals"),
+                SemanticCondition("SecurityLogs", "LogonType", "3", "equals"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="authentication",
+            severity="info",
+            confidence=0.90
+        ))
+        
+        # User Logoff
+        default_rules.append(SemanticRule(
+            rule_id="default-user-logoff",
+            name="User Logoff",
+            semantic_value="User Logoff",
+            description="User logged off (Event 4634 or 4647)",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4634", "equals"),
+                SemanticCondition("SecurityLogs", "EventID", "4647", "equals"),
+            ],
+            logic_operator="OR",
+            scope="global",
+            category="authentication",
+            severity="info",
+            confidence=0.95
+        ))
+        
+        # Session Lock
+        default_rules.append(SemanticRule(
+            rule_id="default-session-lock",
+            name="Session Locked",
+            semantic_value="Session Locked",
+            description="User locked their workstation",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4800", "equals"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="authentication",
+            severity="info",
+            confidence=0.95
+        ))
+        
+        # Session Unlock
+        default_rules.append(SemanticRule(
+            rule_id="default-session-unlock",
+            name="Session Unlocked",
+            semantic_value="Session Unlocked",
+            description="User unlocked their workstation",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4801", "equals"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="authentication",
+            severity="info",
+            confidence=0.95
+        ))
+        
+        # =================================================================
+        # FILE OPERATION RULES
+        # =================================================================
+        
+        # File Access via ShellBags (folder navigation)
+        default_rules.append(SemanticRule(
+            rule_id="default-folder-access-shellbags",
+            name="Folder Access (ShellBags)",
+            semantic_value="Folder Accessed",
+            description="User navigated to a folder (evidence from ShellBags)",
+            conditions=[
+                SemanticCondition("ShellBags", "path", "*", "wildcard"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="file_access",
+            severity="info",
+            confidence=0.85
+        ))
+        
+        # File Access via LNK (recent file)
+        default_rules.append(SemanticRule(
+            rule_id="default-file-access-lnk",
+            name="File Accessed (LNK)",
+            semantic_value="File Accessed - Recent",
+            description="User accessed a file (evidence from LNK shortcut)",
+            conditions=[
+                SemanticCondition("LNK", "target_path", "*", "wildcard"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="file_access",
+            severity="info",
+            confidence=0.90
+        ))
+        
+        # File Creation (MFT)
+        default_rules.append(SemanticRule(
+            rule_id="default-file-created-mft",
+            name="File Created (MFT)",
+            semantic_value="File Created",
+            description="New file was created (evidence from MFT)",
+            conditions=[
+                SemanticCondition("MFT", "file_name", "*", "wildcard"),
+                SemanticCondition("MFT", "created_time", "*", "wildcard"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="file_access",
+            severity="info",
+            confidence=0.85
+        ))
+        
+        # File Deletion (USN Journal)
+        default_rules.append(SemanticRule(
+            rule_id="default-file-deleted-usn",
+            name="File Deleted (USN)",
+            semantic_value="File Deleted",
+            description="File was deleted (evidence from USN Journal)",
+            conditions=[
+                SemanticCondition("USN", "reason", "FILE_DELETE", "contains"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="file_access",
+            severity="low",
+            confidence=0.90
+        ))
+        
+        # File Renamed (USN Journal)
+        default_rules.append(SemanticRule(
+            rule_id="default-file-renamed-usn",
+            name="File Renamed (USN)",
+            semantic_value="File Renamed",
+            description="File was renamed (evidence from USN Journal)",
+            conditions=[
+                SemanticCondition("USN", "reason", "RENAME", "contains"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="file_access",
+            severity="info",
+            confidence=0.90
+        ))
+        
+        # =================================================================
+        # MULTI-FEATHER RULES (Cross-Artifact Correlation)
+        # Smart field matching handles variations automatically
+        # =================================================================
+        
+        # 1. Application Execution with File Access (Prefetch + LNK)
+        default_rules.append(SemanticRule(
+            rule_id="default-app-execution-file-access",
+            name="Application Executed with File Access",
+            semantic_value="App Execution + File Access",
+            description="Application was executed AND a file was accessed (evidence from Prefetch + LNK)",
+            conditions=[
+                SemanticCondition("Prefetch", "executable_name", "*", "wildcard"),
+                SemanticCondition("LNK", "target_path", "*", "wildcard"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="user_activity",
+            severity="info",
+            confidence=0.85
+        ))
+        
+        # 2. USB Device Usage (Registry + EventLogs)
+        default_rules.append(SemanticRule(
+            rule_id="default-usb-device-usage",
+            name="USB Device Connected with Activity",
+            semantic_value="USB Device Usage",
+            description="USB device was connected AND related activity detected",
+            conditions=[
+                SemanticCondition("Registry", "key_path", "USBSTOR", "contains"),
+                SemanticCondition("EventLogs", "EventID", "*", "wildcard"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="device_activity",
+            severity="medium",
+            confidence=0.80
+        ))
+        
+        # 3. User Login + File Access (SecurityLogs + ShellBags)
+        default_rules.append(SemanticRule(
+            rule_id="default-login-file-access",
+            name="User Login with Folder Navigation",
+            semantic_value="Login + Folder Access",
+            description="User logged in AND navigated to folders",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4624", "equals"),
+                SemanticCondition("ShellBags", "path", "*", "wildcard"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="user_activity",
+            severity="info",
+            confidence=0.85
+        ))
+        
+        # 4. Browser Activity (Prefetch + BrowserHistory)
+        default_rules.append(SemanticRule(
+            rule_id="default-browser-activity",
+            name="Browser Execution with Web Activity",
+            semantic_value="Browser Activity",
+            description="Browser was executed AND web activity detected",
+            conditions=[
+                SemanticCondition("Prefetch", "executable_name", "chrome|firefox|msedge|edge|iexplore|opera|brave|safari", "regex"),
+                SemanticCondition("BrowserHistory", "url", "*", "wildcard"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="web_activity",
+            severity="info",
+            confidence=0.90
+        ))
+        
+        # 5. Data Exfiltration Pattern (USB + File Access + Network)
+        default_rules.append(SemanticRule(
+            rule_id="default-data-exfiltration-pattern",
+            name="Potential Data Exfiltration",
+            semantic_value="Data Exfiltration Pattern",
+            description="USB device connected OR file accessed OR network activity - potential data movement",
+            conditions=[
+                SemanticCondition("Registry", "key_path", "USBSTOR", "contains"),
+                SemanticCondition("LNK", "target_path", "*", "wildcard"),
+                SemanticCondition("NetworkConnections", "remote_address", "*", "wildcard"),
+            ],
+            logic_operator="OR",
+            scope="global",
+            category="suspicious_activity",
+            severity="high",
+            confidence=0.70
+        ))
+        
+        # =================================================================
+        # ADDITIONAL MULTI-FEATHER RULES
+        # =================================================================
+        
+        # Process Creation with Network Activity
+        default_rules.append(SemanticRule(
+            rule_id="default-process-network-activity",
+            name="Process with Network Connection",
+            semantic_value="Process + Network Activity",
+            description="Process was created AND established network connection",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4688", "equals"),
+                SemanticCondition("NetworkConnections", "remote_address", "*", "wildcard"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="network_activity",
+            severity="medium",
+            confidence=0.80
+        ))
+        
+        # Failed Login Attempts
+        default_rules.append(SemanticRule(
+            rule_id="default-failed-login-attempts",
+            name="Failed Login Attempt",
+            semantic_value="Failed Authentication",
+            description="Failed login attempt detected (Event 4625 or 4771)",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4625", "equals"),
+                SemanticCondition("SecurityLogs", "EventID", "4771", "equals"),
+            ],
+            logic_operator="OR",
+            scope="global",
+            category="authentication",
+            severity="medium",
+            confidence=0.95
+        ))
+        
+        # Privilege Escalation Pattern
+        default_rules.append(SemanticRule(
+            rule_id="default-privilege-escalation",
+            name="Privilege Escalation",
+            semantic_value="Privilege Escalation",
+            description="Special privileges assigned to new logon (Event 4672)",
+            conditions=[
+                SemanticCondition("SecurityLogs", "EventID", "4672", "equals"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="authentication",
+            severity="high",
+            confidence=0.90
+        ))
+        
+        # Application Installation (Prefetch + Registry)
+        default_rules.append(SemanticRule(
+            rule_id="default-app-installation",
+            name="Application Installation",
+            semantic_value="App Installation",
+            description="New application installed (evidence from Prefetch + Registry)",
+            conditions=[
+                SemanticCondition("Prefetch", "executable_name", "msiexec|setup|install|installer", "regex"),
+                SemanticCondition("Registry", "key_path", "Uninstall", "contains"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="software_activity",
+            severity="low",
+            confidence=0.75
+        ))
+        
+        # Remote Access Tool Detection
+        default_rules.append(SemanticRule(
+            rule_id="default-remote-access-tool",
+            name="Remote Access Tool Activity",
+            semantic_value="Remote Access Tool",
+            description="Remote access tool executed (TeamViewer, AnyDesk, VNC, RDP, LogMeIn, etc.)",
+            conditions=[
+                SemanticCondition("Prefetch", "executable_name", "teamviewer|anydesk|vnc|rdp|logmein|ammyy|ultraviewer|rustdesk|parsec|splashtop", "regex"),
+            ],
+            logic_operator="AND",
+            scope="global",
+            category="remote_access",
+            severity="medium",
+            confidence=0.85
+        ))
+        
+        # Add all default rules to the manager
+        for rule in default_rules:
+            self.add_rule(rule)
+        
+        logger.info(f"Loaded {len(default_rules)} default semantic rules")
     
     def _load_default_mappings(self):
         """Load default semantic mappings for all artifact types."""
@@ -717,9 +1625,17 @@ class SemanticMappingManager:
     
     def _evaluate_single_condition(self, condition: Dict[str, Any], record: Dict[str, Any]) -> bool:
         """Evaluate a single condition."""
-        field_name = condition.get("field")
+        field_name = condition.get("field") or condition.get("field_name")
         operator = condition.get("operator", "equals")
         expected_value = condition.get("value")
+        condition_feather_id = condition.get("feather_id")
+        
+        # Check feather_id match if specified in condition
+        if condition_feather_id:
+            record_feather_id = record.get("_feather_id", "")
+            # Case-insensitive comparison and handle common variations
+            if not self._feather_id_matches(condition_feather_id, record_feather_id):
+                return False
         
         if field_name not in record:
             return False
@@ -744,6 +1660,53 @@ class SemanticMappingManager:
                 return False
         elif operator == "contains":
             return expected_value.lower() in str(actual_value).lower()
+        elif operator == "wildcard":
+            # Wildcard matches any non-empty value
+            return bool(actual_value) and str(actual_value).strip() != ""
+        
+        return False
+    
+    def _feather_id_matches(self, condition_feather_id: str, record_feather_id: str) -> bool:
+        """Check if feather IDs match with common variations."""
+        if not condition_feather_id or not record_feather_id:
+            return not condition_feather_id  # If no condition feather_id, match any
+        
+        # Normalize both IDs for comparison
+        cond_lower = condition_feather_id.lower().replace("_", "").replace("-", "")
+        rec_lower = record_feather_id.lower().replace("_", "").replace("-", "")
+        
+        # Direct match
+        if cond_lower == rec_lower:
+            return True
+        
+        # Common mappings between rule feather IDs and actual feather IDs
+        feather_id_mappings = {
+            "securitylogs": ["systemlogs", "security", "eventlogs", "winevt"],
+            "systemlogs": ["securitylogs", "security", "eventlogs", "winevt"],
+            "prefetch": ["prefetch", "pf"],
+            "lnk": ["lnk", "shortcut", "link"],
+            "mft": ["mft", "mftusn", "ntfs"],
+            "usn": ["usn", "usnjournal", "mftusn"],
+            "shellbags": ["shellbags", "shell"],
+            "registry": ["registry", "reg"],
+            "amcache": ["amcache", "amcacheapp", "amcachefile", "inventoryapplication"],
+            "shimcache": ["shimcache", "appcompat"],
+            "jumplist": ["jumplist", "jumplistauto", "jumplistcustom", "automaticjumplist", "customjumplist"],
+            "srum": ["srum", "srumapp", "srumusage"],
+            "browserhistory": ["browserhistory", "browser", "webhistory"],
+            "networkconnections": ["networkconnections", "network", "connections"],
+            "eventlogs": ["eventlogs", "winevt", "systemlogs", "securitylogs"],
+        }
+        
+        # Check if condition feather ID maps to record feather ID
+        for key, variations in feather_id_mappings.items():
+            if cond_lower == key or cond_lower in variations:
+                if rec_lower == key or rec_lower in variations:
+                    return True
+        
+        # Partial match (one contains the other)
+        if cond_lower in rec_lower or rec_lower in cond_lower:
+            return True
         
         return False
     
@@ -938,3 +1901,435 @@ class SemanticMappingManager:
                 self.add_rule(rule)
             
             logger.info(f"Loaded {len(mappings_data)} mappings and {len(rules_data)} rules from {file_path}")
+    
+    # =========================================================================
+    # JSON CONFIGURATION METHODS
+    # =========================================================================
+    
+    def _ensure_config_directory(self):
+        """Ensure the configs directory exists."""
+        if not self.config_dir.exists():
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created config directory: {self.config_dir}")
+    
+    def _load_rules_from_json(self):
+        """
+        Load rules from JSON files with fallback to built-in rules.
+        
+        Load order:
+        1. Try to load default rules from JSON
+        2. If missing, export built-in rules to JSON
+        3. If corrupted, use built-in rules and log warning
+        4. Load custom rules if present
+        5. Merge custom rules over defaults
+        """
+        self._ensure_config_directory()
+        
+        # Track loading status for logging
+        default_rules_dict = {}
+        custom_rules_dict = {}
+        default_loaded = False
+        custom_loaded = False
+        fallback_used = False
+        
+        # Store built-in rules count for comparison
+        built_in_count = len(self.global_rules)
+        
+        # Load default rules
+        if not self.default_rules_path.exists():
+            logger.info(f"Default rules file not found, exporting built-in rules to {self.default_rules_path}")
+            try:
+                self.export_default_rules_to_json()
+                logger.info(f"Successfully created default rules file with {built_in_count} built-in rules")
+                # Use built-in rules that are already loaded
+                default_rules_dict = {rule.rule_id: rule for rule in self.global_rules}
+                default_loaded = True
+            except Exception as e:
+                logger.error(f"Failed to export default rules: {e}")
+                logger.warning("Using built-in rules from code")
+                fallback_used = True
+                default_rules_dict = {rule.rule_id: rule for rule in self.global_rules}
+        else:
+            try:
+                # Load default rules without adding to manager yet
+                default_rules_dict = self.load_rules_from_json(self.default_rules_path, add_to_manager=False)
+                default_loaded = True
+                logger.info(f"✓ Loaded {len(default_rules_dict)} default rules from JSON")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON syntax error in {self.default_rules_path}: {e}")
+                logger.warning("⚠ Falling back to built-in rules due to corrupted default rules file")
+                fallback_used = True
+                self._show_fallback_warning("default", str(e))
+                # Use built-in rules that are already loaded
+                default_rules_dict = {rule.rule_id: rule for rule in self.global_rules}
+            except Exception as e:
+                logger.error(f"Failed to load default rules from JSON: {e}")
+                logger.warning("⚠ Falling back to built-in rules")
+                fallback_used = True
+                self._show_fallback_warning("default", str(e))
+                # Use built-in rules that are already loaded
+                default_rules_dict = {rule.rule_id: rule for rule in self.global_rules}
+        
+        # Load custom rules if present
+        if self.custom_rules_path.exists():
+            try:
+                custom_rules_dict = self.load_rules_from_json(self.custom_rules_path, add_to_manager=False)
+                custom_loaded = True
+                logger.info(f"✓ Loaded {len(custom_rules_dict)} custom rules from JSON")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON syntax error in {self.custom_rules_path}: {e}")
+                logger.warning("⚠ Skipping custom rules due to corrupted file")
+                self._show_fallback_warning("custom", str(e))
+            except Exception as e:
+                logger.error(f"Failed to load custom rules from JSON: {e}")
+                logger.warning("⚠ Skipping custom rules")
+        else:
+            logger.info("No custom rules file found (this is normal)")
+        
+        # Merge custom rules over defaults if we have both
+        if default_loaded and custom_rules_dict:
+            merged_rules = self.merge_rules(default_rules_dict, custom_rules_dict)
+            
+            # Clear and rebuild global_rules with merged results
+            self.global_rules.clear()
+            for rule in merged_rules.values():
+                self.global_rules.append(rule)
+        elif default_loaded and not fallback_used:
+            # Only default rules loaded from JSON, replace built-in rules
+            self.global_rules.clear()
+            for rule in default_rules_dict.values():
+                self.global_rules.append(rule)
+        # else: keep built-in rules that are already loaded
+        
+        # Log final status
+        total_rules = len(self.global_rules)
+        default_count = len(default_rules_dict)
+        custom_count = len(custom_rules_dict)
+        
+        if fallback_used:
+            logger.warning(f"⚠ Using {total_rules} built-in rules (fallback mode)")
+        elif default_loaded and custom_loaded:
+            logger.info(f"✓ Successfully loaded rules: {default_count} default + {custom_count} custom = {total_rules} total")
+        elif default_loaded:
+            logger.info(f"✓ Successfully loaded {total_rules} default rules from JSON")
+        else:
+            logger.info(f"✓ Using {total_rules} built-in rules")
+    
+    def _show_fallback_warning(self, file_type: str, error_message: str):
+        """
+        Show warning notification when falling back to built-in rules.
+        
+        Args:
+            file_type: "default" or "custom"
+            error_message: Error message to display
+        """
+        # This method can be enhanced to show GUI notifications
+        # For now, it just logs the warning
+        file_name = "semantic_rules_default.json" if file_type == "default" else "semantic_rules_custom.json"
+        logger.warning(f"""
+╔══════════════════════════════════════════════════════════════════════════╗
+║ WARNING: Semantic Rules Configuration Error                              ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+File: {file_name}
+Error: {error_message}
+
+Action Taken:
+  {'Using built-in default rules from code' if file_type == 'default' else 'Skipping custom rules, using defaults only'}
+
+To Fix:
+  1. Open Settings → Semantic Mapping tab
+  2. Click "Validate Rule Files" to see detailed errors
+  3. Fix the JSON syntax or use "Export Default Rules" to reset
+
+The system will continue operating normally with {'built-in' if file_type == 'default' else 'default'} rules.
+        """)
+    
+    def load_rules_from_json(self, json_path: Path, add_to_manager: bool = False) -> Dict[str, SemanticRule]:
+        """
+        Load semantic rules from JSON file.
+        
+        Args:
+            json_path: Path to JSON file
+            add_to_manager: If True, automatically add rules to manager (default: False)
+            
+        Returns:
+            Dictionary of rules keyed by rule_id
+            
+        Raises:
+            Exception: If file cannot be loaded or parsed
+        """
+        if not json_path.exists():
+            return {}
+        
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load JSON from {json_path}: {e}")
+            raise
+        
+        if not isinstance(data, dict) or "rules" not in data:
+            logger.error(f"Invalid JSON structure in {json_path}: missing 'rules' array")
+            return {}
+        
+        rules_dict = {}
+        for rule_data in data["rules"]:
+            try:
+                # Convert conditions from dict to SemanticCondition objects
+                conditions = []
+                for cond_data in rule_data.get("conditions", []):
+                    condition = SemanticCondition(
+                        feather_id=cond_data["feather_id"],
+                        field_name=cond_data["field_name"],
+                        value=cond_data["value"],
+                        operator=cond_data.get("operator", "equals")
+                    )
+                    conditions.append(condition)
+                
+                # Create SemanticRule object
+                rule = SemanticRule(
+                    rule_id=rule_data["rule_id"],
+                    name=rule_data["name"],
+                    semantic_value=rule_data["semantic_value"],
+                    description=rule_data.get("description", ""),
+                    conditions=conditions,
+                    logic_operator=rule_data["logic_operator"],
+                    scope=rule_data.get("scope", "global"),
+                    category=rule_data.get("category", ""),
+                    severity=rule_data.get("severity", "info"),
+                    confidence=rule_data.get("confidence", 1.0),
+                    wing_id=rule_data.get("wing_id"),
+                    pipeline_id=rule_data.get("pipeline_id")
+                )
+                
+                rules_dict[rule.rule_id] = rule
+                
+                # Optionally add to manager
+                if add_to_manager:
+                    self.add_rule(rule)
+                
+            except Exception as e:
+                logger.error(f"Failed to parse rule from JSON: {e}")
+                continue
+        
+        return rules_dict
+    
+    def export_default_rules_to_json(self, output_path: Optional[Path] = None):
+        """
+        Export built-in default rules to JSON file.
+        
+        Args:
+            output_path: Optional output path (defaults to default_rules_path)
+        """
+        if output_path is None:
+            output_path = self.default_rules_path
+        
+        self._ensure_config_directory()
+        
+        # Convert global rules to JSON format
+        rules_data = []
+        for rule in self.global_rules:
+            rule_dict = {
+                "rule_id": rule.rule_id,
+                "name": rule.name,
+                "semantic_value": rule.semantic_value,
+                "description": rule.description,
+                "conditions": [
+                    {
+                        "feather_id": cond.feather_id,
+                        "field_name": cond.field_name,
+                        "value": cond.value,
+                        "operator": cond.operator
+                    }
+                    for cond in rule.conditions
+                ],
+                "logic_operator": rule.logic_operator,
+                "scope": rule.scope,
+                "category": rule.category,
+                "severity": rule.severity,
+                "confidence": rule.confidence
+            }
+            
+            if rule.wing_id:
+                rule_dict["wing_id"] = rule.wing_id
+            if rule.pipeline_id:
+                rule_dict["pipeline_id"] = rule.pipeline_id
+            
+            rules_data.append(rule_dict)
+        
+        # Write to file with 2-space indentation
+        data = {"rules": rules_data}
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Exported {len(rules_data)} default rules to {output_path}")
+    
+    def validate_json_rules(self, json_path: Path) -> Tuple[bool, List[str]]:
+        """
+        Validate JSON rules file and return errors.
+        
+        Args:
+            json_path: Path to JSON file to validate
+            
+        Returns:
+            Tuple of (is_valid, error_list)
+        """
+        from .semantic_rule_validator import SemanticRuleValidator
+        
+        validator = SemanticRuleValidator()
+        result = validator.validate_file(json_path)
+        
+        error_messages = []
+        for error in result.errors:
+            error_messages.append(str(error))
+        for warning in result.warnings:
+            error_messages.append(str(warning))
+        
+        return result.is_valid, error_messages
+    
+    def reload_rules(self):
+        """
+        Reload rules from JSON files without restart.
+        
+        Clears current rules and reloads from JSON files.
+        Emits a reload event via logging when complete.
+        """
+        logger.info("=" * 70)
+        logger.info("RELOAD EVENT: Reloading semantic rules from JSON files...")
+        logger.info("=" * 70)
+        
+        # Clear current global rules (keep built-in as fallback)
+        rules_before = len(self.global_rules)
+        
+        # Store built-in rules as backup
+        built_in_rules = self.global_rules.copy()
+        
+        # Clear rules
+        self.global_rules.clear()
+        logger.info(f"Cleared {rules_before} existing rules")
+        
+        # Reload built-in rules first (as fallback)
+        self._load_default_rules()
+        
+        # Try to reload from JSON
+        try:
+            self._load_rules_from_json()
+            rules_after = len(self.global_rules)
+            logger.info(f"✓ Successfully reloaded rules: {rules_before} → {rules_after}")
+            
+            # Emit reload event
+            logger.info("=" * 70)
+            logger.info("RELOAD EVENT COMPLETE: Rules successfully reloaded")
+            logger.info(f"  - Previous count: {rules_before}")
+            logger.info(f"  - New count: {rules_after}")
+            logger.info(f"  - Change: {rules_after - rules_before:+d}")
+            logger.info("=" * 70)
+            
+        except Exception as e:
+            logger.error(f"Failed to reload rules: {e}")
+            # Restore built-in rules
+            self.global_rules = built_in_rules
+            logger.warning("⚠ Restored previous rules due to reload failure")
+            
+            # Emit reload failure event
+            logger.warning("=" * 70)
+            logger.warning("RELOAD EVENT FAILED: Restored previous rules")
+            logger.warning("=" * 70)
+            raise
+    
+    def merge_rules(self, default_rules: Dict[str, SemanticRule], 
+                   custom_rules: Dict[str, SemanticRule]) -> Dict[str, SemanticRule]:
+        """
+        Merge custom rules over default rules.
+        
+        Args:
+            default_rules: Dictionary of default rules keyed by rule_id
+            custom_rules: Dictionary of custom rules keyed by rule_id
+            
+        Returns:
+            Merged dictionary with custom rules overriding defaults
+        """
+        merged = default_rules.copy()
+        overridden_count = 0
+        added_count = 0
+        
+        for rule_id, custom_rule in custom_rules.items():
+            if rule_id in merged:
+                overridden_count += 1
+                logger.debug(f"Custom rule '{rule_id}' overrides default rule")
+            else:
+                added_count += 1
+                logger.debug(f"Custom rule '{rule_id}' added to rule set")
+            merged[rule_id] = custom_rule
+        
+        logger.info(f"Rule merge complete: {len(default_rules)} default + {len(custom_rules)} custom = {len(merged)} total ({overridden_count} overridden, {added_count} added)")
+        
+        return merged
+
+    def save_rule_to_custom_json(self, rule: SemanticRule):
+        """
+        Save a rule to the custom rules JSON file.
+        
+        Args:
+            rule: SemanticRule to save
+        """
+        import json
+        
+        # Ensure config directory exists
+        self._ensure_config_directory()
+        
+        # Load existing custom rules or create empty structure
+        custom_rules = {"rules": []}
+        
+        if self.custom_rules_path.exists():
+            try:
+                with open(self.custom_rules_path, 'r', encoding='utf-8') as f:
+                    custom_rules = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load existing custom rules: {e}")
+                custom_rules = {"rules": []}
+        
+        # Convert rule to dict
+        rule_dict = {
+            "rule_id": rule.rule_id,
+            "name": rule.name,
+            "semantic_value": rule.semantic_value,
+            "conditions": [
+                {
+                    "feather_id": cond.feather_id,
+                    "field_name": cond.field_name,
+                    "value": cond.value,
+                    "operator": cond.operator
+                }
+                for cond in rule.conditions
+            ],
+            "logic_operator": rule.logic_operator,
+            "scope": rule.scope,
+            "category": rule.category if hasattr(rule, 'category') else "",
+            "severity": rule.severity if hasattr(rule, 'severity') else "info",
+            "confidence": rule.confidence if hasattr(rule, 'confidence') else 1.0,
+            "description": rule.description if hasattr(rule, 'description') else ""
+        }
+        
+        # Check if rule already exists (by rule_id)
+        existing_index = None
+        for i, existing_rule in enumerate(custom_rules["rules"]):
+            if existing_rule.get("rule_id") == rule.rule_id:
+                existing_index = i
+                break
+        
+        if existing_index is not None:
+            # Update existing rule
+            custom_rules["rules"][existing_index] = rule_dict
+            logger.info(f"Updated existing rule '{rule.rule_id}' in custom rules")
+        else:
+            # Add new rule
+            custom_rules["rules"].append(rule_dict)
+            logger.info(f"Added new rule '{rule.rule_id}' to custom rules")
+        
+        # Save to file
+        with open(self.custom_rules_path, 'w', encoding='utf-8') as f:
+            json.dump(custom_rules, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Saved rule to {self.custom_rules_path}")

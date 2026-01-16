@@ -35,13 +35,17 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
     - Enhanced result formatting
     """
     
-    def __init__(self, config: Any, filters: Optional[FilterConfig] = None):
+    def __init__(self, config: Any, filters: Optional[FilterConfig] = None,
+                 mapping_integration: Optional[Any] = None,
+                 scoring_integration: Optional[Any] = None):
         """
         Initialize Identity-Based Engine Adapter.
         
         Args:
             config: Pipeline configuration object
             filters: Optional filter configuration
+            mapping_integration: Optional semantic mapping integration (shared instance)
+            scoring_integration: Optional weighted scoring integration (shared instance)
         """
         super().__init__(config, filters)
         
@@ -49,9 +53,26 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         self.debug_mode = getattr(config, 'debug_mode', False)
         self.verbose_logging = getattr(config, 'verbose_logging', False)
         
-        # Initialize integration systems first
-        self.semantic_integration = SemanticMappingIntegration(getattr(config, 'config_manager', None))
-        self.scoring_integration = WeightedScoringIntegration(getattr(config, 'config_manager', None))
+        # Use provided integrations or create new ones
+        # This allows sharing integrations across multiple engines in the same pipeline
+        if mapping_integration:
+            self.semantic_integration = mapping_integration
+            if self.verbose_logging:
+                print("[Identity Engine] Using shared semantic mapping integration")
+        else:
+            self.semantic_integration = SemanticMappingIntegration(getattr(config, 'config_manager', None))
+            if self.verbose_logging:
+                print("[Identity Engine] Created new semantic mapping integration")
+        
+        if scoring_integration:
+            self.scoring_integration = scoring_integration
+            if self.verbose_logging:
+                print("[Identity Engine] Using shared weighted scoring integration")
+        else:
+            self.scoring_integration = WeightedScoringIntegration(getattr(config, 'config_manager', None))
+            if self.verbose_logging:
+                print("[Identity Engine] Created new weighted scoring integration")
+        
         self.progress_tracker = ProgressTracker(debug_mode=self.debug_mode)
         
         # Initialize core engine with debug mode only
@@ -65,6 +86,20 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # Verify semantic integration health (only log if verbose)
         if not self.semantic_integration.is_healthy() and self.verbose_logging:
             logger.warning("Semantic mapping integration health check failed - some features may not work correctly")
+        
+        # Log semantic rules source (JSON vs built-in)
+        if self.verbose_logging:
+            manager = self.semantic_integration.semantic_manager
+            rules_count = len(manager.global_rules)
+            mappings_count = sum(len(v) for v in manager.global_mappings.values())
+            logger.info(f"[Identity Engine] Semantic rules loaded: {rules_count} rules, {mappings_count} mappings")
+            logger.info(f"[Identity Engine] Rules source: JSON files (configs directory)")
+            if manager.config_dir.exists():
+                logger.info(f"[Identity Engine] Config directory: {manager.config_dir}")
+                if manager.default_rules_path.exists():
+                    logger.info(f"[Identity Engine]   - Default rules: {manager.default_rules_path.name}")
+                if manager.custom_rules_path.exists():
+                    logger.info(f"[Identity Engine]   - Custom rules: {manager.custom_rules_path.name}")
         
         # Results storage
         self.last_results: Optional[CorrelationResult] = None
@@ -761,9 +796,10 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 
                 # Handle streaming vs in-memory
                 if streaming_enabled and streaming_writer:
-                    # Apply scoring to each match before writing to database
+                    # Apply semantic mappings and scoring to each match before writing to database
+                    # Note: _apply_scoring_to_single_match now handles both semantic mappings and scoring
                     for match in identity_anchors:
-                        # Apply weighted scoring to this match
+                        # Apply weighted scoring (which also applies semantic mappings) to this match
                         scored_match = self._apply_scoring_to_single_match(match, wing_config)
                         streaming_writer.write_match(result_id, scored_match)
                         match_count += 1
@@ -1132,6 +1168,71 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         """
         self._report_identity_milestone(processed_identities, total_identities)
     
+    def _extract_semantic_data_from_records(self, 
+                                           enhanced_records: Dict[str, Dict]) -> Dict[str, Any]:
+        """
+        Extract semantic data from enhanced feather records.
+        
+        This method iterates through enhanced records that have been processed by
+        the semantic integration layer and extracts the _semantic_mappings from each
+        record to build a consolidated semantic_data dict for the CorrelationMatch.
+        
+        Args:
+            enhanced_records: Dict of feather_id -> enhanced record with _semantic_mappings
+            
+        Returns:
+            Consolidated semantic_data dict for the match containing:
+            - Individual semantic mappings keyed by feather_id.field_name
+            - _metadata with mappings_applied flag and count
+            
+        Requirements: 1.2, 1.3
+        """
+        semantic_data = {}
+        mappings_count = 0
+        
+        for feather_id, record in enhanced_records.items():
+            if not isinstance(record, dict):
+                continue
+            
+            semantic_mappings = record.get('_semantic_mappings', {})
+            if not semantic_mappings:
+                continue
+            
+            for field_name, mapping_info in semantic_mappings.items():
+                if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
+                    # Use feather_id.field_name as key to avoid collisions
+                    key = f"{feather_id}.{field_name}" if feather_id else field_name
+                    semantic_data[key] = {
+                        'semantic_value': mapping_info['semantic_value'],
+                        'technical_value': mapping_info.get('technical_value', ''),
+                        'description': mapping_info.get('description', ''),
+                        'category': mapping_info.get('category', ''),
+                        'confidence': mapping_info.get('confidence', 1.0),
+                        'rule_name': mapping_info.get('rule_name', field_name),
+                        'feather_id': feather_id
+                    }
+                    mappings_count += 1
+        
+        # Add metadata
+        semantic_data['_metadata'] = {
+            'mappings_applied': mappings_count > 0,
+            'mappings_count': mappings_count,
+            'engine_type': self.__class__.__name__
+        }
+        
+        # Task 11.1: Add debug logging for semantic data extraction
+        # Requirements: 7.1, 7.2 - Log semantic mapping application details
+        if getattr(self, 'verbose_logging', False) and mappings_count > 0:
+            logger.debug(f"[Identity Engine] Extracted semantic data: {mappings_count} mappings from {len(enhanced_records)} records")
+            # Log summary of semantic values found
+            semantic_values = [v.get('semantic_value', '') for k, v in semantic_data.items() 
+                             if k != '_metadata' and isinstance(v, dict)]
+            if semantic_values:
+                unique_values = list(set(semantic_values))[:5]  # Show first 5 unique values
+                logger.debug(f"[Identity Engine] Semantic values sample: {unique_values}")
+        
+        return semantic_data
+    
     def _apply_semantic_mappings(self, 
                                matches: List[CorrelationMatch], 
                                wing_configs: List[Any]) -> List[CorrelationMatch]:
@@ -1153,59 +1254,121 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         if self.verbose_logging:
             logger.info(f"Applying semantic mappings to {len(matches)} correlation matches")
         enhanced_matches = []
+        errors_count = 0
         
         for i, match in enumerate(matches):
-            # Log progress for large datasets (only if verbose)
-            if self.verbose_logging and len(matches) > 100 and i % 50 == 0:
-                logger.info(f"Processing semantic mappings: {i}/{len(matches)} matches completed")
-            
-            # Convert match feather_records to format expected by semantic integration
-            records_list = [record for record in match.feather_records.values()]
-            
-            # Apply semantic mappings
-            enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
-                records_list,
-                wing_id=getattr(match, 'wing_id', None),
-                pipeline_id=getattr(match, 'pipeline_id', None),
-                artifact_type=getattr(match, 'artifact_type', match.anchor_artifact_type)
-            )
-            
-            # Convert back to match format
-            enhanced_feather_records = {}
-            for j, enhanced_record in enumerate(enhanced_records_list):
-                # Use original keys if available, otherwise use index
-                original_keys = list(match.feather_records.keys())
-                key = original_keys[j] if j < len(original_keys) else f"record_{j}"
-                enhanced_feather_records[key] = enhanced_record
-            
-            # Create enhanced match with updated feather_records
-            enhanced_match = CorrelationMatch(
-                match_id=match.match_id,
-                timestamp=match.timestamp,
-                feather_records=enhanced_feather_records,
-                match_score=match.match_score,
-                feather_count=match.feather_count,
-                time_spread_seconds=match.time_spread_seconds,
-                anchor_feather_id=match.anchor_feather_id,
-                anchor_artifact_type=match.anchor_artifact_type,
-                matched_application=match.matched_application,
-                matched_file_path=match.matched_file_path,
-                matched_event_id=match.matched_event_id,
-                score_breakdown=match.score_breakdown,
-                confidence_score=match.confidence_score,
-                confidence_category=match.confidence_category,
-                weighted_score=match.weighted_score,
-                time_deltas=match.time_deltas,
-                field_similarity_scores=match.field_similarity_scores,
-                candidate_counts=match.candidate_counts,
-                algorithm_version=match.algorithm_version,
-                wing_config_hash=match.wing_config_hash,
-                is_duplicate=match.is_duplicate,
-                duplicate_info=match.duplicate_info,
-                semantic_data={'semantic_mappings_applied': True}
-            )
-            
-            enhanced_matches.append(enhanced_match)
+            try:
+                # Log progress for large datasets (only if verbose)
+                if self.verbose_logging and len(matches) > 100 and i % 50 == 0:
+                    logger.info(f"Processing semantic mappings: {i}/{len(matches)} matches completed")
+                
+                # Convert match feather_records to format expected by semantic integration
+                # IMPORTANT: Include feather_id in each record so semantic rules can match
+                records_list = []
+                for feather_id, record in match.feather_records.items():
+                    record_with_feather = record.copy() if isinstance(record, dict) else {'value': record}
+                    record_with_feather['_feather_id'] = feather_id
+                    records_list.append(record_with_feather)
+                
+                # Apply semantic mappings
+                enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
+                    records_list,
+                    wing_id=getattr(match, 'wing_id', None),
+                    pipeline_id=getattr(match, 'pipeline_id', None),
+                    artifact_type=getattr(match, 'artifact_type', match.anchor_artifact_type)
+                )
+                
+                # Convert back to match format
+                enhanced_feather_records = {}
+                for j, enhanced_record in enumerate(enhanced_records_list):
+                    # Use original keys if available, otherwise use index
+                    original_keys = list(match.feather_records.keys())
+                    key = original_keys[j] if j < len(original_keys) else f"record_{j}"
+                    enhanced_feather_records[key] = enhanced_record
+                
+                # CRITICAL FIX: Extract actual semantic values from enhanced records
+                # Requirements: 1.1, 1.2 - Store semantic data in CorrelationMatch.semantic_data
+                semantic_data = self._extract_semantic_data_from_records(enhanced_feather_records)
+                
+                # Task 11.1: Log per-match semantic mapping count (Requirements: 7.1, 7.2)
+                if getattr(self, 'debug_mode', False):
+                    mappings_count = semantic_data.get('_metadata', {}).get('mappings_count', 0)
+                    if mappings_count > 0:
+                        logger.debug(f"[Identity Engine] Match {match.match_id}: {mappings_count} semantic mappings applied")
+                
+                # Create enhanced match with actual semantic data (not just a flag)
+                enhanced_match = CorrelationMatch(
+                    match_id=match.match_id,
+                    timestamp=match.timestamp,
+                    feather_records=enhanced_feather_records,
+                    match_score=match.match_score,
+                    feather_count=match.feather_count,
+                    time_spread_seconds=match.time_spread_seconds,
+                    anchor_feather_id=match.anchor_feather_id,
+                    anchor_artifact_type=match.anchor_artifact_type,
+                    matched_application=match.matched_application,
+                    matched_file_path=match.matched_file_path,
+                    matched_event_id=match.matched_event_id,
+                    score_breakdown=match.score_breakdown,
+                    confidence_score=match.confidence_score,
+                    confidence_category=match.confidence_category,
+                    weighted_score=match.weighted_score,
+                    time_deltas=match.time_deltas,
+                    field_similarity_scores=match.field_similarity_scores,
+                    candidate_counts=match.candidate_counts,
+                    algorithm_version=match.algorithm_version,
+                    wing_config_hash=match.wing_config_hash,
+                    is_duplicate=match.is_duplicate,
+                    duplicate_info=match.duplicate_info,
+                    semantic_data=semantic_data  # Now contains actual values
+                )
+                
+                enhanced_matches.append(enhanced_match)
+                
+            except Exception as e:
+                # Requirements 1.4: Log error and continue processing remaining matches
+                errors_count += 1
+                logger.warning(f"Failed to apply semantic mappings to match {match.match_id}: {e}")
+                
+                # Create match with error metadata in semantic_data
+                error_semantic_data = {
+                    '_metadata': {
+                        'mappings_applied': False,
+                        'error': str(e),
+                        'error_type': type(e).__name__,
+                        'match_id': match.match_id,
+                        'engine_type': 'IdentityBasedEngineAdapter'
+                    }
+                }
+                
+                # Keep original match but add error semantic_data
+                error_match = CorrelationMatch(
+                    match_id=match.match_id,
+                    timestamp=match.timestamp,
+                    feather_records=match.feather_records,  # Keep original records
+                    match_score=match.match_score,
+                    feather_count=match.feather_count,
+                    time_spread_seconds=match.time_spread_seconds,
+                    anchor_feather_id=match.anchor_feather_id,
+                    anchor_artifact_type=match.anchor_artifact_type,
+                    matched_application=match.matched_application,
+                    matched_file_path=match.matched_file_path,
+                    matched_event_id=match.matched_event_id,
+                    score_breakdown=match.score_breakdown,
+                    confidence_score=match.confidence_score,
+                    confidence_category=match.confidence_category,
+                    weighted_score=match.weighted_score,
+                    time_deltas=match.time_deltas,
+                    field_similarity_scores=match.field_similarity_scores,
+                    candidate_counts=match.candidate_counts,
+                    algorithm_version=match.algorithm_version,
+                    wing_config_hash=match.wing_config_hash,
+                    is_duplicate=match.is_duplicate,
+                    duplicate_info=match.duplicate_info,
+                    semantic_data=error_semantic_data
+                )
+                
+                enhanced_matches.append(error_match)
         
         # Log completion with statistics (only if verbose)
         if self.verbose_logging:
@@ -1215,6 +1378,15 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             logger.info(f"  Mappings applied: {semantic_stats.mappings_applied}")
             logger.info(f"  Pattern matches: {semantic_stats.pattern_matches}")
             logger.info(f"  Exact matches: {semantic_stats.exact_matches}")
+            logger.info(f"  Rules source: JSON configuration files (configs directory)")
+            if errors_count > 0:
+                logger.warning(f"  Errors encountered: {errors_count}")
+            
+            # Log which specific mappings were applied if debug mode
+            if self.debug_mode:
+                manager = self.semantic_integration.semantic_manager
+                logger.debug(f"  Available rules: {len(manager.global_rules)}")
+                logger.debug(f"  Available mappings: {sum(len(v) for v in manager.global_mappings.values())}")
         
         return enhanced_matches
     
@@ -1353,20 +1525,39 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             
             # Apply semantic mapping if enabled
             semantic_data = None
+            enhanced_feather_records = match.feather_records  # Default to original records
+            
             if self.semantic_integration.is_enabled():
                 try:
                     records_list = [record for record in match.feather_records.values()]
-                    enhanced_records = self.semantic_integration.apply_to_correlation_results(
+                    enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
                         records_list,
                         wing_id=getattr(wing_config, 'wing_id', None),
                         pipeline_id=None,
                         artifact_type=match.anchor_artifact_type
                     )
-                    semantic_data = {'semantic_mappings_applied': True}
+                    
+                    # Convert back to dict format with original keys
+                    enhanced_feather_records = {}
+                    original_keys = list(match.feather_records.keys())
+                    for i, enhanced_record in enumerate(enhanced_records_list):
+                        key = original_keys[i] if i < len(original_keys) else f"record_{i}"
+                        enhanced_feather_records[key] = enhanced_record
+                    
+                    # CRITICAL FIX: Extract actual semantic values from enhanced records
+                    # Requirements: 1.1, 1.2 - Store semantic data in CorrelationMatch.semantic_data
+                    semantic_data = self._extract_semantic_data_from_records(enhanced_feather_records)
+                    
                 except Exception as e:
-                    if self.verbose_logging:
+                    if getattr(self, 'verbose_logging', False):
                         logger.warning(f"Semantic mapping failed for match {match.match_id}: {e}")
-                    semantic_data = {'semantic_mappings_applied': False, 'error': str(e)}
+                    semantic_data = {
+                        '_metadata': {
+                            'mappings_applied': False, 
+                            'error': str(e),
+                            'engine_type': 'IdentityBasedEngineAdapter'
+                        }
+                    }
             
             # Apply weighted scoring if enabled
             weighted_score = None
@@ -1384,7 +1575,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                         confidence_score = weighted_score.get('score')
                         confidence_category = weighted_score.get('interpretation')
                 except Exception as e:
-                    if self.verbose_logging:
+                    if getattr(self, 'verbose_logging', False):
                         logger.warning(f"Weighted scoring failed for match {match.match_id}: {e}")
                     # Fall back to simple scoring
                     weighted_score = self._calculate_simple_score(match, wing_config)
@@ -1392,11 +1583,11 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 # Use simple scoring
                 weighted_score = self._calculate_simple_score(match, wing_config)
             
-            # Create scored match
+            # Create scored match with enhanced records containing _semantic_mappings
             scored_match = CorrelationMatch(
                 match_id=match.match_id,
                 timestamp=match.timestamp,
-                feather_records=match.feather_records,
+                feather_records=enhanced_feather_records,  # Use enhanced records with _semantic_mappings
                 match_score=weighted_score.get('score', match.match_score) if isinstance(weighted_score, dict) else match.match_score,
                 feather_count=match.feather_count,
                 time_spread_seconds=match.time_spread_seconds,
@@ -1424,7 +1615,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             return scored_match
             
         except Exception as e:
-            if self.verbose_logging:
+            if getattr(self, 'verbose_logging', False):
                 logger.warning(f"Error applying scoring to match {match.match_id}: {e}")
             return match
     

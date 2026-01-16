@@ -1,0 +1,285 @@
+{
+  "_comment": "Semantic Rules Example File - Annotated examples for Crow-Eye Correlation Engine",
+  "_version": "1.0",
+  "_documentation": "See Crow-Eye/configs/README.md for complete documentation",
+  
+  "rules": [
+    {
+      "_comment": "EXAMPLE 1: Simple rule with single condition using 'equals' operator",
+      "rule_id": "user_login_success",
+      "name": "Successful User Login",
+      "semantic_value": "User Login",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4624",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "Authentication",
+      "severity": "info",
+      "confidence": 1.0,
+      "description": "Successful user logon event (Windows Event ID 4624)"
+    },
+    
+    {
+      "_comment": "EXAMPLE 2: Rule with 'contains' operator for substring matching",
+      "rule_id": "browser_activity_chrome",
+      "name": "Chrome Browser Activity",
+      "semantic_value": "Web Browser Usage",
+      "conditions": [
+        {
+          "feather_id": "Prefetch",
+          "field_name": "executable_name",
+          "value": "chrome.exe",
+          "operator": "contains"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "Application",
+      "severity": "info",
+      "confidence": 0.95,
+      "description": "Chrome browser execution detected via Prefetch artifacts"
+    },
+    
+    {
+      "_comment": "EXAMPLE 3: Complex rule with multiple conditions using AND logic and 'regex' operator",
+      "rule_id": "suspicious_powershell_execution",
+      "name": "Suspicious PowerShell Execution",
+      "semantic_value": "Potential malicious PowerShell activity",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "CommandLine",
+          "value": ".*-encodedcommand.*",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "Execution",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Detects PowerShell process creation (4688) with encoded commands, often used by attackers to obfuscate malicious code. Both conditions must match (AND logic)."
+    },
+    
+    {
+      "_comment": "EXAMPLE 4: Rule with 'wildcard' operator to match any non-empty value",
+      "rule_id": "registry_run_key_modification",
+      "name": "Registry Run Key Modification",
+      "semantic_value": "Persistence Mechanism",
+      "conditions": [
+        {
+          "feather_id": "Registry",
+          "field_name": "KeyPath",
+          "value": ".*\\\\Run.*",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "Registry",
+          "field_name": "ValueName",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "Persistence",
+      "severity": "high",
+      "confidence": 0.9,
+      "description": "Modification to registry Run keys (HKLM/HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run), commonly used for persistence. Wildcard matches any value name."
+    },
+    
+    {
+      "_comment": "EXAMPLE 5: Rule with OR logic - matches if ANY condition is true",
+      "rule_id": "authentication_failure_multiple_sources",
+      "name": "Authentication Failure (Multiple Sources)",
+      "semantic_value": "Failed Login Attempt",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4625",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "ApplicationLogs",
+          "field_name": "EventID",
+          "value": "18456",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "global",
+      "category": "Authentication",
+      "severity": "medium",
+      "confidence": 0.95,
+      "description": "Failed authentication detected from either Windows Security logs (4625) OR SQL Server logs (18456). Only one condition needs to match (OR logic)."
+    },
+    
+    {
+      "_comment": "EXAMPLE 6: High severity rule for critical security events",
+      "rule_id": "network_connection_suspicious_port",
+      "name": "Network Connection to Suspicious Port",
+      "semantic_value": "Suspicious Network Activity",
+      "conditions": [
+        {
+          "feather_id": "NetworkLogs",
+          "field_name": "RemotePort",
+          "value": "4444",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "Network",
+      "severity": "critical",
+      "confidence": 0.8,
+      "description": "Connection to port 4444, commonly used by Metasploit and other attack tools. Marked as critical severity."
+    },
+    
+    {
+      "_comment": "EXAMPLE 7: Rule with regex pattern for flexible matching",
+      "rule_id": "suspicious_file_creation_temp",
+      "name": "Suspicious File Creation in Temp",
+      "semantic_value": "Potential Malware Staging",
+      "conditions": [
+        {
+          "feather_id": "FileSystem",
+          "field_name": "FilePath",
+          "value": ".*\\\\(Temp|TMP)\\\\.*\\.(exe|dll|bat|ps1)$",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "FileActivity",
+      "severity": "medium",
+      "confidence": 0.75,
+      "description": "Detects creation of executable files in temporary directories using regex pattern. Matches .exe, .dll, .bat, or .ps1 files in Temp or TMP folders."
+    },
+    
+    {
+      "_comment": "EXAMPLE 8: Wing-specific rule (only applies to specific Wing)",
+      "rule_id": "wing_specific_lateral_movement",
+      "name": "Lateral Movement Detection",
+      "semantic_value": "Lateral Movement Activity",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4648",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "wing_id": "lateral_movement_investigation",
+      "category": "LateralMovement",
+      "severity": "high",
+      "confidence": 0.9,
+      "description": "Explicit credential logon (4648) - only applied when running the 'lateral_movement_investigation' Wing. Demonstrates wing-specific scope."
+    },
+    
+    {
+      "_comment": "EXAMPLE 9: Low confidence rule for informational purposes",
+      "rule_id": "generic_process_creation",
+      "name": "Generic Process Creation",
+      "semantic_value": "Process Started",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "Execution",
+      "severity": "info",
+      "confidence": 0.5,
+      "description": "Generic process creation event. Low confidence (0.5) as it's very common and not necessarily suspicious by itself."
+    },
+    
+    {
+      "_comment": "EXAMPLE 10: Complex multi-condition rule with regex patterns",
+      "rule_id": "credential_dumping_lsass",
+      "name": "Potential Credential Dumping (LSASS)",
+      "semantic_value": "Credential Access Attempt",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4656",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "ObjectName",
+          "value": ".*lsass\\.exe.*",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "AccessMask",
+          "value": "0x1410",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "CredentialAccess",
+      "severity": "critical",
+      "confidence": 0.95,
+      "description": "Detects potential credential dumping via LSASS process access. All three conditions must match: handle request (4656), target is lsass.exe, and specific access mask. High confidence indicator of credential theft."
+    },
+    
+    {
+      "_comment": "EXAMPLE 11: Rule demonstrating case-insensitive matching",
+      "rule_id": "browser_activity_firefox",
+      "name": "Firefox Browser Activity",
+      "semantic_value": "Web Browser Usage",
+      "conditions": [
+        {
+          "feather_id": "Prefetch",
+          "field_name": "executable_name",
+          "value": "firefox",
+          "operator": "contains"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "Application",
+      "severity": "info",
+      "confidence": 0.95,
+      "description": "Firefox browser execution. Note: 'contains' operator is case-insensitive, so this matches 'firefox.exe', 'Firefox.exe', 'FIREFOX.EXE', etc."
+    },
+    
+    {
+      "_comment": "EXAMPLE 12: Minimal required fields only (optional fields omitted)",
+      "rule_id": "minimal_example",
+      "name": "Minimal Rule Example",
+      "semantic_value": "Minimal Semantic Value",
+      "conditions": [
+        {
+          "feather_id": "AnyArtifact",
+          "field_name": "AnyField",
+          "value": "AnyValue",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND"
+    }
+  ]
+}

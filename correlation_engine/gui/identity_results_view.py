@@ -43,108 +43,209 @@ class IdentityResultsView(QWidget):
     def setup_ui(self):
         """Setup compact UI with labeled filters."""
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(2)
+        main_layout.setSpacing(4)
         main_layout.setContentsMargins(4, 4, 4, 4)
+        
+        # Set widget background
+        self.setStyleSheet("background-color: #0B1220;")
         
         # === TOP: Summary + Filters (single compact row) ===
         top_frame = QFrame()
-        top_frame.setMaximumHeight(32)
+        top_frame.setMaximumHeight(36)
+        top_frame.setStyleSheet("""
+            QFrame {
+                background-color: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 6px;
+            }
+        """)
         top_layout = QHBoxLayout(top_frame)
-        top_layout.setSpacing(8)
-        top_layout.setContentsMargins(4, 2, 4, 2)
+        top_layout.setSpacing(10)
+        top_layout.setContentsMargins(8, 4, 8, 4)
         
         # Summary labels (compact)
         self.identities_lbl = QLabel("Identities: 0")
-        self.identities_lbl.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 8pt;")
+        self.identities_lbl.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 9pt;")
         top_layout.addWidget(self.identities_lbl)
         
         self.anchors_lbl = QLabel("Anchors: 0")
-        self.anchors_lbl.setStyleSheet("font-size: 7pt;")
+        self.anchors_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.anchors_lbl)
         
         self.evidence_lbl = QLabel("Evidence: 0")
-        self.evidence_lbl.setStyleSheet("font-size: 7pt;")
+        self.evidence_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.evidence_lbl)
         
         self.time_lbl = QLabel("Time: 0s")
-        self.time_lbl.setStyleSheet("font-size: 7pt;")
+        self.time_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.time_lbl)
         
         self.feathers_used_lbl = QLabel("Feathers: 0")
-        self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 7pt;")
+        self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 8pt; font-weight: bold;")
         top_layout.addWidget(self.feathers_used_lbl)
         
         # Scoring indicator
         self.scoring_lbl = QLabel("📊 Scoring: Off")
-        self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #888;")
+        self.scoring_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.scoring_lbl)
         
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #444;")
+        sep.setStyleSheet("color: #334155;")
         top_layout.addWidget(sep)
         
         # Filters with labels
         search_lbl = QLabel("Search:")
-        search_lbl.setStyleSheet("font-size: 7pt; color: #aaa;")
+        search_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(search_lbl)
         
         self.identity_filter = QLineEdit()
         self.identity_filter.setPlaceholderText("name...")
-        self.identity_filter.setMaximumWidth(90)
-        self.identity_filter.setStyleSheet("font-size: 7pt; padding: 1px 3px;")
+        self.identity_filter.setMaximumWidth(100)
+        self.identity_filter.setStyleSheet("""
+            QLineEdit {
+                font-size: 8pt; 
+                padding: 2px 4px;
+                background-color: #0B1220;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                color: #E2E8F0;
+            }
+            QLineEdit:focus {
+                border: 1px solid #00FFFF;
+            }
+        """)
         self.identity_filter.textChanged.connect(self._apply_filters)
         top_layout.addWidget(self.identity_filter)
         
         feather_lbl = QLabel("Feather:")
-        feather_lbl.setStyleSheet("font-size: 7pt; color: #aaa;")
+        feather_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(feather_lbl)
         
         self.feather_filter = QComboBox()
         self.feather_filter.addItem("All")
-        self.feather_filter.setMaximumWidth(90)
-        self.feather_filter.setStyleSheet("font-size: 7pt;")
+        self.feather_filter.setMaximumWidth(100)
+        self.feather_filter.setStyleSheet("""
+            QComboBox {
+                font-size: 8pt;
+                background-color: #0B1220;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                color: #E2E8F0;
+                padding: 2px 4px;
+            }
+            QComboBox:hover {
+                border: 1px solid #00FFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1E293B;
+                color: #E2E8F0;
+                selection-background-color: #334155;
+            }
+        """)
         self.feather_filter.currentTextChanged.connect(self._apply_filters)
         top_layout.addWidget(self.feather_filter)
         
         min_lbl = QLabel("Min:")
-        min_lbl.setStyleSheet("font-size: 7pt; color: #aaa;")
+        min_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(min_lbl)
         
         self.min_filter = QComboBox()
         self.min_filter.addItems(["1", "2", "3", "5", "10"])
-        self.min_filter.setMaximumWidth(35)
-        self.min_filter.setStyleSheet("font-size: 7pt;")
+        self.min_filter.setMaximumWidth(50)
+        self.min_filter.setStyleSheet("""
+            QComboBox {
+                font-size: 8pt;
+                background-color: #0B1220;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                color: #E2E8F0;
+                padding: 2px 4px;
+            }
+            QComboBox:hover {
+                border: 1px solid #00FFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1E293B;
+                color: #E2E8F0;
+                selection-background-color: #334155;
+            }
+        """)
         self.min_filter.currentTextChanged.connect(self._apply_filters)
         top_layout.addWidget(self.min_filter)
         
         reset_btn = QPushButton("Reset")
-        reset_btn.setMaximumWidth(40)
-        reset_btn.setStyleSheet("font-size: 7pt; padding: 1px 4px;")
+        reset_btn.setMaximumWidth(50)
+        reset_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 8pt; 
+                padding: 2px 6px;
+                background-color: #334155;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                color: #E2E8F0;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border: 1px solid #00FFFF;
+            }
+        """)
         reset_btn.clicked.connect(self._reset_filters)
         top_layout.addWidget(reset_btn)
         
         # Separator
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.VLine)
-        sep2.setStyleSheet("color: #444;")
+        sep2.setStyleSheet("color: #334155;")
         top_layout.addWidget(sep2)
         
         # Pagination controls
         self.prev_btn = QPushButton("<")
-        self.prev_btn.setMaximumWidth(20)
-        self.prev_btn.setStyleSheet("font-size: 7pt; padding: 1px;")
+        self.prev_btn.setMaximumWidth(24)
+        self.prev_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 8pt; 
+                padding: 2px;
+                background-color: #334155;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                color: #E2E8F0;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border: 1px solid #00FFFF;
+            }
+        """)
         self.prev_btn.clicked.connect(self._prev_page)
         top_layout.addWidget(self.prev_btn)
         
         self.page_lbl = QLabel("1/1")
-        self.page_lbl.setStyleSheet("font-size: 7pt;")
+        self.page_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.page_lbl)
         
         self.next_btn = QPushButton(">")
-        self.next_btn.setMaximumWidth(20)
-        self.next_btn.setStyleSheet("font-size: 7pt; padding: 1px;")
+        self.next_btn.setMaximumWidth(24)
+        self.next_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 8pt; 
+                padding: 2px;
+                background-color: #334155;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                color: #E2E8F0;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border: 1px solid #00FFFF;
+            }
+        """)
         self.next_btn.clicked.connect(self._next_page)
         top_layout.addWidget(self.next_btn)
         
@@ -155,30 +256,34 @@ class IdentityResultsView(QWidget):
         self.results_tree = self._create_tree()
         main_layout.addWidget(self.results_tree, stretch=1)
         
-        # === BOTTOM: Compact Stats Section ===
+        # === BOTTOM: Stats Section with compact tables ===
         stats_frame = QFrame()
-        stats_frame.setMaximumHeight(100)
+        stats_frame.setMinimumHeight(80)
+        stats_frame.setMaximumHeight(120)
+        stats_frame.setStyleSheet("""
+            QFrame {
+                background-color: #0B1220;
+                border-top: 1px solid #334155;
+            }
+        """)
         stats_main_layout = QVBoxLayout(stats_frame)
-        stats_main_layout.setSpacing(2)
-        stats_main_layout.setContentsMargins(2, 2, 2, 2)
+        stats_main_layout.setSpacing(4)
+        stats_main_layout.setContentsMargins(4, 4, 4, 4)
         
-        # Stats row: Types, Roles, Scores (compact)
+        # Stats row: Types, Roles, Scores
         bottom_stats = QHBoxLayout()
-        bottom_stats.setSpacing(4)
+        bottom_stats.setSpacing(12)
         
         # Identity Types
         self.type_table = self._create_compact_table(["Type", "#"])
-        self.type_table.setMaximumHeight(60)
         bottom_stats.addWidget(self._wrap_table("Types", self.type_table), stretch=1)
         
         # Evidence Roles
         self.role_table = self._create_compact_table(["Role", "#"])
-        self.role_table.setMaximumHeight(60)
         bottom_stats.addWidget(self._wrap_table("Roles", self.role_table), stretch=1)
         
         # Scoring Summary
         self.scoring_table = self._create_compact_table(["Score", "#"])
-        self.scoring_table.setMaximumHeight(60)
         bottom_stats.addWidget(self._wrap_table("Scores", self.scoring_table), stretch=1)
         
         stats_main_layout.addLayout(bottom_stats)
@@ -200,80 +305,116 @@ class IdentityResultsView(QWidget):
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
         tree.itemClicked.connect(self._on_item_clicked)
+        tree.itemExpanded.connect(self._on_item_expanded)
+        tree.itemCollapsed.connect(self._on_item_collapsed)
         
-        # Match app background - transparent/inherit
+        # Match app background - dark theme with expand/collapse indicators
         tree.setStyleSheet("""
             QTreeWidget {
                 font-size: 8pt;
-                background-color: transparent;
-                alternate-background-color: rgba(255,255,255,0.02);
-                border: 1px solid #333;
+                background-color: #0B1220;
+                alternate-background-color: #1E293B;
+                border: 1px solid #334155;
+                color: #E2E8F0;
             }
-            QTreeWidget::item { padding: 1px; }
-            QTreeWidget::item:selected { background-color: #0d47a1; }
+            QTreeWidget::item { 
+                padding: 4px 2px;
+                min-height: 24px;
+            }
+            QTreeWidget::item:selected { 
+                background-color: #334155; 
+                color: #00FFFF;
+            }
+            QTreeWidget::branch {
+                background-color: transparent;
+            }
+            QTreeWidget::branch:has-children:!has-siblings:closed,
+            QTreeWidget::branch:closed:has-children:has-siblings {
+                border-image: none;
+                image: none;
+            }
+            QTreeWidget::branch:open:has-children:!has-siblings,
+            QTreeWidget::branch:open:has-children:has-siblings {
+                border-image: none;
+                image: none;
+            }
             QHeaderView::section {
-                background-color: #2196F3;
-                color: white;
-                padding: 2px;
-                font-size: 7pt;
+                background-color: #1E293B;
+                color: #00FFFF;
+                padding: 6px 4px;
+                font-size: 8pt;
                 font-weight: bold;
                 border: none;
+                border-bottom: 2px solid #00FFFF;
+                min-height: 26px;
             }
         """)
         return tree
     
     def _create_compact_table(self, headers: List[str]) -> QTableWidget:
-        """Create ultra compact table with smaller headers."""
+        """Create compact table with smaller sizing."""
         table = QTableWidget()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setMaximumHeight(110)
+        table.setMaximumHeight(100)  # Smaller table
+        table.setMinimumHeight(60)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(14)
-        table.horizontalHeader().setFixedHeight(18)
+        table.verticalHeader().setDefaultSectionSize(18)  # Compact rows
+        table.horizontalHeader().setFixedHeight(22)  # Compact header
         table.setStyleSheet("""
             QTableWidget {
-                font-size: 7pt;
-                background-color: transparent;
-                border: 1px solid #333;
+                font-size: 8pt;
+                background-color: #0B1220;
+                alternate-background-color: #1E293B;
+                border: 1px solid #334155;
+                color: #E2E8F0;
             }
-            QTableWidget::item { padding: 0px; }
+            QTableWidget::item { 
+                padding: 2px; 
+            }
+            QTableWidget::item:selected {
+                background-color: #334155;
+                color: #00FFFF;
+            }
             QHeaderView::section {
-                background-color: #1a1a2e;
-                color: #aaa;
-                padding: 1px;
-                font-size: 6pt;
+                background-color: #1E293B;
+                color: #00FFFF;
+                padding: 2px;
+                font-size: 8pt;
+                font-weight: bold;
                 border: none;
-                border-right: 1px solid #333;
+                border-bottom: 1px solid #00FFFF;
             }
         """)
         return table
     
     def _wrap_table(self, title: str, table: QTableWidget) -> QGroupBox:
-        """Wrap table in ultra compact group box matching tab style."""
+        """Wrap table in group box with dark theme styling."""
         group = QGroupBox(title)
         group.setStyleSheet("""
             QGroupBox { 
-                font-size: 7pt; 
+                font-size: 8pt; 
                 font-weight: bold; 
-                color: #aaa;
-                padding-top: 10px; 
+                color: #00FFFF;
+                padding-top: 12px; 
                 margin-top: 4px;
-                border: 1px solid #333;
-                background-color: #1a1a2e;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                background-color: #0B1220;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 3px;
-                background-color: #1a1a2e;
+                padding: 1px 6px;
+                background-color: #1E293B;
+                border-radius: 3px;
             }
         """)
         layout = QVBoxLayout()
         layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(0)
+        layout.setSpacing(1)
         layout.addWidget(table)
         group.setLayout(layout)
         return group
@@ -298,8 +439,12 @@ class IdentityResultsView(QWidget):
         if result.total_matches > 100:
             progress = QProgressDialog("Loading identity data...", "Cancel", 0, 100, self)
             progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(500)
+            progress.setMinimumDuration(0)
             progress.setWindowTitle("Loading Results")
+            
+            # Apply Crow Eye styling
+            from .ui_styling import CorrelationEngineStyles
+            CorrelationEngineStyles.apply_progress_dialog_style(progress)
             progress.show()
             QApplication.processEvents()
         
@@ -524,11 +669,11 @@ class IdentityResultsView(QWidget):
         identity_count = stats.get('total_identities', len(self.identities))
         if is_cancelled:
             self.identities_lbl.setText(f"⚠️ Identities: {identity_count:,} (Cancelled)")
-            self.identities_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 8pt;")
+            self.identities_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 9pt;")
             self.identities_lbl.setToolTip("Execution was cancelled by user. Showing partial results.")
         else:
             self.identities_lbl.setText(f"Identities: {identity_count:,}")
-            self.identities_lbl.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 8pt;")
+            self.identities_lbl.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 9pt;")
             self.identities_lbl.setToolTip("")
         
         self.anchors_lbl.setText(f"Anchors: {stats.get('total_anchors', 0):,}")
@@ -655,9 +800,13 @@ class IdentityResultsView(QWidget):
         # Get aggregated semantic value for identity
         semantic_value, semantic_tooltip = self._get_identity_semantic_value(identity)
         
-        # Main identity item with blue diamond icon (7 columns now - added Semantic)
+        # Check if has children for expand indicator
+        has_children = bool(sub_identities) or bool(identity.get('anchors', []))
+        expand_indicator = "▶ " if has_children else "  "
+        
+        # Main identity item with expand indicator and blue diamond icon (7 columns now - added Semantic)
         item = QTreeWidgetItem([
-            f"🔷 {name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
+            f"{expand_indicator}🔷 {name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
             feather_str, 
             "", 
             score_str,
@@ -790,9 +939,13 @@ class IdentityResultsView(QWidget):
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Sub-identity item with folder icon (orange/yellow) - 7 columns now
+        # Check if has children for expand indicator
+        has_children = bool(anchors)
+        expand_indicator = "▶ " if has_children else "  "
+        
+        # Sub-identity item with expand indicator and folder icon (orange/yellow) - 7 columns now
         item = QTreeWidgetItem([
-            f"📁 {original_name}",
+            f"{expand_indicator}📁 {original_name}",
             feather_str,
             "",
             score_str,
@@ -869,8 +1022,13 @@ class IdentityResultsView(QWidget):
         if record_count > 0:
             artifact_info = f"{artifact_info} ({record_count} rec)"
         
+        # Check if has children for expand indicator
+        evidence_rows = anchor.get('evidence_rows', [])
+        has_children = bool(evidence_rows)
+        expand_indicator = "▶ " if has_children else "  "
+        
         item = QTreeWidgetItem([
-            "⏱️ Anchor",
+            f"{expand_indicator}⏱️ Anchor",
             ", ".join(feathers[:2]) + ("..." if len(feathers) > 2 else ""),
             time_display,
             score_str,
@@ -1000,6 +1158,16 @@ class IdentityResultsView(QWidget):
     
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
         """Handle item click to show scoring details."""
+        # Toggle expand/collapse when clicking on first column (where the arrow is)
+        if column == 0 and item.childCount() > 0:
+            text = item.text(0)
+            if text.startswith("▶ ") or text.startswith("▼ "):
+                if item.isExpanded():
+                    item.setExpanded(False)
+                else:
+                    item.setExpanded(True)
+                return
+        
         data = item.data(0, Qt.UserRole)
         if not data:
             return
@@ -1009,6 +1177,18 @@ class IdentityResultsView(QWidget):
         
         # Emit signal for external handlers
         self.match_selected.emit({'type': item_type, 'data': item_data})
+    
+    def _on_item_expanded(self, item: QTreeWidgetItem):
+        """Update expand indicator when item is expanded."""
+        text = item.text(0)
+        if text.startswith("▶ "):
+            item.setText(0, "▼ " + text[2:])
+    
+    def _on_item_collapsed(self, item: QTreeWidgetItem):
+        """Update expand indicator when item is collapsed."""
+        text = item.text(0)
+        if text.startswith("▼ "):
+            item.setText(0, "▶ " + text[2:])
     
     def _update_stats(self, results: Dict):
         """Update statistics tables (Types, Roles, Scores only - feather stats are in Summary)."""

@@ -1208,6 +1208,10 @@ def export_results_with_progress(export_config: Dict[str, Any], parent=None) -> 
     progress.setWindowTitle("Exporting Results")
     progress.setWindowModality(Qt.WindowModal)
     progress.setMinimumDuration(0)
+    
+    # Apply Crow Eye styling
+    from .ui_styling import CorrelationEngineStyles
+    CorrelationEngineStyles.apply_progress_dialog_style(progress)
     progress.show()
     
     worker = ExportWorker(export_config)

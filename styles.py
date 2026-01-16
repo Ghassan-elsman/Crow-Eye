@@ -761,8 +761,17 @@ class CrowEyeStyles:
         }
     """
     
-    # Modern Calendar Widget Style
+    # Modern Calendar Widget Style - Dark Theme
     CALENDAR_STYLE = """
+        /* Main calendar widget background */
+        QCalendarWidget {
+            background-color: #0F172A;
+            color: #E2E8F0;
+            border: 1px solid #334155;
+            border-radius: 6px;
+        }
+        
+        /* All child widgets default */
         QCalendarWidget QWidget {
             background-color: #0F172A;
             color: #E2E8F0;
@@ -770,34 +779,106 @@ class CrowEyeStyles:
             font-size: 11px;
         }
         
+        /* Navigation bar (top section with month/year) */
+        QCalendarWidget QWidget#qt_calendar_navigationbar {
+            background-color: #1E293B;
+            border-bottom: 1px solid #334155;
+            min-height: 32px;
+        }
+        
+        /* Month/Year buttons and labels */
         QCalendarWidget QToolButton {
-            color: #FFFFFF;
+            color: #00FFFF;
             background-color: #1E293B;
             border: none;
             border-radius: 4px;
             margin: 2px;
-            padding: 2px;
+            padding: 4px 8px;
             font-weight: bold;
+            font-size: 12px;
         }
         
         QCalendarWidget QToolButton:hover {
             background-color: #3B82F6;
+            color: #FFFFFF;
         }
         
+        QCalendarWidget QToolButton:pressed {
+            background-color: #1E40AF;
+        }
+        
+        /* Previous/Next month buttons */
+        QCalendarWidget QToolButton#qt_calendar_prevmonth,
+        QCalendarWidget QToolButton#qt_calendar_nextmonth {
+            background-color: transparent;
+            color: #10B981;
+            font-size: 16px;
+            font-weight: bold;
+            min-width: 28px;
+        }
+        
+        QCalendarWidget QToolButton#qt_calendar_prevmonth:hover,
+        QCalendarWidget QToolButton#qt_calendar_nextmonth:hover {
+            background-color: #334155;
+            color: #00FFFF;
+        }
+        
+        /* Month button dropdown */
+        QCalendarWidget QToolButton::menu-indicator {
+            image: none;
+        }
+        
+        /* Month/Year dropdown menus */
         QCalendarWidget QMenu {
             background-color: #1E293B;
             color: #E2E8F0;
             border: 1px solid #334155;
+            border-radius: 4px;
         }
         
+        QCalendarWidget QMenu::item {
+            padding: 6px 20px;
+        }
+        
+        QCalendarWidget QMenu::item:selected {
+            background-color: #3B82F6;
+            color: #FFFFFF;
+        }
+        
+        /* Year spinbox */
         QCalendarWidget QSpinBox {
             background-color: #1E293B;
-            color: #E2E8F0;
+            color: #00FFFF;
             border: 1px solid #334155;
             border-radius: 4px;
             margin: 2px;
+            padding: 2px 4px;
+            font-weight: bold;
         }
         
+        QCalendarWidget QSpinBox::up-button,
+        QCalendarWidget QSpinBox::down-button {
+            background-color: #334155;
+            border: none;
+            width: 16px;
+        }
+        
+        QCalendarWidget QSpinBox::up-button:hover,
+        QCalendarWidget QSpinBox::down-button:hover {
+            background-color: #3B82F6;
+        }
+        
+        /* Calendar table view (days grid) */
+        QCalendarWidget QTableView {
+            background-color: #0F172A;
+            alternate-background-color: #0F172A;
+            selection-background-color: #3B82F6;
+            selection-color: #FFFFFF;
+            outline: none;
+            border: none;
+        }
+        
+        /* Day cells */
         QCalendarWidget QAbstractItemView:enabled {
             background-color: #0F172A;
             color: #E2E8F0;
@@ -808,6 +889,26 @@ class CrowEyeStyles:
         
         QCalendarWidget QAbstractItemView:disabled {
             color: #64748B;
+        }
+        
+        /* Weekday header row (Sun, Mon, Tue, etc.) */
+        QCalendarWidget QHeaderView {
+            background-color: #1E293B;
+        }
+        
+        QCalendarWidget QHeaderView::section {
+            background-color: #1E293B;
+            color: #00FFFF;
+            font-weight: bold;
+            font-size: 10px;
+            border: none;
+            padding: 4px;
+        }
+        
+        /* Weekend days (Saturday/Sunday) in header */
+        QCalendarWidget QHeaderView::section:first,
+        QCalendarWidget QHeaderView::section:last {
+            color: #EF4444;
         }
     """
     

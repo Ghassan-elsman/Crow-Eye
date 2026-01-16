@@ -1,0 +1,487 @@
+{
+  "rules": [
+    {
+      "rule_id": "default-user-login-interactive",
+      "name": "User Login (Interactive)",
+      "semantic_value": "User Login - Interactive",
+      "description": "User logged in interactively (Type 2) - physical access to machine",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4624",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "LogonType",
+          "value": "2",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "authentication",
+      "severity": "info",
+      "confidence": 0.95
+    },
+    {
+      "rule_id": "default-user-login-remote",
+      "name": "User Login (Remote/RDP)",
+      "semantic_value": "User Login - Remote Desktop",
+      "description": "User logged in via Remote Desktop (Type 10)",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4624",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "LogonType",
+          "value": "10",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "authentication",
+      "severity": "low",
+      "confidence": 0.95
+    },
+    {
+      "rule_id": "default-user-login-network",
+      "name": "User Login (Network)",
+      "semantic_value": "User Login - Network",
+      "description": "User logged in via network (Type 3) - file share access",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4624",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "LogonType",
+          "value": "3",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "authentication",
+      "severity": "info",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "default-user-logoff",
+      "name": "User Logoff",
+      "semantic_value": "User Logoff",
+      "description": "User logged off (Event 4634 or 4647)",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4634",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4647",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "global",
+      "category": "authentication",
+      "severity": "info",
+      "confidence": 0.95
+    },
+    {
+      "rule_id": "default-session-lock",
+      "name": "Session Locked",
+      "semantic_value": "Session Locked",
+      "description": "User locked their workstation",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4800",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "authentication",
+      "severity": "info",
+      "confidence": 0.95
+    },
+    {
+      "rule_id": "default-session-unlock",
+      "name": "Session Unlocked",
+      "semantic_value": "Session Unlocked",
+      "description": "User unlocked their workstation",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4801",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "authentication",
+      "severity": "info",
+      "confidence": 0.95
+    },
+    {
+      "rule_id": "default-folder-access-shellbags",
+      "name": "Folder Access (ShellBags)",
+      "semantic_value": "Folder Accessed",
+      "description": "User navigated to a folder (evidence from ShellBags)",
+      "conditions": [
+        {
+          "feather_id": "ShellBags",
+          "field_name": "path",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "file_access",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "default-file-access-lnk",
+      "name": "File Accessed (LNK)",
+      "semantic_value": "File Accessed - Recent",
+      "description": "User accessed a file (evidence from LNK shortcut)",
+      "conditions": [
+        {
+          "feather_id": "LNK",
+          "field_name": "target_path",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "file_access",
+      "severity": "info",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "default-file-created-mft",
+      "name": "File Created (MFT)",
+      "semantic_value": "File Created",
+      "description": "New file was created (evidence from MFT)",
+      "conditions": [
+        {
+          "feather_id": "MFT",
+          "field_name": "file_name",
+          "value": "*",
+          "operator": "wildcard"
+        },
+        {
+          "feather_id": "MFT",
+          "field_name": "created_time",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "file_access",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "default-file-deleted-usn",
+      "name": "File Deleted (USN)",
+      "semantic_value": "File Deleted",
+      "description": "File was deleted (evidence from USN Journal)",
+      "conditions": [
+        {
+          "feather_id": "USN",
+          "field_name": "reason",
+          "value": "FILE_DELETE",
+          "operator": "contains"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "file_access",
+      "severity": "low",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "default-file-renamed-usn",
+      "name": "File Renamed (USN)",
+      "semantic_value": "File Renamed",
+      "description": "File was renamed (evidence from USN Journal)",
+      "conditions": [
+        {
+          "feather_id": "USN",
+          "field_name": "reason",
+          "value": "RENAME",
+          "operator": "contains"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "file_access",
+      "severity": "info",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "default-app-execution-file-access",
+      "name": "Application Executed with File Access",
+      "semantic_value": "App Execution + File Access",
+      "description": "Application was executed AND a file was accessed (evidence from Prefetch + LNK)",
+      "conditions": [
+        {
+          "feather_id": "Prefetch",
+          "field_name": "executable_name",
+          "value": "*",
+          "operator": "wildcard"
+        },
+        {
+          "feather_id": "LNK",
+          "field_name": "target_path",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "user_activity",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "default-usb-device-usage",
+      "name": "USB Device Connected with Activity",
+      "semantic_value": "USB Device Usage",
+      "description": "USB device was connected AND related activity detected",
+      "conditions": [
+        {
+          "feather_id": "Registry",
+          "field_name": "key_path",
+          "value": "USBSTOR",
+          "operator": "contains"
+        },
+        {
+          "feather_id": "EventLogs",
+          "field_name": "EventID",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "device_activity",
+      "severity": "medium",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "default-login-file-access",
+      "name": "User Login with Folder Navigation",
+      "semantic_value": "Login + Folder Access",
+      "description": "User logged in AND navigated to folders",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4624",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "ShellBags",
+          "field_name": "path",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "user_activity",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "default-browser-activity",
+      "name": "Browser Execution with Web Activity",
+      "semantic_value": "Browser Activity",
+      "description": "Browser was executed AND web activity detected",
+      "conditions": [
+        {
+          "feather_id": "Prefetch",
+          "field_name": "executable_name",
+          "value": "chrome|firefox|msedge|edge|iexplore|opera|brave|safari",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "BrowserHistory",
+          "field_name": "url",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "web_activity",
+      "severity": "info",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "default-data-exfiltration-pattern",
+      "name": "Potential Data Exfiltration",
+      "semantic_value": "Data Exfiltration Pattern",
+      "description": "USB device connected OR file accessed OR network activity - potential data movement",
+      "conditions": [
+        {
+          "feather_id": "Registry",
+          "field_name": "key_path",
+          "value": "USBSTOR",
+          "operator": "contains"
+        },
+        {
+          "feather_id": "LNK",
+          "field_name": "target_path",
+          "value": "*",
+          "operator": "wildcard"
+        },
+        {
+          "feather_id": "NetworkConnections",
+          "field_name": "remote_address",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "global",
+      "category": "suspicious_activity",
+      "severity": "high",
+      "confidence": 0.7
+    },
+    {
+      "rule_id": "default-process-network-activity",
+      "name": "Process with Network Connection",
+      "semantic_value": "Process + Network Activity",
+      "description": "Process was created AND established network connection",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "NetworkConnections",
+          "field_name": "remote_address",
+          "value": "*",
+          "operator": "wildcard"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "network_activity",
+      "severity": "medium",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "default-failed-login-attempts",
+      "name": "Failed Login Attempt",
+      "semantic_value": "Failed Authentication",
+      "description": "Failed login attempt detected (Event 4625 or 4771)",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4625",
+          "operator": "equals"
+        },
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4771",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "global",
+      "category": "authentication",
+      "severity": "medium",
+      "confidence": 0.95
+    },
+    {
+      "rule_id": "default-privilege-escalation",
+      "name": "Privilege Escalation",
+      "semantic_value": "Privilege Escalation",
+      "description": "Special privileges assigned to new logon (Event 4672)",
+      "conditions": [
+        {
+          "feather_id": "SecurityLogs",
+          "field_name": "EventID",
+          "value": "4672",
+          "operator": "equals"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "authentication",
+      "severity": "high",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "default-app-installation",
+      "name": "Application Installation",
+      "semantic_value": "App Installation",
+      "description": "New application installed (evidence from Prefetch + Registry)",
+      "conditions": [
+        {
+          "feather_id": "Prefetch",
+          "field_name": "executable_name",
+          "value": "msiexec|setup|install|installer",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "Registry",
+          "field_name": "key_path",
+          "value": "Uninstall",
+          "operator": "contains"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "software_activity",
+      "severity": "low",
+      "confidence": 0.75
+    },
+    {
+      "rule_id": "default-remote-access-tool",
+      "name": "Remote Access Tool Activity",
+      "semantic_value": "Remote Access Tool",
+      "description": "Remote access tool executed (TeamViewer, AnyDesk, VNC, RDP, LogMeIn, etc.)",
+      "conditions": [
+        {
+          "feather_id": "Prefetch",
+          "field_name": "executable_name",
+          "value": "teamviewer|anydesk|vnc|rdp|logmein|ammyy|ultraviewer|rustdesk|parsec|splashtop",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "remote_access",
+      "severity": "medium",
+      "confidence": 0.85
+    }
+  ]
+}

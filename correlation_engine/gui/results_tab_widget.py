@@ -229,6 +229,9 @@ class SimpleResultsTableWidget(QTableWidget):
                 pass
             else:
                 for field_name, field_info in match.semantic_data.items():
+                    # Skip metadata and internal keys (Requirements 3.7, 4.7)
+                    if field_name.startswith('_'):
+                        continue
                     if isinstance(field_info, dict) and 'semantic_value' in field_info:
                         return str(field_info['semantic_value'])
                     elif isinstance(field_info, str) and field_name != '_reason':
@@ -241,6 +244,9 @@ class SimpleResultsTableWidget(QTableWidget):
                     semantic_mappings = record.get('_semantic_mappings', {})
                     if isinstance(semantic_mappings, dict):
                         for field_name, mapping_info in semantic_mappings.items():
+                            # Skip internal keys
+                            if field_name.startswith('_'):
+                                continue
                             if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
                                 return str(mapping_info['semantic_value'])
                             elif isinstance(mapping_info, str):
@@ -540,8 +546,15 @@ class ResultTab(QWidget):
         """Create the top section with summary and filters."""
         frame = QFrame()
         frame.setMaximumHeight(80)
+        frame.setStyleSheet("""
+            QFrame {
+                background-color: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 6px;
+            }
+        """)
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(2)
         
         # Summary row
@@ -562,28 +575,28 @@ class ResultTab(QWidget):
         
         # Summary labels
         wing_label = QLabel(f"Wing: {self.tab_state.wing_name}")
-        wing_label.setStyleSheet("font-weight: bold; color: #2196F3;")
+        wing_label.setStyleSheet("font-weight: bold; color: #00FFFF; font-size: 10pt;")
         summary_layout.addWidget(wing_label)
         
         matches_label = QLabel(f"Matches: {total_matches:,}")
-        matches_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+        matches_label.setStyleSheet("font-weight: bold; color: #4CAF50; font-size: 9pt;")
         summary_layout.addWidget(matches_label)
         
         score_label = QLabel(score_text)
-        score_label.setStyleSheet("color: #FF9800;")
+        score_label.setStyleSheet("color: #FF9800; font-size: 9pt;")
         summary_layout.addWidget(score_label)
         
         # Semantic mapping status
         semantic_count = len(self.tab_state.semantic_mappings)
         if semantic_count > 0:
             semantic_label = QLabel(f"Semantic: {semantic_count} mappings")
-            semantic_label.setStyleSheet("color: #9C27B0;")
+            semantic_label.setStyleSheet("color: #9C27B0; font-size: 9pt;")
             summary_layout.addWidget(semantic_label)
         
         # Scoring configuration status
         if self.tab_state.scoring_configuration:
             scoring_label = QLabel("Scoring: Configured")
-            scoring_label.setStyleSheet("color: #607D8B;")
+            scoring_label.setStyleSheet("color: #94A3B8; font-size: 9pt;")
             summary_layout.addWidget(scoring_label)
         
         summary_layout.addStretch()
@@ -593,11 +606,39 @@ class ResultTab(QWidget):
         
         export_btn = QPushButton("Export")
         export_btn.setMaximumWidth(60)
+        export_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #334155;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                color: #E2E8F0;
+                padding: 3px 8px;
+                font-size: 8pt;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border: 1px solid #00FFFF;
+            }
+        """)
         export_btn.clicked.connect(self._export_tab_data)
         actions_layout.addWidget(export_btn)
         
         refresh_btn = QPushButton("Refresh")
         refresh_btn.setMaximumWidth(60)
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #334155;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                color: #E2E8F0;
+                padding: 3px 8px;
+                font-size: 8pt;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border: 1px solid #00FFFF;
+            }
+        """)
         refresh_btn.clicked.connect(self._refresh_tab)
         actions_layout.addWidget(refresh_btn)
         
@@ -977,61 +1018,45 @@ class ResultsTabWidget(QWidget):
         
         # Create tab widget
         self.tab_widget = QTabWidget()
-        self.tab_widget.setTabsClosable(True)
+        # Close buttons completely removed - not needed for results viewer
         self.tab_widget.setMovable(True)
-        self.tab_widget.tabCloseRequested.connect(self._close_tab)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         
-        # Style the tab widget
+        # Style the tab widget to match Crow-Eye main window
         self.tab_widget.setStyleSheet("""
             QTabWidget::pane {
                 border: 1px solid #334155;
                 background: #1E293B;
                 border-radius: 8px;
             }
+            
             QTabBar::tab {
                 background: #1E293B;
                 color: #94A3B8;
                 border: 1px solid #334155;
-                padding: 6px 12px;
+                padding: 4px 10px;
                 font-weight: 600;
-                font-size: 8pt;
-                min-height: 16px;
-                min-width: 120px;
-                max-width: 200px;
+                font-size: 5pt;
+                min-height: 14px;
+                min-width: 100px;
+                max-width: 180px;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
             }
+            
             QTabBar::tab:selected {
                 background-color: #0B1220;
                 color: #00FFFF;
                 border-bottom: 2px solid #00FFFF;
             }
+            
             QTabBar::tab:hover:!selected {
                 background-color: #334155;
                 color: #FFFFFF;
             }
-            QTabBar::close-button {
-                width: 16px;
-                height: 16px;
-                border-radius: 8px;
-                background: transparent;
-                subcontrol-position: right;
-                margin: 2px;
-            }
-            QTabBar::close-button:hover {
-                background: rgba(255, 255, 255, 0.2);
-                border-radius: 8px;
-            }
-            QTabBar::close-button:pressed {
-                background: rgba(255, 255, 255, 0.3);
-            }
         """)
         
         layout.addWidget(self.tab_widget)
-        
-        # Apply proper close button styling
-        apply_tab_close_button_styling(self.tab_widget, "dark")
         
         # Create hidden data storage labels (Summary tab UI removed per user request)
         # The labels are still needed for data storage used by update methods
@@ -1499,7 +1524,12 @@ class ResultsTabWidget(QWidget):
     def _update_summary(self):
         """Update the summary tab with current statistics."""
         # Calculate overall statistics
-        total_matches = sum(len(state.result.matches) for state in self.tab_states.values())
+        # Use total_matches attribute instead of len(matches) to support streaming mode
+        total_matches = sum(
+            state.result.total_matches if hasattr(state.result, 'total_matches') and state.result.total_matches > 0 
+            else len(state.result.matches) 
+            for state in self.tab_states.values()
+        )
         total_tabs = len(self.tab_states)
         
         all_scores = []
@@ -1849,7 +1879,7 @@ class ResultsTabWidget(QWidget):
                             )
                         
                         # Create tab for this result
-                        self.add_result_tab(result)
+                        self.add_result_tab(result.wing_name, result)
                         loaded_count += 1
                         
                         print(f"[ResultsTabWidget] ✓ Loaded {result.wing_name}: {len(result.matches):,} matches")

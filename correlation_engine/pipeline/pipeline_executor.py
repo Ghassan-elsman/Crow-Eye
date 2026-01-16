@@ -161,7 +161,7 @@ class PipelineExecutor:
             Engine instance with injected integrations
         """
         from ..engine.time_based_engine import TimeWindowScanningEngine
-        from ..engine.identity_correlation_engine import IdentityCorrelationEngine
+        from ..engine.identity_based_engine_adapter import IdentityBasedEngineAdapter
         
         if engine_type == EngineType.TIME_WINDOW_SCANNING:
             return TimeWindowScanningEngine(
@@ -172,13 +172,11 @@ class PipelineExecutor:
                 mapping_integration=self.semantic_integration
             )
         elif engine_type == EngineType.IDENTITY_BASED:
-            return IdentityCorrelationEngine(
+            return IdentityBasedEngineAdapter(
                 config=pipeline_config,
                 filters=self.filters,
-                time_window_minutes=getattr(pipeline_config, 'time_window_minutes', 180),
-                debug_mode=getattr(pipeline_config, 'debug_mode', False),
-                scoring_integration=self.scoring_integration,
-                mapping_integration=self.semantic_integration
+                mapping_integration=self.semantic_integration,
+                scoring_integration=self.scoring_integration
             )
         else:
             # Fallback to EngineSelector for other engine types
@@ -332,6 +330,7 @@ class PipelineExecutor:
             'results': results_summary,
             'execution_id': execution_id,  # Include execution_id for results viewer
             'database_path': str(Path(self.config.output_directory) / "correlation_results.db") if self.config.output_directory else None,
+            'output_directory': self.config.output_directory,  # Include output directory for results viewer
             'engine_type': getattr(self.config, 'engine_type', 'time_window_scanning'),  # Include engine type for viewer selection
             'cancelled': self._cancelled
         }

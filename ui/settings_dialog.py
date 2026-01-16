@@ -852,11 +852,11 @@ class SettingsDialog(QtWidgets.QDialog):
         
         layout.addLayout(toolbar)
         
-        # Semantic mappings table
+        # Semantic mappings table - 9 columns to show both Simple and Advanced rules
         self.semantic_table = QtWidgets.QTableWidget()
-        self.semantic_table.setColumnCount(5)
+        self.semantic_table.setColumnCount(9)
         self.semantic_table.setHorizontalHeaderLabels([
-            "Category", "Source", "Field", "Technical Value", "Semantic Value"
+            "Type", "Category", "Name", "Logic", "Conditions/Value", "Semantic Value", "Severity", "Feathers", "Description"
         ])
         self.semantic_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.semantic_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -878,10 +878,15 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         
         self.semantic_table.horizontalHeader().setStretchLastSection(True)
-        self.semantic_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        self.semantic_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
-        self.semantic_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
-        self.semantic_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.Interactive)
+        self.semantic_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)  # Type
+        self.semantic_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)  # Category
+        self.semantic_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)  # Name
+        self.semantic_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)  # Logic
+        self.semantic_table.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)  # Conditions/Value
+        self.semantic_table.horizontalHeader().setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeToContents)  # Semantic Value
+        self.semantic_table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.ResizeToContents)  # Severity
+        self.semantic_table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.ResizeToContents)  # Feathers
+        self.semantic_table.horizontalHeader().setSectionResizeMode(8, QtWidgets.QHeaderView.Stretch)  # Description
         self.semantic_table.setMinimumHeight(400)
         
         layout.addWidget(self.semantic_table)
@@ -986,14 +991,19 @@ class SettingsDialog(QtWidgets.QDialog):
                 print(f"Error loading semantic mappings: {e}")
     
     def load_semantic_mappings_table(self):
-        """Load semantic mappings into the table."""
+        """Load semantic mappings and advanced rules into the table with 9 columns."""
         if not self.semantic_manager:
             return
         
         self.semantic_table.setRowCount(0)
         
-        # Get all global mappings
+        # Get all global mappings (simple)
         mappings = self.semantic_manager.get_all_mappings(scope="global")
+        
+        # Get all global rules (advanced with AND/OR logic)
+        rules = self.semantic_manager.get_rules(scope="global")
+        
+        print(f"[Settings] Loading {len(mappings)} simple mappings and {len(rules)} advanced rules")
         
         # Categorize mappings
         categories = {
@@ -1022,6 +1032,7 @@ class SettingsDialog(QtWidgets.QDialog):
             'other': 'Other'
         }
         
+        # Add simple mappings first
         for category_key, category_mappings in categories.items():
             if not category_mappings:
                 continue
@@ -1030,15 +1041,125 @@ class SettingsDialog(QtWidgets.QDialog):
                 row = self.semantic_table.rowCount()
                 self.semantic_table.insertRow(row)
                 
-                # Store mapping object in first item
-                category_item = QtWidgets.QTableWidgetItem(category_names[category_key])
-                category_item.setData(Qt.UserRole, mapping)
-                self.semantic_table.setItem(row, 0, category_item)
+                # Type (Simple - green)
+                type_item = QtWidgets.QTableWidgetItem("Simple")
+                type_item.setForeground(QtGui.QColor("#10B981"))
+                type_item.setData(Qt.UserRole, mapping)  # Store mapping object
+                type_item.setData(Qt.UserRole + 1, "simple")  # Store type
+                self.semantic_table.setItem(row, 0, type_item)
                 
-                self.semantic_table.setItem(row, 1, QtWidgets.QTableWidgetItem(mapping.source))
-                self.semantic_table.setItem(row, 2, QtWidgets.QTableWidgetItem(mapping.field))
-                self.semantic_table.setItem(row, 3, QtWidgets.QTableWidgetItem(mapping.technical_value))
-                self.semantic_table.setItem(row, 4, QtWidgets.QTableWidgetItem(mapping.semantic_value))
+                # Category
+                category_item = QtWidgets.QTableWidgetItem(category_names[category_key])
+                self.semantic_table.setItem(row, 1, category_item)
+                
+                # Name (Source.Field)
+                name_item = QtWidgets.QTableWidgetItem(f"{mapping.source}.{mapping.field}")
+                self.semantic_table.setItem(row, 2, name_item)
+                
+                # Logic (N/A for simple)
+                logic_item = QtWidgets.QTableWidgetItem("-")
+                logic_item.setForeground(QtGui.QColor("#64748B"))
+                self.semantic_table.setItem(row, 3, logic_item)
+                
+                # Conditions/Value
+                value_item = QtWidgets.QTableWidgetItem(f"= {mapping.technical_value}")
+                self.semantic_table.setItem(row, 4, value_item)
+                
+                # Semantic Value (cyan)
+                semantic_item = QtWidgets.QTableWidgetItem(mapping.semantic_value)
+                semantic_item.setForeground(QtGui.QColor("#00FFFF"))
+                self.semantic_table.setItem(row, 5, semantic_item)
+                
+                # Severity
+                severity = mapping.severity if hasattr(mapping, 'severity') else 'info'
+                severity_item = QtWidgets.QTableWidgetItem(severity)
+                severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
+                severity_item.setForeground(QtGui.QColor(severity_colors.get(severity, "#64748B")))
+                self.semantic_table.setItem(row, 6, severity_item)
+                
+                # Feathers
+                feather_item = QtWidgets.QTableWidgetItem(mapping.source)
+                self.semantic_table.setItem(row, 7, feather_item)
+                
+                # Description
+                desc_item = QtWidgets.QTableWidgetItem(mapping.description if hasattr(mapping, 'description') else '')
+                self.semantic_table.setItem(row, 8, desc_item)
+        
+        # Add advanced rules
+        for rule in rules:
+            row = self.semantic_table.rowCount()
+            self.semantic_table.insertRow(row)
+            
+            # Type (Advanced - cyan bold)
+            type_item = QtWidgets.QTableWidgetItem("Advanced")
+            type_item.setForeground(QtGui.QColor("#00FFFF"))
+            font = type_item.font()
+            font.setBold(True)
+            type_item.setFont(font)
+            type_item.setData(Qt.UserRole, rule)  # Store rule object
+            type_item.setData(Qt.UserRole + 1, "advanced")  # Store type
+            self.semantic_table.setItem(row, 0, type_item)
+            
+            # Category (determine from conditions)
+            category = "Advanced Rule"
+            if hasattr(rule, 'conditions') and rule.conditions:
+                first_feather = rule.conditions[0].feather_id if rule.conditions else ""
+                if "Security" in first_feather:
+                    category = "User Activity"
+                elif "System" in first_feather:
+                    category = "System Events"
+                elif "Prefetch" in first_feather or "Process" in first_feather:
+                    category = "Process Execution"
+            category_item = QtWidgets.QTableWidgetItem(category)
+            self.semantic_table.setItem(row, 1, category_item)
+            
+            # Name (rule name - bold)
+            name_item = QtWidgets.QTableWidgetItem(rule.name)
+            name_item.setFont(font)
+            self.semantic_table.setItem(row, 2, name_item)
+            
+            # Logic (AND/OR with color)
+            logic_item = QtWidgets.QTableWidgetItem(rule.logic_operator)
+            logic_color = "#10B981" if rule.logic_operator == "AND" else "#F59E0B"
+            logic_item.setForeground(QtGui.QColor(logic_color))
+            logic_item.setFont(font)
+            self.semantic_table.setItem(row, 3, logic_item)
+            
+            # Conditions (detailed format with tooltip)
+            conditions_parts = []
+            for c in rule.conditions:
+                op_symbol = {"equals": "=", "contains": "~", "wildcard": "*", "regex": "≈"}.get(c.operator, "=")
+                conditions_parts.append(f"{c.feather_id}.{c.field_name}{op_symbol}{c.value}")
+            conditions_str = f" {rule.logic_operator} ".join(conditions_parts)
+            conditions_item = QtWidgets.QTableWidgetItem(conditions_str)
+            conditions_item.setToolTip(f"Conditions ({len(rule.conditions)}):\n" + "\n".join([f"• {c.feather_id}.{c.field_name} {c.operator} '{c.value}'" for c in rule.conditions]))
+            self.semantic_table.setItem(row, 4, conditions_item)
+            
+            # Semantic Value (cyan bold)
+            semantic_item = QtWidgets.QTableWidgetItem(rule.semantic_value)
+            semantic_item.setForeground(QtGui.QColor("#00FFFF"))
+            semantic_item.setFont(font)
+            self.semantic_table.setItem(row, 5, semantic_item)
+            
+            # Severity (color-coded)
+            severity = rule.severity if hasattr(rule, 'severity') else 'info'
+            severity_item = QtWidgets.QTableWidgetItem(severity)
+            severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
+            severity_item.setForeground(QtGui.QColor(severity_colors.get(severity, "#64748B")))
+            severity_item.setFont(font)
+            self.semantic_table.setItem(row, 6, severity_item)
+            
+            # Feathers (unique list)
+            feathers = set([c.feather_id for c in rule.conditions])
+            feathers_str = ", ".join(sorted(feathers))
+            feather_item = QtWidgets.QTableWidgetItem(feathers_str)
+            self.semantic_table.setItem(row, 7, feather_item)
+            
+            # Description
+            desc_item = QtWidgets.QTableWidgetItem(rule.description if hasattr(rule, 'description') else '')
+            self.semantic_table.setItem(row, 8, desc_item)
+        
+        print(f"[Settings] Table now has {self.semantic_table.rowCount()} rows")
     
     def add_semantic_mapping(self):
         """Add a new semantic mapping using the advanced dialog."""
@@ -1096,70 +1217,99 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.load_semantic_mappings_table()
     
     def edit_semantic_mapping(self):
-        """Edit the selected semantic mapping using the advanced dialog."""
+        """Edit the selected semantic mapping or advanced rule using the advanced dialog."""
         if not self.semantic_manager:
             return
         
         selected_rows = self.semantic_table.selectionModel().selectedRows()
         if not selected_rows:
-            QMessageBox.warning(self, "No Selection", "Please select a mapping to edit.")
+            QMessageBox.warning(self, "No Selection", "Please select a mapping or rule to edit.")
             return
         
         row = selected_rows[0].row()
-        category_item = self.semantic_table.item(row, 0)
-        mapping = category_item.data(Qt.UserRole)
+        type_item = self.semantic_table.item(row, 0)
+        item_data = type_item.data(Qt.UserRole)
+        item_type = type_item.data(Qt.UserRole + 1)  # "simple" or "advanced"
         
-        if not mapping:
+        if not item_data:
             return
-        
-        # Convert mapping to dict format for the dialog
-        mapping_dict = {
-            'source': mapping.source,
-            'field': mapping.field,
-            'technical_value': mapping.technical_value,
-            'semantic_value': mapping.semantic_value,
-            'description': mapping.description or ''
-        }
         
         # Use the advanced SemanticMappingDialog if available
         if AdvancedSemanticMappingDialog:
-            dialog = AdvancedSemanticMappingDialog(
-                parent=self,
-                mapping=mapping_dict,
-                scope='global',
-                wing_id=None,
-                mode='simple'
-            )
-            
-            if dialog.exec_() == QtWidgets.QDialog.Accepted:
-                # Remove old mapping
-                self.semantic_manager.remove_mapping(
-                    mapping.source, mapping.field, mapping.technical_value, scope='global'
+            if item_type == "advanced":
+                # Editing an advanced rule
+                dialog = AdvancedSemanticMappingDialog(
+                    parent=self,
+                    mapping=None,
+                    scope='global',
+                    wing_id=None,
+                    mode='advanced',
+                    rule=item_data  # Pass the rule object
                 )
                 
-                # Check if it's an advanced rule or simple mapping
-                rule = dialog.get_rule()
+                if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                    # Remove old rule
+                    self.semantic_manager.remove_rule(item_data.name, scope='global')
+                    
+                    # Add new rule
+                    new_rule = dialog.get_rule()
+                    if new_rule:
+                        self.semantic_manager.add_rule(new_rule)
+                    
+                    self.load_semantic_mappings_table()
+            else:
+                # Editing a simple mapping
+                mapping = item_data
+                mapping_dict = {
+                    'source': mapping.source,
+                    'field': mapping.field,
+                    'technical_value': mapping.technical_value,
+                    'semantic_value': mapping.semantic_value,
+                    'description': mapping.description or ''
+                }
                 
-                if rule and len(rule.conditions) > 0:
-                    # Advanced rule with conditions
-                    self.semantic_manager.add_rule(rule)
-                else:
-                    # Simple mapping
-                    mapping_data = dialog.get_mapping()
-                    if mapping_data:
-                        new_mapping = SemanticMapping(
-                            source=mapping_data.get('source', ''),
-                            field=mapping_data.get('field', ''),
-                            technical_value=mapping_data.get('technical_value', ''),
-                            semantic_value=mapping_data.get('semantic_value', ''),
-                            description=mapping_data.get('description', ''),
-                            scope='global'
-                        )
-                        self.semantic_manager.add_mapping(new_mapping)
+                dialog = AdvancedSemanticMappingDialog(
+                    parent=self,
+                    mapping=mapping_dict,
+                    scope='global',
+                    wing_id=None,
+                    mode='simple'
+                )
                 
-                self.load_semantic_mappings_table()
+                if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                    # Remove old mapping
+                    self.semantic_manager.remove_mapping(
+                        mapping.source, mapping.field, mapping.technical_value, scope='global'
+                    )
+                    
+                    # Check if it's an advanced rule or simple mapping
+                    rule = dialog.get_rule()
+                    
+                    if rule and len(rule.conditions) > 0:
+                        # Advanced rule with conditions
+                        self.semantic_manager.add_rule(rule)
+                    else:
+                        # Simple mapping
+                        mapping_data = dialog.get_mapping()
+                        if mapping_data:
+                            new_mapping = SemanticMapping(
+                                source=mapping_data.get('source', ''),
+                                field=mapping_data.get('field', ''),
+                                technical_value=mapping_data.get('technical_value', ''),
+                                semantic_value=mapping_data.get('semantic_value', ''),
+                                description=mapping_data.get('description', ''),
+                                scope='global'
+                            )
+                            self.semantic_manager.add_mapping(new_mapping)
+                    
+                    self.load_semantic_mappings_table()
         else:
-            # Fallback to simple dialog
+            # Fallback to simple dialog (only for simple mappings)
+            if item_type == "advanced":
+                QMessageBox.warning(self, "Not Supported", "Advanced rule editing requires the advanced dialog.")
+                return
+            
+            mapping = item_data
             dialog = SimpleSemanticMappingDialog(self, mapping)
             if dialog.exec_() == QtWidgets.QDialog.Accepted:
                 mapping_data = dialog.get_mapping_data()
@@ -1183,35 +1333,46 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.load_semantic_mappings_table()
     
     def delete_semantic_mapping(self):
-        """Delete the selected semantic mapping."""
+        """Delete the selected semantic mapping or advanced rule."""
         if not self.semantic_manager:
             return
         
         selected_rows = self.semantic_table.selectionModel().selectedRows()
         if not selected_rows:
-            QMessageBox.warning(self, "No Selection", "Please select a mapping to delete.")
+            QMessageBox.warning(self, "No Selection", "Please select a mapping or rule to delete.")
             return
         
         row = selected_rows[0].row()
-        category_item = self.semantic_table.item(row, 0)
-        mapping = category_item.data(Qt.UserRole)
+        type_item = self.semantic_table.item(row, 0)
+        item_data = type_item.data(Qt.UserRole)
+        item_type = type_item.data(Qt.UserRole + 1)  # "simple" or "advanced"
         
-        if not mapping:
+        if not item_data:
             return
         
         # Confirm deletion
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("Delete Mapping")
-        msg_box.setText(f"Delete mapping for {mapping.source}.{mapping.field} = {mapping.technical_value}?")
+        
+        if item_type == "advanced":
+            msg_box.setText(f"Delete advanced rule '{item_data.name}'?")
+        else:
+            msg_box.setText(f"Delete mapping for {item_data.source}.{item_data.field} = {item_data.technical_value}?")
+        
         msg_box.setIcon(QMessageBox.Question)
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.No)
         msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
         
         if msg_box.exec_() == QMessageBox.Yes:
-            self.semantic_manager.remove_mapping(
-                mapping.source, mapping.field, mapping.technical_value, scope='global'
-            )
+            if item_type == "advanced":
+                # Delete advanced rule
+                self.semantic_manager.remove_rule(item_data.name, scope='global')
+            else:
+                # Delete simple mapping
+                self.semantic_manager.remove_mapping(
+                    item_data.source, item_data.field, item_data.technical_value, scope='global'
+                )
             self.load_semantic_mappings_table()
     
     def import_semantic_mappings(self):

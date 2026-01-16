@@ -1284,6 +1284,25 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             self.semantic_integration.load_case_specific_mappings(case_id)
             self.scoring_integration.load_case_specific_scoring_weights(case_id)
         
+        # Task 11.3: Verify semantic integration health (only log if debug mode)
+        # Requirements: 7.4 - Check if semantic integration is properly initialized
+        if not self.semantic_integration.is_healthy() and self.debug_mode:
+            logger.warning("[Time-Window Engine] Semantic mapping integration health check failed - some features may not work correctly")
+        
+        # Log semantic rules source (JSON vs built-in)
+        if self.debug_mode:
+            manager = self.semantic_integration.semantic_manager
+            rules_count = len(manager.global_rules)
+            mappings_count = sum(len(v) for v in manager.global_mappings.values())
+            logger.info(f"[Time-Window Engine] Semantic rules loaded: {rules_count} rules, {mappings_count} mappings")
+            logger.info(f"[Time-Window Engine] Rules source: JSON files (configs directory)")
+            if manager.config_dir.exists():
+                logger.info(f"[Time-Window Engine] Config directory: {manager.config_dir}")
+                if manager.default_rules_path.exists():
+                    logger.info(f"[Time-Window Engine]   - Default rules: {manager.default_rules_path.name}")
+                if manager.custom_rules_path.exists():
+                    logger.info(f"[Time-Window Engine]   - Custom rules: {manager.custom_rules_path.name}")
+        
         # Memory management and streaming
         self.memory_manager: Optional[WindowMemoryManager] = None
         self.streaming_writer: Optional[StreamingMatchWriter] = None
@@ -2061,6 +2080,27 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             
             # Record execution time
             result.execution_duration_seconds = time.time() - start_time
+            
+            # Update feather_metadata with matches_created counts
+            # Count how many matches each feather contributed to
+            if result.matches and result.feather_metadata:
+                feather_match_counts = {fid: 0 for fid in result.feather_metadata.keys()}
+                for match in result.matches:
+                    if hasattr(match, 'feather_records') and match.feather_records:
+                        for fid in match.feather_records.keys():
+                            if fid in feather_match_counts:
+                                feather_match_counts[fid] += 1
+                
+                # Update feather_metadata with match counts
+                for fid, count in feather_match_counts.items():
+                    if fid in result.feather_metadata:
+                        result.feather_metadata[fid]['matches_created'] = count
+                
+                if self.debug_mode:
+                    print(f"[Time-Window Engine] 📊 Matches per feather:")
+                    for fid, count in sorted(feather_match_counts.items(), key=lambda x: x[1], reverse=True):
+                        if count > 0:
+                            print(f"  • {fid}: {count:,} matches")
             
             # Calculate and log total feather data size
             total_feather_data_size = 0
@@ -3311,8 +3351,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             
             # Log window results (Requirements 6.4 and 6.5)
             if is_empty_window:
-                # Log empty window skip (Requirement 6.5)
-                print(f"[Time-Window Engine] ⏭️ Skipped empty window: {window_start_str} to {window_end_str}")
+                # Empty window - skip silently (no print to reduce noise)
+                pass
             else:
                 # Count unique identities in this window
                 identity_count = len(set(match.matched_application for match in window_matches if match.matched_application))
@@ -3342,13 +3382,20 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             
             # Add matches to result (handles streaming automatically)
             for match in window_matches:
-                result.add_match(match)
-                
-                # Write to streaming database if active
+                # CRITICAL FIX: Apply semantic mappings before writing to streaming database
+                # Requirements: 2.1, 2.2 - Semantic mappings must be applied before saving
                 if self.streaming_mode_active and self.streaming_writer:
+                    if self.semantic_integration.is_enabled():
+                        enhanced_match = self._apply_semantic_mappings_to_single_match(match, wing)
+                    else:
+                        enhanced_match = match
+                    
+                    result.add_match(enhanced_match)
                     result_id = getattr(result, '_result_id', 0)
                     if result_id > 0:
-                        self.streaming_writer.write_match(result_id, match)
+                        self.streaming_writer.write_match(result_id, enhanced_match)
+                else:
+                    result.add_match(match)
             
             matches.extend(window_matches)
             window_count += 1
@@ -4376,6 +4423,169 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 feather_paths[feather_spec.feather_id] = feather_spec.feather_path
         
         return feather_paths
+
+    def _extract_semantic_data_from_records(self, 
+                                           enhanced_records: Dict[str, Dict]) -> Dict[str, Any]:
+        """
+        Extract semantic data from enhanced feather records.
+        
+        This method iterates through enhanced records that have been processed by
+        the semantic integration layer and extracts the _semantic_mappings from each
+        record to build a consolidated semantic_data dict for the CorrelationMatch.
+        
+        Args:
+            enhanced_records: Dict of feather_id -> enhanced record with _semantic_mappings
+            
+        Returns:
+            Consolidated semantic_data dict for the match containing:
+            - Individual semantic mappings keyed by feather_id.field_name
+            - _metadata with mappings_applied flag and count
+            
+        Requirements: 2.2, 2.3
+        """
+        semantic_data = {}
+        mappings_count = 0
+        
+        for feather_id, record in enhanced_records.items():
+            if not isinstance(record, dict):
+                continue
+            
+            semantic_mappings = record.get('_semantic_mappings', {})
+            if not semantic_mappings:
+                continue
+            
+            for field_name, mapping_info in semantic_mappings.items():
+                if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
+                    # Use feather_id.field_name as key to avoid collisions
+                    key = f"{feather_id}.{field_name}" if feather_id else field_name
+                    semantic_data[key] = {
+                        'semantic_value': mapping_info['semantic_value'],
+                        'technical_value': mapping_info.get('technical_value', ''),
+                        'description': mapping_info.get('description', ''),
+                        'category': mapping_info.get('category', ''),
+                        'confidence': mapping_info.get('confidence', 1.0),
+                        'rule_name': mapping_info.get('rule_name', field_name),
+                        'feather_id': feather_id
+                    }
+                    mappings_count += 1
+        
+        # Add metadata
+        semantic_data['_metadata'] = {
+            'mappings_applied': mappings_count > 0,
+            'mappings_count': mappings_count,
+            'engine_type': self.__class__.__name__
+        }
+        
+        # Task 11.2: Add debug logging for semantic data extraction
+        # Requirements: 7.1, 7.2 - Log semantic mapping application details
+        if self.debug_mode and mappings_count > 0:
+            logger.debug(f"[Time-Window Engine] Extracted semantic data: {mappings_count} mappings from {len(enhanced_records)} records")
+            # Log summary of semantic values found
+            semantic_values = [v.get('semantic_value', '') for k, v in semantic_data.items() 
+                             if k != '_metadata' and isinstance(v, dict)]
+            if semantic_values:
+                unique_values = list(set(semantic_values))[:5]  # Show first 5 unique values
+                logger.debug(f"[Time-Window Engine] Semantic values sample: {unique_values}")
+        
+        return semantic_data
+
+    def _apply_semantic_mappings_to_single_match(self, 
+                                                match: CorrelationMatch, 
+                                                wing: Any) -> CorrelationMatch:
+        """
+        Apply semantic mappings to a single correlation match.
+        Used in streaming mode to apply semantic mappings before writing to database.
+        
+        Args:
+            match: Single correlation match to process
+            wing: Wing configuration for context
+            
+        Returns:
+            Enhanced match with semantic mapping information
+            
+        Requirements: 2.1, 2.2 - Store semantic data in CorrelationMatch.semantic_data
+        """
+        try:
+            # Convert match records to format expected by semantic integration
+            records_list = [record for record in match.feather_records.values()]
+            
+            # Apply semantic mappings
+            enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
+                records_list,
+                wing_id=getattr(wing, 'wing_id', None),
+                pipeline_id=getattr(wing, 'pipeline_id', None),
+                artifact_type=getattr(match, 'anchor_artifact_type', None)
+            )
+            
+            # Convert back to match format
+            enhanced_records = {}
+            original_keys = list(match.feather_records.keys())
+            for i, enhanced_record in enumerate(enhanced_records_list):
+                key = original_keys[i] if i < len(original_keys) else f"record_{i}"
+                enhanced_records[key] = enhanced_record
+            
+            # Extract actual semantic values from enhanced records
+            semantic_data = self._extract_semantic_data_from_records(enhanced_records)
+            
+            # Create enhanced match with actual semantic data
+            enhanced_match = CorrelationMatch(
+                match_id=match.match_id,
+                feather_records=enhanced_records,
+                timestamp=match.timestamp,
+                match_score=match.match_score,
+                feather_count=match.feather_count,
+                time_spread_seconds=match.time_spread_seconds,
+                anchor_feather_id=match.anchor_feather_id,
+                anchor_artifact_type=match.anchor_artifact_type,
+                matched_application=match.matched_application,
+                matched_file_path=match.matched_file_path,
+                matched_event_id=match.matched_event_id,
+                confidence_score=match.confidence_score,
+                confidence_category=match.confidence_category,
+                weighted_score=match.weighted_score,
+                score_breakdown=match.score_breakdown,
+                semantic_data=semantic_data
+            )
+            
+            return enhanced_match
+            
+        except Exception as e:
+            # Requirements 2.4: Log error and continue processing
+            logger.warning(f"Failed to apply semantic mappings to match {match.match_id}: {e}")
+            
+            # Return original match with error metadata
+            error_semantic_data = {
+                '_metadata': {
+                    'mappings_applied': False,
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                    'match_id': match.match_id,
+                    'engine_type': 'TimeBasedCorrelationEngine'
+                }
+            }
+            
+            # Create match with error semantic_data
+            error_match = CorrelationMatch(
+                match_id=match.match_id,
+                feather_records=match.feather_records,
+                timestamp=match.timestamp,
+                match_score=match.match_score,
+                feather_count=match.feather_count,
+                time_spread_seconds=match.time_spread_seconds,
+                anchor_feather_id=match.anchor_feather_id,
+                anchor_artifact_type=match.anchor_artifact_type,
+                matched_application=match.matched_application,
+                matched_file_path=match.matched_file_path,
+                matched_event_id=match.matched_event_id,
+                confidence_score=match.confidence_score,
+                confidence_category=match.confidence_category,
+                weighted_score=match.weighted_score,
+                score_breakdown=match.score_breakdown,
+                semantic_data=error_semantic_data
+            )
+            
+            return error_match
+
     def _apply_semantic_mappings_to_matches(self, 
                                           matches: List[CorrelationMatch], 
                                           wing: Any) -> List[CorrelationMatch]:
@@ -4390,11 +4600,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             Enhanced matches with semantic mapping information
         """
         enhanced_matches = []
+        errors_count = 0
         
         for match in matches:
             try:
                 # Convert match records to format expected by semantic integration
-                records_list = [record for record in match.feather_records.values()]
+                # IMPORTANT: Include feather_id in each record so semantic rules can match
+                records_list = []
+                for feather_id, record in match.feather_records.items():
+                    record_with_feather = record.copy() if isinstance(record, dict) else {'value': record}
+                    record_with_feather['_feather_id'] = feather_id
+                    records_list.append(record_with_feather)
                 
                 # Apply semantic mappings
                 enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
@@ -4412,7 +4628,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     key = original_keys[i] if i < len(original_keys) else f"record_{i}"
                     enhanced_records[key] = enhanced_record
                 
-                # Create enhanced match with semantic information
+                # CRITICAL FIX: Extract actual semantic values from enhanced records
+                # Requirements: 2.1, 2.2 - Store semantic data in CorrelationMatch.semantic_data
+                semantic_data = self._extract_semantic_data_from_records(enhanced_records)
+                
+                # Task 11.2: Log per-match semantic mapping count (Requirements: 7.1, 7.2)
+                if self.debug_mode:
+                    mappings_count = semantic_data.get('_metadata', {}).get('mappings_count', 0)
+                    if mappings_count > 0:
+                        logger.debug(f"[Time-Window Engine] Match {match.match_id}: {mappings_count} semantic mappings applied")
+                
+                # Create enhanced match with actual semantic data (not just a flag)
                 enhanced_match = CorrelationMatch(
                     match_id=match.match_id,
                     feather_records=enhanced_records,
@@ -4429,22 +4655,52 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     confidence_category=match.confidence_category,
                     weighted_score=match.weighted_score,
                     score_breakdown=match.score_breakdown,
-                    semantic_data={'semantic_mappings_applied': True, 'engine_type': 'time_window_scanning'}
+                    semantic_data=semantic_data  # Now contains actual values
                 )
                 
                 enhanced_matches.append(enhanced_match)
                 
             except Exception as e:
-                # If semantic mapping fails, include original match with warning
+                # Requirements 2.4: Log error and continue processing remaining matches
+                errors_count += 1
                 logger.warning(f"Failed to apply semantic mappings to match {match.match_id}: {e}")
                 
-                # Add warning to match semantic_data
-                match.semantic_data = {
-                    'semantic_mapping_error': str(e),
-                    'semantic_mappings_applied': False
+                # Create match with error metadata in semantic_data
+                error_semantic_data = {
+                    '_metadata': {
+                        'mappings_applied': False,
+                        'error': str(e),
+                        'error_type': type(e).__name__,
+                        'match_id': match.match_id,
+                        'engine_type': 'TimeBasedCorrelationEngine'
+                    }
                 }
                 
-                enhanced_matches.append(match)
+                # Keep original match but add error semantic_data
+                error_match = CorrelationMatch(
+                    match_id=match.match_id,
+                    feather_records=match.feather_records,  # Keep original records
+                    timestamp=match.timestamp,
+                    match_score=match.match_score,
+                    feather_count=match.feather_count,
+                    time_spread_seconds=match.time_spread_seconds,
+                    anchor_feather_id=match.anchor_feather_id,
+                    anchor_artifact_type=match.anchor_artifact_type,
+                    matched_application=match.matched_application,
+                    matched_file_path=match.matched_file_path,
+                    matched_event_id=match.matched_event_id,
+                    confidence_score=match.confidence_score,
+                    confidence_category=match.confidence_category,
+                    weighted_score=match.weighted_score,
+                    score_breakdown=match.score_breakdown,
+                    semantic_data=error_semantic_data
+                )
+                
+                enhanced_matches.append(error_match)
+        
+        # Log error summary if any errors occurred
+        if errors_count > 0:
+            logger.warning(f"Semantic mapping completed with {errors_count} errors out of {len(matches)} matches")
         
         return enhanced_matches
     
@@ -4526,8 +4782,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         if matches_with_results > 0:
             stats = self.semantic_rule_evaluator.get_statistics()
             logger.info(f"Applied semantic rules: {matches_with_results} matches matched {total_rule_matches} rules")
+            logger.info(f"Rules loaded from: JSON configuration files (configs directory)")
             if self.debug_mode:
                 logger.debug(f"Semantic rule stats: {stats.to_dict()}")
+                # Log which specific rules matched
+                for match in enhanced_matches:
+                    if match.semantic_data and 'semantic_rule_results' in match.semantic_data:
+                        results = match.semantic_data['semantic_rule_results']
+                        if results:
+                            rule_names = [r['rule_name'] for r in results]
+                            logger.debug(f"Match {match.match_id}: matched rules {rule_names}")
         
         return enhanced_matches
     

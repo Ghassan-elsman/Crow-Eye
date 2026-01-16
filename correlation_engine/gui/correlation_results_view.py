@@ -21,9 +21,6 @@ from correlation_engine.engine.data_structures import QueryFilters
 from correlation_engine.engine.database_persistence import DatabasePersistence
 from .match_detail_dialog import MatchDetailDialog
 
-# Import tab styling from results_tab_widget
-from .results_tab_widget import apply_tab_close_button_styling
-
 
 class CorrelationResultsView(QWidget):
     """
@@ -86,26 +83,8 @@ class CorrelationResultsView(QWidget):
             QTabBar::tab:!selected {
                 background-color: #1e1e1e;
             }
-            QTabBar::close-button {
-                width: 16px;
-                height: 16px;
-                border-radius: 8px;
-                background: transparent;
-                subcontrol-position: right;
-                margin: 2px;
-            }
-            QTabBar::close-button:hover {
-                background: rgba(255, 255, 255, 0.2);
-                border-radius: 8px;
-            }
-            QTabBar::close-button:pressed {
-                background: rgba(255, 255, 255, 0.3);
-            }
         """)
         layout.addWidget(self.result_tabs)
-        
-        # Apply proper close button styling
-        apply_tab_close_button_styling(self.result_tabs, "dark")
         
         # Add initial tab if no execution_id provided
         if not self.current_execution_id:

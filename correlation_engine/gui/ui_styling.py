@@ -298,6 +298,62 @@ class CorrelationEngineStyles:
     # TABLE STYLES
     # ============================================================================
     
+    # ============================================================================
+    # PROGRESS DIALOG STYLE
+    # ============================================================================
+    
+    PROGRESS_DIALOG_STYLE = f"""
+        QProgressDialog {{
+            background-color: {BG_PRIMARY};
+            border: 2px solid {TEXT_ACCENT};
+            border-radius: 8px;
+        }}
+        QProgressDialog QLabel {{
+            color: {TEXT_PRIMARY};
+            font-size: 10pt;
+            padding: 8px;
+        }}
+        QProgressBar {{
+            background-color: {BG_PANELS};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 4px;
+            text-align: center;
+            color: {TEXT_PRIMARY};
+            font-size: 9pt;
+            font-weight: bold;
+            min-height: 20px;
+        }}
+        QProgressBar::chunk {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #00FFFF, stop:0.5 #10B981, stop:1 #00FFFF);
+            border-radius: 3px;
+        }}
+        QPushButton {{
+            background-color: {BG_PANELS};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_ACCENT};
+            border-radius: 4px;
+            padding: 6px 16px;
+            font-size: 9pt;
+            min-width: 70px;
+        }}
+        QPushButton:hover {{
+            background-color: {BG_HOVER};
+            border-color: {TEXT_ACCENT};
+            color: {TEXT_ACCENT};
+        }}
+        QPushButton:pressed {{
+            background-color: {BG_PRIMARY};
+        }}
+    """
+    
+    @staticmethod
+    def apply_progress_dialog_style(dialog):
+        """Apply Crow Eye styling to a QProgressDialog."""
+        dialog.setStyleSheet(CorrelationEngineStyles.PROGRESS_DIALOG_STYLE)
+        dialog.setMinimumWidth(350)
+        dialog.setMinimumHeight(120)
+    
     TABLE_STYLE = f"""
         QTableWidget {{
             background-color: {BG_PRIMARY};

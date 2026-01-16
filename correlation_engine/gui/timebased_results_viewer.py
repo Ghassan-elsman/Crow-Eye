@@ -48,151 +48,260 @@ class TimeBasedResultsViewer(QWidget):
     def setup_ui(self):
         """Setup compact UI with labeled filters matching Identity Viewer style."""
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(2)
+        main_layout.setSpacing(4)
         main_layout.setContentsMargins(4, 4, 4, 4)
+        
+        # Set widget background
+        self.setStyleSheet("background-color: #0B1220;")
         
         # === TOP: Summary + Filters (single compact row) ===
         top_frame = QFrame()
-        top_frame.setMaximumHeight(32)
+        top_frame.setMaximumHeight(36)
+        top_frame.setStyleSheet("""
+            QFrame {
+                background-color: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 6px;
+            }
+        """)
         top_layout = QHBoxLayout(top_frame)
-        top_layout.setSpacing(8)
-        top_layout.setContentsMargins(4, 2, 4, 2)
+        top_layout.setSpacing(10)
+        top_layout.setContentsMargins(8, 4, 8, 4)
         
         # Summary labels (compact - values only, tooltips for context)
         self.windows_lbl = QLabel("0")
-        self.windows_lbl.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 8pt;")
+        self.windows_lbl.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 9pt;")
         self.windows_lbl.setToolTip("Windows")
         top_layout.addWidget(self.windows_lbl)
         
         self.identities_lbl = QLabel("0")
-        self.identities_lbl.setStyleSheet("font-size: 7pt;")
+        self.identities_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         self.identities_lbl.setToolTip("Identities")
         top_layout.addWidget(self.identities_lbl)
         
         self.records_lbl = QLabel("0")
-        self.records_lbl.setStyleSheet("font-size: 7pt;")
+        self.records_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         self.records_lbl.setToolTip("Records")
         top_layout.addWidget(self.records_lbl)
         
         self.time_lbl = QLabel("0s")
-        self.time_lbl.setStyleSheet("font-size: 7pt;")
+        self.time_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         self.time_lbl.setToolTip("Execution Time")
         top_layout.addWidget(self.time_lbl)
         
         self.feathers_used_lbl = QLabel("0")
-        self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 7pt;")
+        self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 8pt; font-weight: bold;")
         self.feathers_used_lbl.setToolTip("Feathers")
         top_layout.addWidget(self.feathers_used_lbl)
         
         # Scoring indicator
-        self.scoring_lbl = QLabel("📊")
-        self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #888;")
+        self.scoring_lbl = QLabel("📊 Scoring: Off")
+        self.scoring_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         self.scoring_lbl.setToolTip("Scoring: Off")
         top_layout.addWidget(self.scoring_lbl)
-        
-        # Legend button
-        legend_btn = QPushButton("?")
-        legend_btn.setMaximumWidth(16)
-        legend_btn.setMaximumHeight(16)
-        legend_btn.setStyleSheet("font-size: 6pt; padding: 0px; background-color: #444; border-radius: 8px;")
-        legend_btn.setToolTip("Show visual indicators legend")
-        legend_btn.clicked.connect(self._show_legend)
-        top_layout.addWidget(legend_btn)
         
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #444;")
+        sep.setStyleSheet("color: #334155;")
         top_layout.addWidget(sep)
         
         # Search filter
         search_lbl = QLabel("Search:")
-        search_lbl.setStyleSheet("font-size: 7pt; color: #aaa;")
+        search_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(search_lbl)
         
         self.identity_filter = QLineEdit()
         self.identity_filter.setPlaceholderText("identity...")
-        self.identity_filter.setMaximumWidth(200)
-        self.identity_filter.setStyleSheet("font-size: 7pt; padding: 1px 3px;")
+        self.identity_filter.setMaximumWidth(100)
+        self.identity_filter.setStyleSheet("""
+            QLineEdit {
+                font-size: 8pt; 
+                padding: 2px 4px;
+                background-color: #0B1220;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                color: #E2E8F0;
+            }
+            QLineEdit:focus {
+                border: 1px solid #00FFFF;
+            }
+        """)
         self.identity_filter.textChanged.connect(self._apply_filters)
         top_layout.addWidget(self.identity_filter)
         
         # Feather filter
         feather_lbl = QLabel("Feather:")
-        feather_lbl.setStyleSheet("font-size: 7pt; color: #aaa;")
+        feather_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(feather_lbl)
         
         self.feather_filter = QComboBox()
         self.feather_filter.addItem("All")
-        self.feather_filter.setMaximumWidth(180)
-        self.feather_filter.setStyleSheet("font-size: 7pt;")
+        self.feather_filter.setMaximumWidth(100)
+        self.feather_filter.setStyleSheet("""
+            QComboBox {
+                font-size: 8pt;
+                background-color: #0B1220;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                color: #E2E8F0;
+                padding: 2px 4px;
+            }
+            QComboBox:hover {
+                border: 1px solid #00FFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1E293B;
+                color: #E2E8F0;
+                selection-background-color: #334155;
+            }
+        """)
         self.feather_filter.currentTextChanged.connect(self._apply_filters)
         top_layout.addWidget(self.feather_filter)
         
         # Time range filter
         time_lbl = QLabel("Time:")
-        time_lbl.setStyleSheet("font-size: 7pt; color: #aaa;")
+        time_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(time_lbl)
+        
+        datetime_style = """
+            QDateTimeEdit {
+                font-size: 8pt;
+                background-color: #0B1220;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                color: #E2E8F0;
+                padding: 2px 4px;
+            }
+            QDateTimeEdit:focus {
+                border: 1px solid #00FFFF;
+            }
+            QDateTimeEdit::drop-down {
+                border: none;
+            }
+        """
         
         self.time_start_edit = QDateTimeEdit()
         self.time_start_edit.setDisplayFormat("MM-dd HH:mm")
-        self.time_start_edit.setMaximumWidth(140)
-        self.time_start_edit.setStyleSheet("font-size: 7pt;")
+        self.time_start_edit.setMaximumWidth(100)
+        self.time_start_edit.setStyleSheet(datetime_style)
         self.time_start_edit.setCalendarPopup(True)
         self.time_start_edit.dateTimeChanged.connect(self._apply_filters)
         top_layout.addWidget(self.time_start_edit)
         
         to_lbl = QLabel("-")
-        to_lbl.setStyleSheet("font-size: 7pt; color: #aaa;")
+        to_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(to_lbl)
         
         self.time_end_edit = QDateTimeEdit()
         self.time_end_edit.setDisplayFormat("MM-dd HH:mm")
-        self.time_end_edit.setMaximumWidth(140)
-        self.time_end_edit.setStyleSheet("font-size: 7pt;")
+        self.time_end_edit.setMaximumWidth(100)
+        self.time_end_edit.setStyleSheet(datetime_style)
         self.time_end_edit.setCalendarPopup(True)
         self.time_end_edit.dateTimeChanged.connect(self._apply_filters)
         top_layout.addWidget(self.time_end_edit)
         
         # Window status filter
         status_lbl = QLabel("Status:")
-        status_lbl.setStyleSheet("font-size: 7pt; color: #aaa;")
+        status_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(status_lbl)
         
         self.status_filter = QComboBox()
         self.status_filter.addItems(["All", "With Data", "Empty"])
-        self.status_filter.setMaximumWidth(90)
-        self.status_filter.setStyleSheet("font-size: 7pt;")
+        self.status_filter.setMaximumWidth(80)
+        self.status_filter.setStyleSheet("""
+            QComboBox {
+                font-size: 8pt;
+                background-color: #0B1220;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                color: #E2E8F0;
+                padding: 2px 4px;
+            }
+            QComboBox:hover {
+                border: 1px solid #00FFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1E293B;
+                color: #E2E8F0;
+                selection-background-color: #334155;
+            }
+        """)
         self.status_filter.currentTextChanged.connect(self._apply_filters)
         top_layout.addWidget(self.status_filter)
         
         # Reset button
         reset_btn = QPushButton("Reset")
-        reset_btn.setMaximumWidth(40)
-        reset_btn.setStyleSheet("font-size: 7pt; padding: 1px 4px;")
+        reset_btn.setMaximumWidth(50)
+        reset_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 8pt; 
+                padding: 2px 6px;
+                background-color: #334155;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                color: #E2E8F0;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border: 1px solid #00FFFF;
+            }
+        """)
         reset_btn.clicked.connect(self._reset_filters)
         top_layout.addWidget(reset_btn)
         
         # Separator
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.VLine)
-        sep2.setStyleSheet("color: #444;")
+        sep2.setStyleSheet("color: #334155;")
         top_layout.addWidget(sep2)
         
         # Pagination controls
         self.prev_btn = QPushButton("<")
-        self.prev_btn.setMaximumWidth(20)
-        self.prev_btn.setStyleSheet("font-size: 7pt; padding: 1px;")
+        self.prev_btn.setMaximumWidth(24)
+        self.prev_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 8pt; 
+                padding: 2px;
+                background-color: #334155;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                color: #E2E8F0;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border: 1px solid #00FFFF;
+            }
+        """)
         self.prev_btn.clicked.connect(self._prev_page)
         top_layout.addWidget(self.prev_btn)
         
         self.page_lbl = QLabel("1/1")
-        self.page_lbl.setStyleSheet("font-size: 7pt;")
+        self.page_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.page_lbl)
         
         self.next_btn = QPushButton(">")
-        self.next_btn.setMaximumWidth(20)
-        self.next_btn.setStyleSheet("font-size: 7pt; padding: 1px;")
+        self.next_btn.setMaximumWidth(24)
+        self.next_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 8pt; 
+                padding: 2px;
+                background-color: #334155;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                color: #E2E8F0;
+            }
+            QPushButton:hover {
+                background-color: #475569;
+                border: 1px solid #00FFFF;
+            }
+        """)
         self.next_btn.clicked.connect(self._next_page)
         top_layout.addWidget(self.next_btn)
         
@@ -203,12 +312,19 @@ class TimeBasedResultsViewer(QWidget):
         self.results_tree = self._create_tree()
         main_layout.addWidget(self.results_tree, stretch=1)
         
-        # === BOTTOM: Ultra Compact Stats Tables ===
+        # === BOTTOM: Stats Section with compact tables ===
         stats_frame = QFrame()
-        stats_frame.setMaximumHeight(160)
+        stats_frame.setMinimumHeight(80)
+        stats_frame.setMaximumHeight(120)
+        stats_frame.setStyleSheet("""
+            QFrame {
+                background-color: #0B1220;
+                border-top: 1px solid #334155;
+            }
+        """)
         stats_layout = QHBoxLayout(stats_frame)
-        stats_layout.setSpacing(6)
-        stats_layout.setContentsMargins(2, 2, 2, 2)
+        stats_layout.setSpacing(8)
+        stats_layout.setContentsMargins(4, 4, 4, 4)
         
         # Time Windows Table
         self.windows_table = self._create_compact_table(["Time Range", "IDs", "Rec", "Status"])
@@ -244,82 +360,118 @@ class TimeBasedResultsViewer(QWidget):
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
         tree.itemClicked.connect(self._on_item_clicked)
+        tree.itemExpanded.connect(self._on_item_expanded)
+        tree.itemCollapsed.connect(self._on_item_collapsed)
         tree.setContextMenuPolicy(Qt.CustomContextMenu)
         tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         
-        # Match app background - transparent/inherit
+        # Match app background - dark theme with expand/collapse indicators
         tree.setStyleSheet("""
             QTreeWidget {
                 font-size: 8pt;
-                background-color: transparent;
-                alternate-background-color: rgba(255,255,255,0.02);
-                border: 1px solid #333;
+                background-color: #0B1220;
+                alternate-background-color: #1E293B;
+                border: 1px solid #334155;
+                color: #E2E8F0;
             }
-            QTreeWidget::item { padding: 1px; }
-            QTreeWidget::item:selected { background-color: #0d47a1; }
+            QTreeWidget::item { 
+                padding: 4px 2px;
+                min-height: 24px;
+            }
+            QTreeWidget::item:selected { 
+                background-color: #334155; 
+                color: #00FFFF;
+            }
+            QTreeWidget::branch {
+                background-color: transparent;
+            }
+            QTreeWidget::branch:has-children:!has-siblings:closed,
+            QTreeWidget::branch:closed:has-children:has-siblings {
+                border-image: none;
+                image: none;
+            }
+            QTreeWidget::branch:open:has-children:!has-siblings,
+            QTreeWidget::branch:open:has-children:has-siblings {
+                border-image: none;
+                image: none;
+            }
             QHeaderView::section {
-                background-color: #2196F3;
-                color: white;
-                padding: 2px;
-                font-size: 7pt;
+                background-color: #1E293B;
+                color: #00FFFF;
+                padding: 6px 4px;
+                font-size: 8pt;
                 font-weight: bold;
                 border: none;
+                border-bottom: 2px solid #00FFFF;
+                min-height: 26px;
             }
         """)
         return tree
     
     def _create_compact_table(self, headers: List[str]) -> QTableWidget:
-        """Create ultra compact table with smaller headers."""
+        """Create compact table with smaller sizing."""
         table = QTableWidget()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setMaximumHeight(110)
+        table.setMaximumHeight(100)  # Smaller table
+        table.setMinimumHeight(60)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(14)
-        table.horizontalHeader().setFixedHeight(18)
+        table.verticalHeader().setDefaultSectionSize(18)  # Compact rows
+        table.horizontalHeader().setFixedHeight(22)  # Compact header
         table.setStyleSheet("""
             QTableWidget {
-                font-size: 7pt;
-                background-color: transparent;
-                border: 1px solid #333;
+                font-size: 8pt;
+                background-color: #0B1220;
+                alternate-background-color: #1E293B;
+                border: 1px solid #334155;
+                color: #E2E8F0;
             }
-            QTableWidget::item { padding: 0px; }
+            QTableWidget::item { 
+                padding: 2px; 
+            }
+            QTableWidget::item:selected {
+                background-color: #334155;
+                color: #00FFFF;
+            }
             QHeaderView::section {
-                background-color: #1a1a2e;
-                color: #aaa;
-                padding: 1px;
-                font-size: 6pt;
+                background-color: #1E293B;
+                color: #00FFFF;
+                padding: 2px;
+                font-size: 8pt;
+                font-weight: bold;
                 border: none;
-                border-right: 1px solid #333;
+                border-bottom: 1px solid #00FFFF;
             }
         """)
         return table
     
     def _wrap_table(self, title: str, table: QTableWidget) -> QGroupBox:
-        """Wrap table in ultra compact group box matching tab style."""
+        """Wrap table in group box with dark theme styling."""
         group = QGroupBox(title)
         group.setStyleSheet("""
             QGroupBox { 
-                font-size: 7pt; 
+                font-size: 8pt; 
                 font-weight: bold; 
-                color: #aaa;
-                padding-top: 10px; 
+                color: #00FFFF;
+                padding-top: 12px; 
                 margin-top: 4px;
-                border: 1px solid #333;
-                background-color: #1a1a2e;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                background-color: #0B1220;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 3px;
-                background-color: #1a1a2e;
+                padding: 1px 6px;
+                background-color: #1E293B;
+                border-radius: 3px;
             }
         """)
         layout = QVBoxLayout()
         layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(0)
+        layout.setSpacing(1)
         layout.addWidget(table)
         group.setLayout(layout)
         return group
@@ -333,8 +485,12 @@ class TimeBasedResultsViewer(QWidget):
         if result.total_matches > 50:
             progress = QProgressDialog("Loading time windows...", "Cancel", 0, 100, self)
             progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(500)
+            progress.setMinimumDuration(0)
             progress.setWindowTitle("Loading Results")
+            
+            # Apply Crow Eye styling
+            from .ui_styling import CorrelationEngineStyles
+            CorrelationEngineStyles.apply_progress_dialog_style(progress)
             progress.show()
             QApplication.processEvents()
         
@@ -656,7 +812,7 @@ class TimeBasedResultsViewer(QWidget):
         # Update windows label with cancelled indicator
         if is_cancelled:
             self.windows_lbl.setText(f"⚠️ {total_windows:,} ({windows_with_data}/{empty_skipped})")
-            self.windows_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 8pt;")
+            self.windows_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 9pt;")
             tooltip_text = (
                 f"⚠️ EXECUTION CANCELLED\n"
                 f"Showing partial results\n\n"
@@ -668,7 +824,7 @@ class TimeBasedResultsViewer(QWidget):
             )
         else:
             self.windows_lbl.setText(f"{total_windows:,} ({windows_with_data}/{empty_skipped})")
-            self.windows_lbl.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 8pt;")
+            self.windows_lbl.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 9pt;")
             tooltip_text = (
                 f"Windows\n\n"
                 f"Total: {total_windows:,}\n"
@@ -804,6 +960,9 @@ class TimeBasedResultsViewer(QWidget):
                 pass
             else:
                 for field_name, field_info in match.semantic_data.items():
+                    # Skip metadata and internal keys (Requirements 3.7, 4.7)
+                    if field_name.startswith('_'):
+                        continue
                     if isinstance(field_info, dict) and 'semantic_value' in field_info:
                         return str(field_info['semantic_value'])
                     elif isinstance(field_info, str) and field_name != '_reason':
@@ -816,6 +975,9 @@ class TimeBasedResultsViewer(QWidget):
                     semantic_mappings = record.get('_semantic_mappings', {})
                     if isinstance(semantic_mappings, dict):
                         for field_name, mapping_info in semantic_mappings.items():
+                            # Skip internal keys
+                            if field_name.startswith('_'):
+                                continue
                             if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
                                 return str(mapping_info['semantic_value'])
                             elif isinstance(mapping_info, str):
@@ -872,9 +1034,13 @@ class TimeBasedResultsViewer(QWidget):
             color = QColor("#4CAF50")  # Green
             tooltip = f"Multi-identity window - {identity_count} identities active simultaneously (correlation opportunity)"
         
-        # Window item with visual indicator
+        # Check if has children for expand indicator
+        has_children = bool(identities)
+        expand_indicator = "▶ " if has_children else "  "
+        
+        # Window item with expand indicator and visual indicator
         item = QTreeWidgetItem([
-            f"{icon} {time_display} ({identity_count} identities, {total_records} records) [{window_type}]",
+            f"{expand_indicator}{icon} {time_display} ({identity_count} identities, {total_records} records) [{window_type}]",
             feather_str,
             start_str,
             score_str,
@@ -953,9 +1119,13 @@ class TimeBasedResultsViewer(QWidget):
             temporal_indicator = "🔷"  # Blue diamond default
             tooltip = identity_name
         
-        # Identity item with temporal indicator (7 columns including semantic)
+        # Check if has children for expand indicator
+        has_children = bool(sub_identities)
+        expand_indicator = "▶ " if has_children else "  "
+        
+        # Identity item with expand indicator and temporal indicator (7 columns including semantic)
         item = QTreeWidgetItem([
-            f"{temporal_indicator} {identity_name}" + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
+            f"{expand_indicator}{temporal_indicator} {identity_name}" + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
             feather_str,
             "",
             score_str,
@@ -1062,9 +1232,13 @@ class TimeBasedResultsViewer(QWidget):
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Sub-identity item with folder icon (7 columns including semantic)
+        # Check if has children for expand indicator
+        has_children = bool(matches)
+        expand_indicator = "▶ " if has_children else "  "
+        
+        # Sub-identity item with expand indicator and folder icon (7 columns including semantic)
         item = QTreeWidgetItem([
-            f"📁 {original_name}",
+            f"{expand_indicator}📁 {original_name}",
             feather_str,
             "",
             score_str,
@@ -1272,6 +1446,16 @@ class TimeBasedResultsViewer(QWidget):
     
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
         """Handle item click."""
+        # Toggle expand/collapse when clicking on first column (where the arrow is)
+        if column == 0 and item.childCount() > 0:
+            text = item.text(0)
+            if text.startswith("▶ ") or text.startswith("▼ "):
+                if item.isExpanded():
+                    item.setExpanded(False)
+                else:
+                    item.setExpanded(True)
+                return
+        
         data = item.data(0, Qt.UserRole)
         if not data:
             return
@@ -1281,6 +1465,18 @@ class TimeBasedResultsViewer(QWidget):
         
         # Emit signal for external handlers
         self.match_selected.emit({'type': item_type, 'data': item_data})
+    
+    def _on_item_expanded(self, item: QTreeWidgetItem):
+        """Update expand indicator when item is expanded."""
+        text = item.text(0)
+        if text.startswith("▶ "):
+            item.setText(0, "▼ " + text[2:])
+    
+    def _on_item_collapsed(self, item: QTreeWidgetItem):
+        """Update expand indicator when item is collapsed."""
+        text = item.text(0)
+        if text.startswith("▼ "):
+            item.setText(0, "▶ " + text[2:])
     
     def _on_double_click(self, item: QTreeWidgetItem, column: int):
         """Handle double-click to show details with feather-specific handling."""
@@ -1404,13 +1600,13 @@ class TimeBasedResultsViewer(QWidget):
         
         # Title
         title = QLabel("<b>Time Window Visual Indicators</b>")
-        title.setStyleSheet("font-size: 10pt; color: #2196F3;")
+        title.setStyleSheet("font-size: 10pt; color: #00FFFF;")
         layout.addWidget(title)
         
         # Legend content
         text = QTextEdit()
         text.setReadOnly(True)
-        text.setStyleSheet("font-size: 8pt; background-color: #1a1a2e; border: 1px solid #333;")
+        text.setStyleSheet("font-size: 8pt; background-color: #0B1220; border: 1px solid #334155; color: #E2E8F0;")
         
         legend_text = """
 TIME WINDOW INDICATORS:
@@ -1740,7 +1936,7 @@ class TimeWindowDetailDialog(QDialog):
         """Create header with visual indicators."""
         frame = QFrame()
         frame.setMaximumHeight(50)
-        frame.setStyleSheet("background-color: #1a1a2e; border: 1px solid #333; padding: 4px;")
+        frame.setStyleSheet("background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 4px;")
         layout = QHBoxLayout(frame)
         
         if self.item_type == 'window':
@@ -1875,30 +2071,30 @@ class TimeWindowDetailDialog(QDialog):
     def _create_identity_content(self) -> QWidget:
         """Create identity content with Summary tab + per-feather tabs (matching IdentityDetailDialog)."""
         tabs = QTabWidget()
-        # Tabs matching the main app tab style
+        # Tabs matching the main app tab style - dark theme
         tabs.setStyleSheet("""
             QTabWidget::pane { 
-                border: 1px solid #333; 
-                background-color: #1a1a2e;
+                border: 1px solid #334155; 
+                background-color: #0B1220;
             }
             QTabBar::tab { 
-                font-size: 7pt; 
+                font-size: 8pt; 
                 padding: 4px 12px; 
                 min-width: 80px;
-                background-color: #1a1a2e;
-                color: #888;
-                border: 1px solid #333;
+                background-color: #1E293B;
+                color: #94A3B8;
+                border: 1px solid #334155;
                 border-bottom: none;
                 margin-right: 1px;
             }
             QTabBar::tab:selected { 
-                background-color: #2a3a5e; 
-                color: #fff;
-                border-top: 2px solid #2196F3;
+                background-color: #334155; 
+                color: #00FFFF;
+                border-top: 2px solid #00FFFF;
             }
             QTabBar::tab:hover:!selected { 
-                background-color: #252540;
-                color: #aaa;
+                background-color: #2D3748;
+                color: #E2E8F0;
             }
         """)
         
@@ -1959,20 +2155,20 @@ class TimeWindowDetailDialog(QDialog):
         
         # Identity name header
         name = self.data.get('identity_name', 'Unknown')
-        name_lbl = QLabel(f"<h2 style='color: #2196F3;'>{name}</h2>")
+        name_lbl = QLabel(f"<h2 style='color: #00FFFF;'>{name}</h2>")
         layout.addWidget(name_lbl)
         
         # Statistics frame
         stats_frame = QFrame()
-        stats_frame.setStyleSheet("background-color: #1a1a2e; border: 1px solid #333; padding: 8px;")
+        stats_frame.setStyleSheet("background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 8px;")
         stats_layout = QHBoxLayout(stats_frame)
         
         # Variants count
         sub_count = len(sub_identities) if sub_identities else 0
-        stats_layout.addWidget(QLabel(f"<b>Variants:</b> {sub_count}"))
+        stats_layout.addWidget(QLabel(f"<b style='color: #E2E8F0;'>Variants:</b> <span style='color: #94A3B8;'>{sub_count}</span>"))
         
         # Matches count
-        stats_layout.addWidget(QLabel(f"<b>Matches:</b> {len(all_matches)}"))
+        stats_layout.addWidget(QLabel(f"<b style='color: #E2E8F0;'>Matches:</b> <span style='color: #94A3B8;'>{len(all_matches)}</span>"))
         
         # Time range
         if timestamps:
@@ -1980,10 +2176,10 @@ class TimeWindowDetailDialog(QDialog):
             if sorted_ts:
                 first = str(sorted_ts[0])[:19]
                 last = str(sorted_ts[-1])[:19]
-                stats_layout.addWidget(QLabel(f"<b>Time Range:</b> {first} → {last}"))
+                stats_layout.addWidget(QLabel(f"<b style='color: #E2E8F0;'>Time Range:</b> <span style='color: #94A3B8;'>{first} → {last}</span>"))
         
         # Feathers count
-        stats_layout.addWidget(QLabel(f"<b>Feathers:</b> {len(feather_records)}"))
+        stats_layout.addWidget(QLabel(f"<b style='color: #E2E8F0;'>Feathers:</b> <span style='color: #94A3B8;'>{len(feather_records)}</span>"))
         stats_layout.addStretch()
         layout.addWidget(stats_frame)
         
@@ -1991,11 +2187,17 @@ class TimeWindowDetailDialog(QDialog):
         feather_group = QGroupBox("Feather Contributions")
         feather_group.setStyleSheet("""
             QGroupBox { 
-                font-size: 9pt; font-weight: bold; color: #aaa;
-                padding-top: 12px; margin-top: 8px;
-                border: 1px solid #333; background-color: #1a1a2e;
+                font-size: 10pt; font-weight: bold; color: #00FFFF;
+                padding-top: 16px; margin-top: 8px;
+                border: 1px solid #334155; background-color: #0B1220;
+                border-radius: 6px;
             }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
+            QGroupBox::title { 
+                subcontrol-origin: margin; 
+                padding: 2px 8px;
+                background-color: #1E293B;
+                border-radius: 4px;
+            }
         """)
         feather_layout = QVBoxLayout(feather_group)
         

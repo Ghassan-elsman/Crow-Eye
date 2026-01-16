@@ -1,241 +1,276 @@
 """
-Pipeline Selector Widget
+Pipeline Selection Dialog
 
-GUI component for selecting and managing pipelines in the correlation engine.
+This module provides a dialog for selecting a pipeline to load when no default
+pipeline is set for the case.
 """
 
+from pathlib import Path
+from typing import Optional
+import json
+from datetime import datetime
+
 from PyQt5.QtWidgets import (
-    QWidget, QHBoxLayout, QComboBox, QLabel, QPushButton, QToolButton
+    QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
+    QPushButton, QLabel, QHeaderView, QAbstractItemView, QDialogButtonBox
 )
-from PyQt5.QtCore import pyqtSignal, Qt
-from PyQt5.QtGui import QIcon
-from typing import List, Optional
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
 
-from ..config.session_state import PipelineMetadata, PipelineBundle, LoadStatus
-from ..config.pipeline_config_manager import PipelineConfigurationManager
+# Import styles from main Crow-Eye application
+try:
+    from styles import CrowEyeStyles
+except ImportError:
+    # Fallback if styles not available
+    class CrowEyeStyles:
+        BUTTON_STYLE = ""
+        GREEN_BUTTON = ""
+        UNIFIED_TABLE_STYLE = ""
 
 
-class PipelineSelectorWidget(QWidget):
+class PipelineSelectionDialog(QDialog):
     """
-    Widget for selecting and managing pipelines.
-    Displays available pipelines in a dropdown with status and quick actions.
+    Dialog for selecting a pipeline to load.
+    
+    Displays available pipelines and allows the user to select one to load
+    into the Execution window.
     """
     
-    # Signals
-    pipeline_selected = pyqtSignal(str)  # Emits pipeline path
-    pipeline_switched = pyqtSignal(object)  # Emits PipelineBundle
-    refresh_requested = pyqtSignal()
-    create_requested = pyqtSignal()
-    
-    def __init__(self, config_manager: PipelineConfigurationManager, parent=None):
+    def __init__(self, case_directory: str, parent=None):
         """
-        Initialize pipeline selector widget.
+        Initialize the Pipeline Selection Dialog.
         
         Args:
-            config_manager: PipelineConfigurationManager instance
+            case_directory: Path to the case directory
             parent: Parent widget
         """
         super().__init__(parent)
-        self.config_manager = config_manager
-        self._current_bundle: Optional[PipelineBundle] = None
-        self._pipelines: List[PipelineMetadata] = []
+        
+        self.case_directory = Path(case_directory)
+        self.pipelines_dir = self.case_directory / "Correlation" / "pipelines"
+        self.selected_pipeline_path: Optional[str] = None
         
         self._init_ui()
+        self._load_pipelines()
     
     def _init_ui(self):
-        """Initialize user interface."""
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        """Initialize the user interface."""
+        self.setWindowTitle("Select Pipeline")
+        self.setMinimumSize(800, 500)
+        self.setModal(True)
         
-        # Pipeline label
-        self.label = QLabel("Pipeline:")
-        layout.addWidget(self.label)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
         
-        # Pipeline dropdown
-        self.pipeline_combo = QComboBox()
-        self.pipeline_combo.setMinimumWidth(250)
-        self.pipeline_combo.setToolTip("Select a pipeline configuration")
-        self.pipeline_combo.currentIndexChanged.connect(self._on_pipeline_selected)
-        layout.addWidget(self.pipeline_combo)
+        # Title
+        title = QLabel("SELECT PIPELINE TO EXECUTE")
+        title.setStyleSheet("""
+            QLabel {
+                color: #00FFFF;
+                font-size: 18px;
+                font-weight: 700;
+                font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+        """)
+        layout.addWidget(title)
         
-        # Status label
-        self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #666;")
-        layout.addWidget(self.status_label)
+        # Info text
+        info_label = QLabel(
+            "No default pipeline is set for this case. "
+            "Please select a pipeline to load for correlation analysis."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("""
+            QLabel {
+                color: #94A3B8;
+                font-size: 12px;
+                font-family: 'Segoe UI', sans-serif;
+                padding: 10px;
+                background-color: #1E293B;
+                border-radius: 6px;
+            }
+        """)
+        layout.addWidget(info_label)
         
-        # Refresh button
-        self.refresh_button = QToolButton()
-        self.refresh_button.setText("🔄")
-        self.refresh_button.setToolTip("Refresh pipeline list")
-        self.refresh_button.clicked.connect(self._on_refresh_clicked)
-        layout.addWidget(self.refresh_button)
+        # Pipeline table
+        self.pipeline_table = QTableWidget()
+        self.pipeline_table.setColumnCount(4)
+        self.pipeline_table.setHorizontalHeaderLabels([
+            "Pipeline Name", "Wings", "Feathers", "Last Modified"
+        ])
+        self.pipeline_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.pipeline_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.pipeline_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         
-        # Create new button
-        self.create_button = QPushButton("Create New")
-        self.create_button.setToolTip("Create a new pipeline")
-        self.create_button.clicked.connect(self._on_create_clicked)
-        layout.addWidget(self.create_button)
-        
-        layout.addStretch()
-    
-    def populate_pipelines(self, pipelines: List[PipelineMetadata]):
-        """
-        Populate dropdown with available pipelines.
-        
-        Args:
-            pipelines: List of PipelineMetadata
-        """
-        self._pipelines = pipelines
-        
-        # Block signals while populating
-        self.pipeline_combo.blockSignals(True)
-        self.pipeline_combo.clear()
-        
-        if not pipelines:
-            self.pipeline_combo.addItem("No pipelines available")
-            self.pipeline_combo.setEnabled(False)
-            self.status_label.setText("")
-        else:
-            self.pipeline_combo.setEnabled(True)
-            
-            for pipeline in pipelines:
-                # Display name with metadata
-                display_text = f"{pipeline.pipeline_name}"
-                if pipeline.feather_count > 0 or pipeline.wing_count > 0:
-                    display_text += f" ({pipeline.feather_count}F, {pipeline.wing_count}W)"
-                
-                self.pipeline_combo.addItem(display_text)
-                
-                # Store metadata in item data
-                self.pipeline_combo.setItemData(
-                    self.pipeline_combo.count() - 1,
-                    pipeline,
-                    Qt.UserRole
-                )
-                
-                # Mark invalid pipelines
-                if not pipeline.is_valid:
-                    self.pipeline_combo.setItemData(
-                        self.pipeline_combo.count() - 1,
-                        "color: red;",
-                        Qt.ToolTipRole
-                    )
-        
-        self.pipeline_combo.blockSignals(False)
-    
-    def set_current_pipeline(self, pipeline_bundle: PipelineBundle):
-        """
-        Set and display current pipeline.
-        
-        Args:
-            pipeline_bundle: Loaded PipelineBundle
-        """
-        self._current_bundle = pipeline_bundle
-        
-        # Find and select in dropdown
-        pipeline_name = pipeline_bundle.pipeline_config.pipeline_name
-        for i in range(self.pipeline_combo.count()):
-            metadata = self.pipeline_combo.itemData(i, Qt.UserRole)
-            if metadata and metadata.pipeline_name == pipeline_name:
-                self.pipeline_combo.blockSignals(True)
-                self.pipeline_combo.setCurrentIndex(i)
-                self.pipeline_combo.blockSignals(False)
-                break
-        
-        # Update status
-        self.show_load_status(pipeline_bundle.load_status)
-    
-    def show_load_status(self, status: LoadStatus):
-        """
-        Display pipeline load status.
-        
-        Args:
-            status: LoadStatus to display
-        """
-        if status.is_complete:
-            self.status_label.setText(
-                f"✓ Loaded: {status.feathers_loaded} feathers, {status.wings_loaded} wings"
-            )
-            self.status_label.setStyleSheet("color: green;")
-        else:
-            # Partial load
-            self.status_label.setText(
-                f"⚠ Partial: {status.feathers_loaded}/{status.feathers_total} feathers, "
-                f"{status.wings_loaded}/{status.wings_total} wings"
-            )
-            self.status_label.setStyleSheet("color: orange;")
-    
-    def show_loading(self):
-        """Show loading indicator."""
-        self.status_label.setText("Loading...")
-        self.status_label.setStyleSheet("color: #666;")
-        self.pipeline_combo.setEnabled(False)
-        self.create_button.setEnabled(False)
-    
-    def show_error(self, error_message: str):
-        """
-        Show error message.
-        
-        Args:
-            error_message: Error message to display
-        """
-        self.status_label.setText(f"✗ Error: {error_message}")
-        self.status_label.setStyleSheet("color: red;")
-        self.pipeline_combo.setEnabled(True)
-        self.create_button.setEnabled(True)
-    
-    def clear_status(self):
-        """Clear status message."""
-        self.status_label.setText("")
-        self.pipeline_combo.setEnabled(True)
-        self.create_button.setEnabled(True)
-    
-    def refresh_pipelines(self):
-        """Refresh pipeline list from config manager."""
+        # Apply table styles
         try:
-            self.config_manager.refresh_configurations()
-            pipelines = self.config_manager.get_available_pipelines()
-            self.populate_pipelines(pipelines)
-            self.status_label.setText("✓ Refreshed")
-            self.status_label.setStyleSheet("color: green;")
-        except Exception as e:
-            self.show_error(f"Refresh failed: {e}")
-    
-    def get_selected_pipeline(self) -> Optional[PipelineMetadata]:
-        """
-        Get currently selected pipeline metadata.
+            CrowEyeStyles.apply_table_styles(self.pipeline_table)
+        except:
+            pass
         
-        Returns:
-            PipelineMetadata or None
-        """
-        index = self.pipeline_combo.currentIndex()
-        if index >= 0:
-            return self.pipeline_combo.itemData(index, Qt.UserRole)
-        return None
-    
-    def get_current_bundle(self) -> Optional[PipelineBundle]:
-        """
-        Get current pipeline bundle.
+        self.pipeline_table.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE + """
+            QTableWidget {
+                font-size: 13px;
+            }
+            QTableWidget::item {
+                padding: 10px 8px;
+                font-size: 13px;
+                color: #F8FAFC;
+            }
+            QHeaderView::section {
+                padding: 10px 8px;
+                font-size: 12px;
+            }
+        """)
         
-        Returns:
-            PipelineBundle or None
-        """
-        return self._current_bundle
+        # Configure column widths
+        header = self.pipeline_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Pipeline Name
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Wings
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Feathers
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Last Modified
+        
+        self.pipeline_table.setMinimumHeight(300)
+        
+        # Connect double-click to accept
+        self.pipeline_table.itemDoubleClicked.connect(self._on_pipeline_double_clicked)
+        self.pipeline_table.itemSelectionChanged.connect(self._on_selection_changed)
+        
+        layout.addWidget(self.pipeline_table)
+        
+        # Dialog buttons
+        button_box = QDialogButtonBox()
+        
+        self.load_btn = QPushButton("Load Pipeline")
+        self.load_btn.setFixedHeight(40)
+        self.load_btn.setMinimumWidth(150)
+        self.load_btn.setStyleSheet(CrowEyeStyles.GREEN_BUTTON + """
+            QPushButton {
+                font-size: 13px;
+                padding: 10px 20px;
+            }
+        """)
+        self.load_btn.clicked.connect(self.accept)
+        self.load_btn.setEnabled(False)
+        button_box.addButton(self.load_btn, QDialogButtonBox.AcceptRole)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(40)
+        cancel_btn.setMinimumWidth(120)
+        cancel_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
+            QPushButton {
+                font-size: 13px;
+                padding: 10px 20px;
+            }
+        """)
+        cancel_btn.clicked.connect(self.reject)
+        button_box.addButton(cancel_btn, QDialogButtonBox.RejectRole)
+        
+        layout.addWidget(button_box)
+        
+        # Apply dialog styling
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0F172A;
+            }
+        """)
     
-    def _on_pipeline_selected(self, index: int):
-        """Handle pipeline selection from dropdown."""
-        if index < 0:
+    def _load_pipelines(self):
+        """Load all pipelines from the case directory."""
+        self.pipeline_table.setRowCount(0)
+        
+        if not self.pipelines_dir.exists():
+            # Show message if no pipelines directory
+            self.pipeline_table.setRowCount(1)
+            item = QTableWidgetItem("No pipelines found. Please create a pipeline first.")
+            item.setTextAlignment(Qt.AlignCenter)
+            self.pipeline_table.setItem(0, 0, item)
+            self.pipeline_table.setSpan(0, 0, 1, 4)
             return
         
-        metadata = self.pipeline_combo.itemData(index, Qt.UserRole)
-        if metadata:
-            self.pipeline_selected.emit(str(metadata.file_path))
+        # Load all pipeline JSON files
+        pipeline_files = sorted(self.pipelines_dir.glob("*.json"))
+        
+        if not pipeline_files:
+            # Show message if no pipeline files
+            self.pipeline_table.setRowCount(1)
+            item = QTableWidgetItem("No pipelines found. Please create a pipeline first.")
+            item.setTextAlignment(Qt.AlignCenter)
+            self.pipeline_table.setItem(0, 0, item)
+            self.pipeline_table.setSpan(0, 0, 1, 4)
+            return
+        
+        for pipeline_file in pipeline_files:
+            try:
+                with open(pipeline_file, 'r') as f:
+                    pipeline_data = json.load(f)
+                
+                self._add_pipeline_to_table(pipeline_data, pipeline_file)
+                
+            except Exception as e:
+                print(f"Error loading pipeline {pipeline_file}: {e}")
+                continue
     
-    def _on_refresh_clicked(self):
-        """Handle refresh button click."""
-        self.refresh_requested.emit()
-        self.refresh_pipelines()
+    def _add_pipeline_to_table(self, pipeline_data: dict, pipeline_file: Path):
+        """Add a pipeline to the table."""
+        row = self.pipeline_table.rowCount()
+        self.pipeline_table.insertRow(row)
+        
+        # Pipeline Name
+        name_item = QTableWidgetItem(pipeline_data.get('pipeline_name', 'Unknown'))
+        name_item.setData(Qt.UserRole, str(pipeline_file))  # Store file path
+        self.pipeline_table.setItem(row, 0, name_item)
+        
+        # Wings count
+        wings_count = len(pipeline_data.get('wing_configs', []))
+        wings_item = QTableWidgetItem(str(wings_count))
+        wings_item.setTextAlignment(Qt.AlignCenter)
+        self.pipeline_table.setItem(row, 1, wings_item)
+        
+        # Feathers count
+        feathers_count = len(pipeline_data.get('feather_configs', []))
+        feathers_item = QTableWidgetItem(str(feathers_count))
+        feathers_item.setTextAlignment(Qt.AlignCenter)
+        self.pipeline_table.setItem(row, 2, feathers_item)
+        
+        # Last Modified
+        last_modified = pipeline_data.get('last_modified', '')
+        if last_modified:
+            try:
+                dt = datetime.fromisoformat(last_modified)
+                last_modified = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                pass
+        modified_item = QTableWidgetItem(last_modified)
+        self.pipeline_table.setItem(row, 3, modified_item)
     
-    def _on_create_clicked(self):
-        """Handle create new button click."""
-        self.create_requested.emit()
+    def _on_selection_changed(self):
+        """Handle selection change."""
+        has_selection = len(self.pipeline_table.selectedItems()) > 0
+        self.load_btn.setEnabled(has_selection)
+        
+        if has_selection:
+            selected_rows = self.pipeline_table.selectionModel().selectedRows()
+            if selected_rows:
+                row = selected_rows[0].row()
+                name_item = self.pipeline_table.item(row, 0)
+                self.selected_pipeline_path = name_item.data(Qt.UserRole)
+    
+    def _on_pipeline_double_clicked(self, item):
+        """Handle double-click on pipeline (load immediately)."""
+        row = item.row()
+        name_item = self.pipeline_table.item(row, 0)
+        self.selected_pipeline_path = name_item.data(Qt.UserRole)
+        self.accept()
+    
+    def get_selected_pipeline_path(self) -> Optional[str]:
+        """
+        Get the path to the selected pipeline.
+        
+        Returns:
+            Path to selected pipeline JSON file, or None if no selection
+        """
+        return self.selected_pipeline_path
