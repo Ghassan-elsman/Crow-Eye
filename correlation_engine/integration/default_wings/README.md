@@ -24,13 +24,18 @@ This Wing establishes that a program was executed on the system by correlating m
 - **AmCache - InventoryApplicationFile** (0.15)
 - **AmCache - InventoryApplicationShortcut** (0.15)
 
-**Tier 3: User-Triggered Execution Traces (Weight: 0.30)**
+**Tier 3: User-Triggered Execution Traces (Weight: 0.37)**
 - **LNK Files** (0.10)
 - **Automatic Jumplists** (0.10)
 - **Custom Jumplists** (0.10)
+- **ShellBags** (0.07) - User folder navigation evidence
 
-**Tier 4: Runtime + Behavior Correlation (Weight: 0.10)**
+**Tier 4: Runtime + Behavior Correlation (Weight: 0.28)**
 - **SRUM Application Usage** (0.10)
+- **SRUM Network Data Usage** (0.08) - Network activity evidence
+- **MFT/USN Journal** (0.10) - File system evidence
+- **System Logs** (0.05) - System event logs
+- **Application Logs** (0.05) - Application event logs
 
 #### Score Interpretation
 
@@ -42,9 +47,25 @@ This Wing establishes that a program was executed on the system by correlating m
 | < 0.20 | **Not Proven** | Insufficient evidence |
 
 #### Configuration
-- **Time Window:** 5 minutes
+- **Time Window:** 180 minutes (3 hours)
 - **Minimum Matches:** 1
-- **Anchor Priority:** Prefetch → ShimCache → AmCache → LNK → Jumplists → SRUM
+- **Anchor Priority:** Prefetch → ShimCache → AmCache → LNK → Jumplists → SRUM → MFT → Logs → Registry
+
+#### Feathers Included
+1. **Prefetch_CrowEyeFeather** - Direct execution evidence
+2. **ShimCache_CrowEyeFeather** - Application compatibility cache
+3. **InventoryApplication_CrowEyeFeather** - AmCache application inventory
+4. **InventoryApplicationFile_CrowEyeFeather** - AmCache file inventory
+5. **InventoryApplicationShortcut_CrowEyeFeather** - AmCache shortcut inventory
+6. **LNK_CrowEyeFeather** - Windows shortcut files
+7. **AutomaticJumplist_CrowEyeFeather** - Automatic destination lists
+8. **CustomJumplist_CrowEyeFeather** - Custom destination lists
+9. **SRUM_ApplicationUsage_CrowEyeFeather** - System Resource Usage Monitor
+10. **MFT_USN_Correlated_CrowEyeFeather** - Master File Table and USN Journal
+11. **SystemLogs_CrowEyeFeather** - Windows system event logs
+12. **SRUM_NetworkDataUsage_CrowEyeFeather** - Network usage data
+13. **ApplicationLogs_CrowEyeFeather** - Application event logs
+14. **ShellBags_CrowEyeFeather** - User folder navigation history
 
 ---
 

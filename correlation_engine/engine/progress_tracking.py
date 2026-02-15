@@ -8,11 +8,14 @@ event system, time estimation, and cancellation support.
 
 import time
 import threading
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Callable, List
 from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
+
+logger = logging.getLogger(__name__)
 
 
 class ProgressTerminology:
@@ -402,6 +405,347 @@ class CancellationToken:
 class OperationCancelledException(Exception):
     """Exception raised when an operation is cancelled"""
     pass
+
+
+class CorrelationStallMonitor:
+    """
+    Monitors correlation progress to detect stalls with comprehensive diagnostics.
+    
+    A stall is detected when:
+    - No progress updates for extended period
+    - Processing rate drops to zero
+    - Infinite loop detected
+    
+    This monitor now uses StallDiagnosticsLogger for enhanced diagnostic logging
+    including operation history, state tracking, and health check commands.
+    
+    Requirements: 12.4 - Enhanced stall diagnostics logging
+    """
+    
+    def __init__(self, stall_timeout_seconds: int = 300, debug_mode: bool = False):
+        """
+        Initialize stall monitor with enhanced diagnostics.
+        
+        Args:
+            stall_timeout_seconds: Seconds without progress before declaring stall (default: 300 = 5 minutes)
+            debug_mode: Enable debug logging for diagnostics
+        """
+        self.stall_timeout = stall_timeout_seconds
+        self.last_progress_time = time.time()
+        self.last_processed_count = 0
+        self.stall_detected = False
+        self.current_stage = "initialization"
+        self.last_successful_operation = "monitor_initialized"
+        
+        # Import and initialize StallDiagnosticsLogger
+        try:
+            from ..errors.stall_diagnostics import StallDiagnosticsLogger
+            self.diagnostics_logger = StallDiagnosticsLogger(
+                stall_timeout_seconds=stall_timeout_seconds,
+                debug_mode=debug_mode
+            )
+            self._has_diagnostics = True
+        except ImportError:
+            logger.warning("StallDiagnosticsLogger not available, using basic diagnostics")
+            self.diagnostics_logger = None
+            self._has_diagnostics = False
+    
+    def update_progress(self, processed_count: int, current_stage: str = None, 
+                       last_operation: str = None, **additional_info):
+        """
+        Update progress tracking with enhanced diagnostics.
+        
+        Args:
+            processed_count: Total items processed so far
+            current_stage: Current processing stage (optional)
+            last_operation: Description of last successful operation (optional)
+            **additional_info: Additional information to record in diagnostics
+        
+        Requirements: 12.4 - Log last successful operation, log current state
+        """
+        # Always update stage and operation if provided
+        if current_stage:
+            self.current_stage = current_stage
+        if last_operation:
+            self.last_successful_operation = last_operation
+        
+        # Reset stall timer if progress was made OR if this is an explicit update
+        if processed_count > self.last_processed_count or (current_stage or last_operation):
+            # Progress made or explicit update, reset stall detection
+            self.last_progress_time = time.time()
+            self.last_processed_count = processed_count
+            self.stall_detected = False
+            
+            # Record operation in diagnostics logger
+            if self._has_diagnostics and last_operation:
+                self.diagnostics_logger.record_operation(
+                    operation_name=last_operation,
+                    processed_count=processed_count,
+                    stage=current_stage or self.current_stage,
+                    **additional_info
+                )
+            
+            # Update state in diagnostics logger
+            if self._has_diagnostics and additional_info:
+                self.diagnostics_logger.update_state(**additional_info)
+    
+    def set_total_items(self, total: int):
+        """
+        Set total number of items to process.
+        
+        Args:
+            total: Total item count
+        """
+        if self._has_diagnostics:
+            self.diagnostics_logger.set_total_items(total)
+    
+    def add_error(self, error_message: str):
+        """
+        Add an error message to diagnostics.
+        
+        Args:
+            error_message: Error message to record
+        """
+        if self._has_diagnostics:
+            self.diagnostics_logger.add_error_message(error_message)
+    
+    def check_for_stall(self) -> bool:
+        """
+        Check if correlation has stalled with comprehensive diagnostics logging.
+        
+        Returns:
+            True if stall detected
+        
+        Requirements: 12.4 - Log stall detection diagnostics
+        """
+        time_since_progress = time.time() - self.last_progress_time
+        
+        if time_since_progress > self.stall_timeout:
+            self.stall_detected = True
+            
+            # Use enhanced diagnostics logger if available
+            if self._has_diagnostics:
+                # The diagnostics logger will log comprehensive diagnostics
+                self.diagnostics_logger.check_for_stall()
+            else:
+                # Fallback to basic logging
+                logger.error(f"Correlation stall detected: No progress for {time_since_progress:.1f} seconds")
+                logger.error(f"Last successful operation: {self.last_successful_operation}")
+                logger.error(f"Current stage: {self.current_stage}")
+            
+            return True
+        
+        return False
+    
+    def get_stall_diagnostics(self) -> Dict[str, Any]:
+        """
+        Get diagnostic information about potential stall.
+        
+        Returns:
+            Dictionary with stall diagnostic data
+        
+        Requirements: 12.4 - Provide diagnostic commands for health checks
+        """
+        if self._has_diagnostics:
+            # Use comprehensive diagnostics from logger
+            return self.diagnostics_logger.get_diagnostics_report()
+        else:
+            # Fallback to basic diagnostics
+            return {
+                'stall_detected': self.stall_detected,
+                'time_since_last_progress': time.time() - self.last_progress_time,
+                'last_processed_count': self.last_processed_count,
+                'stall_timeout': self.stall_timeout,
+                'current_stage': self.current_stage,
+                'last_successful_operation': self.last_successful_operation
+            }
+    
+    def get_health_status(self) -> Dict[str, Any]:
+        """
+        Get current health status.
+        
+        Returns:
+            Dictionary with health status information
+        
+        Requirements: 12.4 - Provide diagnostic commands for health checks
+        """
+        if self._has_diagnostics:
+            return self.diagnostics_logger.get_health_status()
+        else:
+            # Fallback to basic health status
+            time_since_progress = time.time() - self.last_progress_time
+            if self.stall_detected:
+                status = "stalled"
+            elif time_since_progress > self.stall_timeout * 0.8:
+                status = "warning"
+            else:
+                status = "healthy"
+            
+            return {
+                'status': status,
+                'stall_detected': self.stall_detected,
+                'time_since_progress': time_since_progress,
+                'current_stage': self.current_stage,
+                'last_operation': self.last_successful_operation
+            }
+    
+    def get_operation_history(self) -> List[Dict[str, Any]]:
+        """
+        Get operation history.
+        
+        Returns:
+            List of operation records
+        
+        Requirements: 12.4 - Provide diagnostic commands for health checks
+        """
+        if self._has_diagnostics:
+            return self.diagnostics_logger.get_operation_history()
+        else:
+            return []
+    
+    def get_current_state(self) -> Dict[str, Any]:
+        """
+        Get current state information.
+        
+        Returns:
+            Dictionary with current state
+        
+        Requirements: 12.4 - Log current state
+        """
+        if self._has_diagnostics:
+            return self.diagnostics_logger.get_current_state()
+        else:
+            return {
+                'stage': self.current_stage,
+                'processed_items': self.last_processed_count,
+                'time_since_progress': time.time() - self.last_progress_time
+            }
+    
+    def reset(self):
+        """Reset the stall monitor for a new operation."""
+        self.last_progress_time = time.time()
+        self.last_processed_count = 0
+        self.stall_detected = False
+        self.current_stage = "initialization"
+        self.last_successful_operation = "monitor_reset"
+        
+        # Reset diagnostics logger if available
+        if self._has_diagnostics:
+            self.diagnostics_logger.reset()
+
+
+class CorrelationStallException(Exception):
+    """Exception raised when correlation stalls."""
+    pass
+
+
+class CorrelationProgressReporter:
+    """
+    Manages progress reporting for correlation engines and semantic matching.
+    
+    Reports progress every 10% for correlation.
+    Reports progress every 10% for semantic matching (Identity Semantic Phase).
+    
+    This class provides a simple, focused progress reporting mechanism that:
+    - Reports at percentage intervals (default: 10%)
+    - Logs progress to console and logger
+    - Supports GUI progress callbacks
+    - Tracks processing rate and timing
+    """
+    
+    def __init__(self, total_items: int, report_percentage_interval: float = 10.0, 
+                 phase_name: str = "Processing"):
+        """
+        Initialize progress reporter.
+        
+        Args:
+            total_items: Total number of items to process
+            report_percentage_interval: Percentage interval for progress reports (default: 10%)
+            phase_name: Name of the processing phase (e.g., "Correlation", "Semantic Matching")
+        """
+        self.total_items = total_items
+        self.processed_items = 0
+        self.report_percentage_interval = report_percentage_interval
+        self.last_reported_percentage = 0.0
+        self.start_time = time.time()
+        self.phase_name = phase_name
+        self.progress_callback = None
+    
+    def set_progress_callback(self, callback: Callable[[float, int, int], None]):
+        """
+        Set a callback function for GUI progress updates.
+        
+        Args:
+            callback: Function that takes (percentage, processed, total) as arguments
+        """
+        self.progress_callback = callback
+    
+    def update(self, items_processed: int = 1):
+        """
+        Update progress and report if percentage threshold crossed.
+        
+        Args:
+            items_processed: Number of items processed since last update
+        """
+        # Don't update if we've been stopped (cancelled)
+        if self.processed_items >= self.total_items:
+            return
+            
+        self.processed_items += items_processed
+        
+        # Calculate current percentage
+        current_percentage = (self.processed_items / self.total_items * 100) if self.total_items > 0 else 0
+        
+        # Report if we've crossed a percentage threshold or processing complete
+        percentage_increase = current_percentage - self.last_reported_percentage
+        
+        if percentage_increase >= self.report_percentage_interval or self.processed_items >= self.total_items:
+            self._report_progress()
+            self.last_reported_percentage = current_percentage
+    
+    def _report_progress(self):
+        """Report current progress to logs and GUI."""
+        percentage = (self.processed_items / self.total_items * 100) if self.total_items > 0 else 0
+        elapsed = time.time() - self.start_time
+        rate = self.processed_items / elapsed if elapsed > 0 else 0
+        
+        # Print to console for immediate feedback
+        print(f"[{self.phase_name}] Progress: {percentage:.1f}% ({self.processed_items:,}/{self.total_items:,}) - {rate:.1f} items/sec")
+        
+        logger.info(f"{self.phase_name} Progress: {percentage:.1f}% ({self.processed_items}/{self.total_items}) - {rate:.1f} items/sec")
+        
+        # Update GUI progress bar if available
+        if self.progress_callback:
+            try:
+                self.progress_callback(percentage, self.processed_items, self.total_items)
+            except Exception as e:
+                logger.warning(f"Progress callback failed: {e}")
+    
+    def force_report(self):
+        """Force immediate progress report regardless of percentage threshold."""
+        self._report_progress()
+        current_percentage = (self.processed_items / self.total_items * 100) if self.total_items > 0 else 0
+        self.last_reported_percentage = current_percentage
+    
+    def stop(self):
+        """Stop progress reporting (for cancellation)."""
+        # Mark as complete to stop further updates
+        self.processed_items = self.total_items
+        current_percentage = 100.0
+        self.last_reported_percentage = current_percentage
+    
+    def get_elapsed_time(self) -> float:
+        """Get elapsed time in seconds since start."""
+        return time.time() - self.start_time
+    
+    def get_processing_rate(self) -> float:
+        """Get current processing rate (items per second)."""
+        elapsed = time.time() - self.start_time
+        return self.processed_items / elapsed if elapsed > 0 else 0.0
+    
+    def get_percentage(self) -> float:
+        """Get current completion percentage."""
+        return (self.processed_items / self.total_items * 100) if self.total_items > 0 else 0.0
 
 
 class ProgressTracker:

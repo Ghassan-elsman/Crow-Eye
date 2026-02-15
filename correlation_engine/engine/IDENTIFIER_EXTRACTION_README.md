@@ -30,10 +30,12 @@ This implementation provides comprehensive identifier extraction and correlation
    - Extracts filenames from full paths
    - Generates identity keys (`type:normalized_value`)
 
-5. **Enhanced Feather Loader** (`enhanced_feather_loader.py`)
+5. **Feather Loader** (`feather_loader.py`)
+   - Unified loader supporting both traditional querying and identifier extraction
    - Detects name, path, and timestamp columns automatically
    - Supports manual column specification
    - Extracts values and parses timestamps
+   - Metadata-based and metadata-optional operation modes
 
 6. **Identifier Correlation Engine** (`identifier_correlation_engine.py`)
    - Builds in-memory engine state dictionary
@@ -285,7 +287,7 @@ Evidence rows are grouped into anchors based on timestamps:
 - `correlation_engine/engine/data_structures.py`
 - `correlation_engine/engine/timestamp_parser.py`
 - `correlation_engine/engine/identity_extractor.py`
-- `correlation_engine/engine/enhanced_feather_loader.py`
+- `correlation_engine/engine/feather_loader.py` (unified loader with identifier extraction)
 - `correlation_engine/engine/identifier_correlation_engine.py`
 - `correlation_engine/engine/database_persistence.py`
 - `correlation_engine/engine/query_interface.py`

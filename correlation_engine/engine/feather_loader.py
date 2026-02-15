@@ -38,9 +38,26 @@ class SchemaDetectionError(FeatherLoaderError):
 
 
 class FeatherLoader:
-    """Loads and queries feather databases with identifier extraction support"""
+    """
+    Loads and queries feather databases with identifier extraction support.
+    
+    This unified loader consolidates functionality from both the basic FeatherLoader
+    and EnhancedFeatherLoader, providing:
+    - Traditional feather database querying
+    - Identifier extraction for correlation engine
+    - Column detection and value extraction
+    - Metadata-based and metadata-optional operation modes
+    
+    Responsibilities:
+    - Open Feather databases in read-only or read-write mode
+    - Detect name, path, and timestamp columns
+    - Extract values from detected columns
+    - Parse timestamps using TimestampParser
+    - Query feather data with various filters
+    """
     
     # Column detection patterns for identifier extraction
+    # Merged from both FeatherLoader and EnhancedFeatherLoader
     NAME_PATTERNS = ['name', 'executable', 'filename', 'exe_name', 'application', 'app_name', 'process_name']
     PATH_PATTERNS = ['path', 'filepath', 'full_path', 'exe_path', 'executable_path', 'file_path', 'full_file_path']
     TIMESTAMP_PATTERNS = [
@@ -53,7 +70,7 @@ class FeatherLoader:
         # LNK & Jumplist patterns
         'time_access', 'time_creation', 'time_modification',
         # Generic patterns
-        'datetime', 'execution_time', 'last_run', 'modified_time', 
+        'time', 'datetime', 'execution_time', 'last_run', 'modified_time', 
         'created_time', 'accessed_time', 'run_time', 'exec_time',
         'access_date', 'creation_date', 'modification_date'
     ]
@@ -967,3 +984,178 @@ class FeatherLoader:
             'row_count': row_count,
             'metadata': self.metadata
         }
+    
+    @staticmethod
+    def validate_feather_table(table_path: str) -> tuple[bool, List[str]]:
+        """
+        Validate a Feather table structure.
+        
+        This is a lightweight validation method that checks if a feather database
+        has the expected structure. It's more permissive than validate_schema_standalone
+        and is suitable for identifier extraction mode.
+        
+        Args:
+            table_path: Path to Feather database
+            
+        Returns:
+            Tuple of (is_valid, list_of_errors)
+        """
+        errors = []
+        
+        if not Path(table_path).exists():
+            return False, [f"Table file not found: {table_path}"]
+        
+        try:
+            conn = sqlite3.connect(f"file:{table_path}?mode=ro", uri=True)
+            cursor = conn.cursor()
+            
+            # Check if feather_data table exists
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='feather_data'"
+            )
+            if not cursor.fetchone():
+                # If feather_data doesn't exist, check for any data tables
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT IN ('feather_metadata', 'sqlite_sequence', 'import_history', 'data_lineage')"
+                )
+                data_tables = cursor.fetchall()
+                if not data_tables:
+                    errors.append("No data tables found in database")
+            
+            conn.close()
+            
+        except sqlite3.Error as e:
+            errors.append(f"Database error: {str(e)}")
+        
+        return len(errors) == 0, errors
+    
+    @staticmethod
+    def create_feather_with_metadata(db_path: str, feather_name: str, 
+                                     table_name: str, data: List[Dict[str, Any]],
+                                     columns: List[Dict[str, Any]], 
+                                     artifact_type: str,
+                                     source_path: str = None,
+                                     source_tool: str = 'FeatherLoader',
+                                     indexed_columns: List[str] = None) -> tuple[bool, Optional[str]]:
+        """
+        Create a new feather database with properly populated metadata.
+        
+        This is a convenience method that creates a feather database and ensures
+        all metadata is properly populated for query-based semantic evaluation.
+        
+        Args:
+            db_path: Directory path for database
+            feather_name: Name of the feather database
+            table_name: Name of the data table to create
+            data: List of data records to insert
+            columns: Column mapping configuration
+            artifact_type: Type of forensic artifact (e.g., 'prefetch', 'srum')
+            source_path: Optional path to source data file
+            source_tool: Tool used to create the feather (default: 'FeatherLoader')
+            indexed_columns: Optional list of columns to create indexes on
+            
+        Returns:
+            Tuple of (success: bool, error_message: Optional[str])
+            
+        Example:
+            success, error = FeatherLoader.create_feather_with_metadata(
+                db_path='/path/to/feathers',
+                feather_name='chrome_prefetch',
+                table_name='prefetch_data',
+                data=[{'executable_name': 'CHROME.EXE', 'run_count': 5}],
+                columns=[
+                    {'original': 'executable_name', 'feather': 'executable_name', 'type': 'TEXT'},
+                    {'original': 'run_count', 'feather': 'run_count', 'type': 'INTEGER'}
+                ],
+                artifact_type='prefetch',
+                source_path='/path/to/prefetch.csv',
+                indexed_columns=['executable_name']
+            )
+        """
+        from correlation_engine.feather.database import FeatherDatabase
+        
+        try:
+            # Create feather database
+            feather_db = FeatherDatabase(db_path, feather_name)
+            feather_db.connect()
+            
+            # Create base schema (includes feather_metadata table)
+            feather_db.create_base_schema()
+            
+            # Create data table
+            feather_db.create_feather_table(table_name, columns)
+            
+            # Prepare source info
+            source_info = {
+                'source_type': artifact_type,
+                'source_path': source_path or f'{feather_name}.db',
+                'source_tool': source_tool,
+                'artifact_type': artifact_type
+            }
+            
+            # Insert data (this will automatically populate metadata)
+            success, error = feather_db.insert_data(table_name, data, source_info, columns)
+            
+            if not success:
+                feather_db.close()
+                return False, error
+            
+            # Create indexes if specified
+            if indexed_columns:
+                feather_db.create_indexes(table_name, indexed_columns)
+            
+            # Close database
+            feather_db.close()
+            
+            logger.info(
+                f"Created feather '{feather_name}' with metadata:\n"
+                f"  - Artifact Type: {artifact_type}\n"
+                f"  - Table Name: {table_name}\n"
+                f"  - Record Count: {len(data)}\n"
+                f"  - Columns: {len(columns)}\n"
+                f"  - Indexed Columns: {indexed_columns or 'None'}"
+            )
+            
+            return True, None
+            
+        except Exception as e:
+            error_msg = f"Failed to create feather with metadata: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+
+
+# Convenience function for identifier extraction
+
+def load_feather_table(table_path: str, config, artifact_name: Optional[str] = None):
+    """
+    Convenience function to load a Feather table with identifier extraction.
+    
+    This function provides a simple interface for loading feather tables
+    in identifier extraction mode, automatically handling connection management.
+    
+    Args:
+        table_path: Path to Feather database
+        config: Wings configuration for identifier extraction
+        artifact_name: Optional artifact name (inferred from filename if not provided)
+        
+    Yields:
+        ExtractedValues for each row
+        
+    Example:
+        from correlation_engine.engine.feather_loader import load_feather_table
+        
+        for extracted in load_feather_table("prefetch.db", config):
+            print(f"Names: {extracted.names}")
+            print(f"Paths: {extracted.paths}")
+    """
+    from correlation_engine.engine.timestamp_parser import TimestampParser
+    
+    # Create timestamp parser from config
+    timestamp_parser = TimestampParser(
+        custom_formats=config.timestamp_parsing.custom_formats if hasattr(config, 'timestamp_parsing') else []
+    )
+    
+    # Create loader and yield results
+    loader = FeatherLoader(table_path, config=config, timestamp_parser=timestamp_parser)
+    yield from loader.load_table_with_extraction(artifact_name)

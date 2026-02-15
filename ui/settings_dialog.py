@@ -511,6 +511,136 @@ class SettingsDialog(QtWidgets.QDialog):
         
         form_layout.addRow(max_label, max_container)
         
+        # Identity Semantic Phase setting with description
+        semantic_label = QtWidgets.QLabel("Identity Semantic Phase:")
+        semantic_label.setStyleSheet(label_style)
+        semantic_label.setToolTip("Enable identity-level semantic mapping for optimized correlation analysis")
+        
+        semantic_container = QtWidgets.QWidget()
+        semantic_layout = QtWidgets.QVBoxLayout(semantic_container)
+        semantic_layout.setContentsMargins(0, 0, 0, 0)
+        semantic_layout.setSpacing(5)
+        
+        self.identity_semantic_phase_checkbox = QtWidgets.QCheckBox("Enable identity-level semantic mapping")
+        self.identity_semantic_phase_checkbox.setChecked(True)
+        self.identity_semantic_phase_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #E2E8F0;
+                font-size: 13px;
+                font-weight: 600;
+                font-family: 'Segoe UI', sans-serif;
+                spacing: 10px;
+            }
+            QCheckBox::indicator {
+                width: 24px;
+                height: 24px;
+                border: 2px solid #475569;
+                border-radius: 4px;
+                background-color: #1E293B;
+            }
+            QCheckBox::indicator:hover {
+                border: 2px solid #00FFFF;
+                background-color: #263449;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #00FFFF;
+                border: 2px solid #00FFFF;
+                image: none;
+            }
+            QCheckBox::indicator:checked:after {
+                content: "✓";
+                color: #0F172A;
+                font-weight: bold;
+            }
+        """)
+        self.identity_semantic_phase_checkbox.setToolTip(
+            "When enabled, semantic mappings are applied once per identity after correlation completes,\n"
+            "reducing redundant processing and improving performance. Recommended for most use cases."
+        )
+        
+        semantic_desc = QtWidgets.QLabel(
+            "💡 Applies semantic mappings at identity-level for better performance\n"
+            "   (Recommended: Enabled for optimized correlation analysis)"
+        )
+        semantic_desc.setStyleSheet("""
+            QLabel {
+                color: #94A3B8;
+                font-size: 11px;
+                font-style: italic;
+                padding-top: 3px;
+            }
+        """)
+        
+        semantic_layout.addWidget(self.identity_semantic_phase_checkbox)
+        semantic_layout.addWidget(semantic_desc)
+        
+        form_layout.addRow(semantic_label, semantic_container)
+        
+        # Wings Semantic Mapping setting with description
+        wings_semantic_label = QtWidgets.QLabel("Wings Semantic Mapping:")
+        wings_semantic_label.setStyleSheet(label_style)
+        wings_semantic_label.setToolTip("Enable semantic mapping for Wings correlation results")
+        
+        wings_semantic_container = QtWidgets.QWidget()
+        wings_semantic_layout = QtWidgets.QVBoxLayout(wings_semantic_container)
+        wings_semantic_layout.setContentsMargins(0, 0, 0, 0)
+        wings_semantic_layout.setSpacing(5)
+        
+        self.wings_semantic_mapping_checkbox = QtWidgets.QCheckBox("Enable semantic mapping for Wings")
+        self.wings_semantic_mapping_checkbox.setChecked(True)  # On by default
+        self.wings_semantic_mapping_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #E2E8F0;
+                font-size: 13px;
+                font-weight: 600;
+                font-family: 'Segoe UI', sans-serif;
+                spacing: 10px;
+            }
+            QCheckBox::indicator {
+                width: 24px;
+                height: 24px;
+                border: 2px solid #475569;
+                border-radius: 4px;
+                background-color: #1E293B;
+            }
+            QCheckBox::indicator:hover {
+                border: 2px solid #00FFFF;
+                background-color: #263449;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #00FFFF;
+                border: 2px solid #00FFFF;
+                image: none;
+            }
+            QCheckBox::indicator:checked:after {
+                content: "✓";
+                color: #0F172A;
+                font-weight: bold;
+            }
+        """)
+        self.wings_semantic_mapping_checkbox.setToolTip(
+            "When enabled, semantic mappings are applied to Wings correlation results\n"
+            "after correlation completes. Disable to skip semantic mapping phase."
+        )
+        
+        wings_semantic_desc = QtWidgets.QLabel(
+            "💡 Applies semantic rules to Wings correlation results\n"
+            "   (Recommended: Enabled for enhanced correlation analysis)"
+        )
+        wings_semantic_desc.setStyleSheet("""
+            QLabel {
+                color: #94A3B8;
+                font-size: 11px;
+                font-style: italic;
+                padding-top: 3px;
+            }
+        """)
+        
+        wings_semantic_layout.addWidget(self.wings_semantic_mapping_checkbox)
+        wings_semantic_layout.addWidget(wings_semantic_desc)
+        
+        form_layout.addRow(wings_semantic_label, wings_semantic_container)
+        
         layout.addWidget(form_widget)
         layout.addStretch()
         
@@ -1557,6 +1687,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self.default_dir_input.setText(config.default_case_directory)
         self.recent_count_spin.setValue(config.recent_cases_display_count)
         self.max_history_spin.setValue(config.max_history_size)
+        self.identity_semantic_phase_checkbox.setChecked(config.identity_semantic_phase_enabled)
+        
+        # Load wings semantic mapping setting (default to True if not present)
+        wings_semantic_enabled = getattr(config, 'wings_semantic_mapping_enabled', True)
+        self.wings_semantic_mapping_checkbox.setChecked(wings_semantic_enabled)
     
     def save_settings(self):
         """Save settings and close dialog."""
@@ -1565,7 +1700,9 @@ class SettingsDialog(QtWidgets.QDialog):
             self.case_history_manager.update_global_config(
                 default_case_directory=self.default_dir_input.text(),
                 recent_cases_display_count=self.recent_count_spin.value(),
-                max_history_size=self.max_history_spin.value()
+                max_history_size=self.max_history_spin.value(),
+                identity_semantic_phase_enabled=self.identity_semantic_phase_checkbox.isChecked(),
+                wings_semantic_mapping_enabled=self.wings_semantic_mapping_checkbox.isChecked()
             )
             
             # Save semantic mappings if manager is available

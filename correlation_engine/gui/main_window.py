@@ -48,9 +48,16 @@ class PipelineManagerTab(QWidget):
         info_layout = QHBoxLayout(info_bar)
         info_layout.setContentsMargins(0, 0, 0, 10)
         
-        info_label = QLabel("💡 Feathers are auto-generated from Crow-Eye artifacts on first load.")
+        info_label = QLabel("💡 Feathers are auto-generated from Crow-Eye artifacts on first case load. This may take a few moments.")
         info_label.setStyleSheet("color: #888; font-size: 9pt;")
+        info_label.setWordWrap(True)
         info_layout.addWidget(info_label)
+        
+        # Add status indicator
+        self.feather_status_label = QLabel("⏳ Checking feathers...")
+        self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
+        info_layout.addWidget(self.feather_status_label)
+        self.feather_status_label.hide()  # Hidden by default
         
         info_layout.addStretch()
         
@@ -171,17 +178,31 @@ class PipelineManagerTab(QWidget):
         """
         try:
             from pathlib import Path
+            from PyQt5.QtWidgets import QApplication
+            
+            # Show status label
+            if hasattr(self, 'feather_status_label'):
+                self.feather_status_label.show()
+                self.feather_status_label.setText("⏳ Checking feathers...")
+                self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
+                QApplication.processEvents()
             
             # Check if Correlation/feathers directory exists
             feathers_dir = Path(self.case_directory) / "Correlation" / "feathers"
             
             if not feathers_dir.exists():
+                if hasattr(self, 'feather_status_label'):
+                    self.feather_status_label.setText("⚠️ Feathers not found")
+                    self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
                 return (True, "Feathers directory does not exist")
             
             # Check if there are any .json feather config files
             json_files = list(feathers_dir.glob("*.json"))
             
             if len(json_files) == 0:
+                if hasattr(self, 'feather_status_label'):
+                    self.feather_status_label.setText("⚠️ No feathers configured")
+                    self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
                 return (True, "No feather configuration files found")
             
             # Get expected feather count from mappings
@@ -191,6 +212,9 @@ class PipelineManagerTab(QWidget):
             
             # Check if we have all expected feathers
             if len(json_files) < expected_count:
+                if hasattr(self, 'feather_status_label'):
+                    self.feather_status_label.setText(f"⚠️ Missing feathers ({len(json_files)}/{expected_count})")
+                    self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
                 return (True, f"Missing feathers: found {len(json_files)}, expected {expected_count}")
             
             # Check if corresponding .db files exist for each .json config
@@ -201,25 +225,47 @@ class PipelineManagerTab(QWidget):
                     missing_dbs.append(json_file.stem)
             
             if missing_dbs:
+                if hasattr(self, 'feather_status_label'):
+                    self.feather_status_label.setText(f"⚠️ Generating databases... ({len(missing_dbs)} remaining)")
+                    self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
                 return (True, f"Missing database files for: {', '.join(missing_dbs[:3])}")
             
             # All checks passed
+            if hasattr(self, 'feather_status_label'):
+                self.feather_status_label.setText("✅ Feathers ready")
+                self.feather_status_label.setStyleSheet("color: #4CAF50; font-size: 9pt; font-weight: bold;")
             return (False, "All feathers present and complete")
             
         except Exception as e:
             print(f"[Auto-Generation] Error checking feather status: {e}")
+            if hasattr(self, 'feather_status_label'):
+                self.feather_status_label.setText("❌ Error checking feathers")
+                self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
             # If we can't check, assume we need to generate
             return (True, f"Error checking status: {e}")
     
     def _auto_generate_feathers(self):
         """Automatically generate Feathers from Crow-Eye output"""
         try:
+            from PyQt5.QtWidgets import QApplication, QProgressDialog, QMessageBox
+            from PyQt5.QtCore import Qt
+            
+            # Update status label
+            if hasattr(self, 'feather_status_label'):
+                self.feather_status_label.show()
+                self.feather_status_label.setText("🔄 Generating feathers...")
+                self.feather_status_label.setStyleSheet("color: #00BFFF; font-size: 9pt; font-weight: bold;")
+                QApplication.processEvents()
+            
             # Check if Target_Artifacts directory exists
             from pathlib import Path
             target_artifacts = Path(self.case_directory) / "Target_Artifacts"
             
             if not target_artifacts.exists():
                 print(f"[Auto-Generation] Target_Artifacts not found: {target_artifacts}")
+                if hasattr(self, 'feather_status_label'):
+                    self.feather_status_label.setText("⚠️ Target_Artifacts not found")
+                    self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
                 return
             
             # Create progress dialog
@@ -327,6 +373,8 @@ class PipelineManagerTab(QWidget):
         """Manually regenerate all feathers from Crow-Eye artifacts with validation"""
         try:
             from pathlib import Path
+            from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
+            from PyQt5.QtCore import Qt
             
             # Validate case directory is set
             if not self.case_directory:
@@ -1363,7 +1411,8 @@ class MainWindow(QMainWindow):
         """
         Handle request to load results from database with loading dialog.
         
-        Updated to use new load_last_results() method that creates proper tab structure.
+        Updated to use selected_executions from DatabaseResultsLoaderDialog.
+        Creates proper tab structure with Summary tab and individual wing tabs.
         
         Requirements: 9.1, 9.3, 9.4
         """
@@ -1371,16 +1420,66 @@ class MainWindow(QMainWindow):
         from PyQt5.QtCore import Qt
         
         output_dir = request_data.get('output_dir', '')
+        selected_executions = request_data.get('selected_executions', [])
         
         if not output_dir:
             QMessageBox.warning(self, "No Output Directory", "Please specify an output directory.")
             return
         
+        if not selected_executions:
+            # Fallback to load_last_results if no specific executions selected
+            print("[MainWindow] No specific executions selected, loading most recent")
+            
+            # Create and show loading dialog
+            progress = QProgressDialog("Loading last correlation results...", "Cancel", 0, 100, self)
+            progress.setWindowTitle("Loading Results")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setAutoClose(True)
+            progress.setAutoReset(True)
+            
+            # Apply Crow Eye styling
+            from .ui_styling import CorrelationEngineStyles
+            CorrelationEngineStyles.apply_progress_dialog_style(progress)
+            
+            # Define progress callback
+            def update_progress(message: str, percent: int):
+                """Update progress dialog with message and percentage."""
+                progress.setLabelText(message)
+                progress.setValue(percent)
+                QApplication.processEvents()
+                
+                if progress.wasCanceled():
+                    raise InterruptedError("Loading cancelled by user")
+            
+            try:
+                self.results_viewer.load_last_results(output_dir, progress_callback=update_progress)
+                
+                # Switch to Results tab
+                self.tab_widget.setCurrentIndex(2)
+                
+                # Switch to Summary tab within Results (index 0)
+                self.results_viewer.enhanced_tab_widget.tab_widget.setCurrentIndex(0)
+                
+            except InterruptedError:
+                progress.close()
+                print("[MainWindow] Loading cancelled by user")
+            except Exception as e:
+                progress.close()
+                QMessageBox.critical(self, "Error Loading Results", f"Failed to load results:\n\n{str(e)}")
+                import traceback
+                traceback.print_exc()
+            
+            return
+        
+        # Load specific selected executions
+        print(f"[MainWindow] Loading {len(selected_executions)} selected execution(s)")
+        
         # Create and show loading dialog
-        progress = QProgressDialog("Loading last correlation results...", "Cancel", 0, 100, self)
+        progress = QProgressDialog(f"Loading {len(selected_executions)} execution(s)...", "Cancel", 0, 100, self)
         progress.setWindowTitle("Loading Results")
         progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)  # Show immediately
+        progress.setMinimumDuration(0)
         progress.setAutoClose(True)
         progress.setAutoReset(True)
         
@@ -1389,19 +1488,138 @@ class MainWindow(QMainWindow):
         CorrelationEngineStyles.apply_progress_dialog_style(progress)
         
         try:
-            progress.setLabelText("Scanning for most recent execution...")
-            progress.setValue(20)
+            # Don't clear existing tabs - add new tabs for selected executions
+            tab_widget = self.results_viewer.enhanced_tab_widget.tab_widget
+            
+            # Process each selected execution
+            for idx, (db_path, execution_id, engine_type) in enumerate(selected_executions):
+                if progress.wasCanceled():
+                    raise InterruptedError("Loading cancelled by user")
+                
+                progress_percent = int((idx / len(selected_executions)) * 90)
+                progress.setLabelText(f"Loading execution {idx + 1}/{len(selected_executions)}: {execution_id}")
+                progress.setValue(progress_percent)
+                QApplication.processEvents()
+                
+                print(f"[MainWindow] Loading execution {execution_id} from {db_path}")
+                
+                # Detect wings from this execution
+                wing_summaries = self.results_viewer._detect_wings_from_execution(db_path, execution_id)
+                
+                if not wing_summaries:
+                    print(f"[MainWindow] WARNING: No wings found for execution {execution_id}")
+                    continue
+                
+                # Create ONE Results tab per execution with all wings as sub-tabs
+                exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
+                exec_id_display = exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str
+                
+                print(f"[MainWindow] Creating Results tab for execution {exec_id_display} with {len(wing_summaries)} wings")
+                
+                # Create a tabbed widget to hold all wing viewers from this execution
+                from PyQt5.QtWidgets import QTabWidget
+                combined_viewer = QTabWidget()
+                combined_viewer.setStyleSheet("""
+                    QTabWidget::pane {
+                        border: 1px solid #334155;
+                        background-color: #0B1220;
+                    }
+                    QTabBar::tab {
+                        background-color: #1E293B;
+                        color: #94A3B8;
+                        padding: 6px 12px;
+                        margin-right: 2px;
+                        border: 1px solid #334155;
+                        border-bottom: none;
+                        border-top-left-radius: 4px;
+                        border-top-right-radius: 4px;
+                    }
+                    QTabBar::tab:selected {
+                        background-color: #0B1220;
+                        color: #00FFFF;
+                        border-bottom: 2px solid #00FFFF;
+                    }
+                    QTabBar::tab:hover {
+                        background-color: #334155;
+                    }
+                """)
+                
+                # Add each wing as a sub-tab within the combined viewer
+                wing_count = len(wing_summaries)
+                for wing_idx, wing_summary in enumerate(wing_summaries):
+                    wing_name = wing_summary.get('wing_name', 'Unknown Wing')
+                    wing_engine_type = wing_summary.get('engine_type', 'unknown')
+                    wing_db_path = wing_summary.get('database_path', db_path)
+                    
+                    # Update progress for this wing
+                    base_progress = int((idx / len(selected_executions)) * 90)
+                    wing_progress = int((wing_idx / wing_count) * (90 / len(selected_executions)))
+                    total_progress = base_progress + wing_progress
+                    progress.setLabelText(f"Loading execution {idx + 1}/{len(selected_executions)}: {execution_id}\nWing {wing_idx + 1}/{wing_count}: {wing_name}")
+                    progress.setValue(total_progress)
+                    QApplication.processEvents()
+                    
+                    print(f"[MainWindow]   Creating viewer for wing: {wing_name} ({wing_engine_type})")
+                    
+                    # Create appropriate viewer based on engine type
+                    viewer = None
+                    if wing_engine_type == 'identity_based':
+                        viewer = self.results_viewer._create_identity_viewer(wing_db_path, execution_id, show_progress=False)
+                    elif wing_engine_type in ['time_window_scanning', 'time_based']:
+                        viewer = self.results_viewer._create_timebased_viewer(wing_db_path, execution_id, show_progress=False)
+                    
+                    if viewer:
+                        combined_viewer.addTab(viewer, wing_name)
+                        print(f"[MainWindow]     ✓ Added {wing_name} to combined viewer")
+                    
+                    # Update progress after wing is loaded
+                    QApplication.processEvents()
+                
+                # Add the combined viewer as a single Results tab for this execution
+                tab_widget.addTab(combined_viewer, f"Results - Exec {exec_id_display}")
+                print(f"[MainWindow]   ✓ Results tab created for execution {exec_id_display} with {len(wing_summaries)} wings")
+            
+            # Update Summary tab with aggregate statistics
+            progress.setLabelText("Calculating aggregate statistics...")
+            progress.setValue(95)
             QApplication.processEvents()
             
-            print(f"[MainWindow] Loading last results from {output_dir}")
+            # Collect all wing summaries for aggregate stats
+            all_wing_summaries = []
+            for db_path, execution_id, engine_type in selected_executions:
+                wing_summaries = self.results_viewer._detect_wings_from_execution(db_path, execution_id)
+                all_wing_summaries.extend(wing_summaries)
             
-            # Use new method that handles multi-wing tab creation
-            progress.setLabelText("Loading execution data...")
-            progress.setValue(40)
-            QApplication.processEvents()
+            # Calculate aggregate statistics
+            aggregate_stats = {
+                'total_wings_executed': len(all_wing_summaries),
+                'total_matches_all_wings': sum(ws.get('total_matches', 0) for ws in all_wing_summaries),
+                'execution_times': [ws.get('execution_time', 0) for ws in all_wing_summaries],
+                'wing_summaries': all_wing_summaries,
+                'feather_statistics': {}
+            }
             
-            # Call the new load_last_results method
-            self.results_viewer.results_widget.load_last_results(output_dir)
+            # Aggregate feather statistics
+            for wing_summary in all_wing_summaries:
+                wing_feather_metadata = wing_summary.get('feather_metadata', {})
+                for feather_id, metadata in wing_feather_metadata.items():
+                    if feather_id.startswith('_'):
+                        continue
+                    
+                    if feather_id not in aggregate_stats['feather_statistics']:
+                        aggregate_stats['feather_statistics'][feather_id] = {
+                            'identities_found': 0,
+                            'records_processed': 0,
+                            'matches_created': 0
+                        }
+                    
+                    if isinstance(metadata, dict):
+                        aggregate_stats['feather_statistics'][feather_id]['identities_found'] += metadata.get('identities_found', metadata.get('identities_final', 0))
+                        aggregate_stats['feather_statistics'][feather_id]['records_processed'] += metadata.get('records_processed', 0)
+                        aggregate_stats['feather_statistics'][feather_id]['matches_created'] += metadata.get('matches_created', 0)
+            
+            # Update Summary tab
+            self.results_viewer.update_summary_tab(aggregate_stats)
             
             progress.setValue(100)
             
@@ -1411,8 +1629,28 @@ class MainWindow(QMainWindow):
             # Switch to Summary tab within Results (index 0)
             self.results_viewer.enhanced_tab_widget.tab_widget.setCurrentIndex(0)
             
-            print(f"[MainWindow] Successfully loaded last results from {output_dir}")
+            print(f"[MainWindow] Successfully loaded {len(selected_executions)} execution(s)")
             
+            # Build tab list for message
+            tab_list = ["  • Summary (aggregate statistics)"]
+            for db_path, execution_id, engine_type in selected_executions:
+                exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
+                exec_id_display = exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str
+                wing_count = len(self.results_viewer._detect_wings_from_execution(db_path, execution_id))
+                tab_list.append(f"  • Results - Exec {exec_id_display} ({wing_count} wings)")
+            
+            QMessageBox.information(
+                self,
+                "Results Loaded",
+                f"Successfully loaded {len(selected_executions)} execution(s)\n\n"
+                f"Total Wings: {len(all_wing_summaries)}\n"
+                f"Total Matches: {aggregate_stats['total_matches_all_wings']:,}\n\n"
+                f"Tabs created:\n" + '\n'.join(tab_list)
+            )
+            
+        except InterruptedError:
+            progress.close()
+            print("[MainWindow] Loading cancelled by user")
         except Exception as e:
             progress.close()
             QMessageBox.critical(

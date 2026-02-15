@@ -597,15 +597,21 @@ class WingsCreatorWindow(QMainWindow):
         self.semantic_mappings_table.setHorizontalHeaderLabels([
             "Type", "Name", "Logic", "Conditions/Value", "Semantic Value", "Severity", "Feathers", "Description"
         ])
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Type
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Name
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Logic
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)  # Conditions
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Semantic
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Severity
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Feathers
-        self.semantic_mappings_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)  # Description
-        self.semantic_mappings_table.setMinimumHeight(450)  # Increased height for all 36 rules
+        # Make all columns user-resizable with Interactive mode
+        header = self.semantic_mappings_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)  # Allow user to resize all columns
+        # Set initial widths
+        header.resizeSection(0, 80)   # Type
+        header.resizeSection(1, 200)  # Name
+        header.resizeSection(2, 60)   # Logic
+        header.resizeSection(3, 400)  # Conditions/Value - wider for readability
+        header.resizeSection(4, 200)  # Semantic Value
+        header.resizeSection(5, 80)   # Severity
+        header.resizeSection(6, 150)  # Feathers
+        header.resizeSection(7, 300)  # Description
+        # Make last column stretch to fill remaining space
+        header.setStretchLastSection(True)
+        self.semantic_mappings_table.setMinimumHeight(450)  # Increased height for all rules
         self.semantic_mappings_table.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.semantic_mappings_table)
         

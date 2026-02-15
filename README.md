@@ -103,11 +103,11 @@ The project focuses on:
 | ShimCache                 | Yes  | Executed apps, last modified, size                                             |
 | ShellBags                 | Yes  | Folder views, access history, timestamps                                       |
 | MRU & RecentDocs          | Yes  | Typed paths, Open/Save history, recent files                                   |
-| MFT Parser                | Yes  | File metadata, deleted files, timestamps                                       |
-| USN Journal               | Yes  | File changes (create/modify/delete)                                            |
+| MFT Parser | Yes | File system metadata, deleted files, timestamps, attribute analysis                                       |
+| USN Journal | Yes | Detailed file system changes (create/modify/delete/rename) with timestamps and correlation to MFT                                            |
 | Recycle Bin               | Yes  | Deleted file names, paths, deletion time                                       |
 | SRUM                      | Yes  | App resource usage, network, energy, execution                                 |
-| Disks & Partitions    | Yes | Physical disks, partition layout, hidden/unmounted partitions, EFI/Recovery/MSR     |
+| Disks & Partitions    | Yes | Complete tree view of physical disks, partition layout, color-coded types, hidden/unmounted partition detection, EFI/Recovery/MSR analysis, raw sector scanning     |
 
 **Note:** Not all artifacts support offline analysis; it is still under development.
 
@@ -259,13 +259,17 @@ To analyze custom artifacts:
 
 The Correlation Engine is our most active development area with comprehensive documentation:
 
-**Documentation** (~7,200 lines):
+**Documentation** (~10,000 lines):
 - **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** - System overview with architecture diagrams
 - **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** - Dual-engine architecture, engine selection guide, performance optimization
 - **[Architecture Documentation](correlation_engine/ARCHITECTURE.md)** - Component integration and data flow
 - **[Feather Documentation](correlation_engine/docs/feather/FEATHER_DOCUMENTATION.md)** - Data normalization system
 - **[Wings Documentation](correlation_engine/docs/wings/WINGS_DOCUMENTATION.md)** - Correlation rules
 - **[Pipeline Documentation](correlation_engine/docs/pipeline/PIPELINE_DOCUMENTATION.md)** - Workflow orchestration
+- **[Artifact Type Registry](correlation_engine/docs/config/ARTIFACT_TYPE_REGISTRY.md)** - Centralized artifact type definitions
+- **[Weight Precedence](correlation_engine/docs/config/WEIGHT_PRECEDENCE.md)** - Weight resolution hierarchy
+- **[Configuration Reload](correlation_engine/docs/config/CONFIGURATION_RELOAD.md)** - Live configuration updates
+- **[Integration Interfaces](correlation_engine/docs/integration/INTEGRATION_INTERFACES.md)** - Dependency injection and testing
 
 **Contributing**:
 - **[Correlation Engine Contributing Guide](correlation_engine/CONTRIBUTING.md)** - Priority areas, development status, and how to contribute
@@ -639,7 +643,7 @@ Identity: malware.exe
 
 ### 📚 Correlation Engine Documentation
 
-**Comprehensive Documentation** (~7,200 lines covering all aspects):
+**Comprehensive Documentation** (~10,000 lines covering all aspects):
 - **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** - System overview with architecture diagrams
 - **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** - Dual-engine architecture, engine selection guide, performance optimization
 - **[Architecture Documentation](correlation_engine/ARCHITECTURE.md)** - Component integration and data flow

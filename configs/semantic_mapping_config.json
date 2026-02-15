@@ -1,0 +1,9 @@
+{
+  "batch_size": 1000,
+  "worker_count": 4,
+  "min_indicators_default": 1,
+  "pattern_cache_size": 10000,
+  "max_pattern_matches": 100,
+  "debug_mode": false,
+  "log_file_path": "correlation_engine/semantic_mapping_debug.log"
+}

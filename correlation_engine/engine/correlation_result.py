@@ -129,6 +129,9 @@ class CorrelationResult:
     matches: List[CorrelationMatch] = field(default_factory=list)
     total_matches: int = 0
     
+    # Identity information (for Identity Semantic Phase)
+    identities: List[Any] = field(default_factory=list)  # List of identity records for semantic processing
+    
     # Statistics
     feathers_processed: int = 0
     total_records_scanned: int = 0
@@ -160,6 +163,10 @@ class CorrelationResult:
     streaming_mode: bool = False
     _db_writer: Any = None  # StreamingMatchWriter instance
     _result_id: int = 0  # Database result_id for streaming
+    
+    # Database information for Identity Semantic Phase (streaming mode support)
+    database_path: Optional[str] = None  # Path to correlation_results.db
+    execution_id: Optional[int] = None  # Execution ID for database queries
     
     def add_match(self, match: CorrelationMatch):
         """Add a correlation match - streams to database if in streaming mode"""

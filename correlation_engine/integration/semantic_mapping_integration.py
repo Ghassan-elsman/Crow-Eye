@@ -35,6 +35,13 @@ class SemanticMappingStats:
     successful_recovery_count: int = 0
 
 
+# Global statistics accumulator to prevent multiple summaries
+_global_semantic_stats = SemanticMappingStats()
+_stats_lock = False  # Simple flag to prevent concurrent access
+_last_print_time = None  # Track when we last printed to avoid spam
+_print_threshold = 1000  # Only print when we have significant data
+
+
 class SemanticMappingIntegration(ISemanticMappingIntegration):
     """
     Integration layer for semantic mapping system.
@@ -69,26 +76,87 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
         self._load_global_configuration()
     
     def _load_global_configuration(self):
-        """Load global semantic mapping configuration"""
+        """Load global semantic mapping configuration with validation and warnings"""
         operation_id = self.monitor.start_operation("semantic_mapping", "load_global_config")
         
         try:
-            if self.config_manager:
-                config = self.config_manager.get_semantic_mapping_config()
-                if config and config.get('enabled', True):
-                    global_mappings_path = config.get('global_mappings_path')
-                    if global_mappings_path and Path(global_mappings_path).exists():
-                        self.semantic_manager.load_from_file(Path(global_mappings_path))
-                        logger.info(f"Loaded global semantic mappings from {global_mappings_path}")
-                    
-                    # Check if case-specific mappings are enabled
-                    case_config = config.get('case_specific', {})
+            # Task 6.3: Check if semantic mapping configuration is missing or invalid
+            # Requirements: 7.4, 7.5 - Provide helpful error messages for troubleshooting
+            if not self.config_manager:
+                logger.debug("No configuration manager available - semantic mapping will use default settings")
+                self.monitor.complete_operation(operation_id, success=True)
+                return
+            
+            config = self.config_manager.get_semantic_mapping_config()
+            
+            # Task 6.3: Validate configuration structure
+            if not config:
+                logger.debug("Semantic mapping configuration is missing - semantic mapping will be disabled")
+                self.monitor.complete_operation(operation_id, success=True)
+                return
+            
+            if not isinstance(config, dict):
+                logger.error(f"Invalid semantic mapping configuration type: {type(config)}, expected dict")
+                print("[SEMANTIC] ERROR: Invalid configuration format - semantic mapping disabled")
+                self.monitor.complete_operation(operation_id, success=False, error_message="Invalid config type")
+                return
+            
+            # Task 6.3: Check if semantic mapping is disabled in configuration
+            if not config.get('enabled', True):
+                logger.info("Semantic mapping is disabled in configuration")
+                self.monitor.complete_operation(operation_id, success=True)
+                return
+            
+            # Task 6.3: Validate global mappings path
+            global_mappings_path = config.get('global_mappings_path')
+            if global_mappings_path:
+                mappings_path = Path(global_mappings_path)
+                if not mappings_path.exists():
+                    logger.debug(f"Global semantic mappings file not found: {global_mappings_path}")
+                else:
+                    try:
+                        self.semantic_manager.load_from_file(mappings_path)
+                        logger.debug(f"Loaded global semantic mappings from {global_mappings_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to load global semantic mappings from {global_mappings_path}: {e}")
+                        print(f"[SEMANTIC] ERROR: Failed to load global mappings: {str(e)[:50]}...")
+            else:
+                logger.debug("No global mappings path configured - using built-in semantic rules only")
+            
+            # Task 6.3: Validate case-specific configuration
+            case_config = config.get('case_specific', {})
+            if case_config:
+                if not isinstance(case_config, dict):
+                    logger.warning(f"Invalid case-specific configuration type: {type(case_config)}, expected dict")
+                    self.case_specific_enabled = False
+                else:
                     self.case_specific_enabled = case_config.get('enabled', False)
+                    if self.case_specific_enabled:
+                        storage_path_template = case_config.get('storage_path')
+                        if not storage_path_template:
+                            logger.warning("Case-specific mappings enabled but no storage_path configured")
+                            self.case_specific_enabled = False
+                        else:
+                            logger.debug(f"Case-specific semantic mappings enabled with path template: {storage_path_template}")
+            else:
+                self.case_specific_enabled = False
+                logger.debug("Case-specific semantic mappings not configured")
+            
+            # Task 6.3: Validate semantic manager health after configuration
+            if not self.semantic_manager:
+                logger.error("Semantic manager failed to initialize")
+                print("[SEMANTIC] ERROR: Semantic manager initialization failed")
+                self.monitor.complete_operation(operation_id, success=False, error_message="Manager init failed")
+                return
             
             self.monitor.complete_operation(operation_id, success=True)
                     
         except Exception as e:
             self.monitor.complete_operation(operation_id, success=False, error_message=str(e))
+            
+            # Task 6.3: Provide helpful error messages for troubleshooting
+            logger.error(f"Failed to load global semantic mapping configuration: {e}")
+            print(f"[SEMANTIC] ERROR: Configuration loading failed - semantic mapping disabled")
             
             # Handle error with graceful degradation
             fallback_result = self.error_handler.handle_semantic_mapping_error(
@@ -96,7 +164,7 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             )
             
             if fallback_result.success:
-                logger.warning(f"Using fallback for global configuration: {fallback_result.message}")
+                logger.debug(f"Using fallback for global configuration: {fallback_result.message}")
             else:
                 logger.error(f"Failed to load global semantic mapping configuration: {e}")
                 # Continue with default mappings
@@ -156,6 +224,10 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
         Returns:
             Enhanced results with semantic mapping information
         """
+        # Skip processing if no results or semantic mapping disabled
+        if not results or not self.is_enabled() or not self.is_healthy():
+            return results
+        
         operation_id = self.monitor.start_operation(
             "semantic_mapping", 
             "apply_to_correlation_results",
@@ -167,8 +239,11 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
         enhanced_results = []
         self.stats = SemanticMappingStats()  # Reset stats
         
+        # Task 6.1: Enhanced graceful degradation for semantic mapping failures
+        # Requirements: 7.1, 7.2, 7.3 - Ensure correlation continues even if semantic mapping fails
         try:
-            for result in results:
+            # Process records with minimal logging
+            for i, result in enumerate(results):
                 try:
                     enhanced_result = self._apply_semantic_mappings_to_record(
                         result, wing_id, pipeline_id, artifact_type
@@ -177,11 +252,13 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                     self.stats.total_records_processed += 1
                     
                 except Exception as e:
-                    logger.warning(f"Failed to apply semantic mappings to record: {e}")
+                    # Task 6.1: Log appropriate warnings without stopping execution
+                    # Requirements: 7.1, 7.2 - Continue processing even if individual records fail
+                    logger.debug(f"Failed to apply semantic mappings to record {i}: {e}")
                     
                     # Use error handler for individual record failures
                     fallback_result = self.error_handler.handle_semantic_mapping_error(
-                        e, context={'operation': 'apply_to_record', 'record_keys': list(result.keys())}
+                        e, context={'operation': 'apply_to_record', 'record_index': i}
                     )
                     
                     if fallback_result.success and fallback_result.result:
@@ -207,14 +284,24 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                 execution_time_ms=execution_time_ms
             )
             
-            # Log statistics
-            self._log_mapping_statistics()
+            # Log statistics (debug level only)
+            logger.debug(f"Semantic mapping completed: {self.stats.mappings_applied} mappings on {self.stats.total_records_processed} records")
+            
+            # TASK 4 FIX: Apply identity-level semantic mapping instead of per-record
+            # Only accumulate stats globally - don't print anything here
+            # Let the global accumulator handle batched output
+            self._accumulate_global_stats()
             
             self.monitor.complete_operation(operation_id, success=True, output_size=len(enhanced_results))
             
         except Exception as e:
+            # Task 6.1: Critical failure handling with graceful degradation
+            # Requirements: 7.1, 7.2, 7.3 - Never crash correlation due to semantic mapping issues
             execution_time_ms = (time.time() - start_time) * 1000
             self.monitor.complete_operation(operation_id, success=False, error_message=str(e))
+            
+            logger.error(f"Critical semantic mapping failure: {e}")
+            print(f"[SEMANTIC] ERROR: Critical failure - continuing without semantic mapping")
             
             # Handle critical failure with error handler
             fallback_result = self.error_handler.handle_semantic_mapping_error(
@@ -228,9 +315,9 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                     results, wing_id, pipeline_id, artifact_type
                 )
             else:
-                # Return original results with error indication
-                logger.error(f"Critical semantic mapping failure, returning original results: {e}")
-                enhanced_results = results
+                # Return original results with error indication - correlation continues
+                logger.warning(f"Returning original results without semantic enhancement due to: {e}")
+                enhanced_results = self._create_error_results(results, str(e))
         
         return enhanced_results
     
@@ -279,8 +366,6 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                         'rule_name': getattr(mapping, 'source', field_name)  # Rule name for display
                     }
                     
-                    logger.debug(f"Applied semantic mapping: {field_name}='{actual_technical_value}' -> '{mapping.semantic_value}' (confidence: {mapping.confidence})")
-                    
                     # Update statistics
                     self.stats.mappings_applied += 1
                     if mapping.pattern:
@@ -294,21 +379,15 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                         self.stats.case_specific_mappings_used += 1
                 
                 enhanced_record['_semantic_mappings'] = semantic_info
-                logger.debug(f"Record enhanced with {len(semantic_info)} semantic mappings")
             else:
-                # No mappings found - count unmapped fields and create basic fallback
-                unmapped_field_names = []
+                # No mappings found - count unmapped fields
                 for field_name in record.keys():
                     if not field_name.startswith('_'):  # Skip internal fields
                         self.stats.unmapped_fields += 1
-                        unmapped_field_names.append(field_name)
                 
                 # Create minimal semantic info for unmapped fields
                 enhanced_record['_semantic_mappings'] = {}
                 enhanced_record['_semantic_mapping_status'] = 'no_mappings_found'
-                
-                # Debug logging for troubleshooting
-                logger.debug(f"No semantic mappings found for record. Fields checked: {unmapped_field_names[:5]}{'...' if len(unmapped_field_names) > 5 else ''}")
         
         except Exception as e:
             # Semantic manager failure - attempt recovery
@@ -347,11 +426,9 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                         
                         enhanced_record['_semantic_mappings'] = semantic_info
                         enhanced_record['_semantic_mapping_status'] = 'recovered'
-                        logger.debug(f"Record enhanced with {len(semantic_info)} semantic mappings after recovery")
                     else:
                         enhanced_record['_semantic_mappings'] = {}
                         enhanced_record['_semantic_mapping_status'] = 'recovered_no_mappings'
-                        logger.debug("No semantic mappings found after recovery")
                         
                 except Exception as retry_error:
                     # Recovery failed - use fallback
@@ -579,6 +656,72 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                 logger.info(f"  Global mappings used: {self.stats.global_mappings_used}")
                 logger.info(f"  Case-specific mappings used: {self.stats.case_specific_mappings_used}")
     
+    def _accumulate_global_stats(self):
+        """Accumulate stats globally without printing - TASK 4 FIX"""
+        global _global_semantic_stats, _stats_lock
+        
+        try:
+            if not _stats_lock:
+                _global_semantic_stats.total_records_processed += self.stats.total_records_processed
+                _global_semantic_stats.mappings_applied += self.stats.mappings_applied
+                _global_semantic_stats.pattern_matches += self.stats.pattern_matches
+                _global_semantic_stats.exact_matches += self.stats.exact_matches
+                _global_semantic_stats.manager_failure_count += self.stats.manager_failure_count
+                _global_semantic_stats.fallback_count += self.stats.fallback_count
+        except Exception as e:
+            logger.error(f"Error accumulating global semantic stats: {e}")
+    
+    def _print_gui_terminal_statistics(self):
+        """Print semantic mapping statistics to GUI terminal - BATCHED SUMMARY ONLY"""
+        global _global_semantic_stats, _stats_lock, _last_print_time, _print_threshold
+        
+        try:
+            # Only print summary when we have accumulated significant data or enough time has passed
+            current_time = time.time()
+            time_threshold_met = (_last_print_time is None or 
+                                (current_time - _last_print_time) > 120)  # 2 minutes instead of 1
+            data_threshold_met = _global_semantic_stats.total_records_processed >= (_print_threshold * 5)  # 5x higher threshold
+            
+            # TASK 4 FIX: Much more restrictive printing - only print if we have significant mappings OR errors
+            should_print = ((data_threshold_met and _global_semantic_stats.mappings_applied > 0) or 
+                          time_threshold_met or 
+                          _global_semantic_stats.manager_failure_count > 0)
+            
+            if should_print and _global_semantic_stats.total_records_processed > 0:
+                total_processed = _global_semantic_stats.total_records_processed
+                total_applied = _global_semantic_stats.mappings_applied
+                
+                if total_applied > 0:
+                    mapping_rate = (total_applied / total_processed) * 100 if total_processed > 0 else 0
+                    print(f"[SEMANTIC] Summary: {total_applied} mappings applied to {total_processed} records ({mapping_rate:.1f}%)")
+                    
+                    # Show only high-level rule type counts
+                    rule_types = []
+                    if _global_semantic_stats.exact_matches > 0:
+                        rule_types.append(f"exact: {_global_semantic_stats.exact_matches}")
+                    if _global_semantic_stats.pattern_matches > 0:
+                        rule_types.append(f"pattern: {_global_semantic_stats.pattern_matches}")
+                    
+                    if rule_types:
+                        print(f"[SEMANTIC] Rule types: {', '.join(rule_types)}")
+                
+                # TASK 4 FIX: Don't print "no mappings" messages at all - they're spam
+                # Only show errors/warnings if any
+                if _global_semantic_stats.manager_failure_count > 0:
+                    print(f"[SEMANTIC] WARNING: {_global_semantic_stats.manager_failure_count} manager failures occurred")
+                
+                if _global_semantic_stats.fallback_count > 0:
+                    print(f"[SEMANTIC] INFO: {_global_semantic_stats.fallback_count} records used fallback processing")
+                
+                # Reset global stats after printing and update last print time
+                _global_semantic_stats = SemanticMappingStats()
+                _last_print_time = current_time
+                
+        except Exception as e:
+            # Don't let statistics printing crash the correlation
+            logger.error(f"Error printing semantic statistics: {e}")
+            # Don't print error to GUI - just continue silently
+    
     def get_mapping_statistics(self) -> SemanticMappingStats:
         """
         Get current mapping statistics.
@@ -590,15 +733,43 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
     
     def is_enabled(self) -> bool:
         """
-        Check if semantic mapping is enabled.
+        Check if semantic mapping is enabled with configuration validation.
+        
+        Task 6.3: Enhanced configuration validation and warnings
+        Requirements: 7.4, 7.5 - Log clear warnings when semantic mapping is disabled
         
         Returns:
             True if semantic mapping is enabled, False otherwise
         """
-        if self.config_manager:
+        try:
+            # Task 6.3: Validate configuration manager availability
+            if not self.config_manager:
+                logger.debug("Semantic mapping enabled by default (no config manager)")
+                return True
+            
+            # Task 6.3: Validate configuration structure and content
             config = self.config_manager.get_semantic_mapping_config()
-            return config.get('enabled', True) if config else True
-        return True
+            if not config:
+                logger.warning("Semantic mapping configuration missing - defaulting to enabled")
+                return True
+            
+            if not isinstance(config, dict):
+                logger.error(f"Invalid semantic mapping configuration type: {type(config)} - defaulting to disabled")
+                return False
+            
+            enabled = config.get('enabled', True)
+            
+            # Task 6.3: Log clear warnings when semantic mapping is disabled
+            if not enabled:
+                logger.info("Semantic mapping is explicitly disabled in configuration")
+            
+            return enabled
+            
+        except Exception as e:
+            # Task 6.3: Provide helpful error messages for troubleshooting
+            logger.error(f"Error checking semantic mapping configuration: {e}")
+            logger.warning("Defaulting to semantic mapping disabled due to configuration error")
+            return False
     
     def save_case_specific_mappings(self, 
                                   case_id: str, 
@@ -717,3 +888,278 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             failed_operations=self.stats.manager_failure_count,
             fallback_count=self.stats.fallback_count
         )
+    
+    def _create_disabled_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Create results when semantic mapping is disabled.
+        
+        Task 6.1: Graceful degradation - return original results with disabled metadata
+        Requirements: 7.1, 7.2, 7.3
+        
+        Args:
+            results: Original results
+            
+        Returns:
+            Results with disabled semantic mapping metadata
+        """
+        disabled_results = []
+        for result in results:
+            disabled_result = result.copy()
+            disabled_result['_semantic_mappings'] = {}
+            disabled_result['_semantic_mapping_status'] = 'disabled'
+            disabled_result['_semantic_mapping_message'] = 'Semantic mapping is disabled in configuration'
+            disabled_results.append(disabled_result)
+        
+        # Update stats to reflect disabled state
+        self.stats.total_records_processed = len(results)
+        self.stats.mappings_applied = 0
+        
+        return disabled_results
+    
+    def _create_fallback_results(self, results: List[Dict[str, Any]], reason: str) -> List[Dict[str, Any]]:
+        """
+        Create fallback results when semantic mapping is unhealthy.
+        
+        Task 6.1: Graceful degradation - return original results with fallback metadata
+        Requirements: 7.1, 7.2, 7.3
+        
+        Args:
+            results: Original results
+            reason: Reason for fallback
+            
+        Returns:
+            Results with fallback semantic mapping metadata
+        """
+        fallback_results = []
+        for result in results:
+            fallback_result = result.copy()
+            fallback_result['_semantic_mappings'] = {}
+            fallback_result['_semantic_mapping_status'] = 'fallback'
+            fallback_result['_semantic_mapping_message'] = f'Using fallback mode: {reason}'
+            fallback_results.append(fallback_result)
+        
+        # Update stats to reflect fallback state
+        self.stats.total_records_processed = len(results)
+        self.stats.mappings_applied = 0
+        self.stats.fallback_count = len(results)
+        
+        return fallback_results
+    
+    def validate_configuration(self) -> Dict[str, Any]:
+        """
+        Validate semantic mapping configuration and return detailed status.
+        
+        Task 6.3: Configuration validation and warnings
+        Requirements: 7.4, 7.5 - Check configuration and provide helpful messages
+        
+        Returns:
+            Dictionary with validation results and recommendations
+        """
+        validation_result = {
+            'valid': True,
+            'enabled': False,
+            'warnings': [],
+            'errors': [],
+            'recommendations': [],
+            'config_found': False,
+            'manager_healthy': False,
+            'rules_count': 0,
+            'mappings_count': 0
+        }
+        
+        try:
+            # Check if configuration manager is available
+            if not self.config_manager:
+                validation_result['warnings'].append("No configuration manager available")
+                validation_result['recommendations'].append("Ensure configuration manager is properly initialized")
+                validation_result['enabled'] = True  # Default to enabled
+                return validation_result
+            
+            # Check if configuration exists
+            config = self.config_manager.get_semantic_mapping_config()
+            if not config:
+                validation_result['warnings'].append("Semantic mapping configuration not found")
+                validation_result['recommendations'].append("Create semantic mapping configuration in config files")
+                validation_result['enabled'] = True  # Default to enabled
+                return validation_result
+            
+            validation_result['config_found'] = True
+            
+            # Validate configuration structure
+            if not isinstance(config, dict):
+                validation_result['valid'] = False
+                validation_result['errors'].append(f"Invalid configuration type: {type(config)}, expected dict")
+                validation_result['recommendations'].append("Fix configuration file format")
+                return validation_result
+            
+            # Check if enabled
+            validation_result['enabled'] = config.get('enabled', True)
+            if not validation_result['enabled']:
+                validation_result['warnings'].append("Semantic mapping is disabled in configuration")
+                validation_result['recommendations'].append("Set 'enabled': true in semantic mapping configuration to enable features")
+                return validation_result
+            
+            # Validate global mappings path
+            global_mappings_path = config.get('global_mappings_path')
+            if global_mappings_path:
+                mappings_path = Path(global_mappings_path)
+                if not mappings_path.exists():
+                    validation_result['warnings'].append(f"Global mappings file not found: {global_mappings_path}")
+                    validation_result['recommendations'].append(f"Create global mappings file at: {global_mappings_path}")
+                elif not mappings_path.is_file():
+                    validation_result['errors'].append(f"Global mappings path is not a file: {global_mappings_path}")
+                    validation_result['recommendations'].append("Ensure global mappings path points to a valid JSON file")
+                    validation_result['valid'] = False
+            else:
+                validation_result['warnings'].append("No global mappings path configured")
+                validation_result['recommendations'].append("Configure 'global_mappings_path' to load custom semantic rules")
+            
+            # Validate case-specific configuration
+            case_config = config.get('case_specific', {})
+            if case_config:
+                if not isinstance(case_config, dict):
+                    validation_result['errors'].append(f"Invalid case-specific config type: {type(case_config)}")
+                    validation_result['recommendations'].append("Fix case-specific configuration format")
+                    validation_result['valid'] = False
+                else:
+                    case_enabled = case_config.get('enabled', False)
+                    if case_enabled:
+                        storage_path = case_config.get('storage_path')
+                        if not storage_path:
+                            validation_result['errors'].append("Case-specific mappings enabled but no storage_path configured")
+                            validation_result['recommendations'].append("Configure 'storage_path' for case-specific mappings")
+                            validation_result['valid'] = False
+            
+            # Check semantic manager health
+            validation_result['manager_healthy'] = self.is_healthy()
+            if not validation_result['manager_healthy']:
+                validation_result['warnings'].append("Semantic manager health check failed")
+                validation_result['recommendations'].append("Check semantic manager initialization and configuration files")
+            
+            # Count available rules and mappings
+            try:
+                if hasattr(self.semantic_manager, 'global_rules'):
+                    validation_result['rules_count'] = len(self.semantic_manager.global_rules)
+                if hasattr(self.semantic_manager, 'global_mappings'):
+                    validation_result['mappings_count'] = sum(len(v) for v in self.semantic_manager.global_mappings.values())
+                
+                if validation_result['rules_count'] == 0 and validation_result['mappings_count'] == 0:
+                    validation_result['warnings'].append("No semantic rules or mappings found")
+                    validation_result['recommendations'].append("Add semantic mapping rules to configuration files")
+            except Exception as e:
+                validation_result['warnings'].append(f"Could not count rules and mappings: {e}")
+            
+        except Exception as e:
+            validation_result['valid'] = False
+            validation_result['errors'].append(f"Configuration validation failed: {e}")
+            validation_result['recommendations'].append("Check configuration files and permissions")
+        
+        return validation_result
+    
+    def print_final_summary(self):
+        """Print final semantic mapping summary at end of correlation"""
+        global _global_semantic_stats
+        
+        try:
+            total_processed = _global_semantic_stats.total_records_processed
+            total_applied = _global_semantic_stats.mappings_applied
+            
+            if total_processed > 0:
+                if total_applied > 0:
+                    mapping_rate = (total_applied / total_processed) * 100
+                    print(f"[SEMANTIC] Final Summary: {total_applied} mappings applied to {total_processed} records ({mapping_rate:.1f}%)")
+                    
+                    # Show rule type breakdown
+                    rule_types = []
+                    if _global_semantic_stats.exact_matches > 0:
+                        rule_types.append(f"exact: {_global_semantic_stats.exact_matches}")
+                    if _global_semantic_stats.pattern_matches > 0:
+                        rule_types.append(f"pattern: {_global_semantic_stats.pattern_matches}")
+                    
+                    if rule_types:
+                        print(f"[SEMANTIC] Rule types: {', '.join(rule_types)}")
+                else:
+                    print(f"[SEMANTIC] Final Summary: No semantic mappings applied to {total_processed} records")
+                
+                # Show any issues
+                if _global_semantic_stats.manager_failure_count > 0:
+                    print(f"[SEMANTIC] WARNING: {_global_semantic_stats.manager_failure_count} manager failures")
+                
+                if _global_semantic_stats.fallback_count > 0:
+                    print(f"[SEMANTIC] INFO: {_global_semantic_stats.fallback_count} records used fallback")
+            
+            # Reset global stats
+            _global_semantic_stats = SemanticMappingStats()
+            
+        except Exception as e:
+            logger.error(f"Error printing final semantic summary: {e}")
+    
+    def reset_global_stats(self):
+        """Reset global semantic mapping statistics"""
+        global _global_semantic_stats
+        _global_semantic_stats = SemanticMappingStats()
+        """
+        Print detailed configuration status to GUI terminal.
+        
+        Task 6.3: Provide helpful error messages for troubleshooting
+        Requirements: 7.4, 7.5 - Clear warnings and helpful messages
+        """
+        try:
+            validation = self.validate_configuration()
+            
+            print("[SEMANTIC] Configuration Status:")
+            print(f"[SEMANTIC]   Valid: {'Yes' if validation['valid'] else 'No'}")
+            print(f"[SEMANTIC]   Enabled: {'Yes' if validation['enabled'] else 'No'}")
+            print(f"[SEMANTIC]   Config Found: {'Yes' if validation['config_found'] else 'No'}")
+            print(f"[SEMANTIC]   Manager Healthy: {'Yes' if validation['manager_healthy'] else 'No'}")
+            print(f"[SEMANTIC]   Rules: {validation['rules_count']}")
+            print(f"[SEMANTIC]   Mappings: {validation['mappings_count']}")
+            
+            if validation['errors']:
+                print("[SEMANTIC] Errors:")
+                for error in validation['errors']:
+                    print(f"[SEMANTIC]   ❌ {error}")
+            
+            if validation['warnings']:
+                print("[SEMANTIC] Warnings:")
+                for warning in validation['warnings']:
+                    print(f"[SEMANTIC]   ⚠️  {warning}")
+            
+            if validation['recommendations']:
+                print("[SEMANTIC] Recommendations:")
+                for rec in validation['recommendations']:
+                    print(f"[SEMANTIC]   💡 {rec}")
+                    
+        except Exception as e:
+            print(f"[SEMANTIC] ERROR: Could not print configuration status: {e}")
+    
+    def _create_error_results(self, results: List[Dict[str, Any]], error_message: str) -> List[Dict[str, Any]]:
+        """
+        Create error results when semantic mapping fails completely.
+        
+        Task 6.1: Graceful degradation - return original results with error metadata
+        Requirements: 7.1, 7.2, 7.3
+        
+        Args:
+            results: Original results
+            error_message: Error message
+            
+        Returns:
+            Results with error semantic mapping metadata
+        """
+        error_results = []
+        for result in results:
+            error_result = result.copy()
+            error_result['_semantic_mappings'] = {}
+            error_result['_semantic_mapping_status'] = 'error'
+            error_result['_semantic_mapping_error'] = error_message
+            error_result['_semantic_mapping_message'] = 'Semantic mapping failed - correlation continued without enhancement'
+            error_results.append(error_result)
+        
+        # Update stats to reflect error state
+        self.stats.total_records_processed = len(results)
+        self.stats.mappings_applied = 0
+        self.stats.manager_failure_count = 1
+        self.stats.fallback_count = len(results)
+        
+        return error_results

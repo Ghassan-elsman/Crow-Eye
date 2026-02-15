@@ -44,6 +44,10 @@ class IdentityCorrelationEngine:
         from .identity_validator import IdentityValidator
         self.identity_validator = IdentityValidator()
         
+        # ENHANCEMENT: Cache for feather metadata (smart identity extraction)
+        # Maps feather_id -> {application_column, path_column, artifact_type}
+        self.feather_metadata_cache: Dict[str, Dict[str, str]] = {}
+        
         # Common field name variations for identity extraction
         # ENHANCED: More comprehensive field patterns for better identity extraction
         self.name_field_patterns = [
@@ -232,7 +236,7 @@ class IdentityCorrelationEngine:
                 'hash': ['sha1', 'sha256', 'hash', 'FileId', 'SHA1', 'SHA256', 'Hash', 'ProgramId']
             },
             'Registry': {
-                'name': ['value_name', 'key_name', 'name', 'ValueName', 'KeyName', 'Name', 'value', 'Value'],
+                'name': ['data', 'Data', 'value_name', 'key_name', 'name', 'ValueName', 'KeyName', 'Name', 'value', 'Value'],
                 'path': ['registry_path', 'key_path', 'path', 'KeyPath', 'RegistryPath', 'Path'],
                 'hash': []
             },
@@ -337,12 +341,154 @@ class IdentityCorrelationEngine:
             }
         }
     
+    def load_feather_metadata(self, feather_db_path: str, feather_id: str = None) -> Dict[str, str]:
+        """
+        Load feather metadata from JSON config file for smart identity extraction.
+        
+        This method reads the feather's JSON configuration to determine which fields
+        contain application names and paths, eliminating the need for hardcoded mappings.
+        
+        Args:
+            feather_db_path: Path to feather database (.db file)
+            feather_id: Optional feather ID for caching
+        
+        Returns:
+            Dict with keys: application_column, path_column, artifact_type, feather_id
+            Returns empty dict if JSON config not found
+        
+        Example:
+            metadata = engine.load_feather_metadata('RecentDocs.db')
+            # Returns: {'application_column': 'data', 'path_column': None, 'artifact_type': 'RecentDocs'}
+        """
+        import json
+        
+        # Check cache first
+        cache_key = feather_id or feather_db_path
+        if cache_key in self.feather_metadata_cache:
+            return self.feather_metadata_cache[cache_key]
+        
+        # Try to load JSON config
+        json_path = feather_db_path.replace('.db', '.json')
+        metadata = {}
+        
+        try:
+            if Path(json_path).exists():
+                with open(json_path, 'r') as f:
+                    config = json.load(f)
+                    metadata = {
+                        'application_column': config.get('application_column'),
+                        'path_column': config.get('path_column'),
+                        'artifact_type': config.get('artifact_type'),
+                        'feather_id': config.get('feather_id') or config.get('config_name'),
+                        'timestamp_column': config.get('timestamp_column')
+                    }
+                    
+                    if self.debug_mode:
+                        print(f"[Identity Engine] Loaded metadata for {metadata.get('feather_id', 'unknown')}: "
+                              f"app_col={metadata.get('application_column')}, "
+                              f"path_col={metadata.get('path_column')}")
+        except Exception as e:
+            if self.debug_mode:
+                print(f"[Identity Engine] Could not load metadata from {json_path}: {e}")
+        
+        # Cache the result (even if empty)
+        self.feather_metadata_cache[cache_key] = metadata
+        
+        return metadata
+    
+    def normalize_identity_name(self, name: str) -> Tuple[str, str]:
+        """
+        Normalize identity name by removing version/date/number suffixes and cleaning separators.
+        
+        This groups similar identities together (e.g., different versions of the same file).
+        Also replaces hyphens and underscores with spaces for cleaner display.
+        
+        Args:
+            name: Original identity name
+            
+        Returns:
+            Tuple of (base_name, suffix)
+            - base_name: Name without version/date/number suffix, with cleaned separators
+            - suffix: The removed suffix (empty string if no suffix found)
+            
+        Examples:
+            "Conference-LaTeX-template-UD23.09.2024" -> ("Conference LaTeX template UD", "23.09.2024")
+            "chrome_v120.0.1" -> ("chrome", "v120.0.1")
+            "document (2)" -> ("document", "(2)")
+            "Report_2024-01-15" -> ("Report", "2024-01-15")
+        """
+        if not name:
+            return name, ""
+        
+        import re
+        
+        # Pattern 1: Date suffix (DD.MM.YYYY, YYYY-MM-DD, YYYYMMDD, DD-MM-YYYY)
+        date_patterns = [
+            r'[-_]?\d{2}\.\d{2}\.\d{4}$',  # 23.09.2024, _23.09.2024
+            r'[-_]?\d{4}-\d{2}-\d{2}$',    # 2024-09-23, _2024-09-23
+            r'[-_]?\d{2}-\d{2}-\d{4}$',    # 23-09-2024, _23-09-2024
+            r'[-_]?\d{8}$',                 # 20240923, _20240923
+        ]
+        
+        # Pattern 2: Version suffix (v1.0, v2.3.1, _v1, Build 20240613)
+        version_patterns = [
+            r'[-_]?v?\d+\.\d+(\.\d+)?$',   # v1.0, v2.3.1, 1.0, _1.0
+            r'[-_]v\d+$',                   # _v1, -v2
+            r'\s+Build\s+\d+$',             # Build 20240613
+        ]
+        
+        # Pattern 3: Number suffix (_1, _2, (1), (2), - Copy, - Copy (2))
+        number_patterns = [
+            r'[-_]\d+$',                    # _1, -2
+            r'\s*\(\d+\)$',                 # (1), (2), " (1)"
+            r'\s*-\s*Copy(\s*\(\d+\))?$',  # - Copy, - Copy (2)
+        ]
+        
+        # Pattern 4: x64, x86 suffixes
+        arch_patterns = [
+            r'\s+x64$',                     # x64
+            r'\s+x86$',                     # x86
+        ]
+        
+        # Try each pattern in order
+        all_patterns = date_patterns + version_patterns + number_patterns + arch_patterns
+        
+        base_name = name
+        suffix = ""
+        
+        for pattern in all_patterns:
+            match = re.search(pattern, base_name, re.IGNORECASE)
+            if match:
+                suffix = match.group(0)
+                base_name = base_name[:match.start()]
+                # Clean up base name (remove trailing separators)
+                base_name = base_name.rstrip('-_ ')
+                # Clean up suffix (remove leading separators)
+                suffix = suffix.lstrip('-_ ')
+                break
+        
+        # ENHANCEMENT: Replace hyphens and underscores with spaces for cleaner display
+        # This makes "Conference-LaTeX-template-UD" -> "Conference LaTeX template UD"
+        base_name_cleaned = base_name.replace('-', ' ').replace('_', ' ')
+        # Remove multiple consecutive spaces
+        base_name_cleaned = re.sub(r'\s+', ' ', base_name_cleaned).strip()
+        
+        if self.debug_mode and (suffix or base_name != base_name_cleaned):
+            print(f"[Identity Normalization] '{name}' -> base='{base_name_cleaned}', suffix='{suffix}'")
+        
+        return base_name_cleaned, suffix
+    
     def normalize_identity_key(self, name: str = "", path: str = "", hash_value: str = "") -> str:
         """
-        Normalize identity information into a composite key.
+        Normalize identity information into a composite key for grouping.
         
-        Implements case-insensitive normalization and path standardization
-        for consistent identity matching.
+        ENHANCED NORMALIZATION for better grouping:
+        - Removes ALL spaces, hyphens, underscores, dots
+        - Converts to lowercase
+        - Removes version/date suffixes
+        - Groups similar identities: "Chrome.exe", "chrome.exe", "CHROME_EXE", "chrome-exe" -> same group
+        
+        The original name is preserved separately for display purposes.
         
         Args:
             name: Application or file name
@@ -350,12 +496,26 @@ class IdentityCorrelationEngine:
             hash_value: File hash (MD5, SHA1, SHA256)
         
         Returns:
-            Normalized composite key in format: "name|path|hash"
+            Normalized composite key in format: "normalized_name|path|hash"
         
         Requirements: 1.2, 5.1
         """
-        # Normalize name: lowercase, strip whitespace
-        normalized_name = name.lower().strip() if name else ""
+        import re
+        
+        # ENHANCEMENT: Aggressive normalization for grouping
+        if name:
+            # Step 1: Remove version/date suffixes using existing logic
+            base_name, suffix = self.normalize_identity_name(name)
+            
+            # Step 2: Aggressive normalization for comparison
+            # Remove ALL spaces, hyphens, underscores, dots, and special characters
+            normalized_name = base_name.lower()
+            normalized_name = re.sub(r'[\s\-_\.\(\)\[\]]+', '', normalized_name)
+            # Remove any remaining special characters except alphanumeric
+            normalized_name = re.sub(r'[^a-z0-9]', '', normalized_name)
+            normalized_name = normalized_name.strip()
+        else:
+            normalized_name = ""
         
         # Normalize path: forward slashes, lowercase, strip whitespace
         normalized_path = ""
@@ -372,15 +532,17 @@ class IdentityCorrelationEngine:
         composite_key = f"{normalized_name}|{normalized_path}|{normalized_hash}"
         
         if self.debug_mode:
-            print(f"[DEBUG] Normalized identity: name='{normalized_name}', path='{normalized_path}', hash='{normalized_hash}'")
+            print(f"[DEBUG] Normalized identity: name='{normalized_name}' (from '{name}'), path='{normalized_path}', hash='{normalized_hash}'")
         
         return composite_key
     
-    def extract_identity_info(self, record: Dict[str, Any]) -> Tuple[str, str, str, str]:
+    def extract_identity_info(self, record: Dict[str, Any], feather_metadata: Dict[str, str] = None) -> Tuple[str, str, str, str]:
         """
         Extract identity information from a forensic record with enhanced validation.
         
-        ENHANCED: Implements comprehensive field validation and prioritization:
+        ENHANCED: Now supports smart feather-aware extraction using metadata:
+        - Prioritizes feather metadata (application_column, path_column from JSON config)
+        - Falls back to artifact-specific mappings if metadata not available
         - Validates all extracted values before use
         - Prioritizes fields by quality (executable_name > filename > path)
         - Extracts filename from generic paths
@@ -390,6 +552,8 @@ class IdentityCorrelationEngine:
         
         Args:
             record: Forensic record dictionary
+            feather_metadata: Optional metadata from feather JSON config
+                             (application_column, path_column, artifact_type)
         
         Returns:
             Tuple of (name, path, hash, identity_type)
@@ -404,6 +568,38 @@ class IdentityCorrelationEngine:
         path = ""
         hash_value = ""
         
+        # STEP 0: Try feather metadata FIRST (highest priority)
+        # This allows feather creators to specify exact fields to use
+        if feather_metadata:
+            app_col = feather_metadata.get('application_column')
+            path_col = feather_metadata.get('path_column')
+            
+            # Extract from application_column if specified
+            if app_col and app_col in record and record[app_col]:
+                extracted_value = str(record[app_col])
+                is_valid, reason = self.identity_validator.is_valid_identity(extracted_value, field_name=app_col)
+                extraction_attempts.append((app_col, extracted_value, is_valid, reason))
+                
+                if is_valid:
+                    name = extracted_value
+                    if self.debug_mode:
+                        print(f"[Identity Engine] [OK] Used feather metadata: app_col='{app_col}' -> '{name[:50]}'")
+                elif self.debug_mode:
+                    print(f"[Identity Engine] [WARN] Feather metadata field '{app_col}' rejected: '{extracted_value}' (reason: {reason})")
+            
+            # Extract from path_column if specified
+            if path_col and path_col in record and record[path_col]:
+                extracted_value = str(record[path_col])
+                is_valid, reason = self.identity_validator.is_valid_identity(extracted_value, field_name=path_col)
+                extraction_attempts.append((path_col, extracted_value, is_valid, reason))
+                
+                if is_valid:
+                    path = extracted_value
+                    if self.debug_mode:
+                        print(f"[Identity Engine] [OK] Used feather metadata: path_col='{path_col}' -> '{path[:50]}'")
+                elif self.debug_mode:
+                    print(f"[Identity Engine] [WARN] Feather metadata field '{path_col}' rejected: '{extracted_value}' (reason: {reason})")
+        
         # Get artifact type from record (normalize spaces and case variations)
         artifact_type = record.get('artifact', '')
         artifact_type_normalized = artifact_type.replace(' ', '')
@@ -411,7 +607,7 @@ class IdentityCorrelationEngine:
         # Build lowercase key map for case-insensitive lookup
         record_keys_lower = {k.lower(): k for k in record.keys()}
         
-        # STEP 1: Try artifact-specific field mappings FIRST with prioritization
+        # STEP 1: Try artifact-specific field mappings if name/path not found yet
         # Requirements: 8.5 - Field prioritization
         if artifact_type_normalized in self.artifact_field_mappings:
             mapping = self.artifact_field_mappings[artifact_type_normalized]
@@ -939,26 +1135,163 @@ class IdentityCorrelationEngine:
     
     def _normalize_application_name(self, name: str) -> str:
         """
-        Normalize application name for better grouping.
+        Normalize application name for better grouping with AGGRESSIVE normalization.
         
-        Removes:
-        - File extensions (.exe, .lnk, .dll, .msi, .bat, .cmd, .ps1, .vbs, .js)
-        - Copy indicators: (1), (2), (3), - Copy, _copy
-        - Version indicators: v1, v2, v1.0, 1.0.0
-        - Trailing numbers and special chars
+        ENHANCED: Groups similar identities together by:
+        - Removing ~ and everything after it
+        - Removing ALL numbers
+        - Removing ALL spaces, hyphens, underscores, dots, parentheses, brackets
+        - Converting to lowercase
+        - Removing file extensions (.exe, .lnk, .dll, etc.)
+        - Removing copy indicators: (1), (2), (3), - Copy, _copy
+        - Removing version indicators: v1, v2, v1.0, 1.0.0
+        
+        Examples:
+        - "Chrome.exe", "chrome.exe", "CHROME_EXE", "chrome-exe" → all become "chrome"
+        - "Microsoft Edge.exe", "MicrosoftEdge", "microsoft_edge" → all become "microsoftedge"
+        - "app~123", "app~456" → all become "app"
+        - "file123.exe", "file456.exe" → all become "file"
+        
+        The original name is preserved separately for display purposes.
         
         Args:
             name: Raw application name
         
         Returns:
-            Normalized name for identity grouping
+            Aggressively normalized name for identity grouping
         """
         if not name:
             return ""
         
+        import re
+        
         result = name.strip()
         
-        # Remove common file extensions (case-insensitive)
+        # Step -1: Handle Prefetch filenames (APPNAME.EXE HASH.pf)
+        # Extract just the APPNAME.EXE part before the hash
+        # Pattern: ends with space + 8 hex chars + .pf
+        # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
+        #           "chrome.exe AF43252D.pf" → "chrome.exe"
+        if result.lower().endswith('.pf'):
+            # Check if there's a space followed by hex hash before .pf
+            match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
+            if match:
+                result = match.group(1)  # Extract just the app name part
+        
+        # Step 0: Remove ~ and everything after it (FIRST - before any other processing)
+        # This handles cases like "CHROME~1.EXE", "file~123.txt"
+        if '~' in result:
+            result = result.split('~')[0]
+        
+        # Step 1: Remove common file extensions (case-insensitive)
+        # Do this BEFORE other processing
+        extensions = [
+            '.exe', '.lnk', '.dll', '.msi', '.bat', '.cmd', '.ps1', '.vbs', '.js',
+            '.com', '.scr', '.pif', '.application', '.gadget', '.msp', '.hta',
+            '.cpl', '.msc', '.jar', '.py', '.pyc', '.pyw'
+        ]
+        lower_result = result.lower()
+        for ext in extensions:
+            if lower_result.endswith(ext):
+                result = result[:-len(ext)]
+                lower_result = result.lower()  # Update for next checks
+                break
+        
+        # Step 2: Remove copy indicators like (1), (2), (3), etc.
+        # Do this BEFORE aggressive normalization
+        result = re.sub(r'[\s_]*\(\d+\)\s*$', '', result)
+        
+        # Step 3: Remove " - Copy", "_copy", " copy" at the end
+        # Do this BEFORE aggressive normalization
+        # Handle both "Copy" and "Copy N" patterns
+        result = re.sub(r'[\s_]*[-_]?\s*[Cc]opy\s*\d*\s*$', '', result)
+        result = re.sub(r'[\s_]*\([Cc]opy\s*\d*\)\s*$', '', result)  # Handle (Copy) and (Copy 2)
+        
+        # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
+        # Do this BEFORE aggressive normalization
+        # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
+        # This prevents removing numbers that are part of the name (e.g., "chrome1")
+        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result)  # Requires space/underscore
+        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result)  # OR explicit v prefix without space
+        
+        # Step 5: AGGRESSIVE NORMALIZATION for grouping
+        # Convert to lowercase first
+        result = result.lower()
+        
+        # Remove ALL spaces, hyphens, underscores, dots, parentheses, brackets
+        result = re.sub(r'[\s\-_\.\(\)\[\]]+', '', result)
+        
+        # Remove any remaining special characters except alphanumeric
+        result = re.sub(r'[^a-z0-9]', '', result)
+        
+        # Step 6: Remove ALL numbers for better grouping
+        # This ensures "chrome1", "chrome2", "chrome123" all become "chrome"
+        result = re.sub(r'\d+', '', result)
+        
+        # If result is empty after all processing, fall back to original
+        if not result:
+            # Fall back to simpler normalization (keep some characters)
+            result = name.strip().lower()
+            if '~' in result:
+                result = result.split('~')[0]
+            result = re.sub(r'[\s\-_\.\(\)\[\]]+', '', result)
+            result = re.sub(r'[^a-z0-9]', '', result)
+            # Don't remove numbers in fallback to avoid empty result
+        
+        return result.strip()
+    
+    def _get_display_name(self, raw_name: str) -> str:
+        """
+        Get a clean, readable display name from the raw name.
+        
+        This is used for the primary_name field to show a user-friendly version
+        while the aggressive normalization is used for grouping.
+        
+        Removes:
+        - Tilde and everything after it (~1, ~123)
+        - File extensions (.exe, .lnk, etc.)
+        - Copy indicators: (1), (2), - Copy
+        - Version indicators: v1, v2, v1.0
+        
+        Preserves:
+        - Original capitalization
+        - Spaces and readable formatting
+        
+        Examples:
+        - "Chrome.exe" → "Chrome"
+        - "CHROME~1.EXE" → "CHROME"
+        - "Microsoft Edge.exe" → "Microsoft Edge"
+        - "chrome-browser (1).exe" → "chrome-browser"
+        
+        Args:
+            raw_name: Original application name
+        
+        Returns:
+            Clean, readable display name
+        """
+        if not raw_name:
+            return "Unknown"
+        
+        import re
+        
+        result = raw_name.strip()
+        
+        # Step -1: Handle Prefetch filenames (APPNAME.EXE HASH.pf)
+        # Extract just the APPNAME.EXE part before the hash
+        # Pattern: ends with space + 8 hex chars + .pf
+        # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
+        #           "chrome.exe AF43252D.pf" → "chrome.exe"
+        if result.lower().endswith('.pf'):
+            # Check if there's a space followed by hex hash before .pf
+            match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
+            if match:
+                result = match.group(1)  # Extract just the app name part
+        
+        # Step 0: Remove ~ and everything after it (FIRST)
+        if '~' in result:
+            result = result.split('~')[0]
+        
+        # Step 1: Remove common file extensions (case-insensitive)
         extensions = [
             '.exe', '.lnk', '.dll', '.msi', '.bat', '.cmd', '.ps1', '.vbs', '.js',
             '.com', '.scr', '.pif', '.application', '.gadget', '.msp', '.hta',
@@ -970,22 +1303,22 @@ class IdentityCorrelationEngine:
                 result = result[:-len(ext)]
                 break
         
-        # Remove copy indicators like (1), (2), (3), etc.
-        # Pattern: space or underscore followed by (number) at the end
-        import re
+        # Step 2: Remove copy indicators like (1), (2), (3), etc.
         result = re.sub(r'[\s_]*\(\d+\)\s*$', '', result)
         
-        # Remove " - Copy", "_copy", " copy" at the end
+        # Step 3: Remove " - Copy", "_copy", " copy" at the end
         result = re.sub(r'[\s_]*[-_]?\s*[Cc]opy\s*\d*\s*$', '', result)
         
-        # Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
-        # But be careful not to remove important version info from product names
-        result = re.sub(r'[\s_]*[vV]?\d+(\.\d+)*\s*$', '', result)
+        # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
+        # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
+        # This prevents removing numbers that are part of the name (e.g., "chrome1")
+        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result)  # Requires space/underscore
+        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result)  # OR explicit v prefix without space
         
-        # Remove trailing special characters and spaces
+        # Step 5: Clean up trailing special characters
         result = result.rstrip(' _-.')
         
-        # Normalize multiple spaces to single space
+        # Step 6: Normalize multiple spaces to single space
         result = re.sub(r'\s+', ' ', result)
         
         return result.strip()
@@ -1374,13 +1707,17 @@ class IdentityBasedCorrelationEngine:
                 
                 # Get or create identity
                 if identity_key not in self.identities:
-                    # Use normalized name as display name for the identity group
-                    # But store all original names in the evidence
+                    # IMPROVED: Use a clean display name (not fully normalized)
+                    # Remove extension and version, but keep readable format with spaces/caps
+                    display_name = self._get_display_name(raw_name)
+                    
+                    # Use display name as primary_name for the identity group
+                    # The aggressive normalization is only used for the identity_key
                     identity = Identity(
                         identity_type=identity_type,
                         identity_value=path if path else name,
-                        primary_name=normalized_name,  # Display the normalized group name
-                        normalized_name=identity_key,
+                        primary_name=display_name,  # Clean, readable display name
+                        normalized_name=identity_key,  # Aggressively normalized for grouping
                         confidence=1.0,
                         match_method="exact"
                     )
@@ -2884,17 +3221,31 @@ class IdentityBasedEngineAdapter:
             feather_metadata = {}
             extraction_stats = getattr(correlation_results, 'feather_extraction_stats', {})
             
+            # Calculate unique identities per feather
+            # This is needed because extraction_stats['extracted'] counts records, not unique identities
+            identities_per_feather = {}  # feather_id -> set of identity_keys
+            for identity_key, identity in self.identities.items():
+                for evidence in identity.all_evidence:
+                    feather_id = evidence.feather_id
+                    if feather_id not in identities_per_feather:
+                        identities_per_feather[feather_id] = set()
+                    identities_per_feather[feather_id].add(identity_key)
+            
             for fid, count, artifact in feathers_loaded:
                 # Get extraction stats for this feather
                 fid_stats = extraction_stats.get(fid, {})
                 
+                # Get unique identity count for this feather
+                unique_identities = len(identities_per_feather.get(fid, set()))
+                
                 feather_metadata[fid] = {
                     'feather_name': fid,
                     'records_processed': count,
+                    'total_records': count,  # Add for backward compatibility with database_persistence.py
                     'artifact_type': artifact,
-                    'identities_extracted': fid_stats.get('extracted', 0),
+                    'identities_extracted': unique_identities,  # FIXED: Use unique identity count, not record count
                     'identities_filtered': fid_stats.get('filtered', 0),
-                    'identities_final': fid_stats.get('extracted', 0),  # Final = extracted (after filtering)
+                    'identities_final': unique_identities,  # Final = unique identities (after filtering)
                     'matches_created': 0,  # Will be updated after match creation
                     'extraction_success_rate': (fid_stats.get('extracted', 0) / count * 100) if count > 0 else 0
                 }
@@ -2925,22 +3276,10 @@ class IdentityBasedEngineAdapter:
             # Store result
             self.last_result = correlation_results
             
-            # Count identities found per feather
-            feather_identities = {fid: set() for fid in feather_metadata.keys()}
-            for identity in correlation_results.identities:
-                for evidence in identity.all_evidence:
-                    fid = evidence.feather_id if hasattr(evidence, 'feather_id') else None
-                    if fid and fid in feather_identities:
-                        feather_identities[fid].add(identity.identity_id)
-            
-            # Update feather metadata with identity counts
-            for fid in feather_metadata:
-                feather_metadata[fid]['identities_found'] = len(feather_identities.get(fid, set()))
-            
-            # Print feather contribution summary
-            print(f"[Identity Engine] Feather contribution:")
+            # Print feather contribution summary (will be updated after match creation)
+            print(f"[Identity Engine] Feather records loaded:")
             for fid, meta in sorted(feather_metadata.items(), key=lambda x: x[1]['records_processed'], reverse=True):
-                print(f"  • {fid}: {meta['records_processed']:,} records, {meta['identities_found']} identities")
+                print(f"  • {fid}: {meta['records_processed']:,} records, {meta['identities_extracted']} identities extracted")
             
             # Convert to CorrelationResult format for compatibility
             result = CorrelationResult(
@@ -3001,6 +3340,7 @@ class IdentityBasedEngineAdapter:
             # In streaming mode, matches are written directly to database
             feather_contribution = {}  # Track which feathers contributed
             feather_matches_created = {}  # Track matches created per feather (Requirements: 7.2)
+            feather_identities_in_matches = {}  # Track unique identities that participated in matches per feather
             matches_created = 0
             matches_skipped = 0
             
@@ -3013,6 +3353,9 @@ class IdentityBasedEngineAdapter:
             print(f"[Identity Engine] Processing {total_identities:,} identities into matches...")
             
             for identity in correlation_results.identities:
+                # Track if this identity created any matches
+                identity_created_match = False
+                
                 for anchor in identity.anchors:
                     # Build feather_records from anchor rows
                     feather_records = {}
@@ -3056,6 +3399,7 @@ class IdentityBasedEngineAdapter:
                         continue
                     
                     matches_created += 1
+                    identity_created_match = True
                     
                     # Track matches created per feather (Requirements: 7.2)
                     for feather_id in feather_records.keys():
@@ -3092,19 +3436,39 @@ class IdentityBasedEngineAdapter:
                     )
                     result.add_match(match)  # This streams to DB if streaming mode is enabled
                 
+                # Track which identities participated in matches (for identities_found calculation)
+                if identity_created_match:
+                    for evidence in identity.all_evidence:
+                        feather_id = evidence.feather_id if hasattr(evidence, 'feather_id') else None
+                        if feather_id:
+                            if feather_id not in feather_identities_in_matches:
+                                feather_identities_in_matches[feather_id] = set()
+                            feather_identities_in_matches[feather_id].add(identity.identity_id)
+                
                 # Progress logging after each identity
                 identities_processed += 1
                 if identities_processed - last_progress_log >= progress_interval:
                     progress_pct = (identities_processed / total_identities) * 100
                     print(f"[Identity Engine] ⏳ Progress: {progress_pct:.0f}% ({identities_processed:,}/{total_identities:,} identities, {matches_created:,} matches)")
+                    
+                    # Force GUI update to prevent freezing
+                    try:
+                        from PyQt5.QtWidgets import QApplication
+                        QApplication.processEvents()
+                    except:
+                        pass  # Ignore if not in GUI context
+                    
                     last_progress_log = identities_processed
             
             # Final progress log
             print(f"[Identity Engine] ✓ Processing complete: {identities_processed:,} identities → {matches_created:,} matches")
             
             # Update feather_metadata with matches_created counts (Requirements: 7.2)
+            # Also update identities_found to reflect only identities that participated in matches
             for fid in feather_metadata:
                 feather_metadata[fid]['matches_created'] = feather_matches_created.get(fid, 0)
+                # FIXED: Use identities that actually participated in matches, not all identities with evidence
+                feather_metadata[fid]['identities_found'] = len(feather_identities_in_matches.get(fid, set()))
             
             # Finalize streaming if enabled
             if use_streaming and db_writer:

@@ -672,6 +672,8 @@ class SemanticMappingDialog(QDialog):
         f.setFixedHeight(22)
         # Complete Crow-Eye feather list
         default_feathers = [
+            # Identity-level (for identity-based semantic mapping)
+            "_identity",
             # Execution artifacts
             "Prefetch", "ShimCache", "AmCache", "AmCache_App", "AmCache_File", "AmCache_Shortcut",
             # User activity artifacts  
@@ -699,7 +701,7 @@ class SemanticMappingDialog(QDialog):
         fd.setEditable(True)
         fd.setStyleSheet(combo_style)
         fd.setFixedHeight(22)
-        fd.addItems(["path", "name", "executable_name", "EventID", "user", "timestamp", "source", "destination", "hash", "size", "command_line"])
+        fd.addItems(["identity_value", "identity_type", "path", "name", "executable_name", "EventID", "user", "timestamp", "source", "destination", "hash", "size", "command_line"])
         fd.currentTextChanged.connect(self._preview)
         self.tbl.setCellWidget(r, 1, fd)
         

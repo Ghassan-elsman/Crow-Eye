@@ -108,6 +108,33 @@
       "weight": 0.05,
       "tier": 4,
       "tier_name": "System event logs"
+    },
+    {
+      "feather_config_name": "SRUM_NetworkDataUsage_CrowEyeFeather",
+      "feather_database_path": "feathers/SRUM_NetworkDataUsage_CrowEyeFeather.db",
+      "artifact_type": "SRUM",
+      "feather_id": "srum_network",
+      "weight": 0.08,
+      "tier": 4,
+      "tier_name": "Network activity evidence"
+    },
+    {
+      "feather_config_name": "ApplicationLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/ApplicationLogs_CrowEyeFeather.db",
+      "artifact_type": "Logs",
+      "feather_id": "app_logs",
+      "weight": 0.05,
+      "tier": 4,
+      "tier_name": "Application event logs"
+    },
+    {
+      "feather_config_name": "ShellBags_CrowEyeFeather",
+      "feather_database_path": "feathers/ShellBags_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "shellbags",
+      "weight": 0.07,
+      "tier": 3,
+      "tier_name": "User navigation evidence"
     }
   ],
   
@@ -125,7 +152,8 @@
     "Jumplists",
     "SRUM",
     "MFT",
-    "Logs"
+    "Logs",
+    "Registry"
   ],
   "use_weighted_scoring": true,
   
@@ -319,6 +347,90 @@
       "scope": "wing",
       "category": "process_execution",
       "severity": "medium"
+    },
+    {
+      "rule_id": "exec_network_activity",
+      "name": "Network Activity Evidence",
+      "semantic_value": "Network Activity Detected",
+      "description": "SRUM network data indicates application network usage",
+      "conditions": [
+        {
+          "feather_id": "srum_network",
+          "field_name": "app_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "network_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_app_logs_evidence",
+      "name": "Application Log Evidence",
+      "semantic_value": "Application Event Logged",
+      "description": "Application logs provide additional execution evidence",
+      "conditions": [
+        {
+          "feather_id": "app_logs",
+          "field_name": "EventID",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_folder_navigation",
+      "name": "Folder Navigation Evidence",
+      "semantic_value": "User Navigated to Folder",
+      "description": "ShellBags indicate user navigated to application folder",
+      "conditions": [
+        {
+          "feather_id": "shellbags",
+          "field_name": "file_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "user_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_comprehensive_evidence",
+      "name": "Comprehensive Execution Evidence (OR)",
+      "semantic_value": "Multiple Evidence Sources",
+      "description": "Network activity OR Application logs OR ShellBags provide supporting execution evidence",
+      "conditions": [
+        {
+          "feather_id": "srum_network",
+          "field_name": "app_name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "app_logs",
+          "field_name": "EventID",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "shellbags",
+          "field_name": "file_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
     }
   ],
   

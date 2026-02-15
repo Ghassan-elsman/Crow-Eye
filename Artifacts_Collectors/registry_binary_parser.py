@@ -1198,7 +1198,7 @@ def _parse_network_location(item_data: bytes) -> dict:
     
     Returns:
         dict: {
-            'network_path': str,   # Full UNC path (\\server\share)
+            'network_path': str,   # Full UNC path (\\\\server\\share)
             'server_name': str,    # Server name
             'share_name': str      # Share name
         }
@@ -1229,7 +1229,7 @@ def _parse_network_location(item_data: bytes) -> dict:
                 if len(ascii_str) > 2:
                     strings_found.append(ascii_str)
         
-        # Parse UNC path format (\\server\share)
+        # Parse UNC path format (\\\\server\\share)
         if strings_found:
             # First string is often the server name
             if len(strings_found) >= 1:
@@ -1622,7 +1622,7 @@ def parse_muicache_entry(value_name: str, value_data: str) -> dict:
     and the value data contains the display name.
     
     Args:
-        value_name: Full application path (e.g., "C:\\Windows\\System32\\notepad.exe")
+        value_name: Full application path (e.g., "C:\\\\Windows\\\\System32\\\\notepad.exe")
         value_data: Application display name (e.g., "Notepad")
     
     Returns:

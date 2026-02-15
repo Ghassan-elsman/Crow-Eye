@@ -76,17 +76,37 @@ class StreamingMatchWriter:
                 anchor_feather_id TEXT,
                 anchor_selection_reason TEXT,
                 filters_applied TEXT,
-                feather_metadata TEXT
+                feather_metadata TEXT,
+                status TEXT DEFAULT 'COMPLETED',
+                progress_info TEXT
             )
         """)
         
-        # Migration: Add feather_metadata column if it doesn't exist (for existing databases)
+        # Migration: Add new columns if they don't exist (for existing databases)
         try:
             cursor.execute("SELECT feather_metadata FROM results LIMIT 1")
         except:
             try:
                 cursor.execute("ALTER TABLE results ADD COLUMN feather_metadata TEXT")
                 print("[Database] Migration: Added feather_metadata column to results table")
+            except:
+                pass
+        
+        try:
+            cursor.execute("SELECT status FROM results LIMIT 1")
+        except:
+            try:
+                cursor.execute("ALTER TABLE results ADD COLUMN status TEXT DEFAULT 'COMPLETED'")
+                print("[Database] Migration: Added status column to results table")
+            except:
+                pass
+        
+        try:
+            cursor.execute("SELECT progress_info FROM results LIMIT 1")
+        except:
+            try:
+                cursor.execute("ALTER TABLE results ADD COLUMN progress_info TEXT")
+                print("[Database] Migration: Added progress_info column to results table")
             except:
                 pass  # Column might already exist or table doesn't exist yet
         
@@ -127,6 +147,8 @@ class StreamingMatchWriter:
                 artifact_type TEXT,
                 database_path TEXT,
                 total_records INTEGER,
+                identities_extracted INTEGER DEFAULT 0,
+                identities_found INTEGER DEFAULT 0,
                 FOREIGN KEY (result_id) REFERENCES results(result_id)
             )
         """)
@@ -265,7 +287,20 @@ class StreamingMatchWriter:
         feather_metadata_json = None
         if feather_metadata:
             import json
-            feather_metadata_json = json.dumps(feather_metadata)
+            from datetime import datetime
+            
+            # Convert datetime objects to strings for JSON serialization
+            def convert_datetime(obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                elif isinstance(obj, dict):
+                    return {k: convert_datetime(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_datetime(item) for item in obj]
+                return obj
+            
+            serializable_metadata = convert_datetime(feather_metadata)
+            feather_metadata_json = json.dumps(serializable_metadata)
         
         cursor.execute("""
             UPDATE results SET 
@@ -295,29 +330,74 @@ class StreamingMatchWriter:
     
     def update_result_counts(self, result_id: int, total_matches: int,
                             feathers_processed: int = 0,
-                            total_records_scanned: int = 0):
+                            total_records_scanned: int = 0,
+                            status: str = "COMPLETED",
+                            progress_info: dict = None):
         """
-        Update result record with final counts (simplified version for streaming).
+        Update result record with final counts and status (enhanced for pause/resume).
         
         Args:
             result_id: Result ID to update
             total_matches: Final match count
             feathers_processed: Number of feathers processed
             total_records_scanned: Total records scanned
+            status: Execution status (COMPLETED, PAUSED, FAILED)
+            progress_info: Additional progress information for resume capability
         """
         cursor = self.conn.cursor()
+        
+        # Convert progress_info to JSON string if provided
+        progress_json = None
+        if progress_info:
+            import json
+            progress_json = json.dumps(progress_info)
+        
         cursor.execute("""
             UPDATE results SET 
                 total_matches = ?,
                 feathers_processed = ?,
-                total_records_scanned = ?
+                total_records_scanned = ?,
+                status = ?,
+                progress_info = ?
             WHERE result_id = ?
-        """, (total_matches, feathers_processed, total_records_scanned, result_id))
+        """, (total_matches, feathers_processed, total_records_scanned, status, progress_json, result_id))
         self.conn.commit()
     
     def get_total_written(self) -> int:
         """Get total number of matches written"""
         return self._total_written
+    
+    def get_paused_executions(self) -> List[Dict[str, Any]]:
+        """Get list of paused executions that can be resumed"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT e.execution_id, e.run_name, e.pipeline_name, e.start_time,
+                   r.progress_info, r.wing_name, r.total_matches
+            FROM executions e
+            JOIN results r ON e.execution_id = r.execution_id
+            WHERE r.status = 'PAUSED'
+            ORDER BY e.start_time DESC
+        """)
+        
+        columns = [desc[0] for desc in cursor.description]
+        paused_executions = []
+        
+        for row in cursor.fetchall():
+            execution_data = dict(zip(columns, row))
+            
+            # Parse progress info if available
+            if execution_data['progress_info']:
+                import json
+                try:
+                    execution_data['progress_details'] = json.loads(execution_data['progress_info'])
+                except:
+                    execution_data['progress_details'] = {}
+            else:
+                execution_data['progress_details'] = {}
+            
+            paused_executions.append(execution_data)
+        
+        return paused_executions
     
     def close(self):
         """Close database connection"""
@@ -364,8 +444,13 @@ class ResultsDatabase:
     
     def _create_schema(self):
         """Create database schema if it doesn't exist"""
-        self.conn = sqlite3.connect(str(self.db_path))
+        # Use longer timeout (30 seconds) and enable WAL mode for better concurrency
+        self.conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         cursor = self.conn.cursor()
+        
+        # Enable WAL mode for better concurrent access
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")  # 30 seconds in milliseconds
         
         # Executions table - stores pipeline execution metadata
         cursor.execute("""
@@ -410,6 +495,8 @@ class ResultsDatabase:
                 anchor_selection_reason TEXT,
                 filters_applied TEXT,
                 feather_metadata TEXT,
+                status TEXT DEFAULT 'COMPLETED',
+                progress_info TEXT,
                 FOREIGN KEY (execution_id) REFERENCES executions(execution_id)
             )
         """)
@@ -453,6 +540,8 @@ class ResultsDatabase:
                 artifact_type TEXT,
                 database_path TEXT,
                 total_records INTEGER,
+                identities_extracted INTEGER DEFAULT 0,
+                identities_found INTEGER DEFAULT 0,
                 FOREIGN KEY (result_id) REFERENCES results(result_id)
             )
         """)
@@ -562,6 +651,31 @@ class ResultsDatabase:
                 cursor.execute("ALTER TABLE executions ADD COLUMN run_number INTEGER DEFAULT 1")
                 print("[Database] Migration: Added run_number column")
             except Exception as e:
+                pass
+        
+        # Check if identities_found column exists in feather_metadata table
+        cursor.execute("PRAGMA table_info(feather_metadata)")
+        feather_meta_columns = {row[1] for row in cursor.fetchall()}
+        
+        # Add identities_found if missing (for tracking identities that participated in matches)
+        if 'identities_found' not in feather_meta_columns:
+            try:
+                cursor.execute("ALTER TABLE feather_metadata ADD COLUMN identities_found INTEGER DEFAULT 0")
+                print("[Database] Migration: Added identities_found column to feather_metadata table")
+            except Exception as e:
+                pass
+        
+        # Check if identities_extracted column exists in feather_metadata table
+        cursor.execute("PRAGMA table_info(feather_metadata)")
+        feather_meta_columns = {row[1] for row in cursor.fetchall()}
+        
+        # Add identities_extracted if missing
+        if 'identities_extracted' not in feather_meta_columns:
+            try:
+                cursor.execute("ALTER TABLE feather_metadata ADD COLUMN identities_extracted INTEGER DEFAULT 0")
+                print("[Database] Migration: Added identities_extracted column to feather_metadata table")
+            except Exception as e:
+                pass  # Column might already exist
                 pass
         
         self.conn.commit()
@@ -914,6 +1028,8 @@ class ResultsDatabase:
                 artifact_type = metadata.get('artifact_type', '')
                 database_path = metadata.get('database_path', '')
                 total_records = metadata.get('total_records', 0)
+                identities_extracted = metadata.get('identities_extracted', 0)
+                identities_found = metadata.get('identities_found', 0)
             else:
                 # Skip non-dict metadata entries (e.g., boolean values)
                 print(f"[Database] Warning: Skipping non-dict metadata for feather {feather_id}: {type(metadata)}")
@@ -921,14 +1037,16 @@ class ResultsDatabase:
             
             cursor.execute("""
                 INSERT INTO feather_metadata (
-                    result_id, feather_id, artifact_type, database_path, total_records
-                ) VALUES (?, ?, ?, ?, ?)
+                    result_id, feather_id, artifact_type, database_path, total_records, identities_extracted, identities_found
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 result_id,
                 feather_id,
                 artifact_type,
                 database_path,
-                total_records
+                total_records,
+                identities_extracted,
+                identities_found
             ))
         
         # Save all matches (only if not already streamed)
@@ -1020,6 +1138,71 @@ class ResultsDatabase:
             json.dumps(match.score_breakdown) if match.score_breakdown else None,
             compressed
         ))
+    
+    def update_result_count(self, result_id: int, total_matches: int, 
+                           execution_duration: float = 0.0,
+                           duplicates_prevented: int = 0,
+                           feather_metadata: dict = None):
+        """
+        Update result record with final counts and feather metadata.
+        
+        This method is used to update result records after correlation completes,
+        particularly for adding feather metadata that is calculated post-correlation.
+        
+        Args:
+            result_id: Result ID to update
+            total_matches: Final match count
+            execution_duration: Execution duration in seconds
+            duplicates_prevented: Number of duplicates prevented
+            feather_metadata: Feather metadata dictionary
+        """
+        cursor = self.conn.cursor()
+        
+        # Serialize feather_metadata to JSON if provided
+        feather_metadata_json = None
+        if feather_metadata:
+            feather_metadata_json = json.dumps(feather_metadata)
+        
+        # Update results table
+        cursor.execute("""
+            UPDATE results SET 
+                total_matches = ?,
+                execution_duration_seconds = ?,
+                duplicates_prevented = ?,
+                feather_metadata = ?
+            WHERE result_id = ?
+        """, (total_matches, execution_duration, duplicates_prevented, feather_metadata_json, result_id))
+        
+        # Also save to feather_metadata table for backwards compatibility
+        if feather_metadata:
+            # Delete existing feather metadata for this result
+            cursor.execute("DELETE FROM feather_metadata WHERE result_id = ?", (result_id,))
+            
+            # Insert new feather metadata
+            for feather_id, metadata in feather_metadata.items():
+                # Skip internal metadata entries (starting with _)
+                if feather_id.startswith('_'):
+                    continue
+                
+                # Handle case where metadata might not be a dict
+                if not isinstance(metadata, dict):
+                    continue
+                
+                cursor.execute("""
+                    INSERT INTO feather_metadata (
+                        result_id, feather_id, artifact_type, database_path, total_records, identities_extracted, identities_found
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    result_id,
+                    feather_id,
+                    metadata.get('artifact_type', ''),
+                    metadata.get('database_path', ''),
+                    metadata.get('records_processed', metadata.get('total_records', 0)),
+                    metadata.get('identities_extracted', 0),
+                    metadata.get('identities_found', 0)
+                ))
+        
+        self.conn.commit()
     
     def get_recent_executions(self, limit: int = 10, engine_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -1338,7 +1521,14 @@ class ResultsDatabase:
             
             # Add semantic data if available
             if match_data.get('semantic_data'):
-                match.semantic_data = json.loads(match_data['semantic_data'])
+                try:
+                    semantic_data_raw = json.loads(match_data['semantic_data'])
+                    match.semantic_data = semantic_data_raw
+                    
+                except (json.JSONDecodeError, TypeError) as e:
+                    # Handle corrupted semantic data gracefully
+                    print(f"[Database] Warning: Failed to parse semantic_data for match {match_data['match_id']}: {e}")
+                    match.semantic_data = {}
             
             matches.append(match)
         
@@ -1360,7 +1550,7 @@ class ResultsDatabase:
             execution_duration_seconds=result_data.get('execution_duration_seconds', 0.0),
             anchor_feather_id=result_data.get('anchor_feather_id', ''),
             anchor_selection_reason=result_data.get('anchor_selection_reason', ''),
-            filters_applied=json.loads(result_data.get('filters_applied', '{}')),
+            filters_applied=json.loads(result_data.get('filters_applied') or '{}'),
             feather_metadata=feather_metadata
         )
         
@@ -1406,6 +1596,38 @@ class ResultsDatabase:
         
         row = cursor.fetchone()
         return row[0] if row else None
+
+    def get_paused_executions(self) -> List[Dict[str, Any]]:
+        """Get list of paused executions that can be resumed"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT e.execution_id, e.run_name, e.pipeline_name, e.execution_time,
+                   r.progress_info, r.wing_name, r.total_matches
+            FROM executions e
+            JOIN results r ON e.execution_id = r.execution_id
+            WHERE r.status = 'PAUSED'
+            ORDER BY e.execution_time DESC
+        """)
+        
+        columns = [desc[0] for desc in cursor.description]
+        paused_executions = []
+        
+        for row in cursor.fetchall():
+            execution_data = dict(zip(columns, row))
+            
+            # Parse progress info if available
+            if execution_data['progress_info']:
+                import json
+                try:
+                    execution_data['progress_details'] = json.loads(execution_data['progress_info'])
+                except:
+                    execution_data['progress_details'] = {}
+            else:
+                execution_data['progress_details'] = {}
+            
+            paused_executions.append(execution_data)
+        
+        return paused_executions
 
     def close(self):
         """Close database connection"""

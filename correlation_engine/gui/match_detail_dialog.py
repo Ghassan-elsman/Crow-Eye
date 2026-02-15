@@ -6,9 +6,10 @@ Displays comprehensive details about a correlation match.
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QGroupBox, QTreeWidget,
-    QTreeWidgetItem, QScrollArea, QWidget
+    QTreeWidgetItem, QScrollArea, QWidget, QMessageBox
 )
 from PyQt5.QtCore import Qt
+import json
 
 
 class MatchDetailDialog(QDialog):
@@ -24,16 +25,32 @@ class MatchDetailDialog(QDialog):
     - Raw record data
     """
     
-    def __init__(self, match, parent=None):
+    def __init__(self, match, parent=None, db_persistence=None):
         """
         Initialize match detail dialog.
         
         Args:
             match: CorrelationMatch object
             parent: Parent widget
+            db_persistence: DatabasePersistence object for loading full match data
         """
         super().__init__(parent)
         self.match = match
+        self.db_persistence = db_persistence
+        
+        # Load full match data from database if available
+        if self.db_persistence and hasattr(match, 'match_id'):
+            try:
+                full_match_data = self.db_persistence.get_match_details(match.match_id)
+                if full_match_data and full_match_data.get('feather_records'):
+                    # Update match object with full feather records
+                    self.match.feather_records = full_match_data['feather_records']
+                    # Also load semantic data if available
+                    if full_match_data.get('semantic_data'):
+                        self.match.semantic_data = json.loads(full_match_data['semantic_data']) if isinstance(full_match_data['semantic_data'], str) else full_match_data['semantic_data']
+            except Exception as e:
+                print(f"Warning: Could not load full match data: {e}")
+        
         self.setup_ui()
     
     def setup_ui(self):

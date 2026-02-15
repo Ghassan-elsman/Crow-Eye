@@ -18,104 +18,130 @@ The **pipeline/** directory orchestrates complete analysis workflows, including 
 
 ### pipeline_executor.py
 
-**Lines**: 671 lines
-
-**Purpose**: Main pipeline execution orchestrator.
+**Purpose**: The central orchestrator responsible for executing entire analysis pipelines defined by `PipelineConfig` objects. It coordinates feather creation, wing execution (using the selected engine), dependency handling, integration with shared services (semantic mapping, weighted scoring), and report generation.
 
 **Key Classes**:
-- `PipelineExecutor`: Executes complete pipelines
+- `PipelineExecutor`: The main class responsible for the end-to-end execution of a correlation pipeline.
 
 **Key Methods**:
 ```python
-def execute() -> Dict[str, Any]:
-    """Execute complete pipeline"""
-    # Steps:
-    # 1. Create feathers (if configured)
-    # 2. Execute wings (if configured)
-    # 3. Generate report (if configured)
+def __init__(self, pipeline_config: PipelineConfig):
+    """Initializes the executor, sets up filters, integrations, and the correlation engine."""
+    
+def execute(self, resume_execution_id: int = None) -> Dict[str, Any]:
+    """
+    The main method to execute the complete pipeline.
+    Orchestrates feather creation, wing execution, and report generation.
+    Supports resuming from a paused state.
+    """
+    
+def _create_shared_integrations(self, pipeline_config: PipelineConfig):
+    """Creates and configures instances of WeightedScoringIntegration and SemanticMappingIntegration."""
+    
+def _on_config_changed(self, old_config, new_config):
+    """Callback triggered on configuration changes, reloads integrations."""
+    
+def _create_engine_with_integrations(self, pipeline_config: PipelineConfig, engine_type: EngineType) -> BaseCorrelationEngine:
+    """Factory method to create a correlation engine instance with injected shared integrations."""
     
 def _create_feathers() -> Dict[str, str]:
-    """Create feather databases"""
+    """Simulates/orchestrates the creation of feather databases based on FeatherConfig."""
     
-def _execute_wings(feather_paths):
-    """Execute all wings in pipeline"""
+def _execute_wings(self, feather_paths: Dict[str, str]):
+    """
+    Executes all configured wings in the pipeline, integrating with the chosen correlation engine.
+    Includes validation, dynamic path resolution, and streaming setup.
+    """
     
-def _validate_feather_wing_linkages(feather_paths) -> Dict:
-    """Validate all feather-wing linkages"""
+def _validate_feather_wing_linkages(self, feather_paths: Dict[str, str]) -> Dict[str, Any]:
+    """Validates that wings correctly reference existing feathers before execution."""
     
-def _detect_circular_dependencies(feather_paths) -> Dict:
-    """Detect circular dependencies"""
+def _detect_circular_dependencies(self, feather_paths: Dict[str, str]) -> Dict[str, Any]:
+    """Detects issues in feather references and circular dependencies, generating errors/warnings."""
     
-def _generate_dependency_graph_dot(feather_paths) -> str:
-    """Generate GraphViz dependency graph"""
+def _generate_dependency_graph_dot(self, feather_paths: Dict[str, str]) -> str:
+    """Generates a dependency graph of feathers and wings in DOT format for visualization."""
     
-def _wing_config_to_wing(wing_config) -> Wing:
-    """Convert WingConfig to Wing with validation"""
+def _wing_config_to_wing(self, wing_config: WingConfig) -> Wing:
+    """Converts a WingConfig object to a Wing object, performing comprehensive validation."""
+    
+def _generate_report(self) -> Optional[int]:
+    """Generates the analysis report, saving results to the SQLite database (supporting streaming)."""
 ```
 
 **Execution Flow**:
-1. Load pipeline configuration
-2. Validate configuration
-3. Create feathers (optional)
-4. Validate feather-wing linkages
-5. Detect circular dependencies
-6. Execute wings sequentially
-7. Generate reports (optional)
-8. Return summary
+1.  Initialize with `PipelineConfig`, setting up filters, shared integrations, and the selected correlation engine.
+2.  Orchestrate feather creation (if `auto_create_feathers` is enabled).
+3.  Perform pre-execution validation (feather-wing linkages, circular dependencies).
+4.  Execute each `WingConfig` by converting it to a `Wing` object and calling `engine.execute_wing()`.
+5.  Integrate with shared services (semantic mapping, weighted scoring) during wing execution.
+6.  Stream results to a SQLite database.
+7.  Generate a final report (if `generate_report` is enabled).
+8.  Return an overall summary of the execution.
 
 **Dependencies**:
-- `config/pipeline_config.py`
-- `engine/correlation_engine.py`
-- `wings/core/wing_model.py`
+-   `config/pipeline_config.py`, `config/feather_config.py`, `config/wing_config.py` (for configuration objects)
+-   `engine/engine_selector.py`, `engine/base_engine.py`, `engine/time_based_engine.py`, `engine/identity_based_engine_adapter.py` (for engine instantiation and execution)
+-   `engine/database_persistence.py` (for results persistence)
+-   `integration/weighted_scoring_integration.py`, `integration/semantic_mapping_integration.py` (for shared services)
+-   `wings/core/wing_model.py` (for Wing object definition)
 
 **Dependents**:
-- `gui/execution_control.py`
-- `integration/crow_eye_integration.py`
+-   `gui/execution_control.py` (for GUI-driven execution)
+-   `integration/crow_eye_integration.py`
 
-**Impact**: CRITICAL - Changes affect all pipeline operations
-
-**Code Example**:
-```python
-from correlation_engine.pipeline import PipelineExecutor
-from correlation_engine.config import PipelineConfig
-
-# Load pipeline config
-config = PipelineConfig.load_from_file("pipeline.json")
-
-# Create executor
-executor = PipelineExecutor(config)
-
-# Execute pipeline
-summary = executor.execute()
-
-print(f"Feathers created: {summary['feathers_created']}")
-print(f"Wings executed: {summary['wings_executed']}")
-print(f"Total matches: {summary['total_matches']}")
-```
+**Impact**: CRITICAL - This module is the **central orchestrator** of the entire correlation analysis workflow. Changes profoundly affect pipeline operations, engine execution, and results generation.
 
 ---
 
 ### pipeline_loader.py
 
-**Purpose**: Load pipeline configurations from files with dependency resolution.
+**Purpose**: Designed to load a complete pipeline bundle, including its `PipelineConfig` and all associated `FeatherConfig` and `WingConfig` files. It handles validation of dependencies, resolves file paths (both absolute and relative to the case directory), and manages database connections, preparing all necessary components for the `PipelineExecutor`.
 
 **Key Classes**:
-- `PipelineLoader`: Loads pipeline bundles
+- `PipelineLoader`: The main class responsible for loading, validating, and assembling pipeline components.
 
 **Key Methods**:
 ```python
-def load_pipeline(pipeline_path):
-    """Load pipeline with all dependencies"""
+def __init__(selfself, case_directory: Path):
+    """Initializes the loader with the base case_directory and a DatabaseConnectionManager."""
+
+def load_pipeline(self, pipeline_path: str) -> PipelineBundle:
+    """
+    Loads a PipelineConfig from the specified path, validates its dependencies,
+    resolves all file paths, loads associated feather and wing configurations,
+    and returns a PipelineBundle ready for execution.
+    """
     
-def resolve_dependencies(pipeline_config):
-    """Resolve feather and wing references"""
+def validate_pipeline_dependencies(self, pipeline_config: PipelineConfig) -> ValidationResult:
+    """Validates that all referenced feather and wing configuration files (or their databases) exist."""
+    
+def resolve_config_paths(self, pipeline_config: PipelineConfig) -> Dict[str, str]:
+    """Converts all relative paths found in the pipeline configuration to absolute paths."""
+    
+def unload_pipeline(self, bundle: PipelineBundle):
+    """Closes all database connections associated with a loaded PipelineBundle."""
+
+def _load_feather_configs(self, pipeline_config: PipelineConfig, resolved_paths: Dict[str, str]) -> tuple[List[FeatherConfig], List[str]]:
+    """Helper method to load all FeatherConfig objects referenced in the PipelineConfig."""
+
+def _load_wing_configs(self, pipeline_config: PipelineConfig, resolved_paths: Dict[str, str]) -> tuple[List[WingConfig], List[str]]:
+    """Helper method to load all WingConfig objects referenced in the PipelineConfig."""
+
+def _resolve_path(self, path: str) -> Path:
+    """Resolves a given path string, making it absolute relative to the case_directory if not already absolute."""
 ```
 
-**Dependencies**: `config/pipeline_config.py`
+**Dependencies**:
+- `config/pipeline_config.py`, `config/feather_config.py`, `config/wing_config.py` (for configuration objects)
+- `config/session_state.py` (for `PipelineBundle`, `LoadStatus`, `ValidationResult` data models)
+- `pipeline/database_connection_manager.py`
 
-**Dependents**: `pipeline_executor.py`, `gui/` components
+**Dependents**:
+- `pipeline_executor.py` (utilizes the loaded `PipelineBundle`)
+- `gui/` components (for loading pipelines via the UI)
 
-**Impact**: MEDIUM - Affects pipeline loading
+**Impact**: CRITICAL - This module performs the crucial initial step of loading, validating, and preparing all configurations and dependencies for an entire correlation analysis pipeline. Errors here prevent any analysis from starting.
 
 ---
 
@@ -269,35 +295,71 @@ def validate_path(path):
 
 ## Pipeline Execution Sequence
 
-```
-1. Load Pipeline Config
-   ↓
-2. Validate Configuration
-   ↓
-3. Create Feathers (optional)
-   ├─ For each feather config:
-   │  ├─ Load source data
-   │  ├─ Apply transformations
-   │  └─ Create feather database
-   ↓
-4. Validate Feather-Wing Linkages
-   ├─ Check all feather references exist
-   ├─ Validate database paths
-   └─ Detect circular dependencies
-   ↓
-5. Execute Wings
-   ├─ For each wing config:
-   │  ├─ Convert to Wing object
-   │  ├─ Resolve feather paths
-   │  ├─ Execute correlation
-   │  └─ Collect results
-   ↓
-6. Generate Reports (optional)
-   ├─ Save individual results
-   ├─ Generate summary report
-   └─ Create dependency graph
-   ↓
-7. Return Summary
+```mermaid
+sequenceDiagram
+    participant User
+    participant PLoader as PipelineLoader
+    participant PConfig as PipelineConfig
+    participant PExecutor as PipelineExecutor
+    participant ESelector as EngineSelector
+    participant Engine as ICorrelationEngine
+    participant FeatherDB as Feather Databases
+    participant SharedServices as Shared Integrations
+    participant ResultsDB as Results Database
+    
+    User->>PLoader: Load Pipeline (pipeline_path)
+    activate PLoader
+    PLoader->>PConfig: Load from file (pipeline_path)
+    PConfig-->>PLoader: Return PipelineConfig object
+    PLoader->>PLoader: Validate Config Dependencies
+    PLoader->>PConfig: Resolve Config Paths
+    PExecutor-->>PLoader: Instantiates PipelineLoader
+    deactivate PLoader
+
+    User->>PExecutor: Execute Pipeline
+    activate PExecutor
+    PExecutor->>PConfig: Get feather_configs
+    
+    alt Auto Create Feathers
+        PExecutor->>PExecutor: _create_feathers()
+        loop For each FeatherConfig
+            PExecutor->>FeatherDB: Create Feather DB
+        end
+    end
+
+    PExecutor->>PExecutor: _validate_feather_wing_linkages()
+    PExecutor->>PExecutor: _detect_circular_dependencies()
+
+    PExecutor->>ESelector: Create Engine (engine_type, filters, shared_integrations)
+    activate ESelector
+    ESelector-->>PExecutor: Return Engine Instance
+    deactivate ESelector
+
+    loop For each WingConfig in PipelineConfig
+        PExecutor->>PExecutor: _wing_config_to_wing(WingConfig)
+        PExecutor->>Engine: execute_wing(Wing, feather_paths)
+        activate Engine
+        
+        loop For each Feather in Wing
+            Engine->>FeatherDB: Load Records (filtered by time/identity)
+            FeatherDB-->>Engine: Stream Records
+            Engine->>Engine: Process Records (Extract identities, temporal clustering)
+            Engine->>SharedServices: Apply Semantic Mapping
+            Engine->>SharedServices: Apply Weighted Scoring
+            Engine-->>ResultsDB: Persist Matches (Streaming)
+        end
+        Engine-->>PExecutor: Return CorrelationResult
+        deactivate Engine
+        PExecutor->>PExecutor: Collect CorrelationResult
+    end
+    
+    alt Generate Report
+        PExecutor->>ResultsDB: Finalize Execution Record
+        PExecutor->>ResultsDB: Generate Summary/Reports
+    end
+
+    PExecutor-->>User: Return Overall Summary
+    deactivate PExecutor
 ```
 
 ---

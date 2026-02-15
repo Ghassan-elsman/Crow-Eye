@@ -96,6 +96,27 @@
           "type": "string",
           "description": "Pipeline ID if scope is 'pipeline'. This rule will only apply when the specified pipeline is executed. Leave empty or omit for global rules. Optional field.",
           "examples": ["windows_security_pipeline", "network_analysis_pipeline"]
+        },
+        "_requires_multi_indicator": {
+          "type": "boolean",
+          "description": "Multi-indicator validation flag. When set to true, this rule requires at least _min_indicators conditions to match before triggering. This reduces false positives for generic patterns that could match many unrelated applications. Use for rules with broad regex patterns or ambiguous indicators. Default is false for backward compatibility. Optional field.",
+          "default": false,
+          "examples": [true, false]
+        },
+        "_min_indicators": {
+          "type": "integer",
+          "description": "Minimum number of independent indicators (conditions) that must match for this rule to trigger. Only applies when _requires_multi_indicator is true. Must be >= 1 and should be <= the number of conditions in the rule. Common values: 2 for dual-indicator validation, 3 for high-confidence matches. Default is 1. Optional field.",
+          "minimum": 1,
+          "default": 1,
+          "examples": [1, 2, 3]
+        },
+        "_pattern_specificity": {
+          "type": "number",
+          "description": "Pattern specificity score ranging from 0.0 (very generic) to 1.0 (very specific). Used internally to assess pattern quality. Generic patterns (e.g., '.*', '.+', '\\w+') have low specificity and should use multi-indicator validation. Specific patterns (e.g., 'CHROME\\.EXE') have high specificity. This field is typically calculated automatically but can be set manually. Default is 1.0. Optional field.",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 1.0,
+          "examples": [1.0, 0.8, 0.5, 0.2]
         }
       },
       "additionalProperties": false

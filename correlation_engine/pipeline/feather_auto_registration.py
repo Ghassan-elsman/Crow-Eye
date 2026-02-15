@@ -31,6 +31,52 @@ class FeatherAutoRegistrationService:
         self.databases_dir = self.case_directory / "databases"
         self._notification_callback: Optional[Callable] = None
     
+    def resolve_feather_location(self, database_path: str) -> tuple[str, bool]:
+        """
+        Resolve the correct feather location and check if it exists.
+        
+        TASK 3 FIX: This method helps detect and resolve feather location issues
+        
+        Args:
+            database_path: Original database path
+            
+        Returns:
+            Tuple of (resolved_path, location_corrected)
+        """
+        db_path = Path(database_path)
+        expected_feathers_dir = self.case_directory / "feathers"
+        
+        # Check if database is already in the correct location
+        if str(db_path.parent) == str(expected_feathers_dir):
+            return str(db_path), False
+        
+        # Check if the database exists in the expected location
+        expected_path = expected_feathers_dir / db_path.name
+        if expected_path.exists():
+            print(f"[Feather Location] Found feather in correct location: {expected_path}")
+            return str(expected_path), True
+        
+        # Check common wrong locations
+        wrong_locations = [
+            self.case_directory / "config" / "feathers",  # Old location
+            self.case_directory / "databases",  # Alternative location
+            self.case_directory,  # Root case directory
+        ]
+        
+        for wrong_location in wrong_locations:
+            wrong_path = wrong_location / db_path.name
+            if wrong_path.exists():
+                print(f"[Feather Location] Found feather in wrong location: {wrong_path}")
+                print(f"[Feather Location] Expected location: {expected_path}")
+                print(f"[Feather Location] Consider moving feather to correct location")
+                return str(wrong_path), False
+        
+        # Database not found in any expected location
+        print(f"[Feather Location] WARNING: Database not found in expected locations")
+        print(f"[Feather Location]   Original path: {database_path}")
+        print(f"[Feather Location]   Expected location: {expected_path}")
+        return database_path, False
+    
     def register_new_feather(self, database_path: str, artifact_type: str,
                             detection_method: str = "auto", 
                             confidence: str = "high") -> FeatherConfig:
@@ -50,14 +96,20 @@ class FeatherAutoRegistrationService:
             FileNotFoundError: If database doesn't exist
             ValueError: If database is invalid
         """
-        db_path = Path(database_path)
+        # TASK 3 FIX: Resolve correct feather location first
+        resolved_path, location_corrected = self.resolve_feather_location(database_path)
+        
+        db_path = Path(resolved_path)
         
         if not db_path.exists():
-            raise FileNotFoundError(f"Database not found: {database_path}")
+            raise FileNotFoundError(f"Database not found: {resolved_path}")
         
-        # Generate feather configuration
+        if location_corrected:
+            print(f"[Feather Registration] Using corrected location: {resolved_path}")
+        
+        # Generate feather configuration with resolved path
         feather_config = self.generate_feather_config(
-            database_path=database_path,
+            database_path=resolved_path,  # Use resolved path
             artifact_type=artifact_type,
             detection_method=detection_method,
             confidence=confidence
@@ -88,6 +140,26 @@ class FeatherAutoRegistrationService:
         """
         db_path = Path(database_path)
         
+        # TASK 3 FIX: Resolve correct feather location
+        # Check if the database is in the correct feathers directory
+        expected_feathers_dir = self.case_directory / "feathers"
+        
+        # If database is not in the feathers directory, determine the correct path
+        if not str(db_path).startswith(str(expected_feathers_dir)):
+            # Database might be in wrong location - use the expected location
+            correct_db_path = expected_feathers_dir / db_path.name
+            
+            # Check if the correct location exists
+            if correct_db_path.exists():
+                print(f"[Feather Registration] Using correct location: {correct_db_path}")
+                db_path = correct_db_path
+            else:
+                # Database exists but not in correct location - use original path but warn
+                print(f"[Feather Registration] WARNING: Database not in expected location")
+                print(f"[Feather Registration]   Expected: {expected_feathers_dir}")
+                print(f"[Feather Registration]   Found: {db_path.parent}")
+                print(f"[Feather Registration]   Using original path: {db_path}")
+        
         # Generate config name from database filename and timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         config_name = f"{db_path.stem}_{timestamp}"
@@ -101,7 +173,7 @@ class FeatherAutoRegistrationService:
         date_range_end = None
         
         try:
-            conn = sqlite3.connect(database_path)
+            conn = sqlite3.connect(str(db_path))  # Use resolved path
             cursor = conn.cursor()
             
             # Get record count
@@ -120,14 +192,14 @@ class FeatherAutoRegistrationService:
             
             conn.close()
         except Exception as e:
-            print(f"Warning: Could not read database metadata: {e}")
+            print(f"Warning: Could not read database metadata from {db_path}: {e}")
         
-        # Create feather configuration
+        # Create feather configuration with resolved path
         feather_config = FeatherConfig(
             config_name=config_name,
             feather_name=feather_name,
             artifact_type=artifact_type,
-            source_database=str(db_path),  # Original source
+            source_database=str(db_path),  # Use resolved path
             source_table="feather_data",
             selected_columns=["timestamp", "application", "file_path", "event_data"],
             column_mapping={
@@ -138,7 +210,7 @@ class FeatherAutoRegistrationService:
             },
             timestamp_column="timestamp",
             timestamp_format="%Y-%m-%d %H:%M:%S",
-            output_database=str(db_path),
+            output_database=str(db_path),  # Use resolved path
             total_records=total_records,
             date_range_start=date_range_start,
             date_range_end=date_range_end,

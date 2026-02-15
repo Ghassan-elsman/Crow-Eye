@@ -9,6 +9,7 @@ Features:
 - Comprehensive statistics tables
 """
 
+import logging
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QLabel, QLineEdit, QPushButton, QGroupBox, QDialog, QSplitter,
@@ -22,6 +23,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
 
+logger = logging.getLogger(__name__)
+
 
 class TimeBasedResultsViewer(QWidget):
     """Time Window-Based Correlation Results View with Hierarchical Tree and Dynamic Grouping."""
@@ -33,6 +36,12 @@ class TimeBasedResultsViewer(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        
+        # Initialize centralized score configuration manager
+        # Requirements: 7.2, 8.4
+        from ..config.score_configuration_manager import ScoreConfigurationManager
+        self.score_config_manager = ScoreConfigurationManager()
+        
         self.time_windows = []  # List of time window data
         self.filtered_windows = []
         self.current_results = None
@@ -84,11 +93,6 @@ class TimeBasedResultsViewer(QWidget):
         self.records_lbl.setToolTip("Records")
         top_layout.addWidget(self.records_lbl)
         
-        self.time_lbl = QLabel("0s")
-        self.time_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
-        self.time_lbl.setToolTip("Execution Time")
-        top_layout.addWidget(self.time_lbl)
-        
         self.feathers_used_lbl = QLabel("0")
         self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 8pt; font-weight: bold;")
         self.feathers_used_lbl.setToolTip("Feathers")
@@ -112,8 +116,8 @@ class TimeBasedResultsViewer(QWidget):
         top_layout.addWidget(search_lbl)
         
         self.identity_filter = QLineEdit()
-        self.identity_filter.setPlaceholderText("identity...")
-        self.identity_filter.setMaximumWidth(100)
+        self.identity_filter.setPlaceholderText("🔍 Search identity or semantic...")
+        self.identity_filter.setMaximumWidth(250)
         self.identity_filter.setStyleSheet("""
             QLineEdit {
                 font-size: 8pt; 
@@ -347,15 +351,14 @@ class TimeBasedResultsViewer(QWidget):
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and hierarchical structure."""
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Time Window / Identity / Evidence", "Feathers", "Time", "Score", "Semantic", "Records", "Artifact"])
+        tree.setHeaderLabels(["Time Window / Identity / Evidence", "Feathers", "Score", "Semantic", "Records", "Artifact"])
         
         tree.setColumnWidth(0, 300)
         tree.setColumnWidth(1, 150)
-        tree.setColumnWidth(2, 140)
-        tree.setColumnWidth(3, 60)
-        tree.setColumnWidth(4, 120)  # Semantic column
-        tree.setColumnWidth(5, 60)   # Records column
-        tree.setColumnWidth(6, 80)   # Artifact column
+        tree.setColumnWidth(2, 60)
+        tree.setColumnWidth(3, 350)  # Semantic column - WIDER: Increased to 350 for better readability
+        tree.setColumnWidth(4, 60)   # Records column
+        tree.setColumnWidth(5, 80)   # Artifact column
         
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
@@ -476,13 +479,18 @@ class TimeBasedResultsViewer(QWidget):
         group.setLayout(layout)
         return group
 
-    def load_from_correlation_result(self, result):
-        """Load from CorrelationResult object and organize by time windows with progress indicator."""
+    def load_from_correlation_result(self, result, show_progress=True):
+        """Load from CorrelationResult object and organize by time windows with progress indicator.
+        
+        Args:
+            result: CorrelationResult object
+            show_progress: If False, suppresses the progress dialog (useful when parent already shows progress)
+        """
         print(f"[TimeWindowResultsView] load_from_correlation_result called with {result.total_matches} matches")
         
-        # Show progress dialog if we have many windows
+        # Show progress dialog if we have many windows and show_progress is True
         progress = None
-        if result.total_matches > 50:
+        if show_progress and result.total_matches > 50:
             progress = QProgressDialog("Loading time windows...", "Cancel", 0, 100, self)
             progress.setWindowModality(Qt.WindowModal)
             progress.setMinimumDuration(0)
@@ -577,6 +585,21 @@ class TimeBasedResultsViewer(QWidget):
         """Set the database path for loading results from database."""
         self.database_path = db_path
         print(f"[TimeWindowResultsView] Database path set to: {db_path}")
+    
+    def _get_score_interpretation(self, score: float) -> str:
+        """
+        Get score interpretation using centralized configuration.
+        
+        Args:
+            score: Score value to interpret (0.0 to 1.0)
+        
+        Returns:
+            String interpretation ('Critical', 'High', 'Medium', 'Low', or 'Minimal')
+        
+        Requirements: 7.2, 8.4
+        """
+        config = self.score_config_manager.get_configuration()
+        return config.interpret_score(score)
     
     def load_results_from_execution(self, execution_id: int):
         """Load results from a specific execution in the database."""
@@ -711,7 +734,7 @@ class TimeBasedResultsViewer(QWidget):
                 'start_time': window_data['start_time'],
                 'end_time': window_data['end_time'],
                 'identities': identities_list,
-                'total_records': sum(len(id['sub_identities']) for id in identities_list),
+                'total_records': sum(id['total_matches'] for id in identities_list),
                 'status': 'Active' if identities_list else 'Empty'
             })
         
@@ -838,7 +861,6 @@ class TimeBasedResultsViewer(QWidget):
         
         self.identities_lbl.setText(f"{stats.get('total_identities', 0):,}")
         self.records_lbl.setText(f"{stats.get('total_records', 0):,}")
-        self.time_lbl.setText(f"{stats.get('execution_time', 0):.1f}s")
         
         # Show feathers used
         feather_metadata = results.get('feather_metadata', {})
@@ -865,7 +887,7 @@ class TimeBasedResultsViewer(QWidget):
             for identity in window.get('identities', []):
                 for feather in identity.get('feathers_found', []):
                     # Extract base feather name (remove _number suffix)
-                    base_name = feather.rsplit('_', 1)[0] if '_' in feather else feather
+                    base_name = feather.rsplit('_', 1)[0] if '_' in feather and feather.rsplit('_', 1)[-1].isdigit() else feather
                     feathers.add(base_name)
         
         for f in sorted(feathers):
@@ -927,8 +949,8 @@ class TimeBasedResultsViewer(QWidget):
         self.results_tree.clear()
         
         if not windows:
-            # Empty item with 7 columns
-            empty_item = QTreeWidgetItem(["No time windows found", "", "", "", "", "", ""])
+            # Empty item with 6 columns (removed Time column)
+            empty_item = QTreeWidgetItem(["No time windows found", "", "", "", "", ""])
             empty_item.setForeground(0, QBrush(QColor("#888888")))
             empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
             self.results_tree.addTopLevelItem(empty_item)
@@ -944,44 +966,120 @@ class TimeBasedResultsViewer(QWidget):
 
     def _get_semantic_value(self, match) -> str:
         """
-        Extract semantic value from match data.
+        Extract semantic value from match data with comprehensive error handling.
+        
+        Task 6.2: Handle corrupted or invalid semantic_data gracefully
+        Requirements: 7.3, 7.4 - Prevent crashes when semantic values are malformed
         
         Checks:
-        1. Match-level semantic_data field
-        2. Feather records for _semantic_mappings key
+        1. Match-level semantic_data field (new structure with semantic_mappings)
+        2. Feather records for _semantic_mappings key (legacy)
         
         Returns:
             Semantic value string or "-" if not available
         """
-        # Check match-level semantic data
-        if hasattr(match, 'semantic_data') and match.semantic_data:
-            # Skip unavailable marker
-            if match.semantic_data.get('_unavailable'):
-                pass
-            else:
-                for field_name, field_info in match.semantic_data.items():
+        try:
+            # Task 6.2: Check match-level semantic data with error handling
+            if hasattr(match, 'semantic_data') and match.semantic_data:
+                semantic_data = match.semantic_data
+                
+                # Task 6.2: Handle corrupted semantic_data gracefully
+                if not isinstance(semantic_data, dict):
+                    logger.warning(f"Invalid semantic_data type: {type(semantic_data)}, expected dict")
+                    return "Error: Invalid data"
+                
+                # Skip unavailable marker
+                if semantic_data.get('_unavailable'):
+                    return "-"
+                
+                # Check for error metadata
+                metadata = semantic_data.get('_metadata', {})
+                if isinstance(metadata, dict):
+                    if metadata.get('error'):
+                        return "Error"
+                    if metadata.get('fallback_reason'):
+                        return "Fallback"
+                
+                # Extract semantic values with error handling
+                # New structure: field_info contains semantic_mappings array
+                for field_name, field_info in semantic_data.items():
                     # Skip metadata and internal keys (Requirements 3.7, 4.7)
                     if field_name.startswith('_'):
                         continue
-                    if isinstance(field_info, dict) and 'semantic_value' in field_info:
-                        return str(field_info['semantic_value'])
-                    elif isinstance(field_info, str) and field_name != '_reason':
-                        return field_info
-        
-        # Check feather records for semantic mappings
-        if hasattr(match, 'feather_records') and match.feather_records:
-            for feather_id, record in match.feather_records.items():
-                if isinstance(record, dict):
-                    semantic_mappings = record.get('_semantic_mappings', {})
-                    if isinstance(semantic_mappings, dict):
+                    
+                    try:
+                        # NEW: Check for semantic_mappings array (current structure)
+                        if isinstance(field_info, dict) and 'semantic_mappings' in field_info:
+                            semantic_mappings = field_info['semantic_mappings']
+                            if isinstance(semantic_mappings, list) and len(semantic_mappings) > 0:
+                                first_mapping = semantic_mappings[0]
+                                if isinstance(first_mapping, dict) and 'semantic_value' in first_mapping:
+                                    semantic_value = first_mapping['semantic_value']
+                                    if semantic_value is not None:
+                                        return str(semantic_value)
+                        
+                        # LEGACY: Direct semantic_value in field_info
+                        elif isinstance(field_info, dict) and 'semantic_value' in field_info:
+                            semantic_value = field_info['semantic_value']
+                            if semantic_value is not None:
+                                return str(semantic_value)
+                        
+                        # LEGACY: String value
+                        elif isinstance(field_info, str) and field_name != '_reason':
+                            return field_info
+                        
+                        # Fallback: Convert to string
+                        elif field_info is not None:
+                            return str(field_info)
+                    except Exception as e:
+                        logger.warning(f"Error processing semantic field {field_name}: {e}")
+                        continue
+            
+            # Task 6.2: Check feather records for semantic mappings with error handling
+            if hasattr(match, 'feather_records') and match.feather_records:
+                feather_records = match.feather_records
+                
+                if not isinstance(feather_records, dict):
+                    logger.warning(f"Invalid feather_records type: {type(feather_records)}, expected dict")
+                    return "-"
+                
+                for feather_id, record in feather_records.items():
+                    try:
+                        if not isinstance(record, dict):
+                            continue
+                        
+                        semantic_mappings = record.get('_semantic_mappings', {})
+                        if not isinstance(semantic_mappings, dict):
+                            continue
+                        
                         for field_name, mapping_info in semantic_mappings.items():
                             # Skip internal keys
                             if field_name.startswith('_'):
                                 continue
-                            if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
-                                return str(mapping_info['semantic_value'])
-                            elif isinstance(mapping_info, str):
-                                return mapping_info
+                            
+                            try:
+                                if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
+                                    semantic_value = mapping_info['semantic_value']
+                                    if semantic_value is not None:
+                                        return str(semantic_value)
+                                elif isinstance(mapping_info, str):
+                                    return mapping_info
+                                elif mapping_info is not None:
+                                    # Handle unexpected data types gracefully
+                                    return str(mapping_info)
+                            except Exception as e:
+                                logger.warning(f"Error processing semantic mapping {field_name}: {e}")
+                                continue
+                                
+                    except Exception as e:
+                        logger.warning(f"Error processing feather record {feather_id}: {e}")
+                        continue
+        
+        except Exception as e:
+            # Task 6.2: Show appropriate fallback content in semantic column
+            # Requirements: 7.3, 7.4 - Never crash, always show something meaningful
+            logger.error(f"Critical error in _get_semantic_value: {e}")
+            return "Error"
         
         return "-"  # Default when no semantic data available
 
@@ -1008,11 +1106,18 @@ class TimeBasedResultsViewer(QWidget):
         avg_score = self._calculate_window_score(window)
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Collect all feathers in this window
+        # Collect all feathers in this window and group by base name
         feathers = set()
         for identity in identities:
             feathers.update(identity.get('feathers_found', []))
-        feather_str = ", ".join(sorted(feathers)[:2]) + ("..." if len(feathers) > 2 else "")
+        
+        # Group feathers by base name (remove numeric suffix)
+        base_feathers = set()
+        for f in feathers:
+            base_name = f.rsplit('_', 1)[0] if '_' in f and f.rsplit('_', 1)[-1].isdigit() else f
+            base_feathers.add(base_name)
+        
+        feather_str = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
         
         # Determine window type and visual indicator
         if identity_count == 0:
@@ -1038,11 +1143,10 @@ class TimeBasedResultsViewer(QWidget):
         has_children = bool(identities)
         expand_indicator = "▶ " if has_children else "  "
         
-        # Window item with expand indicator and visual indicator
+        # Window item with expand indicator and visual indicator (6 columns - removed Time column)
         item = QTreeWidgetItem([
             f"{expand_indicator}{icon} {time_display} ({identity_count} identities, {total_records} records) [{window_type}]",
             feather_str,
-            start_str,
             score_str,
             "-",  # Semantic column (windows don't have semantic values)
             str(total_records),
@@ -1090,7 +1194,13 @@ class TimeBasedResultsViewer(QWidget):
         total_matches = identity.get('total_matches', 0)
         feathers = identity.get('feathers_found', [])
         
-        feather_str = ", ".join(sorted(feathers)[:2]) + ("..." if len(feathers) > 2 else "")
+        # Group feathers by base name (remove numeric suffix)
+        base_feathers = set()
+        for f in feathers:
+            base_name = f.rsplit('_', 1)[0] if '_' in f and f.rsplit('_', 1)[-1].isdigit() else f
+            base_feathers.add(base_name)
+        
+        feather_str = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
         
         # Calculate average score for identity
         scores = []
@@ -1123,15 +1233,22 @@ class TimeBasedResultsViewer(QWidget):
         has_children = bool(sub_identities)
         expand_indicator = "▶ " if has_children else "  "
         
-        # Identity item with expand indicator and temporal indicator (7 columns including semantic)
+        # Task 6.2: Check if identity has semantic data for [S] indicator with error handling
+        try:
+            has_semantic = semantic_value not in ["-", "Error", "Fallback", None, ""]
+            semantic_indicator = "[S] " if has_semantic else ""
+        except Exception as e:
+            logger.warning(f"Error checking semantic indicator: {e}")
+            semantic_indicator = ""
+        
+        # Identity item with expand indicator and temporal indicator (6 columns - removed Time column)
         item = QTreeWidgetItem([
-            f"{expand_indicator}{temporal_indicator} {identity_name}" + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
+            f"{expand_indicator}{temporal_indicator} {semantic_indicator}{identity_name}" + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
             feather_str,
-            "",
             score_str,
             semantic_value,  # Semantic column with aggregated value
             str(total_matches),
-            f"{len(feathers)} feathers"
+            f"{len(base_feathers)} feathers"
         ])
         item.setFont(0, QFont("Segoe UI", 8, QFont.Bold))
         
@@ -1153,11 +1270,20 @@ class TimeBasedResultsViewer(QWidget):
         elif avg_score > 0:
             item.setForeground(3, QBrush(QColor("#F44336")))
         
-        # Color semantic column if value exists
-        if semantic_value != "-":
-            item.setForeground(4, QBrush(QColor("#9C27B0")))  # Purple for semantic values
-            if semantic_tooltip:
-                item.setToolTip(4, semantic_tooltip)
+        # Task 6.2: Color semantic column with error handling
+        try:
+            if semantic_value == "Error":
+                item.setForeground(4, QBrush(QColor("#F44336")))  # Red for errors
+                item.setToolTip(4, "Error retrieving semantic data")
+            elif semantic_value == "Fallback":
+                item.setForeground(4, QBrush(QColor("#FF9800")))  # Orange for fallback
+                item.setToolTip(4, "Using fallback semantic data")
+            elif semantic_value != "-":
+                item.setForeground(4, QBrush(QColor("#9C27B0")))  # Purple for semantic values
+                if semantic_tooltip:
+                    item.setToolTip(4, semantic_tooltip)
+        except Exception as e:
+            logger.warning(f"Error setting semantic column color: {e}")
         
         item.setData(0, Qt.UserRole, {'type': 'identity', 'data': identity, 'window_type': window_type})
         
@@ -1185,17 +1311,37 @@ class TimeBasedResultsViewer(QWidget):
             for match in sub.get('matches', []):
                 semantic_data = getattr(match, 'semantic_data', None)
                 if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
-                    for key, value in semantic_data.items():
-                        if key.startswith('_'):
+                    # NEW STRUCTURE: Check for semantic_mappings array
+                    for field_name, field_info in semantic_data.items():
+                        if field_name.startswith('_'):
                             continue
-                        if isinstance(value, dict) and 'semantic_value' in value:
-                            sem_val = str(value['semantic_value'])
-                            rule_name = value.get('rule_name', key)
-                            if sem_val and sem_val not in [v[0] for v in semantic_values]:
-                                semantic_values.append((sem_val, rule_name))
-                        elif isinstance(value, str) and value:
-                            if value not in [v[0] for v in semantic_values]:
-                                semantic_values.append((value, key))
+                        
+                        try:
+                            # Check for semantic_mappings array (current structure)
+                            if isinstance(field_info, dict) and 'semantic_mappings' in field_info:
+                                semantic_mappings = field_info['semantic_mappings']
+                                if isinstance(semantic_mappings, list) and len(semantic_mappings) > 0:
+                                    first_mapping = semantic_mappings[0]
+                                    if isinstance(first_mapping, dict) and 'semantic_value' in first_mapping:
+                                        sem_val = str(first_mapping['semantic_value'])
+                                        rule_name = first_mapping.get('rule_name', field_name)
+                                        if sem_val and sem_val not in [v[0] for v in semantic_values]:
+                                            semantic_values.append((sem_val, rule_name))
+                            
+                            # LEGACY: Direct semantic_value in field_info
+                            elif isinstance(field_info, dict) and 'semantic_value' in field_info:
+                                sem_val = str(field_info['semantic_value'])
+                                rule_name = field_info.get('rule_name', field_name)
+                                if sem_val and sem_val not in [v[0] for v in semantic_values]:
+                                    semantic_values.append((sem_val, rule_name))
+                            
+                            # LEGACY: String value
+                            elif isinstance(field_info, str) and field_info:
+                                if field_info not in [v[0] for v in semantic_values]:
+                                    semantic_values.append((field_info, field_name))
+                        except Exception as e:
+                            logger.warning(f"Error processing semantic field {field_name}: {e}")
+                            continue
         
         if not semantic_values:
             return ("-", "")
@@ -1220,7 +1366,13 @@ class TimeBasedResultsViewer(QWidget):
         matches = sub_identity.get('matches', [])
         feathers = sub_identity.get('feathers_found', [])
         
-        feather_str = ", ".join(sorted(feathers)[:2]) + ("..." if len(feathers) > 2 else "")
+        # Group feathers by base name (remove numeric suffix)
+        base_feathers = set()
+        for f in feathers:
+            base_name = f.rsplit('_', 1)[0] if '_' in f and f.rsplit('_', 1)[-1].isdigit() else f
+            base_feathers.add(base_name)
+        
+        feather_str = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
         
         # Calculate average score
         scores = []
@@ -1236,11 +1388,10 @@ class TimeBasedResultsViewer(QWidget):
         has_children = bool(matches)
         expand_indicator = "▶ " if has_children else "  "
         
-        # Sub-identity item with expand indicator and folder icon (7 columns including semantic)
+        # Sub-identity item with expand indicator and folder icon (6 columns - removed Time column)
         item = QTreeWidgetItem([
             f"{expand_indicator}📁 {original_name}",
             feather_str,
-            "",
             score_str,
             "-",  # Semantic column - placeholder for sub-identity level
             str(len(matches)),
@@ -1272,9 +1423,14 @@ class TimeBasedResultsViewer(QWidget):
         if isinstance(ts, str) and len(ts) > 11:
             ts = ts[11:19]
         
-        # Get feathers involved
+        # Get feathers involved and group by base name
         feathers = list(match.feather_records.keys())
-        feather_str = ", ".join(feathers[:2]) + ("..." if len(feathers) > 2 else "")
+        base_feathers = set()
+        for f in feathers:
+            base_name = f.rsplit('_', 1)[0] if '_' in f and f.rsplit('_', 1)[-1].isdigit() else f
+            base_feathers.add(base_name)
+        
+        feather_str = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
         
         # Get score
         weighted_score = getattr(match, 'weighted_score', None)
@@ -1288,14 +1444,13 @@ class TimeBasedResultsViewer(QWidget):
         # Extract semantic value from match
         semantic_value = self._get_semantic_value(match)
         
-        # Evidence item with document icon (7 columns including semantic)
+        # Evidence item with document icon (6 columns - removed Time column)
         item = QTreeWidgetItem([
             f"📄 Evidence",
             feather_str,
-            ts,
             score_str,
             semantic_value,  # Semantic column
-            str(len(feathers)),
+            str(len(base_feathers)),
             match.anchor_artifact_type
         ])
         item.setForeground(0, QBrush(QColor("#4CAF50")))  # Green for evidence
@@ -1361,7 +1516,7 @@ class TimeBasedResultsViewer(QWidget):
         print(f"[TimeWindowResultsView] Re-grouped into {len(self.time_windows)} windows")
     
     def _apply_filters(self):
-        """Apply filters with pagination."""
+        """Apply filters with pagination, including semantic value search."""
         text = self.identity_filter.text().lower()
         feather = self.feather_filter.currentText()
         status = self.status_filter.currentText()
@@ -1386,13 +1541,35 @@ class TimeBasedResultsViewer(QWidget):
                 if window_end < time_start or window_start > time_end:
                     continue
             
-            # Identity name filter
+            # Identity name and semantic value filter
             if text:
                 has_match = False
                 for identity in window.get('identities', []):
+                    # Check identity name
                     if text in identity.get('identity_name', '').lower():
                         has_match = True
                         break
+                    
+                    # Check semantic values
+                    semantic_data = identity.get('semantic_data', {})
+                    if semantic_data and isinstance(semantic_data, dict):
+                        for key, value in semantic_data.items():
+                            if key.startswith('_'):
+                                continue
+                            # Check semantic value
+                            if isinstance(value, dict) and 'semantic_value' in value:
+                                sem_val = str(value['semantic_value']).lower()
+                                rule_name = value.get('rule_name', key).lower()
+                                if text in sem_val or text in rule_name:
+                                    has_match = True
+                                    break
+                            elif isinstance(value, str):
+                                if text in value.lower() or text in key.lower():
+                                    has_match = True
+                                    break
+                        if has_match:
+                            break
+                
                 if not has_match:
                     continue
             
@@ -1402,7 +1579,7 @@ class TimeBasedResultsViewer(QWidget):
                 for identity in window.get('identities', []):
                     for found_feather in identity.get('feathers_found', []):
                         # Match by base name (remove _number suffix)
-                        base_name = found_feather.rsplit('_', 1)[0] if '_' in found_feather else found_feather
+                        base_name = found_feather.rsplit('_', 1)[0] if '_' in found_feather and found_feather.rsplit('_', 1)[-1].isdigit() else found_feather
                         if feather == base_name:
                             has_feather = True
                             break
@@ -2403,31 +2580,251 @@ class TimeWindowDetailDialog(QDialog):
         return widget
     
     def _create_evidence_content(self) -> QWidget:
-        """Create evidence content."""
+        """Create evidence content with semantic mappings and feather records in table format."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setSpacing(8)
+        layout.setContentsMargins(4, 4, 4, 4)
         
-        text = QTextEdit()
-        text.setReadOnly(True)
-        
-        # Format match data
+        # Get match object - handle both dict and object types
         match = self.data
-        lines = []
-        lines.append(f"Evidence Record")
-        lines.append(f"=" * 50)
-        lines.append(f"Match ID: {getattr(match, 'match_id', 'N/A')}")
-        lines.append(f"Timestamp: {getattr(match, 'timestamp', 'N/A')}")
-        lines.append(f"Application: {getattr(match, 'matched_application', 'N/A')}")
-        lines.append(f"Anchor: {getattr(match, 'anchor_artifact_type', 'N/A')}")
-        lines.append(f"\nFeather Records:")
         
-        for fid, data in getattr(match, 'feather_records', {}).items():
-            lines.append(f"\n  {fid}:")
-            if isinstance(data, dict):
-                for k, v in list(data.items())[:10]:
-                    lines.append(f"    {k}: {v}")
+        # Extract feather_records - handle both dict and object
+        if isinstance(match, dict):
+            feather_records = match.get('feather_records', {})
+            semantic_data = match.get('semantic_data', {})
+        else:
+            feather_records = getattr(match, 'feather_records', {})
+            semantic_data = getattr(match, 'semantic_data', {})
         
-        text.setPlainText("\n".join(lines))
-        layout.addWidget(text)
+        # Check if we have semantic_data to display
+        if semantic_data and isinstance(semantic_data, dict):
+            # Add Semantic Mappings section
+            semantic_group = QGroupBox("🔍 Semantic Mappings")
+            semantic_group.setStyleSheet("""
+                QGroupBox { 
+                    font-size: 10pt; font-weight: bold; color: #00FFFF;
+                    padding-top: 16px; margin-top: 8px;
+                    border: 2px solid #00FFFF; background-color: #0B1220;
+                    border-radius: 6px;
+                }
+                QGroupBox::title { 
+                    subcontrol-origin: margin; 
+                    padding: 2px 8px;
+                    background-color: #1E293B;
+                    border-radius: 4px;
+                }
+            """)
+            semantic_layout = QVBoxLayout(semantic_group)
+            
+            # Create semantic mappings table
+            semantic_table = QTableWidget()
+            semantic_table.setColumnCount(6)
+            semantic_table.setHorizontalHeaderLabels([
+                'Semantic Value', 'Identity Type', 'Rule Name', 
+                'Category', 'Confidence', 'Severity'
+            ])
+            
+            # Count total mappings
+            total_mappings = 0
+            for entry in semantic_data.values():
+                if isinstance(entry, dict) and 'semantic_mappings' in entry:
+                    total_mappings += len(entry['semantic_mappings'])
+            
+            semantic_table.setRowCount(total_mappings)
+            
+            row = 0
+            for key, entry in sorted(semantic_data.items()):
+                if isinstance(entry, dict) and 'semantic_mappings' in entry:
+                    mappings = entry['semantic_mappings']
+                    identity_type = entry.get('identity_type', 'unknown')
+                    
+                    for mapping in mappings:
+                        semantic_table.setItem(row, 0, QTableWidgetItem(mapping.get('semantic_value', '')))
+                        semantic_table.setItem(row, 1, QTableWidgetItem(identity_type))
+                        semantic_table.setItem(row, 2, QTableWidgetItem(mapping.get('rule_name', '')))
+                        semantic_table.setItem(row, 3, QTableWidgetItem(mapping.get('category', '')))
+                        
+                        confidence = mapping.get('confidence', 0)
+                        conf_item = QTableWidgetItem(f"{confidence:.0%}")
+                        semantic_table.setItem(row, 4, conf_item)
+                        
+                        severity = mapping.get('severity', 'info')
+                        sev_item = QTableWidgetItem(severity.upper())
+                        # Color code severity
+                        if severity == 'high':
+                            sev_item.setForeground(QColor('#ff5252'))
+                        elif severity == 'medium':
+                            sev_item.setForeground(QColor('#ffa726'))
+                        else:
+                            sev_item.setForeground(QColor('#66bb6a'))
+                        semantic_table.setItem(row, 5, sev_item)
+                        
+                        row += 1
+            
+            semantic_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            semantic_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            semantic_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            semantic_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+            semantic_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+            semantic_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+            semantic_table.setAlternatingRowColors(True)
+            semantic_table.setMaximumHeight(200)
+            
+            semantic_layout.addWidget(semantic_table)
+            layout.addWidget(semantic_group)
         
+        # Check if we have feather_records to display
+        if feather_records and isinstance(feather_records, dict):
+            # Add Feather Records section
+            feather_group = QGroupBox("📋 Feather Records")
+            feather_group.setStyleSheet("""
+                QGroupBox { 
+                    font-size: 10pt; font-weight: bold; color: #00FFFF;
+                    padding-top: 16px; margin-top: 8px;
+                    border: 1px solid #334155; background-color: #0B1220;
+                    border-radius: 6px;
+                }
+                QGroupBox::title { 
+                    subcontrol-origin: margin; 
+                    padding: 2px 8px;
+                    background-color: #1E293B;
+                    border-radius: 4px;
+                }
+            """)
+            feather_layout = QVBoxLayout(feather_group)
+            
+            # Create tabs for each feather
+            feather_tabs = QTabWidget()
+            feather_tabs.setStyleSheet("""
+                QTabBar::tab { 
+                    font-size: 8pt; 
+                    padding: 4px 12px; 
+                    background-color: #1E293B;
+                    color: #94A3B8;
+                    border: 1px solid #334155;
+                }
+                QTabBar::tab:selected { 
+                    background-color: #334155; 
+                    color: #00FFFF;
+                }
+            """)
+            
+            for feather_name, feather_data in sorted(feather_records.items()):
+                if isinstance(feather_data, list) and feather_data:
+                    # Create table for this feather's records
+                    feather_table = self._create_feather_records_table(feather_name, feather_data)
+                    feather_tabs.addTab(feather_table, f"{feather_name} ({len(feather_data)})")
+                elif isinstance(feather_data, dict):
+                    # Single record as dict
+                    feather_table = self._create_feather_records_table(feather_name, [feather_data])
+                    feather_tabs.addTab(feather_table, feather_name)
+            
+            feather_layout.addWidget(feather_tabs)
+            layout.addWidget(feather_group)
+        
+        # Fallback: display basic match info if no semantic or feather records
+        if not semantic_data and not feather_records:
+            info_text = QTextEdit()
+            info_text.setReadOnly(True)
+            lines = []
+            lines.append(f"Evidence Record")
+            lines.append(f"=" * 50)
+            
+            # Handle both dict and object
+            if isinstance(match, dict):
+                lines.append(f"Match ID: {match.get('match_id', 'N/A')}")
+                lines.append(f"Timestamp: {match.get('timestamp', 'N/A')}")
+                lines.append(f"Application: {match.get('matched_application', 'N/A')}")
+                lines.append(f"Anchor: {match.get('anchor_artifact_type', 'N/A')}")
+            else:
+                lines.append(f"Match ID: {getattr(match, 'match_id', 'N/A')}")
+                lines.append(f"Timestamp: {getattr(match, 'timestamp', 'N/A')}")
+                lines.append(f"Application: {getattr(match, 'matched_application', 'N/A')}")
+                lines.append(f"Anchor: {getattr(match, 'anchor_artifact_type', 'N/A')}")
+            
+            lines.append(f"\nNo feather records or semantic data available.")
+            info_text.setPlainText("\n".join(lines))
+            layout.addWidget(info_text)
+        
+        layout.addStretch()
+        return widget
+    
+    def _create_feather_records_table(self, feather_name: str, records: list) -> QWidget:
+        """Create a table displaying feather records with vertical layout (fields as rows)."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(4, 4, 4, 4)
+        
+        # Handle case where records might be a list with a single dict
+        # Database format: {'prefetch': [{'field': 'value', ...}]}
+        # Expected format: [{'field': 'value', ...}]
+        if records and len(records) == 1 and isinstance(records[0], dict):
+            # Check if it's already the correct format (has actual field names)
+            first_record = records[0]
+            # If it has typical feather fields, it's correct
+            if any(key in first_record for key in ['filename', 'executable_name', 'path', 'timestamp', 'name']):
+                # Already correct format
+                pass
+            else:
+                # Might be wrapped, but let's use it as-is
+                pass
+        
+        # Collect all unique keys from all records
+        all_keys = set()
+        for record in records:
+            if isinstance(record, dict):
+                all_keys.update(record.keys())
+        
+        # Remove internal/metadata keys
+        excluded_keys = {'semantic_data', 'semantic_mappings', '_metadata', '_internal', '_feather_id', '_table'}
+        all_keys = sorted([k for k in all_keys if k not in excluded_keys])
+        
+        # Create table with VERTICAL layout (fields as rows)
+        # Columns: Field Name | Record 1 | Record 2 | ... | Record N
+        table = QTableWidget()
+        table.setRowCount(len(all_keys))  # Each field is a row
+        table.setColumnCount(len(records) + 1)  # Field name + one column per record
+        
+        # Set headers
+        headers = ["Field"] + [f"Record {i+1}" if len(records) > 1 else "Value" for i in range(len(records))]
+        table.setHorizontalHeaderLabels(headers)
+        
+        # Set vertical headers (field names)
+        table.setVerticalHeaderLabels(all_keys)
+        
+        table.setAlternatingRowColors(True)
+        
+        # Populate table
+        for row, key in enumerate(all_keys):
+            # Column 0: Field name
+            field_item = QTableWidgetItem(key)
+            field_item.setFont(QFont("Arial", 9, QFont.Bold))
+            table.setItem(row, 0, field_item)
+            
+            # Columns 1+: Values from each record
+            for col, record in enumerate(records):
+                if isinstance(record, dict):
+                    value = record.get(key, '')
+                    
+                    # Handle different value types
+                    if isinstance(value, (list, dict)):
+                        display_val = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
+                    else:
+                        display_val = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
+                    
+                    item = QTableWidgetItem(display_val)
+                    item.setToolTip(str(value))  # Full value in tooltip
+                    table.setItem(row, col + 1, item)
+        
+        # Enable column resizing
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Field name column
+        for i in range(1, len(records) + 1):
+            table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch)  # Value columns
+        
+        # Add row selection highlighting
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+        
+        layout.addWidget(table)
         return widget

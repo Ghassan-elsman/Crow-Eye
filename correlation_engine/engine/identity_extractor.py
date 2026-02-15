@@ -37,15 +37,35 @@ class IdentityExtractor:
         Returns:
             Normalized name or None if invalid
         """
-        if not name or not isinstance(name, str):
+        # Validation for empty/None values (Requirement 5.6, 9.2)
+        if name is None:
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value=None, normalization_step='validate_input', "
+                f"reason='Received None value'"
+            )
+            return None
+            
+        if not isinstance(name, str):
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value={repr(name)}, normalization_step='validate_input', "
+                f"reason='Received non-string value of type {type(name).__name__}'"
+            )
             return None
         
+        # Whitespace stripping
         name = name.strip()
         
         if not name:
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value='', normalization_step='strip_whitespace', "
+                f"reason='Empty string after stripping whitespace'"
+            )
             return None
         
-        # Convert to lowercase for case-insensitive matching
+        # Consistent lowercase conversion
         normalized = name.lower()
         
         logger.debug(f"Normalized name: '{name}' -> '{normalized}'")
@@ -61,18 +81,38 @@ class IdentityExtractor:
         Returns:
             Normalized path or None if invalid
         """
-        if not path or not isinstance(path, str):
+        # Validation for empty/None values (Requirement 5.6, 9.2)
+        if path is None:
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value=None, normalization_step='validate_input', "
+                f"reason='Received None value'"
+            )
+            return None
+            
+        if not isinstance(path, str):
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value={repr(path)}, normalization_step='validate_input', "
+                f"reason='Received non-string value of type {type(path).__name__}'"
+            )
             return None
         
+        # Whitespace stripping
         path = path.strip()
         
         if not path:
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value='', normalization_step='strip_whitespace', "
+                f"reason='Empty string after stripping whitespace'"
+            )
             return None
         
-        # Convert to lowercase
+        # Consistent lowercase conversion
         normalized = path.lower()
         
-        # Standardize path separators to forward slashes
+        # Standardize separators to forward slashes
         normalized = normalized.replace('\\', '/')
         
         # Remove duplicate slashes
@@ -94,29 +134,61 @@ class IdentityExtractor:
         Returns:
             Extracted filename or None if invalid
         """
-        if not path or not isinstance(path, str):
+        # Validation for empty/None values (Requirement 5.6, 9.2)
+        if path is None:
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value=None, normalization_step='validate_input', "
+                f"reason='Received None value'"
+            )
+            return None
+            
+        if not isinstance(path, str):
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value={repr(path)}, normalization_step='validate_input', "
+                f"reason='Received non-string value of type {type(path).__name__}'"
+            )
             return None
         
+        # Whitespace stripping
         path = path.strip()
         
         if not path:
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value='', normalization_step='strip_whitespace', "
+                f"reason='Empty string after stripping whitespace'"
+            )
             return None
         
-        # Normalize path separators first
+        # Normalize path separators before extraction
         normalized_path = path.replace('\\', '/')
         
         # Get last component
         filename = normalized_path.split('/')[-1]
         
         if not filename:
-            logger.warning(f"Could not extract filename from path: '{path}'")
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value='{path}', normalization_step='extract_filename', "
+                f"reason='Path ends with separator, no filename component'"
+            )
             return None
         
-        # Normalize the filename
-        filename = self.normalize_name(filename)
+        # Use normalize_name() for filename normalization to ensure consistency
+        normalized_filename = self.normalize_name(filename)
         
-        logger.debug(f"Extracted filename from path: '{path}' -> '{filename}'")
-        return filename
+        if normalized_filename is None:
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value='{path}', normalization_step='normalize_filename', "
+                f"reason='Filename normalization failed for extracted filename: {filename}'"
+            )
+            return None
+        
+        logger.debug(f"Extracted filename from path: '{path}' -> '{normalized_filename}'")
+        return normalized_filename
     
     def generate_identity_key(self, identity_type: str, value: str) -> Optional[str]:
         """
@@ -179,12 +251,28 @@ class IdentityExtractor:
         normalized_path = self.normalize_path(path)
         if normalized_path:
             identities.append(("path", normalized_path))
+        else:
+            logger.error(
+                f"[Identity Extraction] Identity extraction failed: "
+                f"original_value='{path}', normalization_step='normalize_path', "
+                f"reason='Path normalization failed'"
+            )
         
-        # Optionally extract filename
+        # Always extract filename when extract_name=True
         if extract_name:
             filename = self.extract_filename_from_path(path)
             if filename:
+                # Create both path and name identities
                 identities.append(("name", filename))
+                logger.debug(f"Extracted both path and name identities from: '{path}'")
+            else:
+                logger.error(
+                    f"[Identity Extraction] Identity extraction failed: "
+                    f"original_value='{path}', normalization_step='extract_filename', "
+                    f"reason='Filename extraction failed'"
+                )
+        
+        return identities
         
         return identities
     

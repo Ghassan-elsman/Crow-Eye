@@ -2,17 +2,77 @@
 
 This directory contains JSON configuration files for semantic mapping rules used by the Crow-Eye Correlation Engine.
 
+## Table of Contents
+- [Overview](#overview)
+- [Directory Structure and Key Files](#directory-structure-and-key-files)
+- [Default Semantic Rules Overview](#default-semantic-rules-overview)
+- [Rule Format](#rule-format)
+- [Required Fields](#required-fields)
+- [Optional Fields](#optional-fields)
+- [Condition Fields](#condition-fields)
+- [Logic Operators](#logic-operators)
+- [Examples](#examples)
+  - [Simple Rule (Single Condition)](#simple-rule-single-condition)
+  - [Complex Rule (Multiple Conditions with AND)](#complex-rule-multiple-conditions-with-and)
+  - [Wildcard Rule](#wildcard-rule)
+- [Creating Custom Rules](#creating-custom-rules)
+  - [Custom Rule Priority](#custom-rule-priority)
+- [Validation](#validation)
+  - [Validation Errors](#validation-errors)
+- [Fallback Behavior](#fallback-behavior)
+- [Performance](#performance)
+- [GUI Management](#gui-management)
+- [Troubleshooting](#troubleshooting)
+  - [Rules not loading](#rules-not-loading)
+  - [Rules not matching](#rules-not-matching)
+  - [Duplicate rule_id warning](#duplicate-rule_id-warning)
+- [Best Practices](#best-practices)
+- [Support](#support)
+- [Version](#version)
+
 ## Overview
 
 Semantic rules map technical forensic values (like Event IDs, file names, registry keys) to human-readable meanings. This helps investigators quickly understand the significance of correlation matches.
 
-## File Structure
+## Directory Structure and Key Files
 
-- **semantic_rules_default.json** - Default forensic rules provided by the system (20+ rules)
-- **semantic_rules_custom.json** - Your custom rules that extend or override defaults
-- **semantic_rules_schema.json** - JSON schema for validation
-- **semantic_rules_example.json** - Annotated examples showing rule syntax
-- **README.md** - This documentation file
+This `configs/` directory stores all static configuration files for the Crow-Eye Correlation Engine. These files define the behavior of the system, including feather definitions, correlation rules (wings), pipeline workflows, and semantic mappings.
+
+-   **`feathers/` Directory**: Contains individual JSON configuration files for each Feather (normalized SQLite database). These files define how raw artifacts are transformed.
+    -   Example: `feathers/prefetch_data.json`
+-   **`wings/` Directory**: Contains individual JSON configuration files for each Wing (correlation rule). These files define which feathers to correlate, time windows, and other parameters.
+    -   Example: `wings/execution_proof.json`
+-   **`pipelines/` Directory**: Contains individual JSON configuration files for each Pipeline. These files orchestrate complete analysis workflows, linking feathers and wings with execution settings.
+    -   Example: `pipelines/investigation_pipeline.json`
+-   **`semantic_rules_default.json`**: This JSON file contains the default, built-in semantic rules provided by Crow-Eye. These rules map common technical forensic values (e.g., specific Event IDs, registry keys) to human-readable semantic meanings.
+-   **`semantic_mapping_config.json`**: This JSON file holds the configuration settings for the overall semantic mapping system, such as paths to rule files, confidence thresholds, and severity levels.
+-   **`semantic_rules_custom.json`**: This optional JSON file is where users can define their own custom semantic rules. These rules can extend or override the default rules provided by Crow-Eye.
+-   **`semantic_rules_schema.json`**: This JSON file defines the JSON schema for validating `semantic_rules_default.json` and `semantic_rules_custom.json`. It ensures that all semantic rule definitions adhere to the correct structure and data types.
+-   **`semantic_rules_example.json`**: This JSON file provides annotated examples of various semantic rule syntaxes, serving as a helpful reference for users creating custom rules.
+-   **`README.md`**: This documentation file you are currently reading, explaining the purpose and contents of the `configs/` directory.
+
+## Default Semantic Rules Overview
+
+Crow-Eye comes with a robust set of built-in semantic rules designed to automatically interpret common forensic artifacts. These rules are defined in `semantic_rules_default.json` and cover various categories of forensic interest, making initial analysis quicker and more intuitive.
+
+While the full list of rules is extensive, here's an overview of the types of semantic interpretations Crow-Eye provides:
+
+-   **System Interaction**: Rules to identify user logins/logoffs, system shutdowns/restarts, and other general system events.
+    -   *Examples*: "User Login", "System Shutdown", "Service Start".
+-   **Program Execution**: Rules that detect and categorize program launches, application installations, and process creations.
+    -   *Examples*: "Program Execution (Prefetch)", "Application Installation (AmCache)", "Process Creation (Event Log 4688)".
+-   **File Activity**: Rules for identifying file creations, modifications, deletions, and accesses.
+    -   *Examples*: "File Created", "File Modified", "File Deleted", "File Accessed (Jump List)".
+-   **Network Activity**: Rules that flag network connections, DNS queries, and unusual network traffic patterns.
+    -   *Examples*: "Network Connection", "DNS Query", "Port Scan Detected".
+-   **Persistence Mechanisms**: Rules to highlight entries related to auto-run locations in the Registry or scheduled tasks.
+    -   *Examples*: "Autorun Entry Added", "Scheduled Task Created".
+-   **User Activity**: Rules for interpreting user-specific actions, such as document access, browsing history, and device connections.
+    -   *Examples*: "Document Accessed", "USB Device Connected", "Web Browser History".
+-   **Security Events**: Rules to identify security-relevant events like failed logins, security policy changes, or audit log tampering.
+    -   *Examples*: "Failed Login Attempt", "Security Policy Changed".
+
+These default rules form a strong foundation for correlation. Users can extend or override these with custom rules in `semantic_rules_custom.json` to tailor the analysis to specific investigation needs.
 
 ## Rule Format
 

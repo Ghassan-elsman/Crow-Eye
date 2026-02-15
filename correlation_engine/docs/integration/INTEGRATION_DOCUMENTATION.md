@@ -1,5 +1,29 @@
 # Integration Directory Documentation
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Purpose](#purpose)
+- [How It Fits in the Overall System](#how-it-fits-in-the-overall-system)
+- [Files in This Directory](#files-in-this-directory)
+  - [correlation_integration.py](#correlation_integrationpy)
+  - [crow_eye_integration.py](#crow_eye_integrationpy)
+    - [Error Handling & Recovery Flow](#error-handling--recovery-flow)
+  - [case_initializer.py](#case_initializerpy)
+  - [auto_feather_generator.py](#auto_feather_generatorpy)
+  - [feather_config_generator.py](#feather_config_generatorpy)
+  - [feather_mappings.py](#feather_mappingspy)
+  - [default_wings_loader.py](#default_wings_loaderpy)
+  - [default_pipeline_creator.py](#default_pipeline_creatorpy)
+  - [default_wings/ Subdirectory](#default_wings-subdirectory)
+- [Common Modification Scenarios](#common-modification-scenarios)
+- [Troubleshooting](#troubleshooting)
+- [Integration Flow](#integration-flow)
+- [Case Directory Structure](#case-directory-structure)
+- [See Also](#see-also)
+
+---
+
 ## Overview
 
 The **integration/** directory integrates the correlation engine with the main Crow-Eye application, providing auto-generation features, default configurations, and case initialization.
@@ -201,6 +225,48 @@ def export_results_to_crow_eye(results):
 **Dependents**: Crow-Eye main application
 
 **Impact**: CRITICAL - Main integration point
+
+### Error Handling & Recovery Flow
+
+```mermaid
+graph TD
+    subgraph "Integration Error Handling & Recovery Flow"
+        start((Operation Starts)) --> component_call(Integration Component Call)
+        component_call -- Error Occurs --> error_detected(Error Detected)
+        error_detected --> log_error(Log Error<br/>(integration_error_handler.py))
+        log_error --> assess_severity{Assess Severity<br/>(ErrorSeverity)}
+        
+        assess_severity -- CRITICAL --> halt(Halt Operation)
+        assess_severity -- HIGH --> attempt_recovery(Attempt Recovery<br/>(FallbackStrategy))
+        attempt_recovery -- Recovered --> resume(Resume Operation)
+        attempt_recovery -- Failed --> notify_user_critical(Notify User: Critical)
+        
+        assess_severity -- MEDIUM --> notify_user_warning(Notify User: Warning)
+        assess_severity -- LOW --> continue_operation(Continue Operation)
+        
+        notify_user_critical --> end_error((End with Error))
+        notify_user_warning --> continue_operation
+        continue_operation --> end_success((Operation Ends))
+        resume --> end_success
+        halt --> end_error
+    end
+
+    style start fill:#fff,stroke:#333,stroke-width:2px
+    style end_error fill:#f00,stroke:#333,stroke-width:2px
+    style end_success fill:#0f0,stroke:#333,stroke-width:2px
+    style component_call fill:#ccf,stroke:#333,stroke-width:2px
+    style error_detected fill:#fcc,stroke:#333,stroke-width:2px
+    style log_error fill:#ffc,stroke:#333,stroke-width:2px
+    style assess_severity fill:#afa,stroke:#333,stroke-width:2px
+    style halt fill:#f00,stroke:#333,stroke-width:2px
+    style attempt_recovery fill:#f9f,stroke:#333,stroke-width:2px
+    style resume fill:#0f0,stroke:#333,stroke-width:2px
+    style notify_user_critical fill:#f00,stroke:#333,stroke-width:2px
+    style notify_user_warning fill:#fc0,stroke:#333,stroke-width:2px
+    style continue_operation fill:#afa,stroke:#333,stroke-width:2px
+
+```
+
 
 ---
 

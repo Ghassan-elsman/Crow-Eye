@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QProgressBar, QTextEdit, QFileDialog, QLineEdit, QFormLayout,
     QMessageBox, QListWidget, QListWidgetItem, QComboBox, QDateTimeEdit,
-    QCheckBox, QDialog
+    QCheckBox, QDialog, QInputDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QObject, QMetaType, QDateTime, QTimer
 from PyQt5.QtGui import QFont, QTextCursor
@@ -103,13 +103,14 @@ class CorrelationEngineWrapper(QObject):
         self._cancelled = False  # NEW: Cancellation flag
         self._wing_summaries = []  # NEW: Track all wing summaries for aggregate statistics
     
-    def set_pipeline(self, pipeline_config: PipelineConfig, output_dir: str, selected_wings=None):
+    def set_pipeline(self, pipeline_config: PipelineConfig, output_dir: str, selected_wings=None, resume_execution_id: int = None):
         """Set pipeline configuration and output directory"""
         self.pipeline_config = pipeline_config
         self.output_dir = output_dir
         self.selected_wings = selected_wings or pipeline_config.wing_configs
         self.current_wing_index = 0
         self._cancelled = False
+        self.resume_execution_id = resume_execution_id  # NEW: Resume functionality
     
     def set_log_widget(self, widget):
         """Set the log widget for output redirection"""
@@ -242,8 +243,13 @@ class CorrelationEngineWrapper(QObject):
                 # Register our progress handler to receive events
                 self.executor.engine.register_progress_listener(self.handle_engine_progress)
                 
-                # Execute this wing
-                summary = self.executor.execute()
+                # Execute this wing - pass resume_execution_id if this is the first wing and we're resuming
+                if wing_index == 1 and hasattr(self, 'resume_execution_id') and self.resume_execution_id:
+                    # For resume, pass the execution_id to the engine's execute method
+                    summary = self.executor.execute(resume_execution_id=self.resume_execution_id)
+                else:
+                    # Normal execution
+                    summary = self.executor.execute()
                 
                 # DEBUG: Log what execute() returned
                 self.log_message.emit(f"[DEBUG] execute() returned summary with keys: {list(summary.keys())}")
@@ -346,6 +352,11 @@ class ExecutionControlWidget(QWidget):
         self._last_progress_time: Optional[datetime] = None
         self._min_progress_interval: float = 0.5  # Minimum 0.5 seconds between progress updates
         self._last_progress_message: str = ""
+        
+        # Heartbeat mechanism to keep progress bar alive when no signals are sent
+        self._heartbeat_timer = None
+        self._heartbeat_counter = 0
+        self._is_executing = False
         
         self._init_ui()
         
@@ -910,7 +921,7 @@ class ExecutionControlWidget(QWidget):
         if directory:
             self.output_dir_input.setText(directory)
     
-    def _start_execution(self):
+    def _start_execution(self, resume_execution_id: int = None):
         """Start correlation execution"""
         try:
             # print("[ExecutionControl] _start_execution called")
@@ -964,7 +975,9 @@ class ExecutionControlWidget(QWidget):
             # Disable execute button and change appearance
             self.execute_btn.setEnabled(False)
             self.execute_btn.setText("⏳  Executing...")
-            self.cancel_btn.setEnabled(True)
+            
+            # Switch cancel button to executing mode
+            self._switch_to_executing_mode()
             
             # Create a copy of pipeline config with only selected wings
             from copy import deepcopy
@@ -1028,6 +1041,9 @@ class ExecutionControlWidget(QWidget):
             self._last_progress_time = None  # Reset throttling for new execution
             self.status_label.setText("Initializing...")
             
+            # Start heartbeat to keep progress bar alive
+            self._start_heartbeat()
+            
             # print("[ExecutionControl] Creating worker thread...")
             
             # Create worker thread
@@ -1038,7 +1054,7 @@ class ExecutionControlWidget(QWidget):
             # print("[ExecutionControl] Setting pipeline on engine wrapper...")
             
             # Set pipeline (use filtered pipeline with only selected wings)
-            self.engine_wrapper.set_pipeline(execution_pipeline, output_dir, selected_wings)
+            self.engine_wrapper.set_pipeline(execution_pipeline, output_dir, selected_wings, resume_execution_id)
             
             # Set progress handler for detailed progress display in log_output
             self.engine_wrapper.set_progress_handler(self._handle_progress_event)
@@ -1082,12 +1098,24 @@ class ExecutionControlWidget(QWidget):
             self.cancel_btn.setEnabled(False)
     
     def _cancel_execution(self):
-        """Cancel execution and save partial results."""
+        """Handle pause/resume functionality."""
+        if self.cancel_btn.text().startswith("⏹"):
+            # Currently showing "Cancel" - user wants to pause
+            self._pause_execution()
+        else:
+            # Currently showing "Resume" - user wants to resume
+            self._resume_execution()
+    
+    def _pause_execution(self):
+        """Pause execution and save partial results."""
         if self.worker_thread and self.worker_thread.isRunning():
+            # Switch to pausing mode immediately for visual feedback
+            self._switch_to_pausing_mode()
+            
             # Request graceful shutdown
             if self.engine_wrapper:
-                self.log_output.append("\n⚠️ Cancellation requested - saving partial results...")
-                self.status_label.setText("Cancelling execution...")
+                self.log_output.append("\n⏸️ Pausing execution - saving partial results...")
+                self.status_label.setText("Pausing execution...")
                 
                 # Set cancellation flag on wrapper
                 self.engine_wrapper.cancel()
@@ -1102,9 +1130,9 @@ class ExecutionControlWidget(QWidget):
                 self.worker_thread.quit()
                 self.worker_thread.wait()
             
-            self.log_output.append("❌ Execution cancelled by user")
+            self.log_output.append("⏸️ Execution paused by user")
             
-            # Show cancellation confirmation message
+            # Show pause confirmation message
             partial_results_count = 0
             if self.engine_wrapper and self.engine_wrapper.executor:
                 # Try to get partial results count
@@ -1116,26 +1144,223 @@ class ExecutionControlWidget(QWidget):
             if partial_results_count > 0:
                 QMessageBox.information(
                     self,
-                    "Execution Cancelled",
-                    f"Execution cancelled. Saved {partial_results_count} partial results.\n\n"
-                    f"Partial results have been saved to the database and can be loaded later."
+                    "Execution Paused",
+                    f"Execution paused. Saved {partial_results_count} partial results.\n\n"
+                    f"Partial results have been saved to the database.\n"
+                    f"Click 'Resume' to continue from where you left off."
                 )
                 self.log_output.append(f"✓ Partial results saved: {partial_results_count} identities")
             else:
                 self.log_output.append("✓ Partial results have been saved to database")
             
-            self.status_label.setText("Cancelled - Partial results saved")
+            self.status_label.setText("⏸️ Paused - Click Resume to continue")
+            
+            # Change button to Resume
+            self._switch_to_resume_mode()
             
             self._cleanup_thread()
+    
+    def _resume_execution(self):
+        """Resume paused execution."""
+        try:
+            # Check for paused executions in current output directory
+            output_dir = self.output_dir_input.text().strip()
+            if not output_dir:
+                QMessageBox.warning(self, "No Output Directory", 
+                                  "Please select an output directory first.")
+                return
+            
+            # Get paused executions
+            from ..engine.database_persistence import ResultsDatabase
+            db_path = Path(output_dir) / "correlation_results.db"
+            
+            if not db_path.exists():
+                QMessageBox.information(self, "No Database Found", 
+                                      "No correlation database found in the selected output directory.")
+                self._switch_to_cancel_mode()
+                return
+            
+            with ResultsDatabase(str(db_path)) as db:
+                paused_executions = db.get_paused_executions()
+            
+            if not paused_executions:
+                QMessageBox.information(self, "No Paused Executions", 
+                                      "No paused executions found in the selected output directory.")
+                self._switch_to_cancel_mode()
+                return
+            
+            # If multiple paused executions, let user choose
+            if len(paused_executions) > 1:
+                execution_names = []
+                for exec_data in paused_executions:
+                    progress = exec_data.get('progress_details', {})
+                    percentage = progress.get('percentage_complete', 0)
+                    execution_names.append(f"{exec_data['wing_name']} - {percentage:.1f}% complete")
+                
+                choice, ok = QInputDialog.getItem(
+                    self, "Select Execution to Resume", 
+                    "Multiple paused executions found:", 
+                    execution_names, 0, False
+                )
+                
+                if not ok:
+                    return
+                
+                selected_index = execution_names.index(choice)
+                selected_execution = paused_executions[selected_index]
+            else:
+                selected_execution = paused_executions[0]
+            
+            # Resume the selected execution
+            execution_id = selected_execution['execution_id']
+            progress = selected_execution.get('progress_details', {})
+            
+            self.log_output.append(f"\n▶️ Resuming execution ID: {execution_id}")
+            self.log_output.append(f"   Progress: {progress.get('percentage_complete', 0):.1f}% complete")
+            self.log_output.append(f"   Existing matches: {selected_execution['total_matches']:,}")
+            
+            # Switch back to cancel mode and start execution with resume parameter
+            self._switch_to_cancel_mode()
+            self._start_execution(resume_execution_id=execution_id)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Resume Failed", f"Failed to resume execution:\n{str(e)}")
+            self._switch_to_cancel_mode()
+    
+    def _switch_to_resume_mode(self):
+        """Switch cancel button to resume mode with enhanced styling."""
+        self.cancel_btn.setText("▶️ Resume")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #10B981, stop:1 #059669);
+                color: white;
+                border: 2px solid #047857;
+                border-radius: 6px;
+                font-size: 10pt;
+                font-weight: bold;
+                padding: 6px 16px;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #34D399, stop:1 #10B981);
+                border: 2px solid #059669;
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #059669, stop:1 #047857);
+            }
+            QPushButton:disabled {
+                background: #4B5563;
+                color: #9CA3AF;
+                border: 2px solid #374151;
+            }
+        """)
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.setToolTip("Resume paused execution from where it left off")
+    
+    def _switch_to_cancel_mode(self):
+        """Switch resume button back to cancel mode with enhanced styling."""
+        self.cancel_btn.setText("⏹ Cancel")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #EF4444, stop:1 #DC2626);
+                color: white;
+                border: 2px solid #B91C1C;
+                border-radius: 6px;
+                font-size: 10pt;
+                font-weight: bold;
+                padding: 6px 16px;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #F87171, stop:1 #EF4444);
+                border: 2px solid #DC2626;
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #DC2626, stop:1 #B91C1C);
+            }
+            QPushButton:disabled {
+                background: #4B5563;
+                color: #9CA3AF;
+                border: 2px solid #374151;
+            }
+        """)
+        self.cancel_btn.setEnabled(False)  # Will be enabled when execution starts
+        self.cancel_btn.setToolTip("Cancel execution and save partial results")
+    
+    def _switch_to_pausing_mode(self):
+        """Switch button to pausing mode with animated styling."""
+        self.cancel_btn.setText("⏸️ Pausing...")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #F59E0B, stop:1 #D97706);
+                color: white;
+                border: 2px solid #B45309;
+                border-radius: 6px;
+                font-size: 10pt;
+                font-weight: bold;
+                padding: 6px 16px;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #FBBF24, stop:1 #F59E0B);
+            }
+            QPushButton:disabled {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #F59E0B, stop:1 #D97706);
+                color: white;
+                border: 2px solid #B45309;
+            }
+        """)
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setToolTip("Pausing execution and saving partial results...")
+    
+    def _switch_to_executing_mode(self):
+        """Switch button to executing mode with enhanced styling."""
+        self.cancel_btn.setText("⏹ Cancel")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #EF4444, stop:1 #DC2626);
+                color: white;
+                border: 2px solid #B91C1C;
+                border-radius: 6px;
+                font-size: 10pt;
+                font-weight: bold;
+                padding: 6px 16px;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #F87171, stop:1 #EF4444);
+                border: 2px solid #DC2626;
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #DC2626, stop:1 #B91C1C);
+            }
+            QPushButton:disabled {
+                background: #4B5563;
+                color: #9CA3AF;
+                border: 2px solid #374151;
+            }
+        """)
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.setToolTip("Cancel execution and save partial results")
     
     def _update_progress(self, wing_index: int, total_wings: int, status: str):
         """Update progress indicators - simplified"""
         # Just update status, progress bar stays in indeterminate mode
         self.status_label.setText(status)
-        self.log_output.append(f"[{wing_index}/{total_wings}] {status}")
-        
-        # Scroll to bottom (use QTimer to ensure it happens after text is rendered)
-        QTimer.singleShot(0, self._scroll_to_bottom)
+        # Use the improved _append_to_log method for consistent scrolling
+        self._append_to_log(f"[{wing_index}/{total_wings}] {status}")
     
     def _update_anchor_progress(self, anchor_index: int, total_anchors: int):
         """
@@ -1149,6 +1374,65 @@ class ExecutionControlWidget(QWidget):
             percentage = (anchor_index / total_anchors * 100)
             self.progress_bar.setFormat(f"{anchor_index:,}/{total_anchors:,} ({percentage:.1f}%)")
             self.status_label.setText(f"Processing... {anchor_index:,} items processed")
+            
+            # Reset heartbeat counter since we got a real update
+            self._heartbeat_counter = 0
+            
+            # Force GUI update to prevent lagging
+            try:
+                from PyQt5.QtWidgets import QApplication
+                QApplication.processEvents()
+            except:
+                pass  # Ignore if not in GUI context
+    
+    def _start_heartbeat(self):
+        """Start heartbeat timer to keep progress bar alive during long operations without signals."""
+        if self._heartbeat_timer is None:
+            from PyQt5.QtCore import QTimer
+            self._heartbeat_timer = QTimer(self)
+            self._heartbeat_timer.timeout.connect(self._heartbeat_pulse)
+        
+        self._heartbeat_counter = 0
+        self._is_executing = True
+        self._heartbeat_timer.start(1000)  # Pulse every 1 second
+    
+    def _stop_heartbeat(self):
+        """Stop heartbeat timer."""
+        self._is_executing = False
+        if self._heartbeat_timer:
+            self._heartbeat_timer.stop()
+        self._heartbeat_counter = 0
+    
+    def _heartbeat_pulse(self):
+        """
+        Heartbeat pulse to keep UI responsive when no progress signals are sent.
+        
+        This ensures the progress bar doesn't freeze during long operations
+        where the engine is working but not sending frequent progress updates.
+        """
+        if not self._is_executing:
+            return
+        
+        self._heartbeat_counter += 1
+        
+        # If we haven't received a real progress update in a while, show activity
+        if self._heartbeat_counter > 2:  # After 2 seconds without updates
+            # Keep the progress bar in indeterminate mode or pulse it
+            current_format = self.progress_bar.format()
+            
+            # Add a pulsing indicator to show we're still working
+            dots = "." * ((self._heartbeat_counter % 4))
+            if "Working" in current_format or "Processing" in current_format:
+                # Update the format to show we're alive
+                base_format = current_format.rstrip(".")
+                self.progress_bar.setFormat(f"{base_format}{dots}")
+            
+            # Force GUI update
+            try:
+                from PyQt5.QtWidgets import QApplication
+                QApplication.processEvents()
+            except:
+                pass
     
     def _on_wing_completed(self, summary: dict):
         """Handle individual wing completion - emit signal for parent to create separate tab"""
@@ -1166,11 +1450,17 @@ class ExecutionControlWidget(QWidget):
     
     def _on_execution_completed(self, summary: dict):
         """Handle execution completion - all wings finished"""
+        # Stop heartbeat timer
+        self._stop_heartbeat()
+        
         # Set to determinate mode and show complete
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat("Complete")
         self.status_label.setText("✓ All wings executed successfully")
+        
+        # Reset button to default state
+        self._switch_to_cancel_mode()
         
         # Log summary
         self.log_output.append("\n" + "=" * 60)
@@ -1193,7 +1483,13 @@ class ExecutionControlWidget(QWidget):
     
     def _on_execution_failed(self, error_message: str):
         """Handle execution failure"""
+        # Stop heartbeat timer
+        self._stop_heartbeat()
+        
         self.status_label.setText("❌ Execution failed")
+        
+        # Reset button to default state
+        self._switch_to_cancel_mode()
         
         self.log_output.append("\n" + "=" * 60)
         self.log_output.append("EXECUTION FAILED")
@@ -1209,8 +1505,11 @@ class ExecutionControlWidget(QWidget):
     def _cleanup_thread(self):
         """Cleanup worker thread"""
         self.execute_btn.setEnabled(True)
-        self.execute_btn.setText("▶  Execute Correlation")
-        self.cancel_btn.setEnabled(False)
+        self.execute_btn.setText("▶️ RUN")
+        
+        # Reset cancel button to default state if not already in resume mode
+        if not self.cancel_btn.text().startswith("▶️"):
+            self._switch_to_cancel_mode()
         
         if self.worker_thread:
             self.worker_thread.deleteLater()
@@ -1236,6 +1535,9 @@ class ExecutionControlWidget(QWidget):
                 if time_diff < self._min_progress_interval:
                     return  # Skip this update
             self._last_progress_time = current_time
+            
+            # Reset heartbeat counter since we got a real update
+            self._heartbeat_counter = 0
             
             # Handle new ProgressEvent format
             if hasattr(event, 'event_type') and hasattr(event, 'overall_progress'):
@@ -1280,6 +1582,13 @@ class ExecutionControlWidget(QWidget):
                     self.progress_bar.setFormat("Complete (100%)")
                     self.status_label.setText(f"✓ Completed - {progress.matches_found:,} matches found")
                 
+                # Force GUI update to prevent lagging
+                try:
+                    from PyQt5.QtWidgets import QApplication
+                    QApplication.processEvents()
+                except:
+                    pass  # Ignore if not in GUI context
+                
                 # Log message if provided
                 if event.message and event.message != self._last_progress_message:
                     self._last_progress_message = event.message
@@ -1307,22 +1616,63 @@ class ExecutionControlWidget(QWidget):
                     self.progress_bar.setMaximum(total_anchors)
                     self.progress_bar.setValue(anchors_processed)
                     self.progress_bar.setFormat(f"{anchors_processed}/{total_anchors} ({percentage:.1f}%)")
+                
+                # Force GUI update to prevent lagging
+                try:
+                    from PyQt5.QtWidgets import QApplication
+                    QApplication.processEvents()
+                except:
+                    pass  # Ignore if not in GUI context
                     
         except Exception as e:
             # Don't let progress handling errors crash the execution
             print(f"[ExecutionControl] Progress event handling error: {e}")
     
-    def _append_to_log(self, text: str):
-        """Thread-safe method to append text to log output"""
+    def _append_to_log(self, message: str):
+        """
+        Append message to log output with auto-scroll.
+        This method handles all progress and log messages.
+        
+        Args:
+            message: Message to append
+        """
         # Skip empty or whitespace-only messages to prevent empty lines
-        if text and text.strip():
-            self.log_output.append(text)
-            QTimer.singleShot(0, self._scroll_to_bottom)
+        if message and message.strip():
+            # Use cursor-based insertion for better control over scrolling
+            cursor = self.log_output.textCursor()
+            cursor.movePosition(cursor.End)
+            cursor.insertText(message + '\n')
+            self.log_output.setTextCursor(cursor)
+            
+            # Force scroll to bottom immediately
+            self._scroll_to_bottom()
     
     def _scroll_to_bottom(self):
-        """Scroll log output to bottom"""
+        """Scroll the log output to the bottom"""
+        # Move cursor to end of document first
+        cursor = self.log_output.textCursor()
+        cursor.movePosition(cursor.End)
+        self.log_output.setTextCursor(cursor)
+        
+        # Force scroll to bottom using scrollbar
         scrollbar = self.log_output.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+        
+        # Ensure the cursor is visible
+        self.log_output.ensureCursorVisible()
+        
+        # Force a repaint to ensure scrolling happens immediately
+        self.log_output.repaint()
+        
+        # Additional safety: Use QTimer for a final scroll check
+        # This handles edge cases where the scrollbar maximum changes after text insertion
+        QTimer.singleShot(10, self._final_scroll_check)
+    
+    def _final_scroll_check(self):
+        """Final scroll check to ensure we're at the bottom"""
+        scrollbar = self.log_output.verticalScrollBar()
+        if scrollbar.value() < scrollbar.maximum():
+            scrollbar.setValue(scrollbar.maximum())
     
     def _load_last_results(self):
         """Load results from database using enhanced loader dialog with robust error handling."""
@@ -1702,29 +2052,7 @@ class ExecutionControlWidget(QWidget):
                 selected_wings.append(wing_config)
         return selected_wings
     
-    def _append_to_log(self, message: str):
-        """
-        Append message to log output with auto-scroll.
-        This method handles all progress and log messages.
-        
-        Args:
-            message: Message to append
-        """
-        # Skip empty or whitespace-only messages to prevent empty lines
-        if message and message.strip():
-            self.log_output.append(message)
-            # Auto-scroll to bottom (use QTimer to ensure it happens after text is rendered)
-            QTimer.singleShot(0, self._scroll_to_bottom)
-    
-    def _scroll_to_bottom(self):
-        """Scroll the log output to the bottom"""
-        # Simply scroll to bottom without adding extra newlines
-        scrollbar = self.log_output.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-        
-        # Ensure the widget is visible
-        self.log_output.ensureCursorVisible()
-    
+
     def _handle_progress_event(self, event):
         """
         Handle progress events and display them in the log output.

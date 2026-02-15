@@ -33,6 +33,29 @@ except Exception as e:
     print(f"[Info] matplotlib not available, using PyQt5 native charts")
 
 
+def format_time_duration(seconds: float) -> str:
+    """Format time duration into human-readable format (seconds, minutes, hours)"""
+    try:
+        if seconds == 0:
+            return "0s"
+        elif seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{minutes}m {secs}s"
+        else:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            if secs > 0:
+                return f"{hours}h {minutes}m {secs}s"
+            else:
+                return f"{hours}h {minutes}m"
+    except:
+        return f"{seconds:.1f}s"
+
+
 class PyQt5BarChart(QWidget):
     """
     A simple bar chart widget using pure PyQt5.
@@ -256,7 +279,7 @@ class PyQt5PieChart(QWidget):
         QColor("#009688"),  # Teal
     ]
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, show_legend=True):
         super().__init__(parent)
         self.data = {}  # {label: value}
         self.title = "Pie Chart"
@@ -265,6 +288,7 @@ class PyQt5PieChart(QWidget):
         self.hovered_slice = -1
         self.setMouseTracking(True)
         self.slice_angles = []  # Store slice info for hover detection
+        self.show_legend = show_legend  # Control whether to show built-in legend
         
     def set_data(self, data: Dict[str, float], title: str = "Pie Chart"):
         """Set chart data and labels."""
@@ -298,8 +322,11 @@ class PyQt5PieChart(QWidget):
         
         # Calculate pie dimensions
         top_margin = 30
-        legend_width = min(120, width // 3)
-        pie_size = min(width - legend_width - 20, height - top_margin - 10)
+        # Reserve space for legend on the right - more space if we have many items
+        legend_items_count = len(self.data)
+        use_two_columns = legend_items_count > 8
+        legend_width = 400 if use_two_columns else 200  # Double width for two columns
+        pie_size = min(width - legend_width - 30, height - top_margin - 10)
         pie_x = 10
         pie_y = top_margin + (height - top_margin - pie_size) // 2
         
@@ -331,26 +358,61 @@ class PyQt5PieChart(QWidget):
             
             start_angle += span_angle
         
-        # Draw legend on the right
-        legend_x = pie_x + pie_size + 10
-        legend_y = top_margin + 5
-        small_font = QFont()
-        small_font.setPointSize(7)
-        painter.setFont(small_font)
-        
-        for i, (label, value) in enumerate(list(self.data.items())[:10]):  # Max 10 legend items
-            color = self.COLORS[i % len(self.COLORS)]
+        # Draw legend as text labels next to pie chart (always visible)
+        if self.show_legend:
+            # Legend positioned to the right of pie chart
+            legend_x = pie_x + pie_size + 20
+            legend_y = top_margin + 10
             
-            # Color box
-            painter.setBrush(QBrush(color))
-            painter.setPen(Qt.NoPen)
-            painter.drawRect(legend_x, legend_y + i * 16, 10, 10)
+            # Draw "Feathers:" title
+            painter.setPen(QPen(QColor("#00FFFF")))
+            title_font = QFont()
+            title_font.setPointSize(8)
+            title_font.setBold(True)
+            painter.setFont(title_font)
+            painter.drawText(legend_x, legend_y, "Feathers:")
+            legend_y += 20
             
-            # Label
-            painter.setPen(QPen(QColor("#cccccc")))
-            display_label = label if len(label) <= 12 else label[:10] + ".."
-            percentage = (value / total * 100) if total > 0 else 0
-            painter.drawText(legend_x + 14, legend_y + i * 16 + 9, f"{display_label} ({percentage:.0f}%)")
+            # Draw legend items
+            small_font = QFont()
+            small_font.setPointSize(7)
+            painter.setFont(small_font)
+            
+            legend_items = list(self.data.items())
+            
+            # Determine if we need two columns (more than 8 items)
+            use_two_columns = len(legend_items) > 8
+            items_per_column = (len(legend_items) + 1) // 2 if use_two_columns else len(legend_items)
+            column_width = 200  # Width of each column
+            
+            for i, (label, value) in enumerate(legend_items):
+                color = self.COLORS[i % len(self.COLORS)]
+                
+                # Calculate position based on column
+                if use_two_columns and i >= items_per_column:
+                    # Second column
+                    col_x = legend_x + column_width
+                    row_index = i - items_per_column
+                else:
+                    # First column
+                    col_x = legend_x
+                    row_index = i
+                
+                # Color box
+                painter.setBrush(QBrush(color))
+                painter.setPen(Qt.NoPen)
+                painter.drawRect(col_x, legend_y + row_index * 18, 12, 12)
+                
+                # Label with color
+                painter.setPen(QPen(color))
+                display_label = label if len(label) <= 18 else label[:16] + ".."
+                painter.drawText(col_x + 18, legend_y + row_index * 18 + 10, display_label)
+                
+                # Count and percentage
+                percentage = (value / total * 100) if total > 0 else 0
+                stats_text = f"{int(value):,} ({percentage:.0f}%)"
+                painter.setPen(QPen(color.lighter(120)))
+                painter.drawText(col_x + 120, legend_y + row_index * 18 + 10, stats_text)
     
     def mouseMoveEvent(self, event):
         """Handle mouse movement for hover effects."""
@@ -418,6 +480,189 @@ class PyQt5PieChart(QWidget):
         """Handle mouse leaving widget."""
         self.hovered_slice = -1
         self.update()
+
+
+class PieChartWithBreakdown(QWidget):
+    """
+    A widget that combines a pie chart with a detailed breakdown table.
+    When there are 8+ categories, the breakdown table is shown next to the pie chart.
+    """
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.data = {}
+        self.title = "Pie Chart"
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        """Setup the UI layout."""
+        self.main_layout = QHBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(10)
+        
+        # Create pie chart without built-in legend
+        self.pie_chart = PyQt5PieChart(show_legend=False)
+        
+        # Create legend widget (grid layout with colored indicators)
+        self.legend_widget = QWidget()
+        self.legend_main_layout = QVBoxLayout(self.legend_widget)
+        self.legend_main_layout.setContentsMargins(5, 5, 5, 5)
+        self.legend_main_layout.setSpacing(3)
+        
+        # Add title for legend
+        legend_title = QLabel("Feathers:")
+        legend_title.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
+        self.legend_main_layout.addWidget(legend_title)
+        
+        # Scroll area for legend items
+        self.legend_scroll = QScrollArea()
+        self.legend_scroll.setWidgetResizable(True)
+        self.legend_scroll.setFrameShape(QFrame.NoFrame)
+        self.legend_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.legend_scroll.setMinimumWidth(180)
+        self.legend_scroll.setMaximumWidth(400)  # Wider to accommodate multiple columns
+        self.legend_scroll.setStyleSheet("""
+            QScrollArea {
+                background-color: #1a1a2e;
+                border: 1px solid #334155;
+                border-radius: 4px;
+            }
+            QScrollBar:vertical {
+                background-color: #1E293B;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #475569;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #64748B;
+            }
+        """)
+        
+        self.legend_content = QWidget()
+        self.legend_items_layout = QGridLayout(self.legend_content)  # Changed to QGridLayout
+        self.legend_items_layout.setContentsMargins(5, 5, 5, 5)
+        self.legend_items_layout.setSpacing(4)
+        self.legend_items_layout.setColumnStretch(0, 1)
+        self.legend_items_layout.setColumnStretch(1, 1)
+        
+        self.legend_scroll.setWidget(self.legend_content)
+        self.legend_main_layout.addWidget(self.legend_scroll)
+        
+        self.legend_widget.setStyleSheet("""
+            QWidget {
+                background-color: #1a1a2e;
+            }
+        """)
+        self.legend_widget.hide()
+        
+        # Add widgets to layout
+        self.main_layout.addWidget(self.pie_chart, stretch=1)
+        self.main_layout.addWidget(self.legend_widget, stretch=0)
+    
+    def set_data(self, data: Dict[str, float], title: str = "Pie Chart"):
+        """Set chart data and update display."""
+        self.data = data
+        self.title = title
+        
+        # Update pie chart
+        self.pie_chart.set_data(data, title)
+        
+        # Show legend if 8+ categories
+        if len(data) >= 8:
+            self._populate_legend()
+            self.legend_widget.show()
+        else:
+            self.legend_widget.hide()
+    
+    def _populate_legend(self):
+        """Populate the legend with colored indicators in a grid layout."""
+        # Clear existing legend items
+        while self.legend_items_layout.count() > 0:
+            item = self.legend_items_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Calculate total
+        total = sum(self.data.values())
+        
+        # Sort by count descending
+        sorted_items = sorted(self.data.items(), key=lambda x: x[1], reverse=True)
+        
+        # Get color palette from PyQt5PieChart
+        colors = PyQt5PieChart.COLORS
+        
+        # Determine number of columns based on item count
+        # If more than 8 items, use 2 columns; otherwise use 1 column
+        num_items = len(sorted_items)
+        num_columns = 2 if num_items > 8 else 1
+        items_per_column = (num_items + num_columns - 1) // num_columns  # Ceiling division
+        
+        # Create legend items in grid layout
+        for idx, (feather_name, count) in enumerate(sorted_items):
+            percentage = (count / total * 100) if total > 0 else 0
+            
+            # Get color for this item (same as pie chart)
+            color = colors[idx % len(colors)]
+            
+            # Calculate grid position
+            if num_columns == 2:
+                # Fill first column, then second column
+                col = idx // items_per_column
+                row = idx % items_per_column
+            else:
+                # Single column
+                row = idx
+                col = 0
+            
+            # Create horizontal layout for each legend item
+            item_widget = QWidget()
+            item_layout = QHBoxLayout(item_widget)
+            item_layout.setContentsMargins(0, 0, 0, 0)
+            item_layout.setSpacing(6)
+            
+            # Color indicator (square box)
+            color_box = QLabel()
+            color_box.setFixedSize(12, 12)
+            color_box.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color.name()};
+                    border: 1px solid #334155;
+                    border-radius: 2px;
+                }}
+            """)
+            item_layout.addWidget(color_box)
+            
+            # Feather name and stats
+            text_label = QLabel(f"{feather_name}")
+            text_label.setStyleSheet(f"color: {color.name()}; font-size: 7pt; font-weight: bold;")
+            text_label.setWordWrap(False)
+            text_label.setToolTip(f"{feather_name}\nRecords: {int(count):,}\nPercentage: {percentage:.1f}%")
+            item_layout.addWidget(text_label, stretch=1)
+            
+            # Count
+            count_label = QLabel(f"{int(count):,}")
+            count_label.setStyleSheet(f"color: {color.name()}; font-size: 7pt;")
+            count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item_layout.addWidget(count_label)
+            
+            # Percentage
+            pct_label = QLabel(f"({percentage:.0f}%)")
+            pct_label.setStyleSheet(f"color: {color.lighter(120).name()}; font-size: 6pt;")
+            pct_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item_layout.addWidget(pct_label)
+            
+            # Add to grid layout
+            self.legend_items_layout.addWidget(item_widget, row, col)
+    
+    def setMinimumHeight(self, height: int):
+        """Set minimum height for the widget."""
+        super().setMinimumHeight(height)
+        self.pie_chart.setMinimumHeight(height)
+        self.legend_widget.setMinimumHeight(height)
 
 
 from .ui_styling import CorrelationEngineStyles
@@ -672,12 +917,15 @@ class MatchDetailViewer(QWidget):
         self._init_ui()
     
     def _init_ui(self):
-        """Initialize UI"""
+        """Initialize UI with improved layout"""
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
         
-        # Match info section
+        # Match info section (compact)
         info_group = QGroupBox("Match Information")
         info_layout = QFormLayout()
+        info_layout.setSpacing(5)
         
         self.match_id_label = QLabel("-")
         info_layout.addRow("Match ID:", self.match_id_label)
@@ -692,21 +940,102 @@ class MatchDetailViewer(QWidget):
         info_layout.addRow("Time Spread:", self.time_spread_label)
         
         info_group.setLayout(info_layout)
+        info_group.setMaximumHeight(150)
         layout.addWidget(info_group)
         
         # Weighted scoring breakdown widget
         self.scoring_widget = ScoringBreakdownWidget()
         layout.addWidget(self.scoring_widget)
         
-        # Feather records section
-        self.records_text = QTextEdit()
-        self.records_text.setReadOnly(True)
-        layout.addWidget(QLabel("Feather Records:"))
-        layout.addWidget(self.records_text)
+        # Create vertical splitter for Feather Records and Semantic Mappings
+        self.splitter = QSplitter(Qt.Vertical)
+        
+        # === FEATHER RECORDS SECTION (80% height by default, 100% if no semantic data) ===
+        # This section is now FIRST (top position)
+        feather_widget = QWidget()
+        feather_layout = QVBoxLayout(feather_widget)
+        feather_layout.setContentsMargins(0, 0, 0, 0)
+        feather_layout.setSpacing(5)
+        
+        feather_label = QLabel("📄 Feather Records")
+        feather_label_font = QFont()
+        feather_label_font.setBold(True)
+        feather_label_font.setPointSize(10)
+        feather_label.setFont(feather_label_font)
+        feather_layout.addWidget(feather_label)
+        
+        # Feather selector label
+        self.feather_selector_label = QLabel("")
+        feather_layout.addWidget(self.feather_selector_label)
+        
+        # TWO-COLUMN TABLE for feather records
+        self.feather_table = QTableWidget()
+        self.feather_table.setColumnCount(2)
+        self.feather_table.setHorizontalHeaderLabels(["Field", "Value"])
+        
+        # Configure feather table
+        header = self.feather_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Field column
+        header.setSectionResizeMode(1, QHeaderView.Stretch)  # Value column stretches
+        
+        self.feather_table.setAlternatingRowColors(True)
+        self.feather_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.feather_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.feather_table.verticalHeader().setVisible(False)
+        
+        feather_layout.addWidget(self.feather_table)
+        self.splitter.addWidget(feather_widget)
+        
+        # === SEMANTIC MAPPINGS SECTION (20% height by default, hidden if no data) ===
+        # This section is now SECOND (bottom position)
+        self.semantic_widget = QWidget()
+        semantic_layout = QVBoxLayout(self.semantic_widget)
+        semantic_layout.setContentsMargins(0, 0, 0, 0)
+        semantic_layout.setSpacing(5)
+        
+        semantic_label = QLabel("🔮 Semantic Mappings")
+        semantic_label_font = QFont()
+        semantic_label_font.setBold(True)
+        semantic_label_font.setPointSize(10)
+        semantic_label.setFont(semantic_label_font)
+        semantic_layout.addWidget(semantic_label)
+        
+        self.semantic_table = QTableWidget()
+        self.semantic_table.setColumnCount(6)
+        self.semantic_table.setHorizontalHeaderLabels([
+            "Semantic Value", "Identity Type", "Rule Name", 
+            "Category", "Confidence", "Severity"
+        ])
+        
+        # Configure semantic table
+        header = self.semantic_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Semantic Value
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Identity Type
+        header.setSectionResizeMode(2, QHeaderView.Stretch)  # Rule Name
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Category
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Confidence
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Severity
+        
+        self.semantic_table.setAlternatingRowColors(True)
+        self.semantic_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.semantic_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.semantic_table.verticalHeader().setVisible(False)
+        
+        semantic_layout.addWidget(self.semantic_table)
+        self.splitter.addWidget(self.semantic_widget)
+        
+        # Set splitter sizes: 80% feather (index 0), 20% semantic (index 1)
+        # Total height = 1000, so 800 for feather, 200 for semantic
+        self.splitter.setSizes([800, 200])
+        self.splitter.setStretchFactor(0, 4)  # Feather gets 4x more space (index 0 now)
+        self.splitter.setStretchFactor(1, 1)  # Semantic can shrink (index 1 now)
+        
+        # Add splitter with stretch factor 1 to fill all remaining vertical space
+        layout.addWidget(self.splitter, 1)
     
     def display_match(self, match_data: dict):
         """Display match details with semantic value highlighting"""
-        self.match_id_label.setText(match_data.get('match_id', '-'))
+        self.match_id_label.setText(str(match_data.get('match_id', '-')))
         self.timestamp_label.setText(match_data.get('timestamp', '-'))
         self.feather_count_label.setText(str(match_data.get('feather_count', 0)))
         self.time_spread_label.setText(f"{match_data.get('time_spread_seconds', 0):.1f} seconds")
@@ -715,40 +1044,127 @@ class MatchDetailViewer(QWidget):
         weighted_score = match_data.get('weighted_score')
         self.scoring_widget.display_scoring(weighted_score)
         
-        # Display feather records with semantic value highlighting
-        records_text = ""
-        feather_records = match_data.get('feather_records', {})
+        # Get semantic data from the match (stored in separate semantic_data column)
+        semantic_data = match_data.get('semantic_data', {})
         
-        for feather_id, record in feather_records.items():
-            records_text += f"\n{'='*60}\n"
-            records_text += f"Feather: {feather_id}\n"
-            records_text += f"{'='*60}\n"
-            
-            # Separate fields into regular and semantic
-            regular_fields = {}
-            semantic_fields = {}
-            
-            for key, value in record.items():
-                if key.endswith('_semantic'):
-                    # Skip standalone semantic fields (we'll show them with display fields)
+        # === POPULATE SEMANTIC MAPPINGS TABLE ===
+        self.semantic_table.setRowCount(0)
+        has_semantic_data = False
+        
+        if semantic_data:
+            row = 0
+            for semantic_key, semantic_info in semantic_data.items():
+                if not isinstance(semantic_info, dict):
                     continue
-                elif key.endswith('_display'):
-                    # This is a formatted display field with semantic value
-                    base_key = key.replace('_display', '')
-                    semantic_fields[base_key] = value
-                else:
-                    regular_fields[key] = value
-            
-            # Display fields with semantic values highlighted
-            for key, value in regular_fields.items():
-                if key in semantic_fields:
-                    # Use the display format (includes semantic value)
-                    records_text += f"{key}: {semantic_fields[key]} ✨\n"
-                else:
-                    # Regular field
-                    records_text += f"{key}: {value}\n"
+                
+                semantic_mappings = semantic_info.get('semantic_mappings', [])
+                if semantic_mappings and isinstance(semantic_mappings, list):
+                    for mapping in semantic_mappings:
+                        if isinstance(mapping, dict):
+                            has_semantic_data = True
+                            self.semantic_table.insertRow(row)
+                            
+                            # Semantic Value
+                            self.semantic_table.setItem(row, 0, QTableWidgetItem(
+                                mapping.get('semantic_value', '')
+                            ))
+                            
+                            # Identity Type
+                            identity_type = semantic_info.get('identity_type', 'unknown')
+                            self.semantic_table.setItem(row, 1, QTableWidgetItem(identity_type))
+                            
+                            # Rule Name
+                            self.semantic_table.setItem(row, 2, QTableWidgetItem(
+                                mapping.get('rule_name', '')
+                            ))
+                            
+                            # Category
+                            self.semantic_table.setItem(row, 3, QTableWidgetItem(
+                                mapping.get('category', '')
+                            ))
+                            
+                            # Confidence
+                            confidence = mapping.get('confidence', 0.0)
+                            self.semantic_table.setItem(row, 4, QTableWidgetItem(
+                                f"{confidence:.0%}"
+                            ))
+                            
+                            # Severity
+                            severity = mapping.get('severity', 'info').upper()
+                            self.semantic_table.setItem(row, 5, QTableWidgetItem(severity))
+                            
+                            row += 1
         
-        self.records_text.setPlainText(records_text)
+        # Hide/show semantic section based on whether there's data
+        if has_semantic_data:
+            self.semantic_widget.setVisible(True)
+            # Reset to default sizes: 80% feather (index 0), 20% semantic (index 1)
+            self.splitter.setSizes([800, 200])
+        else:
+            self.semantic_widget.setVisible(False)
+            # Feather table takes 100% when no semantic data
+            self.splitter.setSizes([1000, 0])
+        
+        # === POPULATE FEATHER RECORDS TABLE (TWO COLUMNS) ===
+        feather_records = match_data.get('feather_records', {})
+        self.feather_table.setRowCount(0)
+        
+        if feather_records:
+            # For now, show first feather (in future, could add tabs/dropdown for multiple feathers)
+            first_feather = list(feather_records.keys())[0]
+            record = feather_records[first_feather]
+            
+            feather_count = len(feather_records)
+            self.feather_selector_label.setText(f"{first_feather} ({feather_count})")
+            
+            row = 0
+            for key, value in record.items():
+                # Skip internal fields
+                if key.startswith('_'):
+                    continue
+                
+                self.feather_table.insertRow(row)
+                
+                # Field column (bold)
+                field_item = QTableWidgetItem(key)
+                field_font = QFont()
+                field_font.setBold(True)
+                field_item.setFont(field_font)
+                self.feather_table.setItem(row, 0, field_item)
+                
+                # Value column
+                value_str = str(value)
+                
+                # Check if this field has semantic mapping
+                identity_value = record.get('identity_value', '')
+                semantic_match = None
+                
+                if identity_value and semantic_data:
+                    # Find semantic data for this identity
+                    for semantic_key, semantic_info in semantic_data.items():
+                        if not isinstance(semantic_info, dict):
+                            continue
+                        
+                        # Check if this semantic data matches the identity
+                        semantic_identity = semantic_info.get('identity_value', '')
+                        if semantic_identity:
+                            # Split by | and check if identity matches
+                            semantic_values = [v.strip().upper() for v in semantic_identity.split('|')]
+                            if identity_value.upper() in semantic_values:
+                                # Get the semantic value
+                                semantic_mappings = semantic_info.get('semantic_mappings', [])
+                                if semantic_mappings and isinstance(semantic_mappings, list):
+                                    semantic_match = semantic_mappings[0].get('semantic_value', '')
+                                    break
+                
+                # Add semantic value indicator if available
+                if semantic_match and isinstance(value, str) and identity_value.upper() in value_str.upper():
+                    value_str += f" ✨ ({semantic_match})"
+                
+                value_item = QTableWidgetItem(value_str)
+                self.feather_table.setItem(row, 1, value_item)
+                
+                row += 1
 
 
 class FilterPanelWidget(QWidget):
@@ -1482,6 +1898,8 @@ class DynamicResultsTabWidget(QWidget):
                     fm.feather_id,
                     fm.artifact_type,
                     fm.total_records,
+                    fm.identities_extracted,
+                    fm.identities_found,
                     COUNT(m.match_id) as matches_count
                 FROM feather_metadata fm
                 LEFT JOIN results r ON fm.result_id = r.result_id
@@ -1495,16 +1913,16 @@ class DynamicResultsTabWidget(QWidget):
             
             if rows:
                 for row in rows:
-                    feather_id, artifact_type, total_records, matches_count = row
+                    feather_id, artifact_type, total_records, identities_extracted, identities_found, matches_count = row
                     if feather_id:  # Skip None feather_ids
                         feather_metadata[feather_id] = {
                             'feather_name': feather_id,
                             'artifact_type': artifact_type or 'Unknown',
-                            'identities_found': matches_count,
-                            'identities_final': matches_count,
+                            'identities_found': identities_found or 0,  # FIXED: Read from database
+                            'identities_final': identities_found or 0,
                             'matches_created': matches_count,
                             'records_processed': total_records or 0,
-                            'identities_extracted': matches_count,
+                            'identities_extracted': identities_extracted or 0,
                             'identities_filtered': 0
                         }
             
@@ -1546,11 +1964,11 @@ class DynamicResultsTabWidget(QWidget):
                         feather_metadata[feather_id] = {
                             'feather_name': feather_id,
                             'artifact_type': artifact_type or 'Unknown',
-                            'identities_found': matches_count,
-                            'identities_final': matches_count,
+                            'identities_found': 0,  # FIXED: Can't determine from matches table alone
+                            'identities_final': 0,
                             'matches_created': matches_count,
                             'records_processed': 0,
-                            'identities_extracted': matches_count,
+                            'identities_extracted': 0,  # FIXED: Can't determine from matches table alone
                             'identities_filtered': 0
                         }
             
@@ -1692,7 +2110,7 @@ class DynamicResultsTabWidget(QWidget):
             print(f"[Error] Failed to handle CSV export: {e}")
             QMessageBox.critical(self, "Export Error", f"Failed to export:\n{str(e)}")
     
-    def create_wing_result_tab(self, wing_summary: dict) -> None:
+    def create_wing_result_tab(self, wing_summary: dict, show_progress=True) -> None:
         """
         Create a new tab for a wing's results.
         
@@ -1709,6 +2127,7 @@ class DynamicResultsTabWidget(QWidget):
                 - total_matches: int
                 - wing_index: int
                 - feather_metadata: dict (for wing-specific charts)
+            show_progress: If False, suppresses progress dialogs
         
         Requirements: 2.1, 2.2, 2.3
         """
@@ -1759,9 +2178,9 @@ class DynamicResultsTabWidget(QWidget):
             # Add appropriate tree viewer below (Identity or Time-Based)
             viewer = None
             if engine_type == 'identity_based':
-                viewer = self._create_identity_viewer(database_path, execution_id)
+                viewer = self._create_identity_viewer(database_path, execution_id, show_progress=show_progress)
             elif engine_type in ['time_window_scanning', 'time_based']:
-                viewer = self._create_timebased_viewer(database_path, execution_id)
+                viewer = self._create_timebased_viewer(database_path, execution_id, show_progress=show_progress)
             else:
                 # Unknown engine type - create error widget
                 print(f"[Error] Unknown engine type: {engine_type}")
@@ -1862,7 +2281,8 @@ class DynamicResultsTabWidget(QWidget):
             header_layout.addWidget(matches_label)
             
             execution_time = wing_summary.get('execution_time', 0)
-            time_label = QLabel(f"Time: {execution_time:.1f}s")
+            time_display = format_time_duration(execution_time)
+            time_label = QLabel(f"Time: {time_display}")
             time_label.setStyleSheet("font-size: 9pt; color: #94A3B8;")
             header_layout.addWidget(time_label)
             
@@ -1902,9 +2322,14 @@ class DynamicResultsTabWidget(QWidget):
             traceback.print_exc()
             return None
     
-    def _create_identity_viewer(self, database_path: str, execution_id: str):
+    def _create_identity_viewer(self, database_path: str, execution_id: str, show_progress=True):
         """
         Create and populate Identity-Based results viewer.
+        
+        Args:
+            database_path: Path to the database
+            execution_id: Execution ID to load
+            show_progress: If False, suppresses the progress dialog
         
         Requirements: 2.4, 3.1
         """
@@ -1932,7 +2357,7 @@ class DynamicResultsTabWidget(QWidget):
             conn = sqlite3.connect(database_path)
             cursor = conn.cursor()
             
-            # Load matches for this execution
+            # Load matches for this execution (including semantic_data for Task 1)
             cursor.execute("""
                 SELECT 
                     m.match_id,
@@ -1946,7 +2371,8 @@ class DynamicResultsTabWidget(QWidget):
                     m.timestamp,
                     m.feather_records,
                     m.weighted_score_value,
-                    m.weighted_score_interpretation
+                    m.weighted_score_interpretation,
+                    m.semantic_data
                 FROM matches m
                 JOIN results r ON m.result_id = r.result_id
                 WHERE r.execution_id = ?
@@ -1956,11 +2382,19 @@ class DynamicResultsTabWidget(QWidget):
             for row in cursor.fetchall():
                 match_id, feather_id, artifact_type, score, feather_count, \
                 time_spread, app, file_path, timestamp, feather_records_json, \
-                weighted_score_value, weighted_score_interpretation = row
+                weighted_score_value, weighted_score_interpretation, semantic_data_json = row
                 
                 # Parse JSON fields
                 import json
                 feather_records = json.loads(feather_records_json) if feather_records_json else {}
+                
+                # Parse semantic_data if present (Task 1 fix)
+                semantic_data = None
+                if semantic_data_json:
+                    try:
+                        semantic_data = json.loads(semantic_data_json)
+                    except:
+                        pass
                 
                 # Reconstruct weighted_score dict if values exist
                 weighted_score = None
@@ -1981,7 +2415,8 @@ class DynamicResultsTabWidget(QWidget):
                     anchor_artifact_type=artifact_type,
                     matched_application=app,
                     matched_file_path=file_path,
-                    weighted_score=weighted_score
+                    weighted_score=weighted_score,
+                    semantic_data=semantic_data
                 )
                 matches.append(match)
             
@@ -2001,9 +2436,26 @@ class DynamicResultsTabWidget(QWidget):
                 except:
                     pass
             
+            # Load statistics from results table
+            cursor.execute("""
+                SELECT 
+                    feathers_processed,
+                    total_records_scanned,
+                    execution_duration_seconds
+                FROM results
+                WHERE execution_id = ?
+                LIMIT 1
+            """, (execution_id,))
+            
+            stats_row = cursor.fetchone()
+            feathers_processed = stats_row[0] if stats_row and stats_row[0] is not None else 0
+            total_records_scanned = stats_row[1] if stats_row and stats_row[1] is not None else 0
+            execution_duration_seconds = stats_row[2] if stats_row and stats_row[2] is not None else 0.0
+            
             conn.close()
             
             print(f"[DynamicResultsTabWidget] Loaded {len(matches)} matches from database")
+            print(f"[DynamicResultsTabWidget] Statistics: feathers={feathers_processed}, records={total_records_scanned}, time={execution_duration_seconds:.1f}s")
             
             # Create a minimal CorrelationResult object
             exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
@@ -2012,11 +2464,14 @@ class DynamicResultsTabWidget(QWidget):
                 wing_name=f"Wing {exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str}",
                 matches=matches,
                 total_matches=len(matches),
-                feather_metadata=feather_metadata
+                feather_metadata=feather_metadata,
+                feathers_processed=feathers_processed,
+                total_records_scanned=total_records_scanned,
+                execution_duration_seconds=execution_duration_seconds
             )
             
-            # Load into viewer
-            viewer.load_from_correlation_result(result)
+            # Load into viewer (suppress progress dialog since parent already shows one)
+            viewer.load_from_correlation_result(result, show_progress=show_progress)
             
             return viewer
             
@@ -2049,9 +2504,14 @@ class DynamicResultsTabWidget(QWidget):
             
             return viewer
     
-    def _create_timebased_viewer(self, database_path: str, execution_id: str):
+    def _create_timebased_viewer(self, database_path: str, execution_id: str, show_progress=True):
         """
         Create and populate Time-Based results viewer from timebased_results_viewer.py.
+        
+        Args:
+            database_path: Path to the database
+            execution_id: Execution ID to load
+            show_progress: If False, suppresses the progress dialog
         
         Requirements: 2.5, 3.2
         """
@@ -2079,7 +2539,7 @@ class DynamicResultsTabWidget(QWidget):
             conn = sqlite3.connect(database_path)
             cursor = conn.cursor()
             
-            # Load matches for this execution
+            # Load matches for this execution (including semantic_data for Task 1)
             cursor.execute("""
                 SELECT 
                     m.match_id,
@@ -2093,7 +2553,8 @@ class DynamicResultsTabWidget(QWidget):
                     m.timestamp,
                     m.feather_records,
                     m.weighted_score_value,
-                    m.weighted_score_interpretation
+                    m.weighted_score_interpretation,
+                    m.semantic_data
                 FROM matches m
                 JOIN results r ON m.result_id = r.result_id
                 WHERE r.execution_id = ?
@@ -2103,11 +2564,19 @@ class DynamicResultsTabWidget(QWidget):
             for row in cursor.fetchall():
                 match_id, feather_id, artifact_type, score, feather_count, \
                 time_spread, app, file_path, timestamp, feather_records_json, \
-                weighted_score_value, weighted_score_interpretation = row
+                weighted_score_value, weighted_score_interpretation, semantic_data_json = row
                 
                 # Parse JSON fields
                 import json
                 feather_records = json.loads(feather_records_json) if feather_records_json else {}
+                
+                # Parse semantic_data if present (Task 1 fix)
+                semantic_data = None
+                if semantic_data_json:
+                    try:
+                        semantic_data = json.loads(semantic_data_json)
+                    except:
+                        pass
                 
                 # Reconstruct weighted_score dict if values exist
                 weighted_score = None
@@ -2128,7 +2597,8 @@ class DynamicResultsTabWidget(QWidget):
                     anchor_artifact_type=artifact_type,
                     matched_application=app,
                     matched_file_path=file_path,
-                    weighted_score=weighted_score
+                    weighted_score=weighted_score,
+                    semantic_data=semantic_data
                 )
                 matches.append(match)
             
@@ -2148,9 +2618,26 @@ class DynamicResultsTabWidget(QWidget):
                 except:
                     pass
             
+            # Load statistics from results table
+            cursor.execute("""
+                SELECT 
+                    feathers_processed,
+                    total_records_scanned,
+                    execution_duration_seconds
+                FROM results
+                WHERE execution_id = ?
+                LIMIT 1
+            """, (execution_id,))
+            
+            stats_row = cursor.fetchone()
+            feathers_processed = stats_row[0] if stats_row and stats_row[0] is not None else 0
+            total_records_scanned = stats_row[1] if stats_row and stats_row[1] is not None else 0
+            execution_duration_seconds = stats_row[2] if stats_row and stats_row[2] is not None else 0.0
+            
             conn.close()
             
             print(f"[DynamicResultsTabWidget] Loaded {len(matches)} matches from database")
+            print(f"[DynamicResultsTabWidget] Statistics: feathers={feathers_processed}, records={total_records_scanned}, time={execution_duration_seconds:.1f}s")
             
             # Create a minimal CorrelationResult object
             exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
@@ -2159,11 +2646,14 @@ class DynamicResultsTabWidget(QWidget):
                 wing_name=f"Wing {exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str}",
                 matches=matches,
                 total_matches=len(matches),
-                feather_metadata=feather_metadata
+                feather_metadata=feather_metadata,
+                feathers_processed=feathers_processed,
+                total_records_scanned=total_records_scanned,
+                execution_duration_seconds=execution_duration_seconds
             )
             
-            # Load into viewer
-            viewer.load_from_correlation_result(result)
+            # Load into viewer (suppress progress dialog since parent already shows one)
+            viewer.load_from_correlation_result(result, show_progress=show_progress)
             
             return viewer
             
@@ -2196,7 +2686,7 @@ class DynamicResultsTabWidget(QWidget):
             
             return viewer
     
-    def load_last_results(self, output_dir: str) -> None:
+    def load_last_results(self, output_dir: str, progress_callback=None) -> None:
         """
         Load the most recent execution results from output directory.
         
@@ -2205,20 +2695,36 @@ class DynamicResultsTabWidget(QWidget):
         Process:
         1. Scan output directory for most recent execution
         2. Detect all wings from that execution
-        3. Create Summary tab with aggregate statistics
-        4. Create individual wing tabs in execution order
+        3. Update Summary tab with aggregate statistics
+        4. Create single Results tab with all wings combined as sub-tabs
         5. Handle both database and JSON formats
         
-        Requirements: 9.1, 9.2, 9.3
+        Tab Structure Created:
+        - Summary (index 0): Aggregate statistics, charts, wing breakdown
+        - Results - Exec XXX (index 1): Combined viewer with wing sub-tabs
+          ├── Wing 1 (sub-tab)
+          ├── Wing 2 (sub-tab)
+          └── Wing N (sub-tab)
+        
+        This keeps all wings from the same execution grouped together.
+        
+        Requirements: 5.1, 5.2, 5.3, 5.4, 9.1, 9.2, 9.3
         
         Args:
             output_dir: Path to output directory containing results
+            progress_callback: Optional callback function(message: str, percent: int)
         """
         try:
             from pathlib import Path
             import sqlite3
             
+            def update_progress(message: str, percent: int):
+                """Helper to update progress if callback provided."""
+                if progress_callback:
+                    progress_callback(message, percent)
+            
             print(f"[DynamicResultsTabWidget] Loading last results from: {output_dir}")
+            update_progress("Checking output directory...", 10)
             
             # Check if output directory exists
             output_path = Path(output_dir)
@@ -2231,6 +2737,8 @@ class DynamicResultsTabWidget(QWidget):
                 )
                 return
             
+            update_progress("Looking for database file...", 20)
+            
             # Look for database file
             db_path = output_path / "correlation_results.db"
             if not db_path.exists():
@@ -2242,15 +2750,19 @@ class DynamicResultsTabWidget(QWidget):
                 )
                 return
             
+            update_progress("Connecting to database...", 30)
+            
             # Connect to database and find most recent execution
             conn = sqlite3.connect(str(db_path))
             cursor = conn.cursor()
             
+            update_progress("Finding most recent execution...", 40)
+            
             # Get the most recent execution_id
             cursor.execute("""
-                SELECT execution_id, engine_type, created_at
+                SELECT execution_id, engine_type, execution_time
                 FROM executions
-                ORDER BY created_at DESC
+                ORDER BY execution_time DESC
                 LIMIT 1
             """)
             
@@ -2265,10 +2777,12 @@ class DynamicResultsTabWidget(QWidget):
                 )
                 return
             
-            execution_id, engine_type, created_at = row
-            print(f"[DynamicResultsTabWidget] Found most recent execution: {execution_id} ({engine_type}) at {created_at}")
+            execution_id, engine_type, execution_time = row
+            print(f"[DynamicResultsTabWidget] Found most recent execution: {execution_id} ({engine_type}) at {execution_time}")
             
             conn.close()
+            
+            update_progress(f"Detecting wings from execution {execution_id}...", 50)
             
             # Detect all wings from this execution
             wing_summaries = self._detect_wings_from_execution(str(db_path), execution_id)
@@ -2284,17 +2798,9 @@ class DynamicResultsTabWidget(QWidget):
             
             print(f"[DynamicResultsTabWidget] Detected {len(wing_summaries)} wings for execution {execution_id}")
             
-            # Clear existing tabs (except Summary tab at index 0)
-            tab_widget = self.enhanced_tab_widget.tab_widget
-            while tab_widget.count() > 1:
-                tab_widget.removeTab(1)
+            # Calculate aggregate statistics first
+            update_progress("Calculating aggregate statistics...", 60)
             
-            # Create wing tabs in execution order
-            for wing_summary in wing_summaries:
-                print(f"[DynamicResultsTabWidget] Creating tab for wing: {wing_summary.get('wing_name')}")
-                self.create_wing_result_tab(wing_summary)
-            
-            # Calculate aggregate statistics
             aggregate_stats = {
                 'total_wings_executed': len(wing_summaries),
                 'total_matches_all_wings': sum(ws.get('total_matches', 0) for ws in wing_summaries),
@@ -2304,8 +2810,12 @@ class DynamicResultsTabWidget(QWidget):
             }
             
             # Aggregate feather statistics from all wings
+            print(f"[DynamicResultsTabWidget] Aggregating feather statistics from {len(wing_summaries)} wings...")
             for wing_summary in wing_summaries:
                 wing_feather_metadata = wing_summary.get('feather_metadata', {})
+                wing_name = wing_summary.get('wing_name', 'Unknown')
+                print(f"[DynamicResultsTabWidget]   Wing '{wing_name}': {len(wing_feather_metadata)} feathers in metadata")
+                
                 for feather_id, metadata in wing_feather_metadata.items():
                     if feather_id.startswith('_'):
                         continue
@@ -2313,26 +2823,371 @@ class DynamicResultsTabWidget(QWidget):
                     if feather_id not in aggregate_stats['feather_statistics']:
                         aggregate_stats['feather_statistics'][feather_id] = {
                             'identities_found': 0,
+                            'identities_extracted': 0,  # Add this for extraction rate
                             'records_processed': 0,
                             'matches_created': 0
                         }
                     
                     if isinstance(metadata, dict):
-                        aggregate_stats['feather_statistics'][feather_id]['identities_found'] += metadata.get('identities_found', metadata.get('identities_final', 0))
-                        aggregate_stats['feather_statistics'][feather_id]['records_processed'] += metadata.get('records_processed', 0)
-                        aggregate_stats['feather_statistics'][feather_id]['matches_created'] += metadata.get('matches_created', 0)
+                        identities = metadata.get('identities_found', metadata.get('identities_final', 0))
+                        extracted = metadata.get('identities_extracted', identities)  # Get extracted count
+                        records = metadata.get('records_processed', 0)
+                        matches = metadata.get('matches_created', 0)
+                        
+                        aggregate_stats['feather_statistics'][feather_id]['identities_found'] += identities
+                        aggregate_stats['feather_statistics'][feather_id]['identities_extracted'] += extracted
+                        aggregate_stats['feather_statistics'][feather_id]['records_processed'] += records
+                        aggregate_stats['feather_statistics'][feather_id]['matches_created'] += matches
+                        
+                        print(f"[DynamicResultsTabWidget]     - {feather_id}: identities={identities}, extracted={extracted}, records={records}, matches={matches}")
+                    else:
+                        print(f"[DynamicResultsTabWidget]     - {feather_id}: metadata is not a dict (type={type(metadata)})")
             
-            # Update Summary tab with aggregate statistics
-            self.update_summary_tab(aggregate_stats)
+            print(f"[DynamicResultsTabWidget] ✓ Aggregated statistics for {len(aggregate_stats['feather_statistics'])} feathers")
+            
+            # Don't clear existing tabs - add new tabs for this execution (Requirements 5.1, 5.2)
+            update_progress("Creating new tabs...", 70)
+            tab_widget = self.enhanced_tab_widget.tab_widget
+            
+            # Create Summary tab for this execution (Requirements 5.1, 5.2)
+            update_progress("Creating Summary tab...", 75)
+            
+            # Create a new widget for the summary
+            summary_widget = QWidget()
+            summary_layout = QVBoxLayout(summary_widget)
+            summary_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Build summary content (reuse update_summary_tab logic but in a new widget)
+            exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
+            exec_id_display = exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str
+            
+            # Create scroll area for summary content
+            scroll_area = QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setFrameShape(QFrame.NoFrame)
+            scroll_area.setStyleSheet("""
+                QScrollArea {
+                    background-color: #0B1220;
+                    border: none;
+                }
+                QScrollBar:vertical {
+                    background-color: #1E293B;
+                    width: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:vertical {
+                    background-color: #475569;
+                    border-radius: 6px;
+                    min-height: 20px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background-color: #64748B;
+                }
+            """)
+            
+            # Create container widget for scroll area
+            scroll_content = QWidget()
+            scroll_layout = QVBoxLayout(scroll_content)
+            scroll_layout.setContentsMargins(10, 10, 10, 10)
+            scroll_layout.setSpacing(12)
+            
+            # Create aggregate statistics section - compact horizontal layout with execution ID
+            stats_frame = QFrame()
+            stats_frame.setStyleSheet("""
+                QFrame {
+                    background-color: #1E293B;
+                    border: 1px solid #334155;
+                    border-radius: 4px;
+                    padding: 4px;
+                }
+            """)
+            stats_layout = QHBoxLayout(stats_frame)
+            stats_layout.setContentsMargins(6, 4, 6, 4)
+            stats_layout.setSpacing(4)
+            
+            # Title
+            title_label = QLabel("Stats:")
+            title_label.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
+            stats_layout.addWidget(title_label)
+            
+            # All stats in one horizontal line including execution ID
+            total_wings = aggregate_stats.get('total_wings_executed', 0)
+            total_matches = aggregate_stats.get('total_matches_all_wings', 0)
+            execution_times = aggregate_stats.get('execution_times', [])
+            total_time = sum(execution_times) if execution_times else 0
+            avg_matches = total_matches / total_wings if total_wings > 0 else 0
+            
+            # Format time for display
+            time_display = format_time_duration(total_time)
+            
+            stats_text = QLabel(f"Exec ID: <span style='color:#00FFFF;font-weight:bold;'>{exec_id_display}</span> | "
+                               f"Wings: <span style='color:#4CAF50;font-weight:bold;'>{total_wings}</span> | "
+                               f"Matches: <span style='color:#4CAF50;font-weight:bold;'>{total_matches:,}</span> | "
+                               f"Time: <span style='color:#00FFFF;font-weight:bold;'>{time_display}</span> | "
+                               f"Avg: <span style='color:#FF9800;font-weight:bold;'>{avg_matches:.0f}</span>")
+            stats_text.setStyleSheet("color: #94A3B8; font-size: 8pt;")
+            stats_text.setTextFormat(Qt.RichText)
+            stats_text.setToolTip(f"Full Execution ID: {exec_id_str}")
+            stats_layout.addWidget(stats_text)
+            stats_layout.addStretch()
+            
+            scroll_layout.addWidget(stats_frame)
+            
+            # Add charts if feather statistics available
+            feather_statistics = aggregate_stats.get('feather_statistics', {})
+            if feather_statistics:
+                # Create charts frame
+                charts_frame = QFrame()
+                charts_frame.setStyleSheet("""
+                    QFrame {
+                        background-color: #0B1220;
+                        border: 1px solid #334155;
+                        border-radius: 4px;
+                    }
+                """)
+                charts_layout = QVBoxLayout(charts_frame)
+                charts_layout.setContentsMargins(8, 8, 8, 8)
+                charts_layout.setSpacing(8)
+                
+                # Title
+                charts_title = QLabel("Feather Statistics Charts")
+                charts_title.setStyleSheet("color: #00FFFF; font-size: 9pt; font-weight: bold;")
+                charts_layout.addWidget(charts_title)
+                
+                # Create horizontal layout for charts
+                charts_row = QHBoxLayout()
+                charts_row.setSpacing(10)
+                
+                # Chart 1: Matches by Feather (Bar Chart)
+                matches_data = {}
+                for feather_id, stats in feather_statistics.items():
+                    if feather_id.startswith('_'):
+                        continue
+                    matches = stats.get('identities_found', stats.get('matches_created', 0))
+                    if matches > 0:
+                        matches_data[feather_id] = matches
+                
+                if matches_data:
+                    sorted_data = dict(sorted(matches_data.items(), key=lambda x: x[1], reverse=True)[:10])
+                    chart1 = PyQt5BarChart()
+                    chart1.set_data(sorted_data, "Matches by Feather", "Matches")
+                    chart1.setMinimumHeight(180)
+                    chart1.show()  # Ensure chart is visible
+                    charts_row.addWidget(chart1, stretch=1)
+                
+                # Chart 2: Records by Feather (Pie Chart with Breakdown)
+                records_data = {}
+                for feather_id, stats in feather_statistics.items():
+                    if feather_id.startswith('_'):
+                        continue
+                    records = stats.get('records_processed', 0)
+                    if records > 0:
+                        records_data[feather_id] = records
+                
+                if records_data:
+                    sorted_data = dict(sorted(records_data.items(), key=lambda x: x[1], reverse=True)[:10])
+                    # Always use PyQt5PieChart with legend displayed as text labels
+                    chart2 = PyQt5PieChart(show_legend=True)
+                    chart2.set_data(sorted_data, "Records by Feather")
+                    chart2.setMinimumHeight(200)
+                    chart2.setMinimumWidth(700)  # Ensure enough width for pie + two-column legend
+                    chart2.show()  # Ensure chart is visible
+                    charts_row.addWidget(chart2, stretch=1)
+                
+                charts_layout.addLayout(charts_row)
+                scroll_layout.addWidget(charts_frame)
+                
+                # Force update of charts to ensure they render
+                QApplication.processEvents()
+                print(f"[DynamicResultsTabWidget] ✓ Charts created and added to layout")
+            
+            # Add wing breakdown table
+            wing_frame = QFrame()
+            wing_frame.setStyleSheet("""
+                QFrame {
+                    background-color: #1E293B;
+                    border: 1px solid #334155;
+                    border-radius: 4px;
+                    padding: 4px;
+                }
+            """)
+            wing_layout = QVBoxLayout(wing_frame)
+            wing_layout.setContentsMargins(6, 4, 6, 4)
+            wing_layout.setSpacing(4)
+            
+            wing_title = QLabel(f"Wing Breakdown ({total_wings} wings):")
+            wing_title.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
+            wing_layout.addWidget(wing_title)
+            
+            # Helper function to format time
+            def format_time(seconds):
+                """Format time as seconds, minutes, or hours"""
+                if seconds < 60:
+                    return f"{seconds:.1f}s"
+                elif seconds < 3600:
+                    return f"{seconds/60:.1f}m"
+                else:
+                    return f"{seconds/3600:.2f}h"
+            
+            wing_table = QTableWidget()
+            wing_table.setColumnCount(4)
+            wing_table.setHorizontalHeaderLabels(["Wing Name", "Engine Type", "Matches", "Time"])
+            wing_table.horizontalHeader().setStretchLastSection(False)
+            wing_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            wing_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            wing_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            wing_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+            wing_table.verticalHeader().setVisible(False)
+            wing_table.setEditTriggers(QTableWidget.NoEditTriggers)
+            wing_table.setSelectionBehavior(QTableWidget.SelectRows)
+            wing_table.setMaximumHeight(200)
+            wing_table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #0B1220;
+                    color: #E2E8F0;
+                    border: 1px solid #334155;
+                    gridline-color: #334155;
+                }
+                QTableWidget::item {
+                    padding: 4px;
+                }
+                QHeaderView::section {
+                    background-color: #1E293B;
+                    color: #00FFFF;
+                    padding: 4px;
+                    border: 1px solid #334155;
+                    font-weight: bold;
+                }
+            """)
+            
+            wing_summaries = aggregate_stats.get('wing_summaries', [])
+            wing_table.setRowCount(len(wing_summaries))
+            
+            for row, wing_summary in enumerate(wing_summaries):
+                wing_name = wing_summary.get('wing_name', f'Wing {row}')
+                engine_type = wing_summary.get('engine_type', 'unknown')
+                matches = wing_summary.get('total_matches', 0)
+                exec_time = wing_summary.get('execution_time', 0)
+                
+                wing_table.setItem(row, 0, QTableWidgetItem(wing_name))
+                wing_table.setItem(row, 1, QTableWidgetItem(engine_type))
+                
+                matches_item = QTableWidgetItem(f"{matches:,}")
+                matches_item.setForeground(QColor("#4CAF50"))
+                wing_table.setItem(row, 2, matches_item)
+                
+                time_item = QTableWidgetItem(format_time(exec_time))
+                time_item.setForeground(QColor("#00FFFF"))
+                wing_table.setItem(row, 3, time_item)
+            
+            wing_layout.addWidget(wing_table)
+            scroll_layout.addWidget(wing_frame)
+            
+            scroll_area.setWidget(scroll_content)
+            summary_layout.addWidget(scroll_area)
+            
+            # Update the existing Summary tab (index 0) instead of adding a new one
+            # The Summary tab was created in _create_summary_tab() during __init__
+            existing_summary_tab = tab_widget.widget(0)
+            if existing_summary_tab:
+                # Replace the content of the existing Summary tab
+                existing_layout = existing_summary_tab.layout()
+                if existing_layout:
+                    # Clear existing content
+                    while existing_layout.count():
+                        item = existing_layout.takeAt(0)
+                        if item.widget():
+                            item.widget().deleteLater()
+                    # Add new summary content
+                    existing_layout.addWidget(scroll_area)
+                    print(f"[DynamicResultsTabWidget] ✓ Updated existing Summary tab (index 0)")
+                else:
+                    # No layout, create one and add content
+                    new_layout = QVBoxLayout(existing_summary_tab)
+                    new_layout.setContentsMargins(0, 0, 0, 0)
+                    new_layout.addWidget(scroll_area)
+                    print(f"[DynamicResultsTabWidget] ✓ Created layout and updated Summary tab (index 0)")
+                
+                # Update tab title
+                tab_widget.setTabText(0, f"Summary - Exec {exec_id_display}")
+            else:
+                # No existing Summary tab, add a new one (shouldn't happen)
+                summary_tab_index = tab_widget.addTab(summary_widget, f"Summary - Exec {exec_id_display}")
+                print(f"[DynamicResultsTabWidget] ✓ Summary tab created at index {summary_tab_index}")
+            
+            # Create single combined Results tab for all wings from this execution (Requirements 5.1, 5.3, 5.4)
+            # All wings from the same execution are grouped together in one tab
+            update_progress("Creating Results tab with all wings...", 85)
+            
+            # Create a tabbed widget to hold all wing viewers from this execution
+            from PyQt5.QtWidgets import QTabWidget
+            combined_viewer = QTabWidget()
+            combined_viewer.setStyleSheet("""
+                QTabWidget::pane {
+                    border: 1px solid #334155;
+                    background-color: #0B1220;
+                }
+                QTabBar::tab {
+                    background-color: #1E293B;
+                    color: #94A3B8;
+                    padding: 6px 12px;
+                    margin-right: 2px;
+                    border: 1px solid #334155;
+                    border-bottom: none;
+                    border-top-left-radius: 4px;
+                    border-top-right-radius: 4px;
+                }
+                QTabBar::tab:selected {
+                    background-color: #0B1220;
+                    color: #00FFFF;
+                    border-bottom: 2px solid #00FFFF;
+                }
+                QTabBar::tab:hover {
+                    background-color: #334155;
+                }
+            """)
+            
+            # Add each wing as a sub-tab within the combined viewer
+            for i, wing_summary in enumerate(wing_summaries):
+                wing_name = wing_summary.get('wing_name', f'Wing {i}')
+                engine_type = wing_summary.get('engine_type', 'unknown')
+                database_path = wing_summary.get('database_path', str(db_path))
+                
+                progress_percent = 85 + int((i / len(wing_summaries)) * 10)
+                update_progress(f"Loading {wing_name}...", progress_percent)
+                
+                print(f"[DynamicResultsTabWidget] Creating viewer for wing: {wing_name} ({engine_type})")
+                
+                # Create appropriate viewer based on engine type
+                viewer = None
+                if engine_type == 'identity_based':
+                    viewer = self._create_identity_viewer(database_path, execution_id, show_progress=False)
+                elif engine_type in ['time_window_scanning', 'time_based']:
+                    viewer = self._create_timebased_viewer(database_path, execution_id, show_progress=False)
+                
+                if viewer:
+                    combined_viewer.addTab(viewer, wing_name)
+                    print(f"[DynamicResultsTabWidget]   ✓ Added {wing_name} to combined viewer")
+            
+            # Add the combined viewer as a single Results tab (Requirements 5.1, 5.3)
+            # This keeps all wings from the same execution together
+            tab_widget.addTab(combined_viewer, f"Results - Exec {exec_id_display}")
+            print(f"[DynamicResultsTabWidget] ✓ Results tab created with {len(wing_summaries)} wings combined")
+            
+            update_progress("Loading complete!", 100)
             
             print(f"[DynamicResultsTabWidget] ✓ Successfully loaded last results: {len(wing_summaries)} wings, {aggregate_stats['total_matches_all_wings']} total matches")
+            print(f"[DynamicResultsTabWidget] ✓ Created 2 tabs: Summary and Results (all wings combined) (Requirements 5.1, 5.2, 5.3)")
             
             QMessageBox.information(
                 self,
                 "Results Loaded",
                 f"Successfully loaded results from execution {execution_id}\n\n"
                 f"Wings: {len(wing_summaries)}\n"
-                f"Total Matches: {aggregate_stats['total_matches_all_wings']:,}"
+                f"Total Matches: {aggregate_stats['total_matches_all_wings']:,}\n\n"
+                f"Two tabs created:\n"
+                f"  • Summary - Exec {exec_id_display}\n"
+                f"  • Results - Exec {exec_id_display} (all {len(wing_summaries)} wings combined)"
             )
             
         except Exception as e:
@@ -2371,44 +3226,51 @@ class DynamicResultsTabWidget(QWidget):
                     r.result_id,
                     r.wing_id,
                     r.wing_name,
-                    r.wing_index,
-                    r.engine_type,
+                    e.engine_type,
                     r.execution_id,
                     r.total_matches,
-                    r.execution_time,
-                    r.feather_metadata,
-                    r.created_at
+                    r.execution_duration_seconds,
+                    r.feather_metadata
                 FROM results r
+                JOIN executions e ON r.execution_id = e.execution_id
                 WHERE r.execution_id = ?
-                ORDER BY r.wing_index ASC
+                ORDER BY r.result_id ASC
             """, (execution_id,))
             
             wing_summaries = []
+            wing_index = 0  # Track wing index manually
             
             for row in cursor.fetchall():
-                result_id, wing_id, wing_name, wing_index, engine_type, exec_id, \
-                total_matches, execution_time, feather_metadata_json, created_at = row
+                result_id, wing_id, wing_name, engine_type, exec_id, \
+                total_matches, execution_duration, feather_metadata_json = row
                 
                 # Parse feather_metadata JSON
                 feather_metadata = {}
                 if feather_metadata_json:
                     try:
                         feather_metadata = json.loads(feather_metadata_json)
-                    except:
-                        print(f"[DynamicResultsTabWidget] Warning: Failed to parse feather_metadata for wing {wing_name}")
+                        print(f"[DynamicResultsTabWidget] Parsed feather_metadata for '{wing_name}': {len(feather_metadata)} feathers")
+                        # Log first few feather IDs for debugging
+                        feather_ids = [fid for fid in feather_metadata.keys() if not fid.startswith('_')]
+                        if feather_ids:
+                            print(f"[DynamicResultsTabWidget]   Feather IDs: {feather_ids[:5]}{'...' if len(feather_ids) > 5 else ''}")
+                    except Exception as e:
+                        print(f"[DynamicResultsTabWidget] Warning: Failed to parse feather_metadata for wing {wing_name}: {e}")
                 
                 # Create wing summary dict
                 wing_summary = {
                     'wing_name': wing_name or f"Wing {wing_index}",
-                    'wing_index': wing_index or 0,
+                    'wing_index': wing_index,
                     'engine_type': engine_type or 'unknown',
                     'execution_id': exec_id,
                     'database_path': database_path,
                     'total_matches': total_matches or 0,
-                    'execution_time': execution_time or 0.0,
+                    'execution_time': execution_duration or 0.0,
                     'feather_metadata': feather_metadata,
-                    'timestamp': created_at
+                    'timestamp': execution_duration  # Use execution_duration from results table
                 }
+                
+                wing_index += 1  # Increment for next wing
                 
                 wing_summaries.append(wing_summary)
                 print(f"[DynamicResultsTabWidget] Detected wing: {wing_name} (index={wing_index}, matches={total_matches})")
@@ -2477,6 +3339,13 @@ class DynamicResultsTabWidget(QWidget):
                 }
             """)
             
+            # Add Execution ID header (Requirements 3.1, 3.3)
+            # Extract execution_id from wing_summaries
+            wing_summaries = aggregate_stats.get('wing_summaries', [])
+            execution_id = None
+            if wing_summaries and len(wing_summaries) > 0:
+                execution_id = wing_summaries[0].get('execution_id', None)
+            
             # Create scroll area for summary content
             scroll_area = QScrollArea()
             scroll_area.setWidgetResizable(True)
@@ -2526,23 +3395,34 @@ class DynamicResultsTabWidget(QWidget):
             title_label.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
             stats_layout.addWidget(title_label)
             
-            # All stats in one horizontal line
+            # All stats in one horizontal line including execution ID
             total_wings = aggregate_stats.get('total_wings_executed', 0)
             total_matches = aggregate_stats.get('total_matches_all_wings', 0)
             execution_times = aggregate_stats.get('execution_times', [])
             total_time = sum(execution_times) if execution_times else 0
             avg_matches = total_matches / total_wings if total_wings > 0 else 0
             
-            stats_text = QLabel(f"Wings: <span style='color:#4CAF50;font-weight:bold;'>{total_wings}</span> | "
+            # Format time for display
+            time_display = format_time_duration(total_time)
+            
+            # Format execution ID
+            exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id if execution_id else "N/A"
+            exec_id_display = exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str
+            
+            stats_text = QLabel(f"Exec ID: <span style='color:#00FFFF;font-weight:bold;'>{exec_id_display}</span> | "
+                               f"Wings: <span style='color:#4CAF50;font-weight:bold;'>{total_wings}</span> | "
                                f"Matches: <span style='color:#4CAF50;font-weight:bold;'>{total_matches:,}</span> | "
-                               f"Time: <span style='color:#00FFFF;font-weight:bold;'>{total_time:.1f}s</span> | "
+                               f"Time: <span style='color:#00FFFF;font-weight:bold;'>{time_display}</span> | "
                                f"Avg: <span style='color:#FF9800;font-weight:bold;'>{avg_matches:.0f}</span>")
             stats_text.setStyleSheet("color: #94A3B8; font-size: 8pt;")
             stats_text.setTextFormat(Qt.RichText)
+            if execution_id:
+                stats_text.setToolTip(f"Full Execution ID: {exec_id_str}")
             stats_layout.addWidget(stats_text)
             stats_layout.addStretch()
             
             scroll_layout.addWidget(stats_frame)
+            print(f"[DynamicResultsTabWidget] ✓ Stats with Execution ID added to Summary tab: {exec_id_str}")
             
             # Combine feather statistics from all wings
             feather_statistics = aggregate_stats.get('feather_statistics', {})
@@ -2590,6 +3470,7 @@ class DynamicResultsTabWidget(QWidget):
                         if feather_id not in feather_statistics:
                             feather_statistics[feather_id] = {
                                 'identities_found': 0,
+                                'identities_extracted': 0,  # FIXED: Add identities_extracted
                                 'records_processed': 0,
                                 'matches_created': 0
                             }
@@ -2597,184 +3478,222 @@ class DynamicResultsTabWidget(QWidget):
                         # Aggregate counts
                         if isinstance(metadata, dict):
                             feather_statistics[feather_id]['identities_found'] += metadata.get('identities_found', metadata.get('identities_final', 0))
+                            feather_statistics[feather_id]['identities_extracted'] += metadata.get('identities_extracted', metadata.get('identities_found', 0))  # FIXED: Add with fallback
                             feather_statistics[feather_id]['records_processed'] += metadata.get('records_processed', 0)
                             feather_statistics[feather_id]['matches_created'] += metadata.get('matches_created', 0)
-                            print(f"[DynamicResultsTabWidget]   - {feather_id}: identities={metadata.get('identities_found', 0)}, records={metadata.get('records_processed', 0)}, matches={metadata.get('matches_created', 0)}")
+                            print(f"[DynamicResultsTabWidget]   - {feather_id}: identities={metadata.get('identities_found', 0)}, extracted={metadata.get('identities_extracted', 0)}, records={metadata.get('records_processed', 0)}, matches={metadata.get('matches_created', 0)}")
                 
                 print(f"[DynamicResultsTabWidget] After aggregation: {len(feather_statistics)} feathers with data")
             
             # Create charts section with three charts
             if feather_statistics:
-                print(f"[DynamicResultsTabWidget] Creating charts for {len(feather_statistics)} feathers...")
-                charts_frame = QFrame()
-                charts_frame.setStyleSheet("""
-                    QFrame {
-                        background-color: #1E293B;
-                        border: 1px solid #334155;
-                        border-radius: 8px;
-                        padding: 8px;
-                    }
-                """)
-                charts_layout = QVBoxLayout(charts_frame)
-                charts_layout.setContentsMargins(8, 8, 8, 8)
-                charts_layout.setSpacing(10)
-                
-                charts_title = QLabel("Feather Statistics Charts")
-                charts_title.setStyleSheet("""
-                    QLabel {
-                        font-weight: bold;
-                        font-size: 10pt;
-                        color: #00FFFF;
-                        padding: 2px;
-                    }
-                """)
-                charts_layout.addWidget(charts_title)
-                
-                # Create horizontal layout for Chart 1 and Chart 2 side by side
-                charts_row = QHBoxLayout()
-                charts_row.setSpacing(10)
-                
-                # Chart 1: Identities/Matches Found per Feather (Bar Chart)
-                # Use identities_found for identity engine, matches_created for time-based engine
-                identities_data = {}
-                for feather_id, stats in feather_statistics.items():
-                    if not feather_id.startswith('_'):
-                        # Try identities_found first, then identities_final, then matches_created
-                        count = stats.get('identities_found', 0)
-                        if count == 0:
-                            count = stats.get('identities_final', 0)
-                        if count == 0:
-                            count = stats.get('matches_created', 0)
-                        if count > 0:
-                            identities_data[feather_id] = count
-                
-                if identities_data:
-                    sorted_data = dict(sorted(identities_data.items(), key=lambda x: x[1], reverse=True)[:10])
-                    chart1 = PyQt5BarChart()
-                    chart1.set_data(sorted_data, "Matches by Feather", "Matches")
-                    chart1.setMinimumHeight(180)
-                    charts_row.addWidget(chart1, stretch=1)
-                    print(f"[DynamicResultsTabWidget] ✓ Chart 1 added: Matches Found ({len(sorted_data)} feathers)")
-                
-                # Chart 2: Records Processed per Feather (Pie Chart)
-                records_data = {}
-                for feather_id, stats in feather_statistics.items():
-                    if not feather_id.startswith('_'):
-                        count = stats.get('records_processed', 0)
-                        if count > 0:
-                            records_data[feather_id] = count
-                
-                if records_data:
-                    sorted_data = dict(sorted(records_data.items(), key=lambda x: x[1], reverse=True)[:10])
-                    chart2 = PyQt5PieChart()
-                    chart2.set_data(sorted_data, "Records by Feather")
-                    chart2.setMinimumHeight(180)
-                    charts_row.addWidget(chart2, stretch=1)
-                    print(f"[DynamicResultsTabWidget] ✓ Chart 2 added: Records Pie ({len(sorted_data)} feathers)")
-                
-                charts_layout.addLayout(charts_row)
-                
-                # Chart 3: Feather Extraction Summary - Compact Grid Layout (4 per row)
-                extraction_frame = QFrame()
-                extraction_frame.setStyleSheet("""
-                    QFrame {
-                        background-color: #0B1220;
-                        border: 1px solid #334155;
-                        border-radius: 4px;
-                    }
-                """)
-                extraction_layout = QVBoxLayout(extraction_frame)
-                extraction_layout.setContentsMargins(4, 4, 4, 4)
-                extraction_layout.setSpacing(2)
-                
-                extraction_title = QLabel("Match Extraction by Feather")
-                extraction_title.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold; padding: 1px;")
-                extraction_layout.addWidget(extraction_title)
-                
-                # Build extraction data with percentages
-                # Use matches_created as fallback for identities_found (for time-based engine)
-                extraction_data = []
-                for feather_id, stats in feather_statistics.items():
-                    if feather_id.startswith('_'):
-                        continue
-                    # Try identities_found first, then identities_final, then matches_created
-                    matches = stats.get('identities_found', 0)
-                    if matches == 0:
-                        matches = stats.get('identities_final', 0)
-                    if matches == 0:
-                        matches = stats.get('matches_created', 0)
-                    records = stats.get('records_processed', 0)
-                    percentage = (matches / records * 100) if records > 0 else 0
-                    extraction_data.append((feather_id, matches, records, percentage))
-                
-                # Sort by percentage descending
-                extraction_data.sort(key=lambda x: x[3], reverse=True)
-                
-                # Create compact grid layout - 4 items per row
-                grid_widget = QWidget()
-                grid_layout = QGridLayout(grid_widget)
-                grid_layout.setContentsMargins(0, 0, 0, 0)
-                grid_layout.setSpacing(3)
-                
-                items_per_row = 4
-                for idx, (feather_id, matches, records, percentage) in enumerate(extraction_data):
-                    row = idx // items_per_row
-                    col = idx % items_per_row
-                    
-                    # Create compact card for each feather
-                    card = QFrame()
-                    # Color border based on percentage
-                    if percentage >= 50:
-                        border_color = "#10B981"  # green
-                    elif percentage >= 20:
-                        border_color = "#F59E0B"  # yellow
-                    else:
-                        border_color = "#EF4444"  # red
-                    
-                    card.setStyleSheet(f"""
-                        QFrame {{
+                print(f"[DynamicResultsTabWidget] ✓ Creating charts for {len(feather_statistics)} feathers...")
+                try:
+                    charts_frame = QFrame()
+                    charts_frame.setStyleSheet("""
+                        QFrame {
                             background-color: #1E293B;
-                            border: 1px solid {border_color};
-                            border-radius: 3px;
-                            padding: 2px;
-                        }}
+                            border: 1px solid #334155;
+                            border-radius: 8px;
+                            padding: 8px;
+                        }
                     """)
-                    card_layout = QVBoxLayout(card)
-                    card_layout.setContentsMargins(4, 2, 4, 2)
-                    card_layout.setSpacing(1)
+                    charts_layout = QVBoxLayout(charts_frame)
+                    charts_layout.setContentsMargins(8, 8, 8, 8)
+                    charts_layout.setSpacing(10)
                     
-                    # Feather name (truncated if too long) - smaller font
-                    display_name = feather_id if len(feather_id) <= 18 else feather_id[:15] + "..."
-                    name_label = QLabel(display_name)
-                    name_label.setStyleSheet("color: #E2E8F0; font-size: 7pt; font-weight: bold;")
-                    name_label.setToolTip(feather_id)
-                    card_layout.addWidget(name_label)
+                    charts_title = QLabel("Feather Statistics Charts")
+                    charts_title.setStyleSheet("""
+                        QLabel {
+                            font-weight: bold;
+                            font-size: 10pt;
+                            color: #00FFFF;
+                            padding: 2px;
+                        }
+                    """)
+                    charts_layout.addWidget(charts_title)
                     
-                    # Stats line: Matches / Records - smaller font
-                    stats_label = QLabel(f"{matches:,} / {records:,}")
-                    stats_label.setStyleSheet("color: #94A3B8; font-size: 6pt;")
-                    stats_label.setToolTip(f"Matches: {matches:,} | Records: {records:,}")
-                    card_layout.addWidget(stats_label)
+                    # Create horizontal layout for Chart 1 and Chart 2 side by side
+                    charts_row = QHBoxLayout()
+                    charts_row.setSpacing(10)
                     
-                    # Percentage with color - smaller font
-                    pct_label = QLabel(f"{percentage:.1f}%")
-                    pct_label.setStyleSheet(f"color: {border_color}; font-size: 8pt; font-weight: bold;")
-                    card_layout.addWidget(pct_label)
+                    # Chart 1: Identities/Matches Found per Feather (Bar Chart)
+                    # Use identities_found for identity engine, matches_created for time-based engine
+                    identities_data = {}
+                    for feather_id, stats in feather_statistics.items():
+                        if not feather_id.startswith('_'):
+                            # Try identities_found first, then identities_final, then matches_created
+                            count = stats.get('identities_found', 0)
+                            if count == 0:
+                                count = stats.get('identities_final', 0)
+                            if count == 0:
+                                count = stats.get('matches_created', 0)
+                            if count > 0:
+                                identities_data[feather_id] = count
                     
-                    grid_layout.addWidget(card, row, col)
-                
-                extraction_layout.addWidget(grid_widget)
-                charts_layout.addWidget(extraction_frame)
-                print(f"[DynamicResultsTabWidget] ✓ Extraction grid added: {len(extraction_data)} feathers")
-                
-                scroll_layout.addWidget(charts_frame)
+                    if identities_data:
+                        sorted_data = dict(sorted(identities_data.items(), key=lambda x: x[1], reverse=True)[:10])
+                        chart1 = PyQt5BarChart()
+                        chart1.set_data(sorted_data, "Matches by Feather", "Matches")
+                        chart1.setMinimumHeight(180)
+                        charts_row.addWidget(chart1, stretch=1)
+                        print(f"[DynamicResultsTabWidget] ✓ Chart 1 added: Matches Found ({len(sorted_data)} feathers)")
+                    
+                    # Chart 2: Records Processed per Feather (Pie Chart with Breakdown)
+                    records_data = {}
+                    for feather_id, stats in feather_statistics.items():
+                        if not feather_id.startswith('_'):
+                            count = stats.get('records_processed', 0)
+                            if count > 0:
+                                records_data[feather_id] = count
+                    
+                    if records_data:
+                        sorted_data = dict(sorted(records_data.items(), key=lambda x: x[1], reverse=True)[:10])
+                        # Always use PyQt5PieChart with legend displayed as text labels
+                        chart2 = PyQt5PieChart(show_legend=True)
+                        chart2.set_data(sorted_data, "Records by Feather")
+                        chart2.setMinimumHeight(200)
+                        chart2.setMinimumWidth(700)  # Ensure enough width for pie + two-column legend
+                        charts_row.addWidget(chart2, stretch=1)
+                        print(f"[DynamicResultsTabWidget] ✓ Chart 2 added: Records Pie ({len(sorted_data)} feathers)")
+
+                    
+                    charts_layout.addLayout(charts_row)
+                    
+                    # Chart 3: Feather Extraction Summary - Compact Grid Layout (4 per row)
+                    extraction_frame = QFrame()
+                    extraction_frame.setStyleSheet("""
+                        QFrame {
+                            background-color: #0B1220;
+                            border: 1px solid #334155;
+                            border-radius: 4px;
+                        }
+                    """)
+                    extraction_layout = QVBoxLayout(extraction_frame)
+                    extraction_layout.setContentsMargins(4, 4, 4, 4)
+                    extraction_layout.setSpacing(2)
+                    
+                    extraction_title = QLabel("Evidence Extracted By Feathers")
+                    extraction_title.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold; padding: 1px;")
+                    extraction_layout.addWidget(extraction_title)
+                    
+                    # Build extraction data with percentages
+                    # Show evidence extraction rate: identities_extracted / records_processed
+                    # Also show correlation rate: identities_found / extracted (secondary)
+                    extraction_data = []
+                    for feather_id, stats in feather_statistics.items():
+                        if feather_id.startswith('_'):
+                            continue
+                        # Get extracted evidence count (identities_extracted)
+                        extracted = stats.get('identities_extracted', 0)
+                        if extracted == 0:
+                            # Fallback to identities_found or matches_created
+                            extracted = stats.get('identities_found', 0)
+                        if extracted == 0:
+                            extracted = stats.get('matches_created', 0)
+                        
+                        # Get correlated feathers count (identities_found or matches_created)
+                        correlated = stats.get('identities_found', 0)
+                        if correlated == 0:
+                            correlated = stats.get('matches_created', 0)
+                        
+                        records = stats.get('records_processed', 0)
+                        # Calculate extraction rate (PRIMARY - what percentage of records had evidence extracted)
+                        extraction_percentage = (extracted / records * 100) if records > 0 else 0
+                        # Calculate correlation rate (SECONDARY - what percentage of extracted became correlated)
+                        correlation_percentage = (correlated / extracted * 100) if extracted > 0 else 0
+                        extraction_data.append((feather_id, extracted, records, correlated, extraction_percentage, correlation_percentage))
+                    
+                    # Sort by extraction percentage descending (primary metric)
+                    extraction_data.sort(key=lambda x: x[4], reverse=True)
+                    
+                    # Create compact grid layout - 4 items per row
+                    grid_widget = QWidget()
+                    grid_layout = QGridLayout(grid_widget)
+                    grid_layout.setContentsMargins(0, 0, 0, 0)
+                    grid_layout.setSpacing(3)
+                    
+                    items_per_row = 4
+                    for idx, (feather_id, extracted, records, correlated, extraction_percentage, correlation_percentage) in enumerate(extraction_data):
+                        row = idx // items_per_row
+                        col = idx % items_per_row
+                        
+                        # Create compact card for each feather
+                        card = QFrame()
+                        # Color border based on PRIMARY extraction percentage
+                        if extraction_percentage >= 50:
+                            border_color = "#10B981"  # green
+                        elif extraction_percentage >= 20:
+                            border_color = "#F59E0B"  # yellow
+                        else:
+                            border_color = "#EF4444"  # red
+                        
+                        card.setStyleSheet(f"""
+                            QFrame {{
+                                background-color: #1E293B;
+                                border: 1px solid {border_color};
+                                border-radius: 3px;
+                                padding: 2px;
+                            }}
+                        """)
+                        card_layout = QVBoxLayout(card)
+                        card_layout.setContentsMargins(4, 2, 4, 2)
+                        card_layout.setSpacing(1)
+                        
+                        # Feather name (truncated if too long) - smaller font
+                        display_name = feather_id if len(feather_id) <= 18 else feather_id[:15] + "..."
+                        name_label = QLabel(display_name)
+                        name_label.setStyleSheet("color: #E2E8F0; font-size: 7pt; font-weight: bold;")
+                        name_label.setToolTip(feather_id)
+                        card_layout.addWidget(name_label)
+                        
+                        # Stats line: Extracted / Records - smaller font
+                        stats_label = QLabel(f"{extracted:,} / {records:,}")
+                        stats_label.setStyleSheet("color: #94A3B8; font-size: 6pt;")
+                        stats_label.setToolTip(f"Evidence Extracted: {extracted:,} | Total Records: {records:,}")
+                        card_layout.addWidget(stats_label)
+                        
+                        # PRIMARY Percentage (Extraction Rate) - larger, bold, colored
+                        pct_label = QLabel(f"{extraction_percentage:.1f}%")
+                        pct_label.setStyleSheet(f"color: {border_color}; font-size: 8pt; font-weight: bold;")
+                        pct_label.setToolTip(f"Extraction Rate: {extraction_percentage:.1f}% of records had evidence extracted")
+                        card_layout.addWidget(pct_label)
+                        
+                        # SECONDARY Percentage (Correlation Rate) - smaller, gray
+                        corr_label = QLabel(f"↳ {correlation_percentage:.1f}% correlated")
+                        corr_label.setStyleSheet("color: #64748B; font-size: 5pt;")
+                        corr_label.setToolTip(f"Correlation Rate: {correlation_percentage:.1f}% of extracted evidence resulted in correlations ({correlated:,} / {extracted:,})")
+                        card_layout.addWidget(corr_label)
+                        
+                        grid_layout.addWidget(card, row, col)
+                    
+                    extraction_layout.addWidget(grid_widget)
+                    charts_layout.addWidget(extraction_frame)
+                    print(f"[DynamicResultsTabWidget] ✓ Chart 3 added: Extraction grid with {len(extraction_data)} feathers")
+                    
+                    scroll_layout.addWidget(charts_frame)
+                    print(f"[DynamicResultsTabWidget] ✓ Charts frame added to scroll layout")
+                    
+                except Exception as e:
+                    print(f"[DynamicResultsTabWidget] ✗ ERROR creating charts: {e}")
+                import traceback
+                traceback.print_exc()
             else:
-                print("[DynamicResultsTabWidget] ⚠ No feather_statistics available - charts not created")
+                print("[DynamicResultsTabWidget] ⚠ WARNING: No feather_statistics available - charts not created")
                 print(f"[DynamicResultsTabWidget] aggregate_stats keys: {list(aggregate_stats.keys())}")
+                print(f"[DynamicResultsTabWidget] feather_statistics content: {aggregate_stats.get('feather_statistics', {})}")
+                
+                # Add a message to the summary tab
+                no_charts_label = QLabel("⚠ No feather statistics available for charts")
+                no_charts_label.setStyleSheet("color: #FF9800; font-size: 10pt; padding: 20px;")
+                no_charts_label.setAlignment(Qt.AlignCenter)
+                scroll_layout.addWidget(no_charts_label)
             
-            # Add wing breakdown section
+            # Add wing breakdown section (Requirements 4.1, 4.2, 4.3, 4.4)
             wing_summaries = aggregate_stats.get('wing_summaries', [])
             if wing_summaries:
+                print(f"[DynamicResultsTabWidget] Creating wing breakdown table with {len(wing_summaries)} wings")
+                
                 breakdown_frame = QFrame()
                 breakdown_frame.setStyleSheet("""
                     QFrame {
@@ -2788,7 +3707,7 @@ class DynamicResultsTabWidget(QWidget):
                 breakdown_layout.setContentsMargins(8, 8, 8, 8)
                 breakdown_layout.setSpacing(6)
                 
-                breakdown_title = QLabel("Wing Breakdown")
+                breakdown_title = QLabel(f"Wing Breakdown ({len(wing_summaries)} wings)")
                 breakdown_title.setStyleSheet("""
                     QLabel {
                         font-weight: bold;
@@ -2803,7 +3722,7 @@ class DynamicResultsTabWidget(QWidget):
                 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
                 wing_table = QTableWidget()
                 wing_table.setColumnCount(4)
-                wing_table.setHorizontalHeaderLabels(["Wing Name", "Engine Type", "Matches", "Time (s)"])
+                wing_table.setHorizontalHeaderLabels(["Wing Name", "Engine Type", "Matches", "Time"])
                 wing_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
                 wing_table.setAlternatingRowColors(True)
                 wing_table.setStyleSheet("""
@@ -2834,17 +3753,35 @@ class DynamicResultsTabWidget(QWidget):
                     }
                 """)
                 
+                # Helper function to format time
+                def format_time(seconds):
+                    """Format time as seconds, minutes, or hours."""
+                    if seconds < 60:
+                        return f"{seconds:.1f}s"
+                    elif seconds < 3600:
+                        minutes = seconds / 60
+                        return f"{minutes:.1f}m"
+                    else:
+                        hours = seconds / 3600
+                        return f"{hours:.2f}h"
+                
+                # Set row count to match ALL wings (Requirements 4.1, 4.4)
                 wing_table.setRowCount(len(wing_summaries))
+                
+                # Populate table with ALL wings - no filtering (Requirements 4.1, 4.2, 4.4)
                 for row, wing_summary in enumerate(wing_summaries):
                     wing_name = wing_summary.get('wing_name', 'Unknown')
                     engine_type = wing_summary.get('engine_type', 'unknown').replace('_', ' ').title()
                     matches = wing_summary.get('total_matches', 0)
                     exec_time = wing_summary.get('execution_time', 0)
+                    time_formatted = format_time(exec_time)
+                    
+                    print(f"[DynamicResultsTabWidget]   Row {row}: {wing_name} | {engine_type} | {matches:,} matches | {time_formatted}")
                     
                     wing_table.setItem(row, 0, QTableWidgetItem(wing_name))
                     wing_table.setItem(row, 1, QTableWidgetItem(engine_type))
                     wing_table.setItem(row, 2, QTableWidgetItem(f"{matches:,}"))
-                    wing_table.setItem(row, 3, QTableWidgetItem(f"{exec_time:.2f}"))
+                    wing_table.setItem(row, 3, QTableWidgetItem(time_formatted))
                 
                 # Set minimum row height for better spacing
                 wing_table.verticalHeader().setDefaultSectionSize(24)
@@ -2852,6 +3789,10 @@ class DynamicResultsTabWidget(QWidget):
                 
                 breakdown_layout.addWidget(wing_table)
                 scroll_layout.addWidget(breakdown_frame)
+                
+                print(f"[DynamicResultsTabWidget] ✓ Wing breakdown table created with {len(wing_summaries)} wings")
+            else:
+                print(f"[DynamicResultsTabWidget] ⚠ No wing summaries available for breakdown table")
             
             scroll_layout.addStretch()
             
@@ -2860,10 +3801,12 @@ class DynamicResultsTabWidget(QWidget):
             summary_layout.addWidget(scroll_area)
             
             print(f"[DynamicResultsTabWidget] ✓ Summary tab updated with aggregate statistics")
+            print(f"  - Execution ID: {execution_id if execution_id else 'N/A'}")
             print(f"  - Total wings: {total_wings}")
             print(f"  - Total matches: {total_matches:,}")
             print(f"  - Total time: {total_time:.2f}s")
             print(f"  - Charts displayed: 3")
+            print(f"  - Wing breakdown rows: {len(wing_summaries)}")
             
         except Exception as e:
             print(f"[Error] Failed to update summary tab: {e}")
@@ -2887,6 +3830,11 @@ class ResultsViewer(QWidget):
     def __init__(self, parent=None):
         """Initialize the Results Viewer"""
         super().__init__(parent)
+        
+        # Initialize centralized score configuration manager
+        # Requirements: 7.2, 8.4
+        from ..config.score_configuration_manager import ScoreConfigurationManager
+        self.score_config_manager = ScoreConfigurationManager()
         
         self.current_output_dir = None
         self.engine_type = "time_based"
@@ -2988,6 +3936,21 @@ class ResultsViewer(QWidget):
         """Connect internal signals"""
         if hasattr(self.results_widget, 'match_selected'):
             self.results_widget.match_selected.connect(self._on_match_selected)
+    
+    def _get_score_interpretation(self, score: float) -> str:
+        """
+        Get score interpretation using centralized configuration.
+        
+        Args:
+            score: Score value to interpret (0.0 to 1.0)
+        
+        Returns:
+            String interpretation ('Critical', 'High', 'Medium', 'Low', or 'Minimal')
+        
+        Requirements: 7.2, 8.4
+        """
+        config = self.score_config_manager.get_configuration()
+        return config.interpret_score(score)
         
         if hasattr(self.results_widget, 'export_requested'):
             self.results_widget.export_requested.connect(self._on_export_requested)

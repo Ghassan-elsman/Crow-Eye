@@ -207,9 +207,12 @@ class PipelineExecutor:
         if widget:
             self.engine.register_progress_listener(widget.handle_progress_event)
     
-    def execute(self) -> Dict[str, Any]:
+    def execute(self, resume_execution_id: int = None) -> Dict[str, Any]:
         """
         Execute the complete pipeline.
+        
+        Args:
+            resume_execution_id: Optional execution ID to resume from paused state
         
         Returns:
             Dictionary with execution results and statistics

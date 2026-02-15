@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any
 
 from correlation_engine.engine.query_interface import QueryInterface
 from correlation_engine.engine.data_structures import QueryFilters
-from correlation_engine.engine.database_persistence import DatabasePersistence
+from correlation_engine.engine.database_persistence import ResultsDatabase
 from .match_detail_dialog import MatchDetailDialog
 
 
@@ -42,7 +42,7 @@ class CorrelationResultsView(QWidget):
         super().__init__(parent)
         self.db_path = db_path
         self.query_interface = QueryInterface(db_path)
-        self.db_persistence = DatabasePersistence(db_path)
+        self.db_persistence = ResultsDatabase(db_path)
         self.matches = []  # Store matches for table population
         self.current_execution_id = execution_id
         self.setup_ui()
@@ -305,16 +305,27 @@ class CorrelationResultsView(QWidget):
             # Semantic Match (NEW)
             semantic_data = getattr(match, 'semantic_data', None)
             has_semantic = False
-            if semantic_data and semantic_data.get('semantic_matches'):
-                has_semantic = True
+            semantic_values = []
+            
+            # Check if semantic data exists and extract values
+            if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
+                for field_name, field_info in semantic_data.items():
+                    if field_name.startswith('_'):
+                        continue
+                    if isinstance(field_info, dict) and 'semantic_mappings' in field_info:
+                        mappings = field_info.get('semantic_mappings', [])
+                        if isinstance(mappings, list):
+                            for mapping in mappings:
+                                if isinstance(mapping, dict) and 'semantic_value' in mapping:
+                                    semantic_values.append(mapping['semantic_value'])
+                                    has_semantic = True
             
             semantic_item = QTableWidgetItem("Yes" if has_semantic else "No")
             if has_semantic:
                 semantic_item.setBackground(QColor(200, 255, 200))  # Light green
-                # Add tooltip showing semantic mappings
-                mappings = semantic_data.get('semantic_matches', [])
-                tooltip = "Semantic mappings:\n" + "\n".join([
-                    f"• {m['value1']} ≡ {m['value2']}" for m in mappings[:3]
+                # Add tooltip showing semantic values
+                tooltip = "Semantic values:\n" + "\n".join([
+                    f"• {val}" for val in semantic_values[:5]
                 ])
                 semantic_item.setToolTip(tooltip)
             self.results_table.setItem(row, 9, semantic_item)
@@ -373,8 +384,8 @@ class CorrelationResultsView(QWidget):
         if row < len(self.matches):
             match = self.matches[row]
             try:
-                # Open match detail dialog
-                dialog = MatchDetailDialog(match, self)
+                # Open match detail dialog with database persistence
+                dialog = MatchDetailDialog(match, self, self.db_persistence)
                 dialog.exec_()
             except Exception as e:
                 QMessageBox.critical(
@@ -873,8 +884,8 @@ class CorrelationResultsView(QWidget):
         if row < len(matches):
             match = matches[row]
             try:
-                # Open match detail dialog
-                dialog = MatchDetailDialog(match, self)
+                # Open match detail dialog with database persistence
+                dialog = MatchDetailDialog(match, self, self.db_persistence)
                 dialog.exec_()
             except Exception as e:
                 QMessageBox.critical(
@@ -1040,15 +1051,27 @@ class CorrelationResultsView(QWidget):
             # Semantic Match
             semantic_data = getattr(match, 'semantic_data', None)
             has_semantic = False
-            if semantic_data and semantic_data.get('semantic_matches'):
-                has_semantic = True
+            semantic_values = []
+            
+            # Check if semantic data exists and extract values
+            if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
+                for field_name, field_info in semantic_data.items():
+                    if field_name.startswith('_'):
+                        continue
+                    if isinstance(field_info, dict) and 'semantic_mappings' in field_info:
+                        mappings = field_info.get('semantic_mappings', [])
+                        if isinstance(mappings, list):
+                            for mapping in mappings:
+                                if isinstance(mapping, dict) and 'semantic_value' in mapping:
+                                    semantic_values.append(mapping['semantic_value'])
+                                    has_semantic = True
             
             semantic_item = QTableWidgetItem("Yes" if has_semantic else "No")
             if has_semantic:
                 semantic_item.setBackground(QColor(200, 255, 200))
-                mappings = semantic_data.get('semantic_matches', [])
-                tooltip = "Semantic mappings:\n" + "\n".join([
-                    f"• {m['value1']} ≡ {m['value2']}" for m in mappings[:3]
+                # Add tooltip showing semantic values
+                tooltip = "Semantic values:\n" + "\n".join([
+                    f"• {val}" for val in semantic_values[:5]
                 ])
                 semantic_item.setToolTip(tooltip)
             table.setItem(row, 9, semantic_item)

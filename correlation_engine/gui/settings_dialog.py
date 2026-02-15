@@ -156,16 +156,21 @@ class SettingsDialog(QDialog):
         self.global_mappings_table.setHorizontalHeaderLabels([
             "Type", "Category", "Name", "Logic", "Conditions/Value", "Semantic Value", "Severity", "Feathers", "Description"
         ])
-        # Set column widths for better visibility
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Type
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Category
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Name
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Logic
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)  # Conditions/Value
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Semantic Value
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Severity
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Feathers
-        self.global_mappings_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)  # Description
+        # Set column widths - make all columns user-resizable with Interactive mode
+        header = self.global_mappings_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)  # Allow user to resize all columns
+        # Set initial widths
+        header.resizeSection(0, 80)   # Type
+        header.resizeSection(1, 120)  # Category
+        header.resizeSection(2, 200)  # Name
+        header.resizeSection(3, 60)   # Logic
+        header.resizeSection(4, 400)  # Conditions/Value - wider for readability
+        header.resizeSection(5, 200)  # Semantic Value
+        header.resizeSection(6, 80)   # Severity
+        header.resizeSection(7, 150)  # Feathers
+        header.resizeSection(8, 300)  # Description
+        # Make last column stretch to fill remaining space
+        header.setStretchLastSection(True)
         self.global_mappings_table.setMinimumHeight(300)
         self.global_mappings_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.global_mappings_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -1348,9 +1353,14 @@ class SettingsDialog(QDialog):
                 self.global_mappings_table.setItem(row, 8, desc_item)
             
             logger.info(f"Loaded {len(global_mappings)} simple mappings and {len(global_rules)} advanced rules into settings table")
+            logger.info(f"Total rows in table: {self.global_mappings_table.rowCount()}")
+            
+            # Verify all rules were added
+            if self.global_mappings_table.rowCount() != (len(global_mappings) + len(global_rules)):
+                logger.warning(f"Row count mismatch! Expected {len(global_mappings) + len(global_rules)}, got {self.global_mappings_table.rowCount()}")
             
         except Exception as e:
-            logger.error(f"Failed to refresh global mappings table: {e}")
+            logger.error(f"Failed to refresh global mappings table: {e}", exc_info=True)
             QMessageBox.warning(self, "Error", f"Failed to load semantic mappings: {e}")
     
     def _on_mapping_selection_changed(self):

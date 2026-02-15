@@ -8,6 +8,9 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import List, Dict, Optional
 
+# Import centralized score configuration manager
+from .score_configuration_manager import ScoreConfigurationManager
+
 
 @dataclass
 class WingFeatherReference:
@@ -70,6 +73,8 @@ class WingConfig:
     
     # Weighted scoring configuration - ENABLED BY DEFAULT
     use_weighted_scoring: bool = True  # Default to True for better correlation accuracy
+    # NOTE: Local scoring dict maintained for backward compatibility
+    # New code should use get_score_thresholds() and get_tier_weights() methods
     scoring: Dict = field(default_factory=lambda: {
         'enabled': True,
         'thresholds': {
@@ -98,11 +103,50 @@ class WingConfig:
     tags: List[str] = field(default_factory=list)
     case_types: List[str] = field(default_factory=list)
     
+    # Centralized score configuration manager (not serialized)
+    _score_config_manager: Optional[ScoreConfigurationManager] = field(default=None, init=False, repr=False)
+    
+    def __post_init__(self):
+        """Initialize score configuration manager after dataclass initialization"""
+        self._score_config_manager = ScoreConfigurationManager()
+    
+    def get_score_thresholds(self) -> Dict[str, float]:
+        """
+        Get score thresholds from centralized configuration.
+        
+        Returns:
+            Dictionary of score thresholds (low, medium, high, critical)
+        
+        Requirements: 7.2, 8.2
+        """
+        if self._score_config_manager is None:
+            self._score_config_manager = ScoreConfigurationManager()
+        
+        config = self._score_config_manager.get_configuration()
+        return config.thresholds.copy()
+    
+    def get_tier_weights(self) -> Dict[str, float]:
+        """
+        Get tier weights from centralized configuration.
+        
+        Returns:
+            Dictionary of tier weights (tier1, tier2, tier3, tier4)
+        
+        Requirements: 7.2, 8.2
+        """
+        if self._score_config_manager is None:
+            self._score_config_manager = ScoreConfigurationManager()
+        
+        config = self._score_config_manager.get_configuration()
+        return config.tier_weights.copy()
+    
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
         data = asdict(self)
         # Convert WingFeatherReference objects to dicts
         data['feathers'] = [asdict(f) for f in self.feathers]
+        # Remove non-serializable fields
+        data.pop('_score_config_manager', None)
         return data
     
     def to_json(self, indent: int = 2) -> str:

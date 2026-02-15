@@ -304,6 +304,61 @@ class CorrelationStatistics:
     identities_by_type: Dict[str, int] = field(default_factory=dict)
     evidence_by_role: Dict[str, int] = field(default_factory=dict)
     artifacts_processed: List[str] = field(default_factory=list)
+    
+    # Task 17.2: Performance metrics for semantic matching
+    # Requirements: 13.4
+    semantic_matching_enabled: bool = False
+    semantic_matching_duration_seconds: float = 0.0
+    semantic_identities_processed: int = 0
+    semantic_mappings_applied: int = 0
+    semantic_records_enhanced: int = 0
+    semantic_identities_per_second: float = 0.0
+    semantic_records_per_second: float = 0.0
+    
+    # Performance comparison metrics (old vs new approach)
+    # Old approach: semantic matching during correlation (per-record)
+    # New approach: semantic matching after correlation (per-identity)
+    estimated_old_approach_duration_seconds: float = 0.0  # Estimated time if done per-record
+    performance_improvement_factor: float = 0.0  # How much faster new approach is
+    performance_improvement_percentage: float = 0.0  # Percentage improvement
+    
+    def calculate_performance_comparison(self):
+        """
+        Calculate performance comparison between old and new semantic matching approaches.
+        
+        Old approach: Semantic matching applied per-record during correlation
+        New approach: Semantic matching applied per-identity after correlation
+        
+        Task 17.2
+        Requirements: 13.4
+        """
+        if not self.semantic_matching_enabled or self.semantic_matching_duration_seconds == 0:
+            return
+        
+        # Estimate old approach duration
+        # Old approach would process every record individually during correlation
+        # New approach processes unique identities after correlation
+        # Assumption: Per-record processing takes same time as per-identity processing
+        # but must be done for every record instead of unique identities
+        
+        if self.semantic_identities_processed > 0 and self.semantic_records_enhanced > 0:
+            # Calculate average time per identity in new approach
+            avg_time_per_identity = self.semantic_matching_duration_seconds / self.semantic_identities_processed
+            
+            # Estimate old approach: same time per record (not per identity)
+            self.estimated_old_approach_duration_seconds = avg_time_per_identity * self.semantic_records_enhanced
+            
+            # Calculate improvement factor
+            if self.estimated_old_approach_duration_seconds > 0:
+                self.performance_improvement_factor = (
+                    self.estimated_old_approach_duration_seconds / self.semantic_matching_duration_seconds
+                )
+                
+                # Calculate improvement percentage
+                self.performance_improvement_percentage = (
+                    (self.estimated_old_approach_duration_seconds - self.semantic_matching_duration_seconds) /
+                    self.estimated_old_approach_duration_seconds * 100.0
+                )
 
 
 @dataclass

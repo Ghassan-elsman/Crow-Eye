@@ -10,6 +10,7 @@ Features:
 - Semantic mapping information
 """
 
+import logging
 from collections import defaultdict
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
@@ -21,9 +22,14 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QBrush
 from typing import List, Dict, Any
 
+logger = logging.getLogger(__name__)
+
 
 class IdentityResultsView(QWidget):
     """Compact Identity-Based Correlation Results View with Pagination and Scoring."""
+    
+    # VERSION STAMP - to verify correct file is loaded
+    SEMANTIC_FIX_VERSION = "2026-01-24-v3-IDENTITY-FIX"
     
     match_selected = pyqtSignal(dict)
     
@@ -42,6 +48,10 @@ class IdentityResultsView(QWidget):
     
     def setup_ui(self):
         """Setup compact UI with labeled filters."""
+        # Print version stamp to console
+        print(f"[IdentityResultsView] VERSION: {self.SEMANTIC_FIX_VERSION}")
+        print(f"[IdentityResultsView] Semantic fix is ACTIVE")
+        
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(4)
         main_layout.setContentsMargins(4, 4, 4, 4)
@@ -76,10 +86,6 @@ class IdentityResultsView(QWidget):
         self.evidence_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.evidence_lbl)
         
-        self.time_lbl = QLabel("Time: 0s")
-        self.time_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
-        top_layout.addWidget(self.time_lbl)
-        
         self.feathers_used_lbl = QLabel("Feathers: 0")
         self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 8pt; font-weight: bold;")
         top_layout.addWidget(self.feathers_used_lbl)
@@ -101,8 +107,8 @@ class IdentityResultsView(QWidget):
         top_layout.addWidget(search_lbl)
         
         self.identity_filter = QLineEdit()
-        self.identity_filter.setPlaceholderText("name...")
-        self.identity_filter.setMaximumWidth(100)
+        self.identity_filter.setPlaceholderText("🔍 Search name or semantic value...")
+        self.identity_filter.setMaximumWidth(250)
         self.identity_filter.setStyleSheet("""
             QLineEdit {
                 font-size: 8pt; 
@@ -292,15 +298,14 @@ class IdentityResultsView(QWidget):
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and score column."""
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Identity / Anchor / Evidence", "Feathers", "Time", "Score", "Semantic", "Ev", "Artifact"])
+        tree.setHeaderLabels(["Identity / Anchor / Evidence", "Feathers", "Score", "Semantic", "Ev", "Artifact"])
         
         tree.setColumnWidth(0, 280)
         tree.setColumnWidth(1, 150)
-        tree.setColumnWidth(2, 140)
-        tree.setColumnWidth(3, 60)  # Score column
-        tree.setColumnWidth(4, 120)  # Semantic column
-        tree.setColumnWidth(5, 40)  # Evidence count
-        tree.setColumnWidth(6, 80)  # Artifact
+        tree.setColumnWidth(2, 60)  # Score column
+        tree.setColumnWidth(3, 350)  # Semantic column - WIDER: Increased to 350 for better readability
+        tree.setColumnWidth(4, 40)  # Evidence count
+        tree.setColumnWidth(5, 80)  # Artifact
         
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
@@ -430,13 +435,18 @@ class IdentityResultsView(QWidget):
         self._populate_current_page()
         self._update_stats(results)
     
-    def load_from_correlation_result(self, result):
-        """Load from CorrelationResult object with progress indicator."""
+    def load_from_correlation_result(self, result, show_progress=True):
+        """Load from CorrelationResult object with progress indicator.
+        
+        Args:
+            result: CorrelationResult object
+            show_progress: If False, suppresses the progress dialog (useful when parent already shows progress)
+        """
         print(f"[IdentityResultsView] load_from_correlation_result called with {result.total_matches} matches")
         
-        # Show progress dialog if we have many matches
+        # Show progress dialog if we have many matches and show_progress is True
         progress = None
-        if result.total_matches > 100:
+        if show_progress and result.total_matches > 100:
             progress = QProgressDialog("Loading identity data...", "Cancel", 0, 100, self)
             progress.setWindowModality(Qt.WindowModal)
             progress.setMinimumDuration(0)
@@ -555,14 +565,19 @@ class IdentityResultsView(QWidget):
                       f"path={getattr(match, 'matched_file_path', 'N/A')}, "
                       f"records={len(getattr(match, 'feather_records', {}))}")
             
-            # Main identity (normalized name)
-            main_app = match.matched_application or "Unknown"
+            # FIXED: Normalize the application name for grouping
+            # This ensures "chrome.exe", "CHROME~1.EXE", "chrome123.exe" all group together
+            raw_app = match.matched_application or "Unknown"
+            main_app = self._normalize_for_grouping(raw_app)
             
             if main_app not in identity_map:
+                # Use a clean display name (not fully normalized) for primary_name
+                display_name = self._get_display_name_for_gui(raw_app)
+                
                 identity_map[main_app] = {
                     'identity_id': main_app,
                     'identity_type': 'name',
-                    'primary_name': main_app,
+                    'primary_name': display_name,  # Clean, readable display name
                     'sub_identities': {},  # original_name -> sub_identity data
                     'feathers_found': set()
                 }
@@ -570,27 +585,39 @@ class IdentityResultsView(QWidget):
             identity_map[main_app]['feathers_found'].update(match.feather_records.keys())
             
             # Extract original name from the first evidence row
-            original_name = main_app
+            # FIXED: Start with raw_app (not normalized main_app) as fallback
+            # 
+            # NAME EXTRACTION PRIORITY:
+            # 1. First, try to find a 'name' field in evidence data
+            # 2. If name field matches raw_app, also check path fields (may have different case)
+            # 3. If no suitable name found, fall back to raw_app
+            # 
+            # This ensures we get the most representative original name while preserving
+            # case variations (e.g., "CHROME.EXE" from path vs "chrome.exe" from name field)
+            original_name = raw_app
             for fid, data in match.feather_records.items():
                 if isinstance(data, dict):
-                    # Try to get original filename
+                    # Try to get original filename from name fields
                     for field in ['name', 'filename', 'file_name', 'fn_filename', 'executable_name',
                                   'Source_Name', 'original_filename', 'app_name', 'value', 'Value',
                                   'FileName', 'Name']:
                         if field in data and data[field]:
                             original_name = str(data[field])
                             break
-                    if original_name != main_app:
+                    if original_name != raw_app:
                         break
-                    # Try path
+                    # Try path extraction with validation
                     for field in ['path', 'file_path', 'Local_Path', 'app_path', 'full_path']:
                         if field in data and data[field]:
                             from pathlib import Path
                             path_val = str(data[field])
                             if '\\' in path_val or '/' in path_val:
-                                original_name = Path(path_val.replace('\\', '/')).name
-                                break
-                    if original_name != main_app:
+                                extracted_name = Path(path_val.replace('\\', '/')).name
+                                # FIXED: Validate that extracted name is not empty
+                                if extracted_name:
+                                    original_name = extracted_name
+                                    break
+                    if original_name != raw_app:
                         break
             
             # Create or get sub-identity
@@ -657,6 +684,190 @@ class IdentityResultsView(QWidget):
         
         return result
     
+    def _normalize_for_grouping(self, name: str) -> str:
+        """
+        Normalize application name for identity grouping.
+        
+        Uses the SAME aggressive normalization as the identity engine to ensure
+        identities are grouped correctly in the GUI.
+        
+        This ensures "chrome.exe", "CHROME~1.EXE", "chrome123.exe" all become "chrome"
+        and are grouped together under the same main identity.
+        
+        LIMITATION: Only ASCII alphanumeric characters are preserved. Unicode characters
+        (accents, non-Latin scripts) are removed during normalization. This is acceptable
+        for Windows forensics where most application names use ASCII.
+        
+        Examples:
+        - "chrome.exe" → "chrome"
+        - "CHROME~1.EXE" → "chrome"
+        - "chrome123.exe" → "chrome"
+        - "Naïve.exe" → "nave" (accent removed)
+        
+        Args:
+            name: Raw application name
+        
+        Returns:
+            Aggressively normalized name for grouping (ASCII alphanumeric only)
+        """
+        if not name:
+            return "Unknown"
+        
+        import re
+        
+        result = name.strip()
+        
+        # Step -1: Handle Prefetch filenames (APPNAME.EXE HASH.pf)
+        # Extract just the APPNAME.EXE part before the hash
+        # Pattern: ends with space + 8 hex chars + .pf
+        # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
+        #           "chrome.exe AF43252D.pf" → "chrome.exe"
+        if result.lower().endswith('.pf'):
+            # Check if there's a space followed by hex hash before .pf
+            match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
+            if match:
+                result = match.group(1)  # Extract just the app name part
+        
+        # Step 0: Remove ~ and everything after it (FIRST - before any other processing)
+        # This handles cases like "CHROME~1.EXE", "file~123.txt"
+        if '~' in result:
+            result = result.split('~')[0]
+        
+        # Step 1: Remove common file extensions (case-insensitive)
+        extensions = [
+            '.exe', '.lnk', '.dll', '.msi', '.bat', '.cmd', '.ps1', '.vbs', '.js',
+            '.com', '.scr', '.pif', '.application', '.gadget', '.msp', '.hta',
+            '.cpl', '.msc', '.jar', '.py', '.pyc', '.pyw'
+        ]
+        lower_result = result.lower()
+        for ext in extensions:
+            if lower_result.endswith(ext):
+                result = result[:-len(ext)]
+                lower_result = result.lower()
+                break
+        
+        # Step 2: Remove copy indicators like (1), (2), (3), etc.
+        result = re.sub(r'[\s_]*\(\d+\)\s*$', '', result)
+        
+        # Step 3: Remove " - Copy", "_copy", " copy" at the end
+        result = re.sub(r'[\s_]*[-_]?\s*[Cc]opy\s*\d*\s*$', '', result)
+        result = re.sub(r'[\s_]*\([Cc]opy\s*\d*\)\s*$', '', result)
+        
+        # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
+        # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
+        # This prevents removing numbers that are part of the name (e.g., "chrome1")
+        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result)  # Requires space/underscore
+        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result)  # OR explicit v prefix without space
+        
+        # Step 5: AGGRESSIVE NORMALIZATION for grouping
+        # Convert to lowercase first
+        result = result.lower()
+        
+        # Remove ALL spaces, hyphens, underscores, dots, parentheses, brackets
+        result = re.sub(r'[\s\-_\.\(\)\[\]]+', '', result)
+        
+        # Remove any remaining special characters except alphanumeric
+        result = re.sub(r'[^a-z0-9]', '', result)
+        
+        # Step 6: Remove ALL numbers for better grouping
+        # This ensures "chrome1", "chrome2", "chrome123" all become "chrome"
+        result = re.sub(r'\d+', '', result)
+        
+        # If result is empty after all processing, fall back to original
+        if not result:
+            # Fall back to simpler normalization (keep some characters)
+            result = name.strip().lower()
+            if '~' in result:
+                result = result.split('~')[0]
+            result = re.sub(r'[\s\-_\.\(\)\[\]]+', '', result)
+            result = re.sub(r'[^a-z0-9]', '', result)
+            # Don't remove numbers in fallback to avoid empty result
+        
+        return result.strip() if result else "Unknown"
+    
+    def _get_display_name_for_gui(self, raw_name: str) -> str:
+        """
+        Get a clean, readable display name from the raw name for GUI display.
+        
+        This is used for the primary_name field to show a user-friendly version
+        while the aggressive normalization is used for grouping.
+        
+        Removes:
+        - File extensions (.exe, .lnk, etc.)
+        - Copy indicators: (1), (2), - Copy
+        - Version indicators: v1, v2, v1.0
+        - Tilde and everything after it (~1, ~123)
+        
+        Preserves:
+        - Original capitalization
+        - Spaces and readable formatting
+        
+        Examples:
+        - "Chrome.exe" → "Chrome"
+        - "CHROME~1.EXE" → "CHROME"
+        - "Microsoft Edge.exe" → "Microsoft Edge"
+        - "chrome-browser (1).exe" → "chrome-browser"
+        
+        Args:
+            raw_name: Original application name
+        
+        Returns:
+            Clean, readable display name
+        """
+        if not raw_name:
+            return "Unknown"
+        
+        import re
+        
+        result = raw_name.strip()
+        
+        # Step -1: Handle Prefetch filenames (APPNAME.EXE HASH.pf)
+        # Extract just the APPNAME.EXE part before the hash
+        # Pattern: ends with space + 8 hex chars + .pf
+        # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
+        #           "chrome.exe AF43252D.pf" → "chrome.exe"
+        if result.lower().endswith('.pf'):
+            # Check if there's a space followed by hex hash before .pf
+            match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
+            if match:
+                result = match.group(1)  # Extract just the app name part
+        
+        # Step 0: Remove ~ and everything after it (FIRST)
+        if '~' in result:
+            result = result.split('~')[0]
+        
+        # Step 1: Remove common file extensions (case-insensitive)
+        extensions = [
+            '.exe', '.lnk', '.dll', '.msi', '.bat', '.cmd', '.ps1', '.vbs', '.js',
+            '.com', '.scr', '.pif', '.application', '.gadget', '.msp', '.hta',
+            '.cpl', '.msc', '.jar', '.py', '.pyc', '.pyw'
+        ]
+        lower_result = result.lower()
+        for ext in extensions:
+            if lower_result.endswith(ext):
+                result = result[:-len(ext)]
+                break
+        
+        # Step 2: Remove copy indicators like (1), (2), (3), etc.
+        result = re.sub(r'[\s_]*\(\d+\)\s*$', '', result)
+        
+        # Step 3: Remove " - Copy", "_copy", " copy" at the end
+        result = re.sub(r'[\s_]*[-_]?\s*[Cc]opy\s*\d*\s*$', '', result)
+        
+        # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
+        # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
+        # This prevents removing numbers that are part of the name (e.g., "chrome1")
+        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result)  # Requires space/underscore
+        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result)  # OR explicit v prefix without space
+        
+        # Step 5: Clean up trailing special characters
+        result = result.rstrip(' _-.')
+        
+        # Step 6: Normalize multiple spaces to single space
+        result = re.sub(r'\s+', ' ', result)
+        
+        return result.strip() if result else "Unknown"
+    
     def _update_summary(self, results: Dict):
         """Update summary labels with cancelled indicator if applicable."""
         stats = results.get('statistics', {})
@@ -678,7 +889,6 @@ class IdentityResultsView(QWidget):
         
         self.anchors_lbl.setText(f"Anchors: {stats.get('total_anchors', 0):,}")
         self.evidence_lbl.setText(f"Evidence: {stats.get('total_evidence', 0):,}")
-        self.time_lbl.setText(f"Time: {stats.get('execution_time', 0):.1f}s")
         
         # Show feathers used with details
         feather_metadata = results.get('feather_metadata', {})
@@ -713,18 +923,25 @@ class IdentityResultsView(QWidget):
                 for anchor in identity.get('anchors', []):
                     feathers.update(anchor.get('feathers', []))
         
-        for f in sorted(feathers):
+        # Group feathers by base name (remove numeric suffix like _0, _1, _2)
+        base_feathers = set()
+        for f in feathers:
             # Remove path prefix (e.g., "feathers/") from display name
             display_name = f.split('/')[-1] if '/' in f else f
-            self.feather_filter.addItem(display_name)
+            # Extract base name by removing numeric suffix (_0, _1, etc.)
+            base_name = display_name.rsplit('_', 1)[0] if '_' in display_name and display_name.rsplit('_', 1)[-1].isdigit() else display_name
+            base_feathers.add(base_name)
+        
+        for base_name in sorted(base_feathers):
+            self.feather_filter.addItem(base_name)
     
     def _populate_tree(self, identities: List[Dict]):
         """Populate tree with given identities (used internally)."""
         self.results_tree.clear()
         
         if not identities:
-            # Show a message when there are no results
-            empty_item = QTreeWidgetItem(["No correlation matches found", "", "", "", ""])
+            # Show a message when there are no results (6 columns - removed Time)
+            empty_item = QTreeWidgetItem(["No correlation matches found", "", "", "", "", ""])
             empty_item.setForeground(0, QBrush(QColor("#888888")))
             empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
             self.results_tree.addTopLevelItem(empty_item)
@@ -789,26 +1006,44 @@ class IdentityResultsView(QWidget):
                     total_evidence += a.get('evidence_count', len(a.get('evidence_rows', [])))
                     total_anchors += 1
         
+        # Group feathers by base name (remove numeric suffix)
+        base_feathers = set()
+        for f in feathers:
+            display_name = f.split('/')[-1] if '/' in f else f
+            base_name = display_name.rsplit('_', 1)[0] if '_' in display_name and display_name.rsplit('_', 1)[-1].isdigit() else display_name
+            base_feathers.add(base_name)
+        
         name = identity.get('primary_name', 'Unknown')
-        feather_str = ", ".join(sorted(feathers)[:2]) + ("..." if len(feathers) > 2 else "")
+        feather_str = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
         sub_count = len(sub_identities) if sub_identities else 0
         
         # Calculate average score for identity
         avg_score = self._calculate_identity_score(identity)
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Get aggregated semantic value for identity
-        semantic_value, semantic_tooltip = self._get_identity_semantic_value(identity)
+        # Task 6.2: Get aggregated semantic value for identity with error handling
+        try:
+            semantic_value, semantic_tooltip = self._get_identity_semantic_value(identity)
+        except Exception as e:
+            logger.error(f"Error getting identity semantic value: {e}")
+            semantic_value, semantic_tooltip = "Error", "Error retrieving semantic data"
         
         # Check if has children for expand indicator
         has_children = bool(sub_identities) or bool(identity.get('anchors', []))
         expand_indicator = "▶ " if has_children else "  "
         
-        # Main identity item with expand indicator and blue diamond icon (7 columns now - added Semantic)
+        # Task 6.2: Check if identity has semantic data for [S] indicator with error handling
+        try:
+            has_semantic = semantic_value not in ["-", "Error", "Fallback", None, ""]
+            semantic_indicator = "[S] " if has_semantic else ""
+        except Exception as e:
+            logger.warning(f"Error checking semantic indicator: {e}")
+            semantic_indicator = ""
+        
+        # Main identity item with expand indicator and blue diamond icon (6 columns - removed Time)
         item = QTreeWidgetItem([
-            f"{expand_indicator}🔷 {name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
+            f"{expand_indicator}🔷 {semantic_indicator}{name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
             feather_str, 
-            "", 
             score_str,
             semantic_value,  # Semantic column with aggregated value
             str(total_evidence), 
@@ -819,17 +1054,26 @@ class IdentityResultsView(QWidget):
         
         # Color score based on value
         if avg_score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50")))  # Green - high score
+            item.setForeground(2, QBrush(QColor("#4CAF50")))  # Green - high score
         elif avg_score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800")))  # Orange - medium score
+            item.setForeground(2, QBrush(QColor("#FF9800")))  # Orange - medium score
         elif avg_score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336")))  # Red - low score
+            item.setForeground(2, QBrush(QColor("#F44336")))  # Red - low score
         
-        # Color semantic column if value exists
-        if semantic_value != "-":
-            item.setForeground(4, QBrush(QColor("#9C27B0")))  # Purple for semantic values
-            if semantic_tooltip:
-                item.setToolTip(4, semantic_tooltip)
+        # Task 6.2: Color semantic column with error handling
+        try:
+            if semantic_value == "Error":
+                item.setForeground(3, QBrush(QColor("#F44336")))  # Red for errors
+                item.setToolTip(3, "Error retrieving semantic data")
+            elif semantic_value == "Fallback":
+                item.setForeground(3, QBrush(QColor("#FF9800")))  # Orange for fallback
+                item.setToolTip(3, "Using fallback semantic data")
+            elif semantic_value != "-":
+                item.setForeground(3, QBrush(QColor("#9C27B0")))  # Purple for semantic values
+                if semantic_tooltip:
+                    item.setToolTip(3, semantic_tooltip)
+        except Exception as e:
+            logger.warning(f"Error setting semantic column color: {e}")
         
         item.setData(0, Qt.UserRole, {'type': 'identity', 'data': identity})
         
@@ -894,11 +1138,26 @@ class IdentityResultsView(QWidget):
                 for key, value in semantic_data.items():
                     if key.startswith('_'):
                         continue
-                    if isinstance(value, dict) and 'semantic_value' in value:
+                    
+                    # NEW: Check for semantic_mappings array (current structure)
+                    if isinstance(value, dict) and 'semantic_mappings' in value:
+                        mappings = value['semantic_mappings']
+                        if isinstance(mappings, list) and len(mappings) > 0:
+                            first_mapping = mappings[0]
+                            if isinstance(first_mapping, dict) and 'semantic_value' in first_mapping:
+                                sem_val = str(first_mapping['semantic_value'])
+                                rule_name = first_mapping.get('rule_name', key)
+                                if sem_val and sem_val not in [v[0] for v in semantic_values]:
+                                    semantic_values.append((sem_val, rule_name))
+                    
+                    # LEGACY: Direct semantic_value in value dict
+                    elif isinstance(value, dict) and 'semantic_value' in value:
                         sem_val = str(value['semantic_value'])
                         rule_name = value.get('rule_name', key)
                         if sem_val and sem_val not in [v[0] for v in semantic_values]:
                             semantic_values.append((sem_val, rule_name))
+                    
+                    # LEGACY: String value
                     elif isinstance(value, str) and value:
                         if value not in [v[0] for v in semantic_values]:
                             semantic_values.append((value, key))
@@ -920,6 +1179,126 @@ class IdentityResultsView(QWidget):
         
         return (display_value, "\n".join(tooltip_lines))
     
+    def _get_semantic_value(self, anchor: Dict) -> str:
+        """
+        Extract semantic value from anchor data with comprehensive error handling.
+        
+        Task 6.2: Handle corrupted or invalid semantic_data gracefully
+        Requirements: 7.3, 7.4 - Prevent crashes when semantic values are malformed
+        
+        Checks:
+        1. Anchor-level semantic_data field (new structure with semantic_mappings)
+        2. Evidence rows for _semantic_mappings key (legacy)
+        
+        Returns:
+            Semantic value string or "-" if not available
+        """
+        try:
+            # Task 6.2: Check anchor-level semantic data with error handling
+            semantic_data = anchor.get('semantic_data')
+            if semantic_data:
+                # Task 6.2: Handle corrupted semantic_data gracefully
+                if not isinstance(semantic_data, dict):
+                    logger.warning(f"Invalid semantic_data type: {type(semantic_data)}, expected dict")
+                    return "Error: Invalid data"
+                
+                # Check for unavailable marker
+                if semantic_data.get('_unavailable'):
+                    return "-"
+                
+                # Check for error metadata
+                metadata = semantic_data.get('_metadata', {})
+                if isinstance(metadata, dict):
+                    if metadata.get('error'):
+                        return "Error"
+                    if metadata.get('fallback_reason'):
+                        return "Fallback"
+                
+                # Extract semantic values with error handling
+                # New structure: field_info contains semantic_mappings array
+                for field_name, field_info in semantic_data.items():
+                    # Skip metadata and internal keys
+                    if field_name.startswith('_'):
+                        continue
+                    
+                    try:
+                        # NEW: Check for semantic_mappings array (current structure)
+                        if isinstance(field_info, dict) and 'semantic_mappings' in field_info:
+                            semantic_mappings = field_info['semantic_mappings']
+                            if isinstance(semantic_mappings, list) and len(semantic_mappings) > 0:
+                                first_mapping = semantic_mappings[0]
+                                if isinstance(first_mapping, dict) and 'semantic_value' in first_mapping:
+                                    semantic_value = first_mapping['semantic_value']
+                                    if semantic_value is not None:
+                                        return str(semantic_value)
+                        
+                        # LEGACY: Direct semantic_value in field_info
+                        elif isinstance(field_info, dict) and 'semantic_value' in field_info:
+                            semantic_value = field_info['semantic_value']
+                            if semantic_value is not None:
+                                return str(semantic_value)
+                        
+                        # LEGACY: String value
+                        elif isinstance(field_info, str) and field_name != '_reason':
+                            return field_info
+                        
+                        # Fallback: Convert to string
+                        elif field_info is not None:
+                            return str(field_info)
+                    except Exception as e:
+                        logger.warning(f"Error processing semantic field {field_name}: {e}")
+                        continue
+            
+            # Task 6.2: Check evidence rows for semantic mappings with error handling
+            evidence_rows = anchor.get('evidence_rows', [])
+            if not isinstance(evidence_rows, list):
+                logger.warning(f"Invalid evidence_rows type: {type(evidence_rows)}, expected list")
+                return "-"
+            
+            for evidence in evidence_rows:
+                try:
+                    if not isinstance(evidence, dict):
+                        continue
+                    
+                    data = evidence.get('data', {})
+                    if not isinstance(data, dict):
+                        continue
+                    
+                    semantic_mappings = data.get('_semantic_mappings', {})
+                    if not isinstance(semantic_mappings, dict):
+                        continue
+                    
+                    for field_name, mapping_info in semantic_mappings.items():
+                        # Skip internal keys
+                        if field_name.startswith('_'):
+                            continue
+                        
+                        try:
+                            if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
+                                semantic_value = mapping_info['semantic_value']
+                                if semantic_value is not None:
+                                    return str(semantic_value)
+                            elif isinstance(mapping_info, str):
+                                return mapping_info
+                            elif mapping_info is not None:
+                                # Handle unexpected data types gracefully
+                                return str(mapping_info)
+                        except Exception as e:
+                            logger.warning(f"Error processing semantic mapping {field_name}: {e}")
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"Error processing evidence row: {e}")
+                    continue
+        
+        except Exception as e:
+            # Task 6.2: Show appropriate fallback content in semantic column
+            # Requirements: 7.3, 7.4 - Never crash, always show something meaningful
+            logger.error(f"Critical error in _get_semantic_value: {e}")
+            return "Error"
+        
+        return "-"  # Default when no semantic data available
+    
     def _create_sub_identity_item(self, sub_identity: Dict) -> QTreeWidgetItem:
         """Create sub-identity tree item (original filename)."""
         feathers = set(sub_identity.get('feathers_found', []))
@@ -934,8 +1313,15 @@ class IdentityResultsView(QWidget):
             if isinstance(weighted_score, dict) and weighted_score.get('score', 0) > 0:
                 scores.append(weighted_score.get('score', 0))
         
+        # Group feathers by base name (remove numeric suffix)
+        base_feathers = set()
+        for f in feathers:
+            display_name = f.split('/')[-1] if '/' in f else f
+            base_name = display_name.rsplit('_', 1)[0] if '_' in display_name and display_name.rsplit('_', 1)[-1].isdigit() else display_name
+            base_feathers.add(base_name)
+        
         original_name = sub_identity.get('original_name', 'Unknown')
-        feather_str = ", ".join(sorted(feathers)[:2]) + ("..." if len(feathers) > 2 else "")
+        feather_str = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
@@ -943,11 +1329,10 @@ class IdentityResultsView(QWidget):
         has_children = bool(anchors)
         expand_indicator = "▶ " if has_children else "  "
         
-        # Sub-identity item with expand indicator and folder icon (orange/yellow) - 7 columns now
+        # Sub-identity item with expand indicator and folder icon (orange/yellow) - 6 columns (removed Time)
         item = QTreeWidgetItem([
             f"{expand_indicator}📁 {original_name}",
             feather_str,
-            "",
             score_str,
             "-",  # Semantic column (sub-identities don't have semantic values)
             str(evidence),
@@ -958,11 +1343,11 @@ class IdentityResultsView(QWidget):
         
         # Color score
         if avg_score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50")))
+            item.setForeground(2, QBrush(QColor("#4CAF50")))
         elif avg_score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800")))
+            item.setForeground(2, QBrush(QColor("#FF9800")))
         elif avg_score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336")))
+            item.setForeground(2, QBrush(QColor("#F44336")))
         
         item.setData(0, Qt.UserRole, {'type': 'sub_identity', 'data': sub_identity})
         
@@ -991,6 +1376,14 @@ class IdentityResultsView(QWidget):
             time_display = start_time
         
         feathers = anchor.get('feathers', [])
+        
+        # Group feathers by base name (remove numeric suffix)
+        base_feathers = set()
+        for f in feathers:
+            display_name = f.split('/')[-1] if '/' in f else f
+            base_name = display_name.rsplit('_', 1)[0] if '_' in display_name and display_name.rsplit('_', 1)[-1].isdigit() else display_name
+            base_feathers.add(base_name)
+        
         count = anchor.get('evidence_count', len(anchor.get('evidence_rows', [])))
         
         # Get weighted score
@@ -1004,18 +1397,8 @@ class IdentityResultsView(QWidget):
             interpretation = ''
             score_str = "-"
         
-        # Get semantic value for display
-        semantic_value = "-"
-        semantic_data = anchor.get('semantic_data')
-        if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
-            # Extract first semantic value for display
-            for key, value in semantic_data.items():
-                if not key.startswith('_') and value:
-                    if isinstance(value, dict) and 'semantic_value' in value:
-                        semantic_value = str(value['semantic_value'])
-                    elif isinstance(value, str):
-                        semantic_value = value
-                    break
+        # Get semantic value for display using the dedicated method
+        semantic_value = self._get_semantic_value(anchor)
         
         # 7 columns now - added Semantic column
         artifact_info = anchor.get('primary_artifact', '-')
@@ -1027,10 +1410,11 @@ class IdentityResultsView(QWidget):
         has_children = bool(evidence_rows)
         expand_indicator = "▶ " if has_children else "  "
         
+        feather_display = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
+        
         item = QTreeWidgetItem([
             f"{expand_indicator}⏱️ Anchor",
-            ", ".join(feathers[:2]) + ("..." if len(feathers) > 2 else ""),
-            time_display,
+            feather_display,
             score_str,
             semantic_value,  # New semantic column
             str(count),
@@ -1040,11 +1424,11 @@ class IdentityResultsView(QWidget):
         
         # Color score and add tooltip
         if score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50")))  # Green
+            item.setForeground(2, QBrush(QColor("#4CAF50")))  # Green
         elif score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800")))  # Orange
+            item.setForeground(2, QBrush(QColor("#FF9800")))  # Orange
         elif score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336")))  # Red
+            item.setForeground(2, QBrush(QColor("#F44336")))  # Red
         
         # Build comprehensive tooltip
         tooltip_lines = []
@@ -1134,11 +1518,10 @@ class IdentityResultsView(QWidget):
                     semantic_value = str(value)
                     break
         
-        # 7 columns now - added Semantic column
+        # 6 columns - removed Time column
         item = QTreeWidgetItem([
             f"📄 {original_name}" + (" 🔍" if has_semantic else ""),
             evidence.get('feather_id', ''),
-            ts,
             "-",  # Score column (evidence doesn't have individual scores)
             semantic_value,  # New semantic column
             "1",
@@ -1283,15 +1666,52 @@ class IdentityResultsView(QWidget):
             self.scoring_table.setItem(row, 1, count_item)
     
     def _apply_filters(self):
-        """Apply filters with pagination."""
+        """Apply filters with pagination, including semantic value search."""
         text = self.identity_filter.text().lower()
         feather = self.feather_filter.currentText()
         min_ev = int(self.min_filter.currentText())
         
         filtered = []
         for i in self.identities:
+            # Search in identity name
             name = i.get('primary_name', '').lower()
-            if text and text not in name:
+            name_match = not text or text in name
+            
+            # Search in semantic values if name doesn't match
+            semantic_match = False
+            if text and not name_match:
+                # Get all semantic values for this identity
+                sub_identities = i.get('sub_identities', [])
+                anchors_to_check = []
+                if sub_identities:
+                    for sub in sub_identities:
+                        anchors_to_check.extend(sub.get('anchors', []))
+                else:
+                    anchors_to_check = i.get('anchors', [])
+                
+                # Check if search text matches any semantic value
+                for anchor in anchors_to_check:
+                    semantic_data = anchor.get('semantic_data')
+                    if semantic_data and isinstance(semantic_data, dict):
+                        for key, value in semantic_data.items():
+                            if key.startswith('_'):
+                                continue
+                            # Check semantic value
+                            if isinstance(value, dict) and 'semantic_value' in value:
+                                sem_val = str(value['semantic_value']).lower()
+                                rule_name = value.get('rule_name', key).lower()
+                                if text in sem_val or text in rule_name:
+                                    semantic_match = True
+                                    break
+                            elif isinstance(value, str):
+                                if text in value.lower() or text in key.lower():
+                                    semantic_match = True
+                                    break
+                        if semantic_match:
+                            break
+            
+            # Skip if neither name nor semantic value matches
+            if text and not name_match and not semantic_match:
                 continue
             
             # Handle both old format (anchors) and new format (sub_identities)
@@ -1306,7 +1726,18 @@ class IdentityResultsView(QWidget):
                 all_anchors = i.get('anchors', [])
             
             if feather != "All":
-                has = any(feather in a.get('feathers', []) for a in all_anchors)
+                # Match against base feather name (without numeric suffix)
+                has = False
+                for a in all_anchors:
+                    for f in a.get('feathers', []):
+                        # Extract base name from feather
+                        display_name = f.split('/')[-1] if '/' in f else f
+                        base_name = display_name.rsplit('_', 1)[0] if '_' in display_name and display_name.rsplit('_', 1)[-1].isdigit() else display_name
+                        if feather == base_name:
+                            has = True
+                            break
+                    if has:
+                        break
                 if not has:
                     continue
             
@@ -1595,15 +2026,17 @@ class IdentityDetailDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(4, 4, 4, 4)
         
-        # Header
+        # Header - compact, takes minimal space
         header = QLabel(f"<b>{feather_id}</b> - {len(records)} records")
         header.setStyleSheet("font-size: 9pt; color: #aaa; padding: 4px;")
+        header.setMaximumHeight(30)  # Limit header height
         layout.addWidget(header)
         
-        # Search box
+        # Search box - compact, takes minimal space
         search_box = QLineEdit()
         search_box.setPlaceholderText("Search records...")
         search_box.setStyleSheet("padding: 4px; font-size: 8pt;")
+        search_box.setMaximumHeight(30)  # Limit search box height
         layout.addWidget(search_box)
         
         # Collect all unique keys from all records
@@ -1613,7 +2046,7 @@ class IdentityDetailDialog(QDialog):
             if isinstance(data, dict):
                 all_keys.update(data.keys())
         
-        # Create table with all fields
+        # Create table with all fields - THIS SHOULD TAKE 75% OF SPACE
         table = QTableWidget()
         cols = ['Timestamp', 'Artifact', 'Role'] + sorted(list(all_keys))
         table.setColumnCount(len(cols))
@@ -1621,6 +2054,10 @@ class IdentityDetailDialog(QDialog):
         table.setRowCount(len(records))
         table.setAlternatingRowColors(True)
         table.setSortingEnabled(True)  # Enable column sorting
+        
+        # Set size policy to expand and fill available space
+        from PyQt5.QtWidgets import QSizePolicy
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         for row, rec in enumerate(records):
             table.setItem(row, 0, QTableWidgetItem(str(rec.get('timestamp', ''))[:19]))
@@ -1660,7 +2097,9 @@ class IdentityDetailDialog(QDialog):
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setSelectionMode(QTableWidget.SingleSelection)
         
-        layout.addWidget(table)
+        # Add table with stretch factor to take most of the space
+        # The stretch factor makes the table expand to fill available space
+        layout.addWidget(table, stretch=10)  # High stretch factor = takes most space
         
         return widget
     
@@ -1747,18 +2186,160 @@ class IdentityDetailDialog(QDialog):
         return self._create_anchor_table(self.data)
     
     def _create_evidence_content(self) -> QWidget:
-        """Create evidence content."""
+        """Create evidence content with semantic mappings and feather records in table format."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setSpacing(8)
+        layout.setContentsMargins(4, 4, 4, 4)
         
-        data = self.data.get('data', {})
-        if data and isinstance(data, dict):
+        # Transform evidence structure to match expected format
+        # Evidence from tree: {'feather_id': 'X', 'data': {...}, 'semantic_info': {...}}
+        # Expected format: {'feather_records': {'X': {...}}, 'semantic_data': {...}}
+        
+        feather_id = self.data.get('feather_id', 'Unknown')
+        feather_data = self.data.get('data', {})
+        semantic_info = self.data.get('semantic_info', {})
+        
+        # Build feather_records dict
+        feather_records = {feather_id: feather_data} if feather_data else {}
+        
+        # Build semantic_data dict (transform semantic_info to semantic_data structure)
+        semantic_data = {}
+        if semantic_info:
+            # semantic_info is a flat dict, wrap it in the expected structure
+            semantic_data[feather_id] = {
+                'identity_type': feather_id,
+                'semantic_mappings': [{
+                    'semantic_value': str(v),
+                    'rule_name': k,
+                    'category': 'Unknown',
+                    'confidence': 1.0,
+                    'severity': 'info'
+                } for k, v in semantic_info.items() if v]
+            }
+        
+        # Check if we have semantic_data to display
+        if semantic_data and isinstance(semantic_data, dict):
+            # Add Semantic Mappings section
+            semantic_group = QGroupBox("🔍 Semantic Mappings")
+            semantic_group.setStyleSheet("""
+                QGroupBox { 
+                    font-size: 9pt; font-weight: bold; color: #2196F3;
+                    padding-top: 12px; margin-top: 8px;
+                    border: 2px solid #2196F3; background-color: #1a1a2e;
+                }
+                QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
+            """)
+            semantic_layout = QVBoxLayout(semantic_group)
+            
+            # Create semantic mappings table
+            semantic_table = QTableWidget()
+            semantic_table.setColumnCount(6)
+            semantic_table.setHorizontalHeaderLabels([
+                'Semantic Value', 'Identity Type', 'Rule Name', 
+                'Category', 'Confidence', 'Severity'
+            ])
+            
+            # Count total mappings
+            total_mappings = 0
+            for entry in semantic_data.values():
+                if isinstance(entry, dict) and 'semantic_mappings' in entry:
+                    total_mappings += len(entry['semantic_mappings'])
+            
+            semantic_table.setRowCount(total_mappings)
+            
+            row = 0
+            for key, entry in sorted(semantic_data.items()):
+                if isinstance(entry, dict) and 'semantic_mappings' in entry:
+                    mappings = entry['semantic_mappings']
+                    identity_type = entry.get('identity_type', 'unknown')
+                    
+                    for mapping in mappings:
+                        semantic_table.setItem(row, 0, QTableWidgetItem(mapping.get('semantic_value', '')))
+                        semantic_table.setItem(row, 1, QTableWidgetItem(identity_type))
+                        semantic_table.setItem(row, 2, QTableWidgetItem(mapping.get('rule_name', '')))
+                        semantic_table.setItem(row, 3, QTableWidgetItem(mapping.get('category', '')))
+                        
+                        confidence = mapping.get('confidence', 0)
+                        conf_item = QTableWidgetItem(f"{confidence:.0%}")
+                        semantic_table.setItem(row, 4, conf_item)
+                        
+                        severity = mapping.get('severity', 'info')
+                        sev_item = QTableWidgetItem(severity.upper())
+                        # Color code severity
+                        if severity == 'high':
+                            sev_item.setForeground(QColor('#ff5252'))
+                        elif severity == 'medium':
+                            sev_item.setForeground(QColor('#ffa726'))
+                        else:
+                            sev_item.setForeground(QColor('#66bb6a'))
+                        semantic_table.setItem(row, 5, sev_item)
+                        
+                        row += 1
+            
+            semantic_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            semantic_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            semantic_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            semantic_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+            semantic_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+            semantic_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+            semantic_table.setAlternatingRowColors(True)
+            semantic_table.setMaximumHeight(200)
+            
+            semantic_layout.addWidget(semantic_table)
+            layout.addWidget(semantic_group)
+        
+        # Check if we have feather_records to display
+        if feather_records and isinstance(feather_records, dict):
+            # Add Feather Records section
+            feather_group = QGroupBox("📋 Feather Records")
+            feather_group.setStyleSheet("""
+                QGroupBox { 
+                    font-size: 9pt; font-weight: bold; color: #aaa;
+                    padding-top: 12px; margin-top: 8px;
+                    border: 1px solid #333; background-color: #1a1a2e;
+                }
+                QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
+            """)
+            feather_layout = QVBoxLayout(feather_group)
+            
+            # Create tabs for each feather
+            feather_tabs = QTabWidget()
+            feather_tabs.setStyleSheet("""
+                QTabBar::tab { 
+                    font-size: 7pt; 
+                    padding: 3px 10px; 
+                    background-color: #1a1a2e;
+                    color: #777;
+                    border: 1px solid #333;
+                }
+                QTabBar::tab:selected { 
+                    background-color: #2a3a5e; 
+                    color: #ccc;
+                }
+            """)
+            
+            for feather_name, feather_data_item in sorted(feather_records.items()):
+                if isinstance(feather_data_item, list) and feather_data_item:
+                    # Create table for this feather's records
+                    feather_table = self._create_feather_records_table(feather_name, feather_data_item)
+                    feather_tabs.addTab(feather_table, f"{feather_name} ({len(feather_data_item)})")
+                elif isinstance(feather_data_item, dict):
+                    # Single record as dict
+                    feather_table = self._create_feather_records_table(feather_name, [feather_data_item])
+                    feather_tabs.addTab(feather_table, feather_name)
+            
+            feather_layout.addWidget(feather_tabs)
+            layout.addWidget(feather_group)
+        
+        # Fallback: display basic data if no semantic or feather records
+        if not semantic_data and not feather_records:
             table = QTableWidget()
             table.setColumnCount(2)
             table.setHorizontalHeaderLabels(['Field', 'Value'])
-            table.setRowCount(len(data))
+            table.setRowCount(len(self.data))
             
-            for row, (k, v) in enumerate(sorted(data.items())):
+            for row, (k, v) in enumerate(sorted(self.data.items())):
                 table.setItem(row, 0, QTableWidgetItem(str(k)))
                 val = str(v)[:150]
                 item = QTableWidgetItem(val)
@@ -1769,10 +2350,85 @@ class IdentityDetailDialog(QDialog):
             table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
             table.setAlternatingRowColors(True)
             layout.addWidget(table)
-        else:
-            text = QTextEdit()
-            text.setReadOnly(True)
-            text.setPlainText(str(self.data))
-            layout.addWidget(text)
         
+        layout.addStretch()
+        return widget
+    
+    def _create_feather_records_table(self, feather_name: str, records: list) -> QWidget:
+        """Create a table displaying feather records with vertical layout (fields as rows)."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(4, 4, 4, 4)
+        
+        # Handle case where records might be a list with a single dict
+        # Database format: {'prefetch': [{'field': 'value', ...}]}
+        # Expected format: [{'field': 'value', ...}]
+        if records and len(records) == 1 and isinstance(records[0], dict):
+            # Check if it's already the correct format (has actual field names)
+            first_record = records[0]
+            # If it has typical feather fields, it's correct
+            if any(key in first_record for key in ['filename', 'executable_name', 'path', 'timestamp', 'name']):
+                # Already correct format
+                pass
+            else:
+                # Might be wrapped, but let's use it as-is
+                pass
+        
+        # Collect all unique keys from all records
+        all_keys = set()
+        for record in records:
+            if isinstance(record, dict):
+                all_keys.update(record.keys())
+        
+        # Remove internal/metadata keys
+        excluded_keys = {'semantic_data', 'semantic_mappings', '_metadata', '_internal', '_feather_id', '_table'}
+        all_keys = sorted([k for k in all_keys if k not in excluded_keys])
+        
+        # Create table with VERTICAL layout (fields as rows)
+        # Columns: Field Name | Record 1 | Record 2 | ... | Record N
+        table = QTableWidget()
+        table.setRowCount(len(all_keys))  # Each field is a row
+        table.setColumnCount(len(records) + 1)  # Field name + one column per record
+        
+        # Set headers
+        headers = ["Field"] + [f"Record {i+1}" if len(records) > 1 else "Value" for i in range(len(records))]
+        table.setHorizontalHeaderLabels(headers)
+        
+        # Set vertical headers (field names)
+        table.setVerticalHeaderLabels(all_keys)
+        
+        table.setAlternatingRowColors(True)
+        
+        # Populate table
+        for row, key in enumerate(all_keys):
+            # Column 0: Field name
+            field_item = QTableWidgetItem(key)
+            field_item.setFont(QFont("Arial", 9, QFont.Bold))
+            table.setItem(row, 0, field_item)
+            
+            # Columns 1+: Values from each record
+            for col, record in enumerate(records):
+                if isinstance(record, dict):
+                    value = record.get(key, '')
+                    
+                    # Handle different value types
+                    if isinstance(value, (list, dict)):
+                        display_val = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
+                    else:
+                        display_val = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
+                    
+                    item = QTableWidgetItem(display_val)
+                    item.setToolTip(str(value))  # Full value in tooltip
+                    table.setItem(row, col + 1, item)
+        
+        # Enable column resizing
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Field name column
+        for i in range(1, len(records) + 1):
+            table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch)  # Value columns
+        
+        # Add row selection highlighting
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+        
+        layout.addWidget(table)
         return widget

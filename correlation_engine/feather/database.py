@@ -231,7 +231,7 @@ class FeatherDatabase:
     def insert_data(self, table_name: str, data: List[Dict[str, Any]], 
                    source_info: Dict[str, Any], columns: List[Dict[str, Any]]):
         """
-        Insert data into feather table.
+        Insert data into feather table and populate metadata.
         
         Args:
             table_name: Name of the feather table
@@ -320,6 +320,9 @@ class FeatherDatabase:
                 WHERE id = ?
             ''', (import_id,))
             
+            # Update feather_metadata with table information
+            self._update_metadata_after_insert(table_name, data, all_columns, source_info)
+            
             self.connection.commit()
             return True, None
             
@@ -333,6 +336,40 @@ class FeatherDatabase:
             
             self.connection.commit()
             return False, str(e)
+    
+    def _update_metadata_after_insert(self, table_name: str, data: List[Dict[str, Any]], 
+                                     all_columns: List[str], source_info: Dict[str, Any]):
+        """
+        Update feather_metadata table after data insertion.
+        
+        Populates:
+        - artifact_type: Type of forensic artifact
+        - table_name: Name of main data table
+        - columns: JSON array of column names
+        - record_count: Total number of records
+        
+        Args:
+            table_name: Name of the table that was populated
+            data: List of data records that were inserted
+            all_columns: List of all column names in the table
+            source_info: Information about data source including artifact_type
+        """
+        import json
+        
+        # Prepare metadata entries
+        metadata_updates = [
+            ('artifact_type', source_info.get('artifact_type', 'Unknown')),
+            ('table_name', table_name),
+            ('columns', json.dumps(all_columns)),
+            ('record_count', str(len(data)))
+        ]
+        
+        # Insert or update each metadata entry
+        for key, value in metadata_updates:
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO feather_metadata (key, value)
+                VALUES (?, ?)
+            ''', (key, value))
     
     def get_table_names(self) -> List[str]:
         """Get all feather table names."""
@@ -379,3 +416,189 @@ class FeatherDatabase:
             stats['total_records'] += count
         
         return stats
+    
+    def get_metadata(self) -> Dict[str, str]:
+        """
+        Get all metadata from feather_metadata table.
+        
+        Returns:
+            Dict of key-value pairs from feather_metadata.
+            Returns empty dict if feather_metadata table doesn't exist.
+            
+        Example return:
+            {
+                'artifact_type': 'prefetch',
+                'table_name': 'feather_data',
+                'columns': '["executable_name", "run_count", "last_run_time"]',
+                'creation_date': '2024-01-15T10:30:00',
+                'record_count': '1523'
+            }
+        """
+        try:
+            # Check if feather_metadata table exists
+            self.cursor.execute('''
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='feather_metadata'
+            ''')
+            
+            if not self.cursor.fetchone():
+                return {}
+            
+            # Retrieve all metadata key-value pairs
+            self.cursor.execute('SELECT key, value FROM feather_metadata')
+            rows = self.cursor.fetchall()
+            
+            return {key: value for key, value in rows}
+            
+        except Exception as e:
+            # Return empty dict on any error
+            return {}
+    
+    def has_columns(self, required_columns: List[str]) -> bool:
+        """
+        Check if feather has all required columns.
+        
+        Args:
+            required_columns: List of column names to check
+            
+        Returns:
+            True if all columns exist, False otherwise.
+            Returns False if feather_metadata doesn't exist or columns metadata missing.
+            
+        Note:
+            Uses case-insensitive comparison for robustness.
+        """
+        try:
+            metadata = self.get_metadata()
+            
+            # Check if columns metadata exists
+            if 'columns' not in metadata:
+                return False
+            
+            # Parse columns JSON array
+            import json
+            try:
+                columns_list = json.loads(metadata['columns'])
+            except (json.JSONDecodeError, TypeError):
+                return False
+            
+            # Convert to lowercase for case-insensitive comparison
+            columns_lower = [col.lower() for col in columns_list]
+            required_lower = [col.lower() for col in required_columns]
+            
+            # Check if all required columns are present
+            return all(req_col in columns_lower for req_col in required_lower)
+            
+        except Exception as e:
+            return False
+    
+    def get_artifact_type(self) -> str:
+        """
+        Get artifact type from metadata.
+        
+        Returns:
+            Artifact type string, or None if not found.
+            
+        Note:
+            Used by pre-filtering logic to skip irrelevant feathers.
+        """
+        metadata = self.get_metadata()
+        return metadata.get('artifact_type', None)
+    
+    def get_record_count(self) -> int:
+        """
+        Get record count from metadata.
+        
+        Returns:
+            Number of records, or 0 if not found.
+            
+        Note:
+            Allows quick check for empty feathers without querying data.
+            Used by pre-filtering to skip empty feathers.
+        """
+        metadata = self.get_metadata()
+        record_count_str = metadata.get('record_count', '0')
+        
+        try:
+            return int(record_count_str)
+        except (ValueError, TypeError):
+            return 0
+    
+    def create_indexes(self, table_name: str, indexed_columns: List[str]):
+        """
+        Create indexes on commonly queried columns for performance optimization.
+        
+        Args:
+            table_name: Name of table to create indexes on
+            indexed_columns: List of column names to create indexes for
+            
+        Note:
+            - Index naming convention: idx_{table_name}_{column_name}
+            - Handles missing columns gracefully (skips them with warning)
+            - Logs index creation for debugging
+            - Indexes dramatically improve query performance (10-100x speedup)
+            - Storage overhead: ~10-20% increase in database size
+            
+        Common indexed columns:
+            - executable_name
+            - application
+            - username
+            - timestamp fields (primary_timestamp, last_run_time, etc.)
+            - process_name, process_id
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Sanitize table name
+        table_name = self.sanitize_identifier(table_name)
+        
+        # Get existing columns in the table
+        try:
+            self.cursor.execute(f'PRAGMA table_info("{table_name}")')
+            existing_columns = {row[1].lower() for row in self.cursor.fetchall()}
+        except Exception as e:
+            logger.error(f"Failed to get table info for {table_name}: {e}")
+            return
+        
+        # Create indexes for each specified column
+        for column_name in indexed_columns:
+            # Sanitize column name
+            sanitized_column = self.sanitize_identifier(column_name)
+            
+            # Check if column exists (case-insensitive)
+            if sanitized_column.lower() not in existing_columns:
+                logger.warning(
+                    f"Column '{column_name}' does not exist in table '{table_name}', "
+                    f"skipping index creation"
+                )
+                continue
+            
+            # Create index with naming convention: idx_{table_name}_{column_name}
+            index_name = f"idx_{table_name}_{sanitized_column}"
+            
+            try:
+                # Use IF NOT EXISTS to avoid errors if index already exists
+                create_index_sql = f'''
+                    CREATE INDEX IF NOT EXISTS {index_name}
+                    ON "{table_name}"("{sanitized_column}")
+                '''
+                
+                self.cursor.execute(create_index_sql)
+                logger.info(
+                    f"Created index '{index_name}' on {table_name}.{sanitized_column}"
+                )
+                
+            except Exception as e:
+                logger.error(
+                    f"Failed to create index '{index_name}' on "
+                    f"{table_name}.{sanitized_column}: {e}"
+                )
+        
+        # Commit the index creation
+        try:
+            self.connection.commit()
+            logger.info(
+                f"Successfully committed {len(indexed_columns)} indexes for table '{table_name}'"
+            )
+        except Exception as e:
+            logger.error(f"Failed to commit index creation for table '{table_name}': {e}")

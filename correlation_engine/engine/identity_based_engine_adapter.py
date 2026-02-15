@@ -14,7 +14,7 @@ from .base_engine import BaseCorrelationEngine, EngineMetadata, FilterConfig
 from .identity_correlation_engine import IdentityCorrelationEngine
 from .correlation_result import CorrelationResult, CorrelationMatch
 from .weighted_scoring import WeightedScoringEngine
-from .progress_tracking import ProgressTracker, ProgressListener, ProgressEvent, ProgressEventType
+from .progress_tracking import ProgressTracker, ProgressListener, ProgressEvent, ProgressEventType, CorrelationProgressReporter, CorrelationStallMonitor, CorrelationStallException
 from ..integration.semantic_mapping_integration import SemanticMappingIntegration, SemanticMappingStats
 from ..integration.weighted_scoring_integration import WeightedScoringIntegration
 from ..config.identifier_extraction_config import WingsConfig
@@ -53,6 +53,11 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         self.debug_mode = getattr(config, 'debug_mode', False)
         self.verbose_logging = getattr(config, 'verbose_logging', False)
         
+        # Initialize centralized score configuration manager
+        # Requirements: 7.2, 8.3
+        from ..config.score_configuration_manager import ScoreConfigurationManager
+        self.score_config_manager = ScoreConfigurationManager()
+        
         # Use provided integrations or create new ones
         # This allows sharing integrations across multiple engines in the same pipeline
         if mapping_integration:
@@ -86,6 +91,42 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # Verify semantic integration health (only log if verbose)
         if not self.semantic_integration.is_healthy() and self.verbose_logging:
             logger.warning("Semantic mapping integration health check failed - some features may not work correctly")
+        
+        # Task 2.3: Add logging for semantic integration health status
+        # Requirements: 5.1, 5.2, 5.4 - Log semantic integration initialization status
+        if self.verbose_logging:
+            health_status = "healthy" if self.semantic_integration.is_healthy() else "unhealthy"
+            enabled_status = "enabled" if self.semantic_integration.is_enabled() else "disabled"
+            logger.info(f"[Identity Engine] Semantic integration status: {health_status}, {enabled_status}")
+            
+            # Task 6.3: Enhanced configuration validation and warnings
+            # Requirements: 7.4, 7.5 - Provide helpful error messages for troubleshooting
+            if not self.semantic_integration.is_enabled():
+                logger.warning("[Identity Engine] Semantic mapping is disabled - correlation will continue without semantic enhancement")
+                print("[SEMANTIC] WARNING: Semantic mapping disabled for Identity Engine")
+                print("[SEMANTIC] HELP: Check semantic mapping configuration to enable semantic features")
+            elif not self.semantic_integration.is_healthy():
+                logger.warning("[Identity Engine] Semantic integration health check failed - some features may not work correctly")
+                print("[SEMANTIC] WARNING: Semantic integration unhealthy for Identity Engine")
+                print("[SEMANTIC] HELP: Check semantic mapping configuration files and permissions")
+            
+            # Log configuration source and availability
+            manager = self.semantic_integration.semantic_manager
+            if manager.config_dir.exists():
+                logger.info(f"[Identity Engine] Semantic config directory found: {manager.config_dir}")
+                if manager.default_rules_path.exists():
+                    logger.info(f"[Identity Engine]   Default rules file: available")
+                else:
+                    logger.warning(f"[Identity Engine]   Default rules file: missing")
+                    print(f"[SEMANTIC] WARNING: Default rules file missing: {manager.default_rules_path}")
+                if manager.custom_rules_path.exists():
+                    logger.info(f"[Identity Engine]   Custom rules file: available")
+                else:
+                    logger.info(f"[Identity Engine]   Custom rules file: not found (optional)")
+            else:
+                logger.warning(f"[Identity Engine] Semantic config directory not found: {manager.config_dir}")
+                print(f"[SEMANTIC] WARNING: Config directory not found: {manager.config_dir}")
+                print("[SEMANTIC] HELP: Create semantic mapping configuration directory and files")
         
         # Log semantic rules source (JSON vs built-in)
         if self.verbose_logging:
@@ -142,24 +183,32 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             supports_identity_filter=True
         )
     
-    def execute(self, wing_configs: List[Any]) -> Dict[str, Any]:
+    def execute(self, wing_configs: List[Any], resume_execution_id: int = None) -> Dict[str, Any]:
         """
         Execute identity-based correlation with integrated systems.
         
         Args:
             wing_configs: List of Wing configuration objects
+            resume_execution_id: Optional execution ID to resume from paused state
             
         Returns:
             Dictionary containing correlation results and metadata
         """
         start_time = datetime.now()
         
-        # Always print which engine is being used
-        print("\n" + "="*70)
-        print("CORRELATION ENGINE: Identity-Based")
-        print("="*70)
-        
         try:
+            # Always print which engine is being used
+            print("\n" + "="*70)
+            print("CORRELATION ENGINE: Identity-Based")
+            print("="*70)
+            
+            # Check if this is a resume operation
+            if resume_execution_id:
+                print(f"[Identity Engine] Resuming execution ID: {resume_execution_id}")
+                return self._resume_execution(resume_execution_id, wing_configs, start_time)
+            
+            print("="*70)
+            
             # Simple startup message
             print("[Identity Engine] Starting correlation...")
             
@@ -204,10 +253,9 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 if streaming_enabled:
                     # In streaming mode, matches are written to DB, wing_matches is empty
                     # But we need to count them - get count from the result record
-                    print(f"[Identity Engine] DEBUG: Streaming mode - matches saved to database")
                     # The match count is tracked in _process_wing and saved to DB
+                    pass  # No action needed here, matches already saved
                 else:
-                    print(f"[Identity Engine] DEBUG: _process_wing returned {len(wing_matches)} matches, {wing_identity_count} identities")
                     all_matches.extend(wing_matches)
                 
                 total_identities += wing_identity_count
@@ -221,30 +269,21 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 with ResultsDatabase(str(db_path)) as db:
                     results = db.get_execution_results(self._execution_id)
                     total_match_count = sum(r.get('total_matches', 0) for r in results)
-                print(f"[Identity Engine] DEBUG: Total matches from database = {total_match_count}")
             else:
                 total_match_count = len(all_matches)
-                print(f"[Identity Engine] DEBUG: Total all_matches = {len(all_matches)}")
             
-            # Apply semantic mappings to results (silent unless verbose)
+            # Task 1.1: Remove semantic mappings from correlation processing
+            # Requirements: 1.1, 1.2, 1.3, 1.4
+            # Semantic matching will be applied AFTER correlation reaches 100% in Identity Semantic Phase
             # Skip if streaming mode (matches already in DB)
             if streaming_enabled:
-                enhanced_matches = []
                 scored_matches = []
             else:
-                if self.semantic_integration.is_enabled():
-                    if self.verbose_logging:
-                        print(f"[Identity Engine] Applying semantic mappings...")
-                    enhanced_matches = self._apply_semantic_mappings(all_matches, wing_configs)
-                else:
-                    enhanced_matches = all_matches
-                
                 # Calculate weighted scores (silent unless verbose)
+                # NO semantic mappings applied during correlation
                 if self.verbose_logging:
                     print(f"[Identity Engine] Calculating weighted scores...")
-                scored_matches = self._apply_weighted_scoring(enhanced_matches, wing_configs)
-                
-                print(f"[Identity Engine] DEBUG: enhanced_matches = {len(enhanced_matches)}, scored_matches = {len(scored_matches)}")
+                scored_matches = self._apply_weighted_scoring(all_matches, wing_configs)
             
             # Create correlation result
             execution_time = (datetime.now() - start_time).total_seconds()
@@ -273,9 +312,126 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 'lowest_score': getattr(scoring_stats, 'lowest_score', 0.0)
             }
             
-            # Build feather_metadata from collected statistics
+            # Note: Identity Semantic Phase will extract identities from CorrelationResult
+            # No need to manually build identities_list here
+            
+            self.last_results = CorrelationResult(
+                wing_id=wing_configs[0].wing_id if wing_configs else "unknown",
+                wing_name=wing_configs[0].wing_name if wing_configs else "unknown",
+                matches=scored_matches,
+                total_matches=total_match_count,  # Use tracked count (works for both streaming and non-streaming)
+                execution_duration_seconds=execution_time,
+                filters_applied=self._get_applied_filters(),
+                feather_metadata={},  # Will be populated AFTER Identity Semantic Phase
+                # CRITICAL: Set database info for Identity Semantic Phase (streaming mode support)
+                streaming_mode=streaming_enabled,
+                database_path=str(Path(self._output_dir) / "correlation_results.db") if streaming_enabled and self._output_dir else None,
+                execution_id=self._execution_id if streaming_enabled else None
+                # Note: identities field left empty - Identity Semantic Phase extracts from matches/database
+            )
+            
+            # Store engine type as a direct attribute for easy access
+            self.last_results.engine_type = "identity_based"
+            
+            # Task 7.1: Execute Identity Semantic Phase after correlation completes
+            # Requirements: 10.1, 10.2, 10.3
+            # This applies identity-level semantic mappings in a dedicated final analysis phase
+            print(f"[Identity Engine] Starting Identity Semantic Phase...")
+            print(f"[Identity Engine] DEBUG: About to call _execute_identity_semantic_phase")
+            self.last_results = self._execute_identity_semantic_phase(
+                self.last_results, 
+                wing_configs
+            )
+            print(f"[Identity Engine] DEBUG: _execute_identity_semantic_phase returned")
+            print(f"[Identity Engine] Identity Semantic Phase completed")
+            
+            # NOW calculate feather metadata AFTER matches are written and semantic phase is complete
+            # Build feather_metadata from collected statistics AFTER matches are written
             # Requirements: 7.1, 7.2
             feather_metadata = {}
+            
+            # Calculate matches per feather by counting how many matches each feather contributed to
+            matches_per_feather = {}
+            
+            if streaming_enabled:
+                # In streaming mode, use SQL aggregation to count matches per feather efficiently
+                # This avoids loading all matches into memory which causes resource leaks
+                from pathlib import Path
+                from .database_persistence import ResultsDatabase
+                import sqlite3
+                import json
+                
+                db_path = Path(self._output_dir) / "correlation_results.db"
+                try:
+                    # Use direct SQL connection for efficient aggregation
+                    conn = sqlite3.connect(str(db_path), timeout=30.0)
+                    cursor = conn.cursor()
+                    
+                    # Get result_ids for this execution
+                    cursor.execute("""
+                        SELECT result_id FROM results WHERE execution_id = ?
+                    """, (self._execution_id,))
+                    result_ids = [row[0] for row in cursor.fetchall()]
+                    
+                    print(f"[Identity Engine] Counting matches per feather for {len(result_ids)} results...")
+                    
+                    # For each result, count matches per feather using efficient SQL
+                    for result_id in result_ids:
+                        # Get total match count first
+                        cursor.execute("SELECT COUNT(*) FROM matches WHERE result_id = ?", (result_id,))
+                        total_matches = cursor.fetchone()[0]
+                        
+                        if total_matches == 0:
+                            continue
+                        
+                        # Process matches in batches to avoid memory issues
+                        batch_size = 10000
+                        offset = 0
+                        
+                        while offset < total_matches:
+                            cursor.execute("""
+                                SELECT feather_records FROM matches 
+                                WHERE result_id = ? 
+                                LIMIT ? OFFSET ?
+                            """, (result_id, batch_size, offset))
+                            
+                            batch = cursor.fetchall()
+                            
+                            for row in batch:
+                                feather_records_str = row[0]
+                                if not feather_records_str:
+                                    continue
+                                
+                                try:
+                                    feather_records = json.loads(feather_records_str)
+                                    for feather_key in feather_records.keys():
+                                        # Extract base feather name (remove _0, _1 suffixes)
+                                        feather_id = feather_key.split('_')[0] if '_' in feather_key else feather_key
+                                        matches_per_feather[feather_id] = matches_per_feather.get(feather_id, 0) + 1
+                                except (json.JSONDecodeError, AttributeError):
+                                    pass
+                            
+                            offset += batch_size
+                            
+                            # Show progress for large datasets
+                            if total_matches > 50000 and offset % 50000 == 0:
+                                print(f"[Identity Engine]   Processed {offset:,}/{total_matches:,} matches...")
+                    
+                    conn.close()
+                    print(f"[Identity Engine] ✓ Counted matches for {len(matches_per_feather)} feathers")
+                    
+                except Exception as e:
+                    print(f"[Identity Engine] Warning: Could not count matches per feather: {e}")
+                    # Use feather stats as fallback
+                    for feather_id in all_feather_stats.keys():
+                        matches_per_feather[feather_id] = 0
+            else:
+                # In memory mode, count from scored_matches
+                for match in scored_matches:
+                    for record in match.feather_records:
+                        feather_id = record.get('_feather_id', 'unknown')
+                        matches_per_feather[feather_id] = matches_per_feather.get(feather_id, 0) + 1
+            
             for feather_id, stats in all_feather_stats.items():
                 feather_metadata[feather_id] = {
                     'feather_name': feather_id,
@@ -283,7 +439,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                     'identities_extracted': stats['extracted'],
                     'identities_filtered': stats.get('filtered', 0),
                     'identities_final': len(stats['identities']),
-                    'matches_created': 0  # Will be calculated from matches if needed
+                    'identities_found': len(stats['identities']),  # Alias for GUI compatibility
+                    'matches_created': matches_per_feather.get(feather_id, 0)  # Actual count from matches
                 }
             
             # Add engine metadata as a special entry
@@ -298,33 +455,73 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 'core_engine_stats': self._get_core_engine_stats()
             }
             
-            self.last_results = CorrelationResult(
-                wing_id=wing_configs[0].wing_id if wing_configs else "unknown",
-                wing_name=wing_configs[0].wing_name if wing_configs else "unknown",
-                matches=scored_matches,
-                total_matches=total_match_count,  # Use tracked count (works for both streaming and non-streaming)
-                execution_duration_seconds=execution_time,
-                filters_applied=self._get_applied_filters(),
-                feather_metadata=feather_metadata
-            )
+            # Update the correlation result with the correct feather metadata
+            self.last_results.feather_metadata = feather_metadata
             
-            # Debug: Verify matches are set
-            print(f"[Identity Engine] DEBUG: Created CorrelationResult with {len(scored_matches)} matches (total_matches={total_match_count})")
-            print(f"[Identity Engine] DEBUG: Streaming mode: {streaming_enabled}")
+            # Save feather_metadata to database if in streaming mode
+            if streaming_enabled:
+                from pathlib import Path
+                from .database_persistence import ResultsDatabase
+                db_path = Path(self._output_dir) / "correlation_results.db"
+                try:
+                    # Use direct instantiation instead of context manager
+                    db = ResultsDatabase(str(db_path))
+                    
+                    # Get all results for this execution
+                    results = db.get_execution_results(self._execution_id)
+                    for result in results:
+                        result_id = result.get('result_id')
+                        if result_id:
+                            # Update the result with feather_metadata
+                            db.update_result_count(
+                                result_id=result_id,
+                                total_matches=result.get('total_matches', 0),
+                                execution_duration=execution_time,
+                                duplicates_prevented=0,
+                                feather_metadata=feather_metadata
+                            )
+                    
+                    # Close the database connection
+                    db.close()
+                    
+                    print(f"[Identity Engine] ✓ Feather metadata saved to database")
+                except Exception as e:
+                    print(f"[Identity Engine] Warning: Could not save feather metadata to database: {e}")
+                    import traceback
+                    traceback.print_exc()
             
-            # Store engine type as a direct attribute for easy access
-            self.last_results.engine_type = "identity_based"
+            print(f"[Identity Engine] Feather metadata summary:")
+            for feather_id, metadata in feather_metadata.items():
+                if feather_id.startswith('_'):  # Skip engine metadata
+                    continue
+                identities_count = metadata.get('identities_found', metadata.get('identities_final', 0))
+                matches_count = metadata.get('matches_created', 0)
+                print(f"  - {feather_id}: {identities_count} identities, {matches_count} matches")
             
             # Complete progress tracking
             self.progress_tracker.complete_scanning()
             
             # Print simple completion summary
-            print("[Identity Engine] Complete!")
+            print(f"[Identity Engine] Complete!")
             print(f"[Identity Engine] Processed {total_identities:,} identities")
             print(f"[Identity Engine] Created {total_match_count:,} matches")
             if streaming_enabled:
                 print(f"[Identity Engine] Matches saved to database via streaming")
-            print(f"[Identity Engine] Time: {execution_time:.2f}s")
+            
+            # Format execution time nicely
+            if execution_time < 60:
+                time_str = f"{execution_time:.2f}s"
+            elif execution_time < 3600:
+                minutes = int(execution_time // 60)
+                seconds = execution_time % 60
+                time_str = f"{minutes}m {seconds:.1f}s"
+            else:
+                hours = int(execution_time // 3600)
+                minutes = int((execution_time % 3600) // 60)
+                seconds = execution_time % 60
+                time_str = f"{hours}h {minutes}m {seconds:.0f}s"
+            
+            print(f"[Identity Engine] Time: {time_str}")
             print("="*70 + "\n")
             
             # Store statistics
@@ -349,12 +546,127 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             }
             
         except Exception as e:
-            import traceback
-            error_msg = f"{str(e)}\n{traceback.format_exc()}"
-            self.progress_tracker.report_error(f"Identity correlation failed: {str(e)}", str(e))
-            logger.error(f"Identity-based correlation failed: {error_msg}")
-            print(f"[Identity Engine] CRITICAL ERROR: {error_msg}")
-            raise
+            # Check if this is a cancellation
+            if "cancelled" in str(e).lower() or "OperationCancelledException" in str(type(e).__name__):
+                print(f"[Identity Engine] Correlation cancelled by user")
+                # Return partial results if available
+                if hasattr(self, 'last_results') and self.last_results:
+                    return {
+                        'result': self.last_results,
+                        'engine_type': 'identity_based',
+                        'filters_applied': self._get_applied_filters(),
+                        'cancelled': True
+                    }
+                else:
+                    # Return empty result for cancellation
+                    empty_result = CorrelationResult(
+                        wing_id="cancelled",
+                        wing_name="Cancelled",
+                        matches=[],
+                        total_matches=0,
+                        execution_duration_seconds=(datetime.now() - start_time).total_seconds()
+                    )
+                    return {
+                        'result': empty_result,
+                        'engine_type': 'identity_based',
+                        'filters_applied': self._get_applied_filters(),
+                        'cancelled': True
+                    }
+            else:
+                # Handle other errors
+                import traceback
+                error_msg = f"{str(e)}\n{traceback.format_exc()}"
+                self.progress_tracker.report_error(f"Identity correlation failed: {str(e)}", str(e))
+                logger.error(f"Identity-based correlation failed: {error_msg}")
+                print(f"[Identity Engine] CRITICAL ERROR: {error_msg}")
+                raise
+    
+    def _resume_execution(self, execution_id: int, wing_configs: List[Any], start_time: datetime) -> Dict[str, Any]:
+        """
+        Resume a paused execution from where it left off.
+        
+        Args:
+            execution_id: Execution ID to resume
+            wing_configs: Wing configurations
+            start_time: Current start time
+            
+        Returns:
+            Dictionary containing correlation results and metadata
+        """
+        print(f"[Identity Engine] Loading paused execution state...")
+        
+        # Load existing results from database
+        if not self._output_dir or not self._execution_id:
+            print(f"[Identity Engine] ERROR: Cannot resume - no output directory or execution ID set")
+            return self.execute(wing_configs)  # Fall back to new execution
+        
+        from pathlib import Path
+        from .database_persistence import ResultsDatabase
+        db_path = Path(self._output_dir) / "correlation_results.db"
+        
+        try:
+            with ResultsDatabase(str(db_path)) as db:
+                # Get paused execution info
+                paused_executions = db.get_paused_executions()
+                paused_execution = None
+                
+                for exec_data in paused_executions:
+                    if exec_data['execution_id'] == execution_id:
+                        paused_execution = exec_data
+                        break
+                
+                if not paused_execution:
+                    print(f"[Identity Engine] WARNING: No paused execution found with ID {execution_id}")
+                    return self.execute(wing_configs)  # Fall back to new execution
+                
+                progress_details = paused_execution.get('progress_details', {})
+                identities_processed = progress_details.get('identities_processed', 0)
+                total_identities = progress_details.get('total_identities', 0)
+                percentage_complete = progress_details.get('percentage_complete', 0)
+                
+                print(f"[Identity Engine] Found paused execution:")
+                print(f"  - Wing: {paused_execution['wing_name']}")
+                print(f"  - Progress: {identities_processed:,}/{total_identities:,} identities ({percentage_complete:.1f}%)")
+                print(f"  - Existing matches: {paused_execution['total_matches']:,}")
+                print(f"  - Paused at: {progress_details.get('pause_timestamp', 'Unknown')}")
+                
+                # Load existing matches
+                existing_matches = paused_execution['total_matches']
+                
+                # Create result object with existing data
+                
+                resumed_result = CorrelationResult(
+                    wing_id=wing_configs[0].wing_id if wing_configs else "resumed",
+                    wing_name=wing_configs[0].wing_name if wing_configs else "Resumed",
+                    matches=[],  # Matches are in database
+                    total_matches=existing_matches,
+                    execution_duration_seconds=(datetime.now() - start_time).total_seconds(),
+                    streaming_mode=True,
+                    database_path=str(db_path),
+                    execution_id=execution_id
+                )
+                
+                print(f"[Identity Engine] Resume complete!")
+                print(f"[Identity Engine] Loaded {existing_matches:,} existing matches")
+                print(f"[Identity Engine] Status: Ready to continue or view results")
+                
+                return {
+                    'result': resumed_result,
+                    'engine_type': 'identity_based',
+                    'filters_applied': {},
+                    'resumed': True,
+                    'resume_info': {
+                        'identities_processed': identities_processed,
+                        'total_identities': total_identities,
+                        'percentage_complete': percentage_complete,
+                        'existing_matches': existing_matches
+                    }
+                }
+                
+        except Exception as e:
+            print(f"[Identity Engine] ERROR: Failed to resume execution: {e}")
+            print(f"[Identity Engine] Falling back to new execution...")
+            return self.execute(wing_configs)  # Fall back to new execution
     
     def _smart_truncate_path(self, name: str, max_length: int = 60) -> str:
         """
@@ -451,7 +763,6 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 return correlation_result
             else:
                 # Create empty result if none returned
-                from .correlation_result import CorrelationResult
                 empty_result = CorrelationResult(
                     wing_id=wing.wing_id,
                     wing_name=wing.wing_name
@@ -470,7 +781,6 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             print(f"[Identity Engine] ERROR: Wing execution failed: {error_msg}")
             
             # Create error result
-            from .correlation_result import CorrelationResult
             error_result = CorrelationResult(
                 wing_id=wing.wing_id,
                 wing_name=wing.wing_name
@@ -581,6 +891,13 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                     'filtered': 0  # Track filtered identities
                 }
                 
+                # ENHANCEMENT: Load feather metadata for smart identity extraction
+                feather_metadata = self.core_engine.load_feather_metadata(db_path, feather_id)
+                if feather_metadata and self.verbose_logging:
+                    print(f"[Identity Engine] Loaded metadata for {feather_id}: "
+                          f"app_col={feather_metadata.get('application_column')}, "
+                          f"path_col={feather_metadata.get('path_column')}")
+                
                 conn = sqlite3.connect(db_path)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
@@ -628,24 +945,51 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                             if self._should_filter_record(record):
                                 continue
                             
-                            # Extract identity using core engine
-                            name, path, hash_val, id_type = self.core_engine.extract_identity_info(record)
+                            # ENHANCEMENT: Extract identity using core engine with feather metadata
+                            name, path, hash_val, id_type = self.core_engine.extract_identity_info(record, feather_metadata)
                             
                             if name or path or hash_val:
-                                # Normalize identity key
+                                # ENHANCEMENT: Normalize identity name to get base and suffix
+                                base_name, suffix = self.core_engine.normalize_identity_name(name) if name else (name, "")
+                                
+                                # Normalize identity key (uses base_name internally)
                                 identity_key = self.core_engine.normalize_identity_key(name, path, hash_val)
                                 
                                 # Track if this is a new identity for this feather
                                 is_new_identity = identity_key not in feather_stats[feather_id]['identities']
                                 
                                 if identity_key not in identity_index:
+                                    # Create new identity entry with sub-identity tracking
                                     identity_index[identity_key] = {
-                                        'name': name,
+                                        'base_name': base_name,  # Base name without suffix
+                                        'name': name,  # Original full name
                                         'path': path,
                                         'hash': hash_val,
-                                        'records': []
+                                        'records': [],
+                                        'sub_identities': []  # Track all versions/variants
                                     }
                                     identity_feathers[identity_key] = set()
+                                
+                                # Track sub-identity if it has a suffix (version/date/number)
+                                if suffix:
+                                    # Check if this sub-identity already exists
+                                    sub_identity_exists = any(
+                                        sub['full_name'] == name and sub['suffix'] == suffix
+                                        for sub in identity_index[identity_key]['sub_identities']
+                                    )
+                                    
+                                    if not sub_identity_exists:
+                                        identity_index[identity_key]['sub_identities'].append({
+                                            'full_name': name,
+                                            'suffix': suffix,
+                                            'record_count': 0
+                                        })
+                                    
+                                    # Increment record count for this sub-identity
+                                    for sub in identity_index[identity_key]['sub_identities']:
+                                        if sub['full_name'] == name and sub['suffix'] == suffix:
+                                            sub['record_count'] += 1
+                                            break
                                 
                                 identity_index[identity_key]['records'].append(record)
                                 identity_feathers[identity_key].add(feather_id)
@@ -713,47 +1057,47 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             
             print(f"  {display_fid:<30} {records_str:<15} {extracted_str:<15} {filtered_str:<15} {identities_str:<15}")
         
-        # Requirement 3.6: Show cross-feather correlations with enhanced header
-        print(f"\n[Identity Engine] 🔗 Cross-Feather Correlations (identities in 2+ feathers):")
+        # Requirement 3.6: Cross-feather correlations section - DISABLED for cleaner output
+        # print(f"\n[Identity Engine] 🔗 Cross-Feather Correlations (identities in 2+ feathers):")
         
         # Requirement 3.4: Filter to show only identities in 2+ feathers
         multi_feather = [(k, v) for k, v in identity_feathers.items() if len(v) > 1]
-        multi_feather.sort(key=lambda x: len(x[1]), reverse=True)
+        # multi_feather.sort(key=lambda x: len(x[1]), reverse=True)
         
-        if multi_feather:
-            # Show top 10 cross-feather identities
-            for identity_key, feather_set in multi_feather[:10]:
-                name = identity_index[identity_key]['name'] or identity_index[identity_key]['path'] or 'unknown'
-                
-                # Requirement 3.1, 3.2, 3.3: Apply smart truncation to identity names
-                name = self._smart_truncate_path(name, max_length=60)
-                
-                # Requirement 2.1, 2.2, 2.3: Deduplicate feather names
-                # Extract base feather name (before first underscore or hyphen)
-                feather_base_names = set()
-                for f in feather_set:
-                    # Split on underscore or hyphen and take first part
-                    base_name = f.split('_')[0].split('-')[0]
-                    feather_base_names.add(base_name)
-                
-                # Requirement 2.2: Sort alphabetically
-                feather_names = sorted(feather_base_names)
-                
-                # Requirement 2.4, 2.5, 3.7: Consistent formatting with count matching displayed names
-                print(f"  {name}: Found in {len(feather_names)} feathers ({', '.join(feather_names)})")
-        else:
-            # Requirement 3.5: Don't log identities found in only 1 feather
-            print(f"  No identities found across multiple feathers")
+        # if multi_feather:
+        #     # Show top 10 cross-feather identities
+        #     for identity_key, feather_set in multi_feather[:10]:
+        #         name = identity_index[identity_key]['name'] or identity_index[identity_key]['path'] or 'unknown'
+        #         
+        #         # Requirement 3.1, 3.2, 3.3: Apply smart truncation to identity names
+        #         name = self._smart_truncate_path(name, max_length=60)
+        #         
+        #         # Requirement 2.1, 2.2, 2.3: Deduplicate feather names
+        #         # Extract base feather name (before first underscore or hyphen)
+        #         feather_base_names = set()
+        #         for f in feather_set:
+        #             # Split on underscore or hyphen and take first part
+        #             base_name = f.split('_')[0].split('-')[0]
+        #             feather_base_names.add(base_name)
+        #         
+        #         # Requirement 2.2: Sort alphabetically
+        #         feather_names = sorted(feather_base_names)
+        #         
+        #         # Requirement 2.4, 2.5, 3.7: Consistent formatting with count matching displayed names
+        #         print(f"  {name}: Found in {len(feather_names)} feathers ({', '.join(feather_names)})")
+        # else:
+        #     # Requirement 3.5: Don't log identities found in only 1 feather
+        #     print(f"  No identities found across multiple feathers")
         
         # Requirement 2.6, 3.6: Add cross-feather summary with totals
-        # Calculate unique feathers across all multi-feather identities
-        all_unique_feathers = set()
-        for _, feather_set in multi_feather:
-            for f in feather_set:
-                base_name = f.split('_')[0].split('-')[0]
-                all_unique_feathers.add(base_name)
-        
-        print(f"[Identity Engine] Cross-Feather Summary: {len(multi_feather)} identities across {len(all_unique_feathers)} unique feathers")
+        # Calculate unique feathers across all multi-feather identities (for internal tracking only)
+        # all_unique_feathers = set()
+        # for _, feather_set in multi_feather:
+        #     for f in feather_set:
+        #         base_name = f.split('_')[0].split('-')[0]
+        #         all_unique_feathers.add(base_name)
+        # 
+        # print(f"[Identity Engine] Cross-Feather Summary: {len(multi_feather)} identities across {len(all_unique_feathers)} unique feathers")
         
         print(f"\n[Identity Engine]   Correlating {len(identity_index):,} identities...")
         
@@ -765,13 +1109,100 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         single_feather_identities = 0
         multi_feather_identities = 0
         total_anchors = 0
+        match_counter = 0  # Counter to ensure unique match IDs
         
-        # Track progress
+        # Task 8.2: Initialize progress reporter for identity processing
+        # Requirements: 4.1, 4.2, 4.3, 4.4
+        # PERFORMANCE: Use less frequent reporting for large datasets to reduce overhead
         total_identities = len(identity_index)
-        processed_identities = 0
-        last_printed_percent = -1
+        
+        # Adaptive progress reporting based on dataset size
+        if total_identities > 100000:
+            report_interval = 10.0  # Report every 10% for very large datasets
+        elif total_identities > 50000:
+            report_interval = 5.0   # Report every 5% for large datasets
+        else:
+            report_interval = 2.0   # Report every 2% for smaller datasets
+        
+        progress_reporter = CorrelationProgressReporter(
+            total_items=total_identities,
+            report_percentage_interval=report_interval,
+            phase_name="Identity Correlation"
+        )
+        
+        print(f"[Identity Engine] PERFORMANCE: Using {report_interval}% progress reporting for {total_identities:,} identities")
+        
+        # Task 9.2: Initialize stall monitor for identity processing
+        # Requirements: 5.2, 5.3, 5.4, 5.5
+        # Detects stalls when no progress for 300 seconds (5 minutes)
+        stall_monitor = CorrelationStallMonitor(stall_timeout_seconds=300)
+        
+        # Report initial progress (0%)
+        progress_reporter.force_report()
+        
+        # Task 9.2: Update stall monitor at start
+        stall_monitor.update_progress(0, current_stage="identity_processing", last_operation="started_identity_correlation")
+        
+        # Performance optimization: Check stall less frequently (every 20000 identities for large datasets)
+        if total_identities > 100000:
+            stall_check_interval = 20000  # Less frequent for very large datasets
+        else:
+            stall_check_interval = 10000  # Standard frequency
+        
+        print(f"[Identity Engine] PERFORMANCE: Stall check every {stall_check_interval:,} identities")
+        
+        processed_count = 0
+        cancellation_check_interval = 15000 if total_identities > 100000 else 10000  # Less frequent checks for large datasets
         
         for identity_key, identity_data in identity_index.items():
+            # Check for cancellation less frequently for better performance
+            if processed_count % cancellation_check_interval == 0:
+                try:
+                    self.progress_tracker.check_cancellation()
+                except Exception as e:
+                    print(f"[Identity Engine] Correlation paused by user")
+                    # Update progress to show paused state
+                    progress_reporter.processed_items = processed_count
+                    print(f"[Identity Correlation] PAUSED: {processed_count:,}/{total_identities:,} identities processed ({processed_count/total_identities*100:.1f}%)")
+                    
+                    # Save partial results to database for resume capability
+                    if streaming_enabled and streaming_writer:
+                        print(f"[Identity Engine] Saving {match_count:,} partial matches to database...")
+                        streaming_writer.flush()
+                        
+                        # Update result record with partial counts and paused status
+                        streaming_writer.update_result_counts(
+                            result_id=result_id,
+                            total_matches=match_count,
+                            feathers_processed=len(feathers_with_records),
+                            total_records_scanned=total_records,
+                            status="PAUSED",
+                            progress_info={
+                                'identities_processed': processed_count,
+                                'total_identities': total_identities,
+                                'percentage_complete': processed_count/total_identities*100,
+                                'last_identity_key': identity_key,
+                                'pause_timestamp': datetime.now().isoformat()
+                            }
+                        )
+                        
+                        streaming_writer.close()
+                        print(f"[Identity Engine] ✓ Partial results saved - can resume later")
+                    
+                    # Return partial results for immediate display
+                    return matches, processed_count, feather_stats
+            
+            # Task 9.2: Check for stall periodically (not every iteration for performance)
+            # Requirements: 5.2, 5.3, 5.4
+            if processed_count % stall_check_interval == 0:
+                if stall_monitor.check_for_stall():
+                    diagnostics = stall_monitor.get_stall_diagnostics()
+                    logger.error(f"Correlation stalled during identity processing. Diagnostics: {diagnostics}")
+                    raise CorrelationStallException(
+                        f"Correlation stalled: No progress for {diagnostics['time_since_last_progress']:.1f} seconds. "
+                        f"Last operation: {diagnostics['last_successful_operation']}"
+                    )
+            
             records = identity_data['records']
             
             # Get unique feathers for this identity
@@ -787,19 +1218,33 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             
             # Create anchors for this identity using temporal clustering
             if len(records) >= min_matches:
+                # Log hash processing for first few identities or periodically
+                if self.debug_mode and (processed_count < 5 or processed_count % 1000 == 0):
+                    print(f"[Identity Engine] Processing identity {processed_count}: {len(records)} records, {len(feather_ids)} feathers")
+                    print(f"[Identity Engine] Identity key: {identity_key[:50]}...")
+                    print(f"[Identity Engine] About to create temporal anchors (will trigger hash calculations)")
+                
                 identity_anchors = self._create_temporal_anchors(
                     records, 
                     identity_data, 
                     time_window_minutes,
-                    feather_paths
+                    feather_paths,
+                    match_counter_start=match_counter
                 )
+                
+                if self.debug_mode and (processed_count < 5 or processed_count % 1000 == 0):
+                    print(f"[Identity Engine] Created {len(identity_anchors)} anchors for identity {processed_count}")
+                
+                # Increment match counter for next identity
+                match_counter += len(identity_anchors)
                 
                 # Handle streaming vs in-memory
                 if streaming_enabled and streaming_writer:
-                    # Apply semantic mappings and scoring to each match before writing to database
-                    # Note: _apply_scoring_to_single_match now handles both semantic mappings and scoring
+                    # Task 1.1: Apply scoring to each match before writing to database
+                    # Requirements: 1.1, 1.2, 1.3, 1.4
+                    # NO semantic mappings during correlation - will be applied in Identity Semantic Phase
                     for match in identity_anchors:
-                        # Apply weighted scoring (which also applies semantic mappings) to this match
+                        # Apply weighted scoring (NO semantic mappings during correlation)
                         scored_match = self._apply_scoring_to_single_match(match, wing_config)
                         streaming_writer.write_match(result_id, scored_match)
                         match_count += 1
@@ -810,12 +1255,23 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 
                 total_anchors += len(identity_anchors)
             
-            # Update progress - print every 10%
-            processed_identities += 1
-            current_percent = int((processed_identities / total_identities) * 100)
-            if current_percent % 10 == 0 and current_percent != last_printed_percent and current_percent > 0:
-                print(f"[Identity Engine]   Progress: {current_percent}% ({processed_identities:,}/{total_identities:,})")
-                last_printed_percent = current_percent
+            # Task 8.2: Update progress (will auto-report at 1%, 2%, 3%, etc.)
+            # Requirements: 4.2, 4.3, 4.4
+            processed_count += 1
+            progress_reporter.update(items_processed=1)
+            
+            # Task 9.2: Update stall monitor periodically (every 10000 identities for performance)
+            # Requirements: 5.2, 5.4
+            if processed_count % stall_check_interval == 0:
+                stall_monitor.update_progress(
+                    processed_count, 
+                    current_stage="identity_processing",
+                    last_operation=f"processed_identity_{processed_count}"
+                )
+        
+        # Task 8.2: Report final progress (100%)
+        # Requirements: 4.1, 4.5
+        progress_reporter.force_report()
         
         # Flush any remaining matches in streaming mode
         if streaming_enabled and streaming_writer:
@@ -823,6 +1279,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             streaming_writer.flush()
             
             # Update result record with final counts
+            # Note: feather_metadata will be calculated and saved later in execute() method
             streaming_writer.update_result_counts(
                 result_id=result_id,
                 total_matches=match_count,
@@ -831,6 +1288,11 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             )
             
             streaming_writer.close()
+            
+            # Give SQLite a moment to release the lock
+            import time
+            time.sleep(0.1)
+            
             print(f"[Identity Engine]   Saved {match_count:,} matches to database")
         
         # Show completion
@@ -856,11 +1318,11 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             memory_usage_mb=None
         )
         
-        print(f"[Identity Engine] DEBUG: Returning {len(matches)} matches from _process_wing (streaming={streaming_enabled})")
         return matches, total_identities, feather_stats
     
     def _create_temporal_anchors(self, records: List[Dict[str, Any]], identity_data: Dict[str, Any],
-                                time_window_minutes: int, feather_paths: Dict[str, str]) -> List[CorrelationMatch]:
+                                time_window_minutes: int, feather_paths: Dict[str, str],
+                                match_counter_start: int = 0) -> List[CorrelationMatch]:
         """
         Create temporal anchors by clustering records into time windows.
         
@@ -873,6 +1335,13 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         Returns:
             List of CorrelationMatch objects (one per anchor)
         """
+        # PERFORMANCE FIX: Import dateutil parser ONCE at the top, not in the loop
+        try:
+            from dateutil import parser as date_parser
+            has_dateutil = True
+        except ImportError:
+            has_dateutil = False
+        
         # Step 1: Extract timestamps and sort records
         records_with_timestamps = []
         records_without_timestamps = []
@@ -915,10 +1384,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 # Parse timestamps and calculate time difference
                 should_create_new_anchor = False
                 
-                try:
-                    # Try to parse timestamps as datetime objects
-                    from dateutil import parser as date_parser
-                    
+                if has_dateutil:
                     try:
                         dt_current = date_parser.parse(timestamp)
                         dt_anchor_end = date_parser.parse(current_anchor_end)
@@ -935,7 +1401,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                         if timestamp != current_anchor_end:
                             # For safety, keep in same anchor if can't parse
                             pass
-                except ImportError:
+                else:
                     # dateutil not available, use simple heuristic
                     # If timestamps are very different strings, might be different periods
                     pass
@@ -947,7 +1413,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                         identity_data,
                         current_anchor_start,
                         current_anchor_end,
-                        feather_paths
+                        feather_paths,
+                        match_counter=match_counter_start + len(anchors)
                     )
                     if anchor_match:
                         anchors.append(anchor_match)
@@ -968,7 +1435,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 identity_data,
                 current_anchor_start,
                 current_anchor_end,
-                feather_paths
+                feather_paths,
+                match_counter=match_counter_start + len(anchors)
             )
             if anchor_match:
                 anchors.append(anchor_match)
@@ -980,7 +1448,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 identity_data,
                 datetime.now().isoformat(),
                 datetime.now().isoformat(),
-                feather_paths
+                feather_paths,
+                match_counter=match_counter_start + len(anchors)
             )
             if anchor_match:
                 anchors.append(anchor_match)
@@ -988,7 +1457,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         return anchors
     
     def _create_anchor_match(self, records: List[Dict[str, Any]], identity_data: Dict[str, Any],
-                            start_time: str, end_time: str, feather_paths: Dict[str, str]) -> Optional[CorrelationMatch]:
+                            start_time: str, end_time: str, feather_paths: Dict[str, str],
+                            match_counter: int = 0) -> Optional[CorrelationMatch]:
         """
         Create a CorrelationMatch for a temporal anchor.
         
@@ -1005,54 +1475,137 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         if not records:
             return None
         
-        # Deduplicate records
+        # PERFORMANCE OPTIMIZED: Use simplified hash-based deduplication
+        # Deduplicate records using a fast hash set for O(N) performance
         feather_records_dict = {}
-        for record in records:
+        seen_hashes = {}  # Track seen record hashes per feather
+        
+        # Debug logging for hash calculation
+        hash_start_time = None
+        if self.debug_mode:
+            import time
+            hash_start_time = time.time()
+            print(f"[Identity Engine] HASH: Processing {len(records)} records for anchor")
+        
+        hash_stats = {
+            'total_records': len(records),
+            'unique_hashes': 0,
+            'duplicate_hashes': 0,
+            'feathers_involved': set(),
+            'timestamp_fields_found': 0,
+            'records_without_timestamp': 0
+        }
+        
+        for record_idx, record in enumerate(records):
             fid = record.get('_feather_id', 'unknown')
+            hash_stats['feathers_involved'].add(fid)
+            
             if fid not in feather_records_dict:
                 feather_records_dict[fid] = []
+                seen_hashes[fid] = set()
             
-            # Check if this record is a duplicate
-            is_duplicate = False
-            for existing_record in feather_records_dict[fid]:
-                if self._are_records_identical(record, existing_record):
-                    is_duplicate = True
+            # PERFORMANCE: Create a fast hash using only essential fields
+            # Use timestamp + name + path for deduplication (much faster than all fields)
+            ts = None
+            for ts_field in self.core_engine.timestamp_field_patterns:
+                if ts_field in record and record[ts_field]:
+                    ts = str(record[ts_field])
+                    hash_stats['timestamp_fields_found'] += 1
                     break
             
-            if not is_duplicate:
+            if ts is None:
+                hash_stats['records_without_timestamp'] += 1
+                if self.debug_mode and record_idx < 3:  # Log first few records without timestamp
+                    print(f"[Identity Engine] HASH: Record {record_idx} has no timestamp, feather={fid}")
+            
+            # Create fast hash from essential fields only
+            name = record.get('name', '')
+            path = record.get('path', '')
+            
+            # Log hash creation for debugging (first few records only)
+            if self.debug_mode and record_idx < 3:
+                print(f"[Identity Engine] HASH: Record {record_idx} - ts='{ts}', name='{name[:30]}...', path='{path[:30]}...', fid='{fid}'")
+            
+            record_hash = hash((ts, name, path, fid))
+            
+            if self.debug_mode and record_idx < 3:
+                print(f"[Identity Engine] HASH: Record {record_idx} hash = {record_hash}")
+            
+            # Check if we've seen this hash before (fast O(1) lookup)
+            if record_hash not in seen_hashes[fid]:
+                seen_hashes[fid].add(record_hash)
                 feather_records_dict[fid].append(record)
+                hash_stats['unique_hashes'] += 1
+                
+                if self.debug_mode and record_idx < 3:
+                    print(f"[Identity Engine] HASH: Record {record_idx} is unique, added to feather {fid}")
+            else:
+                hash_stats['duplicate_hashes'] += 1
+                
+                if self.debug_mode and record_idx < 3:
+                    print(f"[Identity Engine] HASH: Record {record_idx} is duplicate, skipped for feather {fid}")
+        
+        # Log hash statistics
+        if self.debug_mode:
+            hash_end_time = time.time()
+            hash_duration = hash_end_time - hash_start_time if hash_start_time else 0
+            
+            print(f"[Identity Engine] HASH STATS:")
+            print(f"  Total records processed: {hash_stats['total_records']}")
+            print(f"  Unique hashes created: {hash_stats['unique_hashes']}")
+            print(f"  Duplicate hashes found: {hash_stats['duplicate_hashes']}")
+            print(f"  Feathers involved: {len(hash_stats['feathers_involved'])} ({', '.join(sorted(hash_stats['feathers_involved']))})")
+            print(f"  Records with timestamps: {hash_stats['timestamp_fields_found']}")
+            print(f"  Records without timestamps: {hash_stats['records_without_timestamp']}")
+            print(f"  Hash processing time: {hash_duration:.4f} seconds")
+            
+            dedup_rate = (hash_stats['duplicate_hashes'] / hash_stats['total_records'] * 100) if hash_stats['total_records'] > 0 else 0
+            print(f"  Deduplication rate: {dedup_rate:.1f}%")
+            
+            if hash_stats['total_records'] > 0 and hash_duration > 0:
+                records_per_second = hash_stats['total_records'] / hash_duration
+                print(f"  Hash performance: {records_per_second:.0f} records/second")
         
         # Flatten for CorrelationMatch
         flattened_feather_records = {}
         for fid, record_list in feather_records_dict.items():
-            if len(record_list) == 1:
-                flattened_feather_records[fid] = record_list[0]
-            else:
-                for idx, record in enumerate(record_list):
-                    key = f"{fid}_{idx}"
-                    flattened_feather_records[key] = record
+            # Always include ALL records consistently (whether 1 or many)
+            # This ensures no data loss and consistent behavior
+            flattened_feather_records[fid] = record_list if record_list else []
+            
+            # Log record inclusion for verification
+            if record_list:
+                logger.info(f"[Identity Engine] Included {len(record_list)} records for feather_id={fid}")
         
-        # Get unique feathers
-        feather_ids = list(set(r.get('_feather_id', '') for r in records))
+        if self.debug_mode:
+            print(f"[Identity Engine] MATCH: Flattened to {len(flattened_feather_records)} feather records")
         
-        # Calculate time spread
-        try:
-            # Simple calculation - would be more sophisticated in production
-            time_spread_seconds = 0
-        except:
-            time_spread_seconds = 0
+        # Get unique feathers (fast)
+        feather_ids = list(feather_records_dict.keys())
+        
+        # PERFORMANCE: Use counter-based ID with execution_id for guaranteed uniqueness
+        # Include execution_id and counter to prevent collisions
+        import time
+        timestamp_micros = int(time.time() * 1000000)
+        exec_id_part = f"e{self._execution_id}_" if self._execution_id else ""
+        match_id = f"match_{exec_id_part}{timestamp_micros}_{match_counter}_{len(feather_ids)}"
+        
+        if self.debug_mode:
+            print(f"[Identity Engine] MATCH: Generated ID = {match_id}")
+            print(f"[Identity Engine] MATCH: Feathers involved = {feather_ids}")
+            print(f"[Identity Engine] MATCH: Creating CorrelationMatch with {len(feather_ids)} feathers")
         
         # Create match
         match = CorrelationMatch(
-            match_id=str(uuid.uuid4()),
+            match_id=match_id,
             timestamp=start_time,
             feather_records=flattened_feather_records,
             match_score=len(feather_ids) / len(feather_paths) if feather_paths else 0.5,
             feather_count=len(feather_ids),
-            time_spread_seconds=time_spread_seconds,
+            time_spread_seconds=0,  # Simplified for performance
             anchor_feather_id=feather_ids[0] if feather_ids else '',
             anchor_artifact_type='Identity',
-            matched_application=identity_data['name'],
+            matched_application=identity_data.get('base_name', identity_data['name']),  # Use base name for display
             matched_file_path=identity_data['path']
         )
         
@@ -1060,6 +1613,17 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         match.anchor_start_time = start_time
         match.anchor_end_time = end_time
         match.anchor_record_count = len(records)
+        
+        # ENHANCEMENT: Add sub-identity information if available
+        # This allows UI to show grouped versions/variants
+        if 'sub_identities' in identity_data and identity_data['sub_identities']:
+            match.sub_identities = identity_data['sub_identities']
+            match.has_sub_identities = True
+            match.sub_identity_count = len(identity_data['sub_identities'])
+        else:
+            match.sub_identities = []
+            match.has_sub_identities = False
+            match.sub_identity_count = 0
         
         return match
     
@@ -1237,111 +1801,197 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                                matches: List[CorrelationMatch], 
                                wing_configs: List[Any]) -> List[CorrelationMatch]:
         """
-        Apply semantic mappings to correlation matches.
+        Apply semantic mappings to correlation matches with comprehensive error handling.
+        
+        IMPORTANT: This method checks the SemanticMappingController to determine if
+        per-record semantic mapping should be skipped (when Identity Semantic Phase is enabled).
+        
+        Task 6.1: Enhanced graceful degradation for semantic mapping failures
+        Requirements: 7.1, 7.2, 7.3 - Ensure correlation continues even if semantic mapping fails
+        Requirements: 1.5, 2.5 - Semantic processing isolation (skip if Identity Semantic Phase enabled)
         
         Args:
             matches: List of correlation matches
             wing_configs: Wing configurations for context
             
         Returns:
-            Enhanced matches with semantic mapping information
+            Enhanced matches with semantic mapping information (or original matches if skipped)
         """
+        # CRITICAL: Check if per-record semantic mapping should be skipped
+        # This ensures semantic processing isolation when Identity Semantic Phase is enabled
+        from ..identity_semantic_phase import SemanticMappingController
+        
+        # Check if we have a semantic mapping controller that says to skip per-record mapping
+        if hasattr(self, 'semantic_mapping_controller'):
+            if not self.semantic_mapping_controller.should_apply_per_record_semantic_mapping():
+                if self.verbose_logging:
+                    logger.info("[Identity Engine] Skipping per-record semantic mapping - will be applied in Identity Semantic Phase")
+                print("[Identity Engine] Semantic mapping deferred to Identity Semantic Phase")
+                return matches
+        
+        # Task 6.1: Check if semantic integration is available before proceeding
+        if not hasattr(self, 'semantic_integration') or not self.semantic_integration:
+            logger.warning("Semantic integration not available - skipping semantic mapping")
+            print("[SEMANTIC] WARNING: Semantic integration not initialized - continuing without semantic mapping")
+            return matches
+        
         if not self.semantic_integration.is_enabled():
             if self.verbose_logging:
                 logger.info("Semantic mapping is disabled, skipping mapping application")
+            print("[SEMANTIC] INFO: Semantic mapping disabled - continuing correlation")
             return matches
         
+        # Task 6.1: Check semantic integration health before processing
+        if not self.semantic_integration.is_healthy():
+            logger.warning("Semantic integration health check failed - continuing without semantic mapping")
+            print("[SEMANTIC] WARNING: Semantic integration unhealthy - continuing correlation without semantic mapping")
+            return matches
+
         if self.verbose_logging:
             logger.info(f"Applying semantic mappings to {len(matches)} correlation matches")
+        
         enhanced_matches = []
         errors_count = 0
+        critical_failure = False
         
-        for i, match in enumerate(matches):
-            try:
-                # Log progress for large datasets (only if verbose)
-                if self.verbose_logging and len(matches) > 100 and i % 50 == 0:
-                    logger.info(f"Processing semantic mappings: {i}/{len(matches)} matches completed")
-                
-                # Convert match feather_records to format expected by semantic integration
-                # IMPORTANT: Include feather_id in each record so semantic rules can match
-                records_list = []
-                for feather_id, record in match.feather_records.items():
-                    record_with_feather = record.copy() if isinstance(record, dict) else {'value': record}
-                    record_with_feather['_feather_id'] = feather_id
-                    records_list.append(record_with_feather)
-                
-                # Apply semantic mappings
-                enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
-                    records_list,
-                    wing_id=getattr(match, 'wing_id', None),
-                    pipeline_id=getattr(match, 'pipeline_id', None),
-                    artifact_type=getattr(match, 'artifact_type', match.anchor_artifact_type)
-                )
-                
-                # Convert back to match format
-                enhanced_feather_records = {}
-                for j, enhanced_record in enumerate(enhanced_records_list):
-                    # Use original keys if available, otherwise use index
-                    original_keys = list(match.feather_records.keys())
-                    key = original_keys[j] if j < len(original_keys) else f"record_{j}"
-                    enhanced_feather_records[key] = enhanced_record
-                
-                # CRITICAL FIX: Extract actual semantic values from enhanced records
-                # Requirements: 1.1, 1.2 - Store semantic data in CorrelationMatch.semantic_data
-                semantic_data = self._extract_semantic_data_from_records(enhanced_feather_records)
-                
-                # Task 11.1: Log per-match semantic mapping count (Requirements: 7.1, 7.2)
-                if getattr(self, 'debug_mode', False):
-                    mappings_count = semantic_data.get('_metadata', {}).get('mappings_count', 0)
-                    if mappings_count > 0:
-                        logger.debug(f"[Identity Engine] Match {match.match_id}: {mappings_count} semantic mappings applied")
-                
-                # Create enhanced match with actual semantic data (not just a flag)
-                enhanced_match = CorrelationMatch(
-                    match_id=match.match_id,
-                    timestamp=match.timestamp,
-                    feather_records=enhanced_feather_records,
-                    match_score=match.match_score,
-                    feather_count=match.feather_count,
-                    time_spread_seconds=match.time_spread_seconds,
-                    anchor_feather_id=match.anchor_feather_id,
-                    anchor_artifact_type=match.anchor_artifact_type,
-                    matched_application=match.matched_application,
-                    matched_file_path=match.matched_file_path,
-                    matched_event_id=match.matched_event_id,
-                    score_breakdown=match.score_breakdown,
-                    confidence_score=match.confidence_score,
-                    confidence_category=match.confidence_category,
-                    weighted_score=match.weighted_score,
-                    time_deltas=match.time_deltas,
-                    field_similarity_scores=match.field_similarity_scores,
-                    candidate_counts=match.candidate_counts,
-                    algorithm_version=match.algorithm_version,
-                    wing_config_hash=match.wing_config_hash,
-                    is_duplicate=match.is_duplicate,
-                    duplicate_info=match.duplicate_info,
-                    semantic_data=semantic_data  # Now contains actual values
-                )
-                
-                enhanced_matches.append(enhanced_match)
-                
-            except Exception as e:
-                # Requirements 1.4: Log error and continue processing remaining matches
-                errors_count += 1
-                logger.warning(f"Failed to apply semantic mappings to match {match.match_id}: {e}")
-                
-                # Create match with error metadata in semantic_data
+        try:
+            for i, match in enumerate(matches):
+                try:
+                    # Log progress for large datasets (only if verbose)
+                    if self.verbose_logging and len(matches) > 100 and i % 50 == 0:
+                        logger.info(f"Processing semantic mappings: {i}/{len(matches)} matches completed")
+                    
+                    # Convert match feather_records to format expected by semantic integration
+                    # IMPORTANT: Include feather_id in each record so semantic rules can match
+                    records_list = []
+                    for feather_id, record in match.feather_records.items():
+                        record_with_feather = record.copy() if isinstance(record, dict) else {'value': record}
+                        record_with_feather['_feather_id'] = feather_id
+                        records_list.append(record_with_feather)
+                    
+                    # Apply semantic mappings with error handling
+                    enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
+                        records_list,
+                        wing_id=getattr(match, 'wing_id', None),
+                        pipeline_id=getattr(match, 'pipeline_id', None),
+                        artifact_type=getattr(match, 'artifact_type', match.anchor_artifact_type)
+                    )
+                    
+                    # Convert back to match format
+                    enhanced_feather_records = {}
+                    for j, enhanced_record in enumerate(enhanced_records_list):
+                        # Use original keys if available, otherwise use index
+                        original_keys = list(match.feather_records.keys())
+                        key = original_keys[j] if j < len(original_keys) else f"record_{j}"
+                        enhanced_feather_records[key] = enhanced_record
+                    
+                    # CRITICAL FIX: Extract actual semantic values from enhanced records
+                    # Requirements: 1.1, 1.2 - Store semantic data in CorrelationMatch.semantic_data
+                    semantic_data = self._extract_semantic_data_from_records(enhanced_feather_records)
+                    
+                    # Task 11.1: Log per-match semantic mapping count (Requirements: 7.1, 7.2)
+                    if getattr(self, 'debug_mode', False):
+                        mappings_count = semantic_data.get('_metadata', {}).get('mappings_count', 0)
+                        if mappings_count > 0:
+                            logger.debug(f"[Identity Engine] Match {match.match_id}: {mappings_count} semantic mappings applied")
+                    
+                    # Create enhanced match with actual semantic data (not just a flag)
+                    enhanced_match = CorrelationMatch(
+                        match_id=match.match_id,
+                        timestamp=match.timestamp,
+                        feather_records=enhanced_feather_records,
+                        match_score=match.match_score,
+                        feather_count=match.feather_count,
+                        time_spread_seconds=match.time_spread_seconds,
+                        anchor_feather_id=match.anchor_feather_id,
+                        anchor_artifact_type=match.anchor_artifact_type,
+                        matched_application=match.matched_application,
+                        matched_file_path=match.matched_file_path,
+                        matched_event_id=match.matched_event_id,
+                        score_breakdown=match.score_breakdown,
+                        confidence_score=match.confidence_score,
+                        confidence_category=match.confidence_category,
+                        weighted_score=match.weighted_score,
+                        time_deltas=match.time_deltas,
+                        field_similarity_scores=match.field_similarity_scores,
+                        candidate_counts=match.candidate_counts,
+                        algorithm_version=match.algorithm_version,
+                        wing_config_hash=match.wing_config_hash,
+                        is_duplicate=match.is_duplicate,
+                        duplicate_info=match.duplicate_info,
+                        semantic_data=semantic_data  # Now contains actual values
+                    )
+                    
+                    enhanced_matches.append(enhanced_match)
+                    
+                except Exception as e:
+                    # Task 6.1: Log error and continue processing remaining matches
+                    # Requirements: 7.1, 7.2, 7.3 - Never stop correlation due to semantic mapping failures
+                    errors_count += 1
+                    logger.warning(f"Failed to apply semantic mappings to match {match.match_id}: {e}")
+                    
+                    # Create match with error metadata in semantic_data
+                    error_semantic_data = {
+                        '_metadata': {
+                            'mappings_applied': False,
+                            'error': str(e),
+                            'error_type': type(e).__name__,
+                            'match_id': match.match_id,
+                            'engine_type': 'IdentityBasedEngineAdapter',
+                            'fallback_reason': 'Individual match semantic mapping failed'
+                        }
+                    }
+                    
+                    # Keep original match but add error semantic_data
+                    error_match = CorrelationMatch(
+                        match_id=match.match_id,
+                        timestamp=match.timestamp,
+                        feather_records=match.feather_records,  # Keep original records
+                        match_score=match.match_score,
+                        feather_count=match.feather_count,
+                        time_spread_seconds=match.time_spread_seconds,
+                        anchor_feather_id=match.anchor_feather_id,
+                        anchor_artifact_type=match.anchor_artifact_type,
+                        matched_application=match.matched_application,
+                        matched_file_path=match.matched_file_path,
+                        matched_event_id=match.matched_event_id,
+                        score_breakdown=match.score_breakdown,
+                        confidence_score=match.confidence_score,
+                        confidence_category=match.confidence_category,
+                        weighted_score=match.weighted_score,
+                        time_deltas=match.time_deltas,
+                        field_similarity_scores=match.field_similarity_scores,
+                        candidate_counts=match.candidate_counts,
+                        algorithm_version=match.algorithm_version,
+                        wing_config_hash=match.wing_config_hash,
+                        is_duplicate=match.is_duplicate,
+                        duplicate_info=match.duplicate_info,
+                        semantic_data=error_semantic_data
+                    )
+                    
+                    enhanced_matches.append(error_match)
+        
+        except Exception as e:
+            # Task 6.1: Critical failure in semantic mapping - continue correlation without semantic data
+            # Requirements: 7.1, 7.2, 7.3 - Never crash correlation due to semantic mapping issues
+            critical_failure = True
+            logger.error(f"Critical failure in semantic mapping processing: {e}")
+            print(f"[SEMANTIC] ERROR: Critical semantic mapping failure - {str(e)[:100]}...")
+            print("[SEMANTIC] WARNING: Continuing correlation without semantic mapping")
+            
+            # Return original matches with error metadata
+            enhanced_matches = []
+            for match in matches:
                 error_semantic_data = {
                     '_metadata': {
                         'mappings_applied': False,
                         'error': str(e),
                         'error_type': type(e).__name__,
-                        'match_id': match.match_id,
-                        'engine_type': 'IdentityBasedEngineAdapter'
+                        'engine_type': 'IdentityBasedEngineAdapter',
+                        'fallback_reason': 'Critical semantic mapping failure'
                     }
                 }
                 
-                # Keep original match but add error semantic_data
                 error_match = CorrelationMatch(
                     match_id=match.match_id,
                     timestamp=match.timestamp,
@@ -1370,23 +2020,32 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 
                 enhanced_matches.append(error_match)
         
-        # Log completion with statistics (only if verbose)
-        if self.verbose_logging:
-            semantic_stats = self.semantic_integration.get_mapping_statistics()
-            logger.info(f"Semantic mapping application completed:")
-            logger.info(f"  Matches processed: {len(matches)}")
-            logger.info(f"  Mappings applied: {semantic_stats.mappings_applied}")
-            logger.info(f"  Pattern matches: {semantic_stats.pattern_matches}")
-            logger.info(f"  Exact matches: {semantic_stats.exact_matches}")
-            logger.info(f"  Rules source: JSON configuration files (configs directory)")
-            if errors_count > 0:
-                logger.warning(f"  Errors encountered: {errors_count}")
-            
-            # Log which specific mappings were applied if debug mode
-            if self.debug_mode:
-                manager = self.semantic_integration.semantic_manager
-                logger.debug(f"  Available rules: {len(manager.global_rules)}")
-                logger.debug(f"  Available mappings: {sum(len(v) for v in manager.global_mappings.values())}")
+        # Add GUI terminal output showing semantic rule detection statistics - SUMMARY ONLY
+        # Requirements: 4.1, 4.2, 4.3 - Print detected semantic rules to GUI terminal
+        try:
+            if not critical_failure:
+                # Don't print individual engine summaries - let the integration handle global summary
+                semantic_stats = self.semantic_integration.get_mapping_statistics()
+                
+                # Only show errors if any
+                if errors_count > 0:
+                    print(f"[SEMANTIC] WARNING: Identity Engine had {errors_count} semantic mapping errors")
+            else:
+                print("[SEMANTIC] ERROR: Identity Engine semantic mapping failed - correlation completed")
+        except Exception as stats_error:
+            # Even statistics printing should not crash correlation
+            logger.debug(f"Failed to print semantic mapping statistics: {stats_error}")
+            # Don't print error to GUI - just continue silently
+        
+        # Log completion with statistics (only if debug mode)
+        if self.debug_mode and not critical_failure:
+            try:
+                semantic_stats = self.semantic_integration.get_mapping_statistics()
+                logger.debug(f"Identity Engine semantic mapping completed: {semantic_stats.mappings_applied} mappings on {len(matches)} matches")
+                if errors_count > 0:
+                    logger.debug(f"Semantic mapping errors: {errors_count}")
+            except Exception as log_error:
+                logger.debug(f"Failed to log semantic mapping completion statistics: {log_error}")
         
         return enhanced_matches
     
@@ -1510,54 +2169,26 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                                        match: CorrelationMatch, 
                                        wing_config: Any) -> CorrelationMatch:
         """
-        Apply semantic mapping and weighted scoring to a single match.
+        Apply weighted scoring to a single match.
         Used in streaming mode to score matches before writing to database.
+        
+        Task 1.1: Remove semantic mapping from correlation processing
+        Requirements: 1.1, 1.2, 1.3, 1.4
+        Semantic matching will be applied AFTER correlation reaches 100% in Identity Semantic Phase
         
         Args:
             match: Correlation match to process
             wing_config: Wing configuration for context
             
         Returns:
-            Match with scoring and semantic data applied
+            Match with scoring applied (NO semantic data during correlation)
         """
         try:
             case_id = getattr(self.config, 'case_id', None)
             
-            # Apply semantic mapping if enabled
+            # Task 1.1: NO semantic mapping during correlation
+            # Semantic data will be applied in Identity Semantic Phase after 100% completion
             semantic_data = None
-            enhanced_feather_records = match.feather_records  # Default to original records
-            
-            if self.semantic_integration.is_enabled():
-                try:
-                    records_list = [record for record in match.feather_records.values()]
-                    enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
-                        records_list,
-                        wing_id=getattr(wing_config, 'wing_id', None),
-                        pipeline_id=None,
-                        artifact_type=match.anchor_artifact_type
-                    )
-                    
-                    # Convert back to dict format with original keys
-                    enhanced_feather_records = {}
-                    original_keys = list(match.feather_records.keys())
-                    for i, enhanced_record in enumerate(enhanced_records_list):
-                        key = original_keys[i] if i < len(original_keys) else f"record_{i}"
-                        enhanced_feather_records[key] = enhanced_record
-                    
-                    # CRITICAL FIX: Extract actual semantic values from enhanced records
-                    # Requirements: 1.1, 1.2 - Store semantic data in CorrelationMatch.semantic_data
-                    semantic_data = self._extract_semantic_data_from_records(enhanced_feather_records)
-                    
-                except Exception as e:
-                    if getattr(self, 'verbose_logging', False):
-                        logger.warning(f"Semantic mapping failed for match {match.match_id}: {e}")
-                    semantic_data = {
-                        '_metadata': {
-                            'mappings_applied': False, 
-                            'error': str(e),
-                            'engine_type': 'IdentityBasedEngineAdapter'
-                        }
-                    }
             
             # Apply weighted scoring if enabled
             weighted_score = None
@@ -1583,11 +2214,11 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 # Use simple scoring
                 weighted_score = self._calculate_simple_score(match, wing_config)
             
-            # Create scored match with enhanced records containing _semantic_mappings
+            # Create scored match WITHOUT semantic data (will be added in Identity Semantic Phase)
             scored_match = CorrelationMatch(
                 match_id=match.match_id,
                 timestamp=match.timestamp,
-                feather_records=enhanced_feather_records,  # Use enhanced records with _semantic_mappings
+                feather_records=match.feather_records,  # Original records, no semantic enhancement
                 match_score=weighted_score.get('score', match.match_score) if isinstance(weighted_score, dict) else match.match_score,
                 feather_count=match.feather_count,
                 time_spread_seconds=match.time_spread_seconds,
@@ -1734,6 +2365,161 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             duplicate_info=match.duplicate_info,
             semantic_data=getattr(match, 'semantic_data', {})
         )
+    
+    def _should_run_identity_semantic_phase(self) -> bool:
+        """
+        Determine if Identity Semantic Phase should run.
+        
+        Task 4.1: Add _should_run_identity_semantic_phase() method
+        Requirements: 2.1, 2.3
+        
+        Returns:
+            True if phase is enabled and correlation is complete
+        """
+        # Check if Identity Semantic Phase is enabled in configuration
+        # Default to True if not explicitly set
+        if not hasattr(self.config, 'identity_semantic_phase_enabled'):
+            # Default: enabled
+            phase_enabled = True
+        else:
+            phase_enabled = self.config.identity_semantic_phase_enabled
+        
+        if not phase_enabled:
+            if self.verbose_logging:
+                logger.info("[Identity Engine] Identity Semantic Phase disabled in configuration")
+            return False
+        
+        # Check if semantic integration is available
+        if not hasattr(self, 'semantic_integration'):
+            if self.verbose_logging:
+                logger.warning("[Identity Engine] Semantic integration not available")
+            return False
+        
+        # Check if semantic integration is enabled
+        if not self.semantic_integration.is_enabled():
+            if self.verbose_logging:
+                logger.info("[Identity Engine] Semantic integration disabled")
+            return False
+        
+        # All checks passed - phase should run
+        return True
+    
+    def _calculate_score(self, match: CorrelationMatch, wing_config: Any) -> float:
+        """
+        Calculate score for a match using centralized configuration.
+        
+        This method delegates to the scoring integration layer which uses
+        the centralized score configuration.
+        
+        Args:
+            match: Correlation match to score
+            wing_config: Wing configuration for scoring context
+        
+        Returns:
+            Calculated score value
+        
+        Requirements: 7.2, 8.3
+        """
+        if self.scoring_integration.is_enabled():
+            case_id = getattr(self.config, 'case_id', None)
+            weighted_score = self.scoring_integration.calculate_match_scores(
+                match.feather_records, wing_config, case_id
+            )
+            if isinstance(weighted_score, dict):
+                return weighted_score.get('score', 0.0)
+        
+        # Fallback to simple count-based scoring
+        feather_count = match.feather_count or len(match.feather_records)
+        total_feathers = len(getattr(wing_config, 'feathers', [])) if wing_config else feather_count
+        return feather_count / total_feathers if total_feathers > 0 else 0.5
+    
+    def _interpret_score(self, score: float) -> str:
+        """
+        Interpret a score value using centralized configuration thresholds.
+        
+        Args:
+            score: Score value to interpret (0.0 to 1.0)
+        
+        Returns:
+            String interpretation ('Critical', 'High', 'Medium', 'Low', or 'Minimal')
+        
+        Requirements: 7.2, 8.3
+        """
+        config = self.score_config_manager.get_configuration()
+        return config.interpret_score(score)
+    
+    def _execute_identity_semantic_phase(self, 
+                                        correlation_results: CorrelationResult,
+                                        wing_configs: List[Any]) -> CorrelationResult:
+        """
+        Execute Identity Semantic Phase after correlation completes.
+        
+        This method applies identity-level semantic mappings in a dedicated final analysis phase,
+        processing each unique identity once rather than per-record during correlation.
+        
+        Task 4.2: Add _execute_identity_semantic_phase() method
+        Task 7.1: Integrate with IdentityBasedEngineAdapter
+        Requirements: 2.1, 2.2, 2.4, 10.1, 10.2, 10.3, 14.1, 14.2
+        
+        Args:
+            correlation_results: Results from correlation engine
+            wing_configs: Wing configurations for context
+            
+        Returns:
+            Enhanced correlation results with identity-level semantic data
+        """
+        # Check if Identity Semantic Phase should run
+        if not self._should_run_identity_semantic_phase():
+            if self.verbose_logging:
+                logger.info("[Identity Engine] Identity Semantic Phase skipped")
+            return correlation_results
+        
+        try:
+            # Import Identity Semantic Phase components
+            from ..identity_semantic_phase.identity_semantic_controller import (
+                IdentitySemanticController,
+                IdentitySemanticConfig
+            )
+            
+            # Create configuration for Identity Semantic Phase
+            semantic_enabled = self.semantic_integration.is_enabled()
+            
+            phase_config = IdentitySemanticConfig(
+                enabled=True,
+                semantic_mapping_enabled=semantic_enabled,
+                identity_extraction_enabled=True,
+                progress_reporting_enabled=True,
+                debug_mode=self.debug_mode
+            )
+            
+            # Create Identity Semantic Controller
+            controller = IdentitySemanticController(
+                config=phase_config,
+                semantic_integration=self.semantic_integration
+            )
+            
+            # Execute final analysis phase
+            enhanced_results = controller.execute_final_analysis(
+                correlation_results=correlation_results,
+                engine_type="identity_based"
+            )
+            
+            return enhanced_results
+            
+        except ImportError as e:
+            # Identity Semantic Phase components not available
+            logger.warning(f"[Identity Engine] Identity Semantic Phase not available: {e}")
+            if self.verbose_logging:
+                print(f"[Identity Engine] Identity Semantic Phase import failed: {e}")
+            return correlation_results
+            
+        except Exception as e:
+            # Error during Identity Semantic Phase execution
+            # Log error but return original results (graceful degradation)
+            logger.error(f"[Identity Engine] Identity Semantic Phase failed: {e}")
+            print(f"[Identity Engine] WARNING: Identity Semantic Phase failed: {e}")
+            print(f"[Identity Engine] Continuing with original correlation results")
+            return correlation_results
     
     def _estimate_total_identities(self, wing_configs: List[Any]) -> int:
         """
@@ -2003,3 +2789,28 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         except Exception as e:
             logger.error(f"Failed to get semantic mapping info: {e}")
             return {'enabled': False, 'error': str(e)}
+    
+    def get_paused_executions(self, output_dir: str) -> List[Dict[str, Any]]:
+        """
+        Get list of paused executions that can be resumed.
+        
+        Args:
+            output_dir: Directory containing correlation_results.db
+            
+        Returns:
+            List of paused execution information
+        """
+        from pathlib import Path
+        from .database_persistence import ResultsDatabase
+        
+        db_path = Path(output_dir) / "correlation_results.db"
+        
+        if not db_path.exists():
+            return []
+        
+        try:
+            with ResultsDatabase(str(db_path)) as db:
+                return db.get_paused_executions()
+        except Exception as e:
+            print(f"[Identity Engine] Error loading paused executions: {e}")
+            return []

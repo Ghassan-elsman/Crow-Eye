@@ -46,6 +46,9 @@ class PipelineConfig:
     semantic_mapping_config: Optional[Dict[str, Any]] = None  # Semantic mapping settings
     weighted_scoring_config: Optional[Dict[str, Any]] = None  # Weighted scoring settings (legacy)
     
+    # Identity Semantic Phase configuration (Requirements 6.2, 6.3, 6.4, 6.5)
+    identity_semantic_phase_enabled: bool = True  # Enable identity-level semantic mapping in final analysis phase
+    
     # Pipeline-specific semantic rules (advanced multi-value rules with AND/OR logic)
     semantic_rules: List[Dict[str, Any]] = field(default_factory=list)
     
@@ -105,6 +108,7 @@ class PipelineConfig:
             'identity_filter_case_sensitive': self.identity_filter_case_sensitive,  # NEW
             'semantic_mapping_config': self.semantic_mapping_config,  # NEW
             'weighted_scoring_config': self.weighted_scoring_config,  # NEW (legacy)
+            'identity_semantic_phase_enabled': self.identity_semantic_phase_enabled,  # Identity Semantic Phase
             'semantic_rules': self.semantic_rules,  # Pipeline-specific semantic rules
             'scoring_config': self.scoring_config,  # Pipeline-level scoring configuration
             'debug_mode': self.debug_mode,  # NEW
@@ -165,6 +169,8 @@ class PipelineConfig:
             data['debug_mode'] = False
         if 'verbose_logging' not in data:
             data['verbose_logging'] = False
+        if 'identity_semantic_phase_enabled' not in data:
+            data['identity_semantic_phase_enabled'] = True  # Enabled by default
         if 'semantic_rules' not in data:
             data['semantic_rules'] = []
         if 'scoring_config' not in data:

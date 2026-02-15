@@ -1,0 +1,118 @@
+{
+  "rules": [
+    {
+      "id": "app_name_normalization",
+      "name": "Application Name Normalization",
+      "description": "Normalize application names across different artifacts",
+      "enabled": true,
+      "priority": 100,
+      "conditions": [
+        {
+          "field_pattern": ".*app.*|.*application.*|.*program.*",
+          "value_pattern": ".*",
+          "case_sensitive": false
+        }
+      ],
+      "actions": [
+        {
+          "type": "normalize",
+          "target_field": "normalized_app_name",
+          "transformations": [
+            {
+              "type": "lowercase"
+            },
+            {
+              "type": "remove_extension"
+            },
+            {
+              "type": "trim"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "file_path_normalization",
+      "name": "File Path Normalization",
+      "description": "Normalize file paths across different artifacts",
+      "enabled": true,
+      "priority": 90,
+      "conditions": [
+        {
+          "field_pattern": ".*path.*|.*file.*|.*location.*",
+          "value_pattern": ".*",
+          "case_sensitive": false
+        }
+      ],
+      "actions": [
+        {
+          "type": "normalize",
+          "target_field": "normalized_path",
+          "transformations": [
+            {
+              "type": "lowercase"
+            },
+            {
+              "type": "normalize_separators"
+            },
+            {
+              "type": "trim"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "mappings": {
+    "application_name": [
+      {
+        "from": "ApplicationName",
+        "to": "app_name"
+      },
+      {
+        "from": "ProgramName",
+        "to": "app_name"
+      },
+      {
+        "from": "ProcessName",
+        "to": "app_name"
+      },
+      {
+        "from": "ExecutableName",
+        "to": "app_name"
+      }
+    ],
+    "file_path": [
+      {
+        "from": "FilePath",
+        "to": "path"
+      },
+      {
+        "from": "FullPath",
+        "to": "path"
+      },
+      {
+        "from": "Location",
+        "to": "path"
+      },
+      {
+        "from": "Directory",
+        "to": "path"
+      }
+    ],
+    "hash": [
+      {
+        "from": "SHA256",
+        "to": "hash"
+      },
+      {
+        "from": "MD5",
+        "to": "hash"
+      },
+      {
+        "from": "FileHash",
+        "to": "hash"
+      }
+    ]
+  }
+}

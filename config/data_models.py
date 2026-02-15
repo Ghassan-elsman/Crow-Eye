@@ -73,6 +73,8 @@ class GlobalConfig:
     max_history_size: int
     theme: str
     last_updated: datetime
+    identity_semantic_phase_enabled: bool = True  # Enable identity-level semantic mapping by default
+    wings_semantic_mapping_enabled: bool = True  # Enable semantic mapping for Wings by default
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -82,7 +84,9 @@ class GlobalConfig:
             'recent_cases_display_count': self.recent_cases_display_count,
             'max_history_size': self.max_history_size,
             'theme': self.theme,
-            'last_updated': self.last_updated.isoformat() if isinstance(self.last_updated, datetime) else self.last_updated
+            'last_updated': self.last_updated.isoformat() if isinstance(self.last_updated, datetime) else self.last_updated,
+            'identity_semantic_phase_enabled': self.identity_semantic_phase_enabled,
+            'wings_semantic_mapping_enabled': self.wings_semantic_mapping_enabled
         }
     
     @classmethod
@@ -98,7 +102,9 @@ class GlobalConfig:
             recent_cases_display_count=data.get('recent_cases_display_count', 10),
             max_history_size=data.get('max_history_size', 200),
             theme=data.get('theme', 'cyberpunk_dark'),
-            last_updated=last_updated
+            last_updated=last_updated,
+            identity_semantic_phase_enabled=data.get('identity_semantic_phase_enabled', True),
+            wings_semantic_mapping_enabled=data.get('wings_semantic_mapping_enabled', True)
         )
     
     @classmethod
@@ -110,7 +116,9 @@ class GlobalConfig:
             recent_cases_display_count=10,
             max_history_size=200,
             theme='cyberpunk_dark',
-            last_updated=datetime.now()
+            last_updated=datetime.now(),
+            identity_semantic_phase_enabled=True,
+            wings_semantic_mapping_enabled=True
         )
 
 

@@ -1,336 +1,38 @@
 {
+  "_comment": "Modified to match actual application names instead of identity patterns",
+  "_version": "8.0",
+  "_description": "Rules with malicious/suspicious/threat/attack/evasion use AND logic to prevent false positives",
   "rules": [
     {
-      "rule_id": "default-user-login-interactive",
-      "name": "User Login (Interactive)",
-      "semantic_value": "User Login - Interactive",
-      "description": "User logged in interactively (Type 2) - physical access to machine",
+      "rule_id": "identity-system-executable",
+      "name": "Windows System Executable",
+      "semantic_value": "System Process",
+      "description": "Core Windows system executable",
       "conditions": [
         {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4624",
-          "operator": "equals"
-        },
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "LogonType",
-          "value": "2",
-          "operator": "equals"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "authentication",
-      "severity": "info",
-      "confidence": 0.95
-    },
-    {
-      "rule_id": "default-user-login-remote",
-      "name": "User Login (Remote/RDP)",
-      "semantic_value": "User Login - Remote Desktop",
-      "description": "User logged in via Remote Desktop (Type 10)",
-      "conditions": [
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4624",
-          "operator": "equals"
-        },
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "LogonType",
-          "value": "10",
-          "operator": "equals"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "authentication",
-      "severity": "low",
-      "confidence": 0.95
-    },
-    {
-      "rule_id": "default-user-login-network",
-      "name": "User Login (Network)",
-      "semantic_value": "User Login - Network",
-      "description": "User logged in via network (Type 3) - file share access",
-      "conditions": [
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4624",
-          "operator": "equals"
-        },
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "LogonType",
-          "value": "3",
-          "operator": "equals"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "authentication",
-      "severity": "info",
-      "confidence": 0.9
-    },
-    {
-      "rule_id": "default-user-logoff",
-      "name": "User Logoff",
-      "semantic_value": "User Logoff",
-      "description": "User logged off (Event 4634 or 4647)",
-      "conditions": [
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4634",
-          "operator": "equals"
-        },
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4647",
-          "operator": "equals"
-        }
-      ],
-      "logic_operator": "OR",
-      "scope": "global",
-      "category": "authentication",
-      "severity": "info",
-      "confidence": 0.95
-    },
-    {
-      "rule_id": "default-session-lock",
-      "name": "Session Locked",
-      "semantic_value": "Session Locked",
-      "description": "User locked their workstation",
-      "conditions": [
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4800",
-          "operator": "equals"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "authentication",
-      "severity": "info",
-      "confidence": 0.95
-    },
-    {
-      "rule_id": "default-session-unlock",
-      "name": "Session Unlocked",
-      "semantic_value": "Session Unlocked",
-      "description": "User unlocked their workstation",
-      "conditions": [
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4801",
-          "operator": "equals"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "authentication",
-      "severity": "info",
-      "confidence": 0.95
-    },
-    {
-      "rule_id": "default-folder-access-shellbags",
-      "name": "Folder Access (ShellBags)",
-      "semantic_value": "Folder Accessed",
-      "description": "User navigated to a folder (evidence from ShellBags)",
-      "conditions": [
-        {
-          "feather_id": "ShellBags",
-          "field_name": "path",
-          "value": "*",
-          "operator": "wildcard"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "file_access",
-      "severity": "info",
-      "confidence": 0.85
-    },
-    {
-      "rule_id": "default-file-access-lnk",
-      "name": "File Accessed (LNK)",
-      "semantic_value": "File Accessed - Recent",
-      "description": "User accessed a file (evidence from LNK shortcut)",
-      "conditions": [
-        {
-          "feather_id": "LNK",
-          "field_name": "target_path",
-          "value": "*",
-          "operator": "wildcard"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "file_access",
-      "severity": "info",
-      "confidence": 0.9
-    },
-    {
-      "rule_id": "default-file-created-mft",
-      "name": "File Created (MFT)",
-      "semantic_value": "File Created",
-      "description": "New file was created (evidence from MFT)",
-      "conditions": [
-        {
-          "feather_id": "MFT",
-          "field_name": "file_name",
-          "value": "*",
-          "operator": "wildcard"
-        },
-        {
-          "feather_id": "MFT",
-          "field_name": "created_time",
-          "value": "*",
-          "operator": "wildcard"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "file_access",
-      "severity": "info",
-      "confidence": 0.85
-    },
-    {
-      "rule_id": "default-file-deleted-usn",
-      "name": "File Deleted (USN)",
-      "semantic_value": "File Deleted",
-      "description": "File was deleted (evidence from USN Journal)",
-      "conditions": [
-        {
-          "feather_id": "USN",
-          "field_name": "reason",
-          "value": "FILE_DELETE",
-          "operator": "contains"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "file_access",
-      "severity": "low",
-      "confidence": 0.9
-    },
-    {
-      "rule_id": "default-file-renamed-usn",
-      "name": "File Renamed (USN)",
-      "semantic_value": "File Renamed",
-      "description": "File was renamed (evidence from USN Journal)",
-      "conditions": [
-        {
-          "feather_id": "USN",
-          "field_name": "reason",
-          "value": "RENAME",
-          "operator": "contains"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "file_access",
-      "severity": "info",
-      "confidence": 0.9
-    },
-    {
-      "rule_id": "default-app-execution-file-access",
-      "name": "Application Executed with File Access",
-      "semantic_value": "App Execution + File Access",
-      "description": "Application was executed AND a file was accessed (evidence from Prefetch + LNK)",
-      "conditions": [
-        {
-          "feather_id": "Prefetch",
-          "field_name": "executable_name",
-          "value": "*",
-          "operator": "wildcard"
-        },
-        {
-          "feather_id": "LNK",
-          "field_name": "target_path",
-          "value": "*",
-          "operator": "wildcard"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "user_activity",
-      "severity": "info",
-      "confidence": 0.85
-    },
-    {
-      "rule_id": "default-usb-device-usage",
-      "name": "USB Device Connected with Activity",
-      "semantic_value": "USB Device Usage",
-      "description": "USB device was connected AND related activity detected",
-      "conditions": [
-        {
-          "feather_id": "Registry",
-          "field_name": "key_path",
-          "value": "USBSTOR",
-          "operator": "contains"
-        },
-        {
-          "feather_id": "EventLogs",
-          "field_name": "EventID",
-          "value": "*",
-          "operator": "wildcard"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "device_activity",
-      "severity": "medium",
-      "confidence": 0.8
-    },
-    {
-      "rule_id": "default-login-file-access",
-      "name": "User Login with Folder Navigation",
-      "semantic_value": "Login + Folder Access",
-      "description": "User logged in AND navigated to folders",
-      "conditions": [
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4624",
-          "operator": "equals"
-        },
-        {
-          "feather_id": "ShellBags",
-          "field_name": "path",
-          "value": "*",
-          "operator": "wildcard"
-        }
-      ],
-      "logic_operator": "AND",
-      "scope": "global",
-      "category": "user_activity",
-      "severity": "info",
-      "confidence": 0.85
-    },
-    {
-      "rule_id": "default-browser-activity",
-      "name": "Browser Execution with Web Activity",
-      "semantic_value": "Browser Activity",
-      "description": "Browser was executed AND web activity detected",
-      "conditions": [
-        {
-          "feather_id": "Prefetch",
-          "field_name": "executable_name",
-          "value": "chrome|firefox|msedge|edge|iexplore|opera|brave|safari",
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "SVCHOST\\.EXE|EXPLORER\\.EXE|DWM\\.EXE|TASKMGR\\.EXE|SERVICES\\.EXE|LSASS\\.EXE|CSRSS\\.EXE|WINLOGON\\.EXE|SMSS\\.EXE|WININIT\\.EXE|SYSTEM|REGISTRY|SPOOLSV\\.EXE|CONHOST\\.EXE|RUNTIMEBROKER\\.EXE|SIHOST\\.EXE|CTFMON\\.EXE|FONTDRVHOST\\.EXE|SEARCHINDEXER\\.EXE|SEARCHPROTOCOLHOST\\.EXE|SEARCHFILTERHOST\\.EXE|AUDIODG\\.EXE|DLLHOST\\.EXE|TASKENG\\.EXE|TASKHOSTW\\.EXE|WMIPRVSE\\.EXE|WUAUCLT\\.EXE|TRUSTEDINSTALLER\\.EXE|MSIEXEC\\.EXE|RUNDLL32\\.EXE|REGSVR32\\.EXE|WERFAULT\\.EXE|WERMGR\\.EXE|MOBSYNC\\.EXE|WSCRIPT\\.EXE|CSCRIPT\\.EXE|MSHTA\\.EXE|CONSENT\\.EXE|LOGONUI\\.EXE|USERINIT\\.EXE|WINRSHOST\\.EXE|WSMPROVHOST\\.EXE|SDIAGNHOST\\.EXE|SLUI\\.EXE|SPPSVC\\.EXE|VSSVC\\.EXE|WBENGINE\\.EXE|SDCLT\\.EXE|BACKGROUNDTASKHOST\\.EXE|APPLICATIONFRAMEHOST\\.EXE",
           "operator": "regex"
-        },
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "system_process",
+      "severity": "info",
+      "confidence": 0.95
+    },
+    {
+      "rule_id": "identity-web-browser",
+      "name": "Web Browser",
+      "semantic_value": "Web Browser Activity",
+      "description": "Web browser application",
+      "conditions": [
         {
-          "feather_id": "BrowserHistory",
-          "field_name": "url",
-          "value": "*",
-          "operator": "wildcard"
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "CHROME|FIREFOX|MSEDGE|EDGE|IEXPLORE|OPERA|BRAVE|SAFARI|VIVALDI",
+          "operator": "regex"
         }
       ],
       "logic_operator": "AND",
@@ -340,140 +42,110 @@
       "confidence": 0.9
     },
     {
-      "rule_id": "default-data-exfiltration-pattern",
-      "name": "Potential Data Exfiltration",
-      "semantic_value": "Data Exfiltration Pattern",
-      "description": "USB device connected OR file accessed OR network activity - potential data movement",
+      "rule_id": "identity-office-app",
+      "name": "Office Application",
+      "semantic_value": "Office Productivity",
+      "description": "Office productivity application",
       "conditions": [
         {
-          "feather_id": "Registry",
-          "field_name": "key_path",
-          "value": "USBSTOR",
-          "operator": "contains"
-        },
-        {
-          "feather_id": "LNK",
-          "field_name": "target_path",
-          "value": "*",
-          "operator": "wildcard"
-        },
-        {
-          "feather_id": "NetworkConnections",
-          "field_name": "remote_address",
-          "value": "*",
-          "operator": "wildcard"
-        }
-      ],
-      "logic_operator": "OR",
-      "scope": "global",
-      "category": "suspicious_activity",
-      "severity": "high",
-      "confidence": 0.7
-    },
-    {
-      "rule_id": "default-process-network-activity",
-      "name": "Process with Network Connection",
-      "semantic_value": "Process + Network Activity",
-      "description": "Process was created AND established network connection",
-      "conditions": [
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4688",
-          "operator": "equals"
-        },
-        {
-          "feather_id": "NetworkConnections",
-          "field_name": "remote_address",
-          "value": "*",
-          "operator": "wildcard"
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "WINWORD|EXCEL|POWERPNT|OUTLOOK|ONENOTE|ACCESS|PUBLISHER|ACRORD32|ACROBAT|FOXIT",
+          "operator": "regex"
         }
       ],
       "logic_operator": "AND",
       "scope": "global",
-      "category": "network_activity",
-      "severity": "medium",
-      "confidence": 0.8
+      "category": "office_productivity",
+      "severity": "info",
+      "confidence": 0.85
     },
     {
-      "rule_id": "default-failed-login-attempts",
-      "name": "Failed Login Attempt",
-      "semantic_value": "Failed Authentication",
-      "description": "Failed login attempt detected (Event 4625 or 4771)",
+      "rule_id": "identity-media-player",
+      "name": "Media Player",
+      "semantic_value": "Media Playback",
+      "description": "Audio/video media player",
       "conditions": [
         {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4625",
-          "operator": "equals"
-        },
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4771",
-          "operator": "equals"
-        }
-      ],
-      "logic_operator": "OR",
-      "scope": "global",
-      "category": "authentication",
-      "severity": "medium",
-      "confidence": 0.95
-    },
-    {
-      "rule_id": "default-privilege-escalation",
-      "name": "Privilege Escalation",
-      "semantic_value": "Privilege Escalation",
-      "description": "Special privileges assigned to new logon (Event 4672)",
-      "conditions": [
-        {
-          "feather_id": "SecurityLogs",
-          "field_name": "EventID",
-          "value": "4672",
-          "operator": "equals"
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "VLC|MEDIAPLAYER|WMPLAYER|SPOTIFY|ITUNES|WINAMP|FOOBAR|KODI|PLEX",
+          "operator": "regex"
         }
       ],
       "logic_operator": "AND",
       "scope": "global",
-      "category": "authentication",
-      "severity": "high",
+      "category": "media_playback",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-development-tool",
+      "name": "Development Tool",
+      "semantic_value": "Software Development",
+      "description": "Software development and programming tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "VSCODE|CODE|DEVENV|PYCHARM|INTELLIJ|WEBSTORM|ECLIPSE|SUBLIME|NOTEPAD\\+\\+|ATOM",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "software_development",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-security-software",
+      "name": "Security Software",
+      "semantic_value": "Security Protection",
+      "description": "Antivirus and security software",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "DEFENDER|MSMPENG|MSSECES|AVAST|AVG|AVIRA|BITDEFENDER|KASPERSKY|NORTON|MCAFEE|ESET|NOD32|SOPHOS|TREND MICRO|PANDA|COMODO|MALWAREBYTES|SPYBOT|ADAWARE|SUPERANTISPYWARE|HITMANPRO|EMSISOFT|GDATA|FSECURE|WEBROOT|VIPRE|BULLGUARD|ZONEALARM|AVIRA|CLAMAV|CLAMWIN|IMMUNET|QIHOO|360|BAIDU|TENCENT|KINGSOFT|RISING|JIANGMIN|MICROPOINT|IKARUS|ARCABIT|AHNLAB|HAURI|QUICKHEAL|K7|ESCAN|NPAV|PROTEGENT|IOLO|PCMATIC|SCANGUARD|TOTALAV|SYSTWEAK|RESTORO|REIMAGE|DRIVERUPDATE|DRIVEREASY|DRIVERBOOSTER|DRIVERPACK|SNAPPY|SLIMDRIVERS|DRIVERMAX|DRIVERGENIUS|DRIVERTALENT|DRIVERHUB",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "security_protection",
+      "severity": "info",
       "confidence": 0.9
     },
     {
-      "rule_id": "default-app-installation",
-      "name": "Application Installation",
-      "semantic_value": "App Installation",
-      "description": "New application installed (evidence from Prefetch + Registry)",
+      "rule_id": "identity-compression-tool",
+      "name": "Compression Tool",
+      "semantic_value": "File Compression/Archive",
+      "description": "File compression and archiving tool",
       "conditions": [
         {
-          "feather_id": "Prefetch",
-          "field_name": "executable_name",
-          "value": "msiexec|setup|install|installer",
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "7Z|7ZIP|WINRAR|WINZIP|PEAZIP|BANDIZIP",
           "operator": "regex"
-        },
-        {
-          "feather_id": "Registry",
-          "field_name": "key_path",
-          "value": "Uninstall",
-          "operator": "contains"
         }
       ],
       "logic_operator": "AND",
       "scope": "global",
-      "category": "software_activity",
-      "severity": "low",
-      "confidence": 0.75
+      "category": "file_compression",
+      "severity": "info",
+      "confidence": 0.85
     },
     {
-      "rule_id": "default-remote-access-tool",
-      "name": "Remote Access Tool Activity",
-      "semantic_value": "Remote Access Tool",
-      "description": "Remote access tool executed (TeamViewer, AnyDesk, VNC, RDP, LogMeIn, etc.)",
+      "rule_id": "identity-remote-access",
+      "name": "Remote Access Tool",
+      "semantic_value": "Remote Desktop/Access",
+      "description": "Remote desktop and access tool",
       "conditions": [
         {
-          "feather_id": "Prefetch",
-          "field_name": "executable_name",
-          "value": "teamviewer|anydesk|vnc|rdp|logmein|ammyy|ultraviewer|rustdesk|parsec|splashtop",
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "TEAMVIEWER|ANYDESK|VNC|LOGMEIN|AMMYY|ULTRAVIEWER|RUSTDESK|MSTSC|RDPCLIP",
           "operator": "regex"
         }
       ],
@@ -481,7 +153,1097 @@
       "scope": "global",
       "category": "remote_access",
       "severity": "medium",
+      "confidence": 0.8,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-network-tool",
+      "name": "Network Tool",
+      "semantic_value": "Network Utility",
+      "description": "Network diagnostic and utility tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "WIRESHARK|TCPDUMP|NMAP|NETSTAT|IPCONFIG|PING|TRACERT|NSLOOKUP|PUTTY|WINSCP",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "network_utility",
+      "severity": "info",
+      "confidence": 0.8,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-file-transfer",
+      "name": "File Transfer Tool",
+      "semantic_value": "File Transfer Protocol",
+      "description": "FTP, SFTP, and file transfer tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "FILEZILLA|WINSCP|CYBERDUCK|PUTTY|BITVISE",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "file_transfer",
+      "severity": "info",
       "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-installer",
+      "name": "Software Installer",
+      "semantic_value": "Installation Process",
+      "description": "Software installation and setup",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "SETUP|INSTALL|INSTALLER|MSIEXEC|INNO|NSIS|INSTALLSHIELD|WISE|ADVANCED INSTALLER|INSTALLAWARE|CLICKTEAM|SETUPFACTORY|ACTUALINSTALLER|SMARTINSTALL|INSTALLCREATOR|INSTALLBUILDER|BITROCK|IZPACK|INSTALL4J|LAUNCH4J|JRE|JDK|DOTNET|VCREDIST|DIRECTX|WEBSETUP|BOOTSTRAPPER|UPDATER|PATCHER|UNINSTALL|UNINS",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "installation",
+      "severity": "info",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "identity-registry-editor",
+      "name": "Registry Editor",
+      "semantic_value": "Registry Modification",
+      "description": "Windows registry editing tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "REGEDIT|REGEDT32|REG\\.EXE|REGINI|REGSHOT|REGISTRAR|REGISTRY WORKSHOP|REGISTRY FINDER|REGISTRY FIRST AID|REGISTRY MECHANIC|REGISTRY BOOSTER|REGISTRY REVIVER|REGISTRY EASY|REGISTRY GENIUS|REGISTRY WINNER|REGCOOL|REGSCANNER|REGFROMAPP|REGDLLVIEW|REGISTRYCHANGESVIEW",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "registry_modification",
+      "severity": "medium",
+      "confidence": 0.85,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-task-scheduler",
+      "name": "Task Scheduler",
+      "semantic_value": "Scheduled Task",
+      "description": "Task scheduling and automation",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "SCHTASKS|TASKSCHD|AT\\.EXE|CRON|ANACRON|SYSTEMD|LAUNCHD|TASKENG|TASKHOSTW|TASKHOST|SCHEDULE|SCHEDULER|AUTOMATOR|HAZEL|KEYBOARD MAESTRO|BETTERTOUCHTOOL|ALFRED",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "task_scheduling",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-process-tool",
+      "name": "Process Management Tool",
+      "semantic_value": "Process Monitoring",
+      "description": "Process monitoring and management",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "TASKMGR|PROCEXP|PROCMON|PROCESS EXPLORER|PROCESS MONITOR|PROCESS HACKER|SYSTEM EXPLORER|DAPHNE|PSKILL|PSLIST|PSSUSPEND|PSTOOLS|HANDLE|LISTDLLS|AUTORUNS|TCPVIEW|PORTMON|REGMON|FILEMON|DISKMON|ACCESSCHK|SIGCHECK|STRINGS|STREAMS|SDELETE|PSEXEC|PSFILE|PSINFO|PSGETSID|PSLOGGEDON|PSLOGLIST|PSPASSWD|PSSERVICE|PSSHUTDOWN|PSSUSPEND|HTOP|TOP|ATOP|IOTOP|IFTOP|NETHOGS|GLANCES",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "process_monitoring",
+      "severity": "info",
+      "confidence": 0.8,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-disk-tool",
+      "name": "Disk Utility",
+      "semantic_value": "Disk Management",
+      "description": "Disk management and utility tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "DISKPART|DISKMGMT|CHKDSK|DEFRAG|CLEANMGR|DISKCLEANUP|TREESIZE|WINDIRSTAT|SPACESNIFFER|SCANNER|DISKANALYZER|DISKUSAGE|DAISYDISK|GRANDPERSPECTIVE|OMNIDISKSWEEPER|DISKWAVE|JDISKREPORT|FILELIGHT|BAOBAB|NCDU|DU|DF|GPARTED|PARTED|FDISK|GDISK|PARTITIONMAGIC|EASEUS|MINITOOL|AOMEI|MACRIUM|ACRONIS|CLONEZILLA|GHOST|TRUEIMAGE|REFLECT|VEEAM|BACKUP|RESTORE|RECUVA|TESTDISK|PHOTOREC|GETDATABACK|R-STUDIO|EASEUS RECOVERY|STELLAR|DISK DRILL|WONDERSHARE|ONTRACK",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "disk_management",
+      "severity": "info",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "identity-email-client",
+      "name": "Email Client",
+      "semantic_value": "Email Communication",
+      "description": "Email client application",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "OUTLOOK|THUNDERBIRD|MAILBIRD|EMCLIENT|POSTBOX|MAILSPRING|MAILMATE|AIRMAIL|SPARK|CANARY|POLYMAIL|NEWTON|SPIKE|SUPERHUMAN|HEY|PROTONMAIL|TUTANOTA|MAILBOX|INBOX|GMAIL|YAHOO MAIL|AOL MAIL|ZOHO MAIL|FASTMAIL|RUNBOX|MAILBOX\\.ORG|POSTEO|STARTMAIL|HUSHMAIL|COUNTERMAIL|MAILFENCE|KOLAB|ROUNDCUBE|SQUIRRELMAIL|HORDE|ZIMBRA|KERIO|MDAEMON|SMARTERMAIL|ICEWARP|AXIGEN|COMMUNIGATE|MERAK|IMAIL|EXCHANGE|LOTUS NOTES|GROUPWISE|EUDORA|PEGASUS|CLAWS|SYLPHEED|MUTT|ALPINE|PINE|ELM|MAIL",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "email_communication",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-messaging-app",
+      "name": "Messaging Application",
+      "semantic_value": "Instant Messaging",
+      "description": "Instant messaging and chat application",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "TEAMS|SLACK|DISCORD|SKYPE|ZOOM|TELEGRAM|WHATSAPP|SIGNAL",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "instant_messaging",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-pdf-reader",
+      "name": "PDF Reader",
+      "semantic_value": "PDF Document Viewing",
+      "description": "PDF document reader and viewer",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "ACRORD32|ACROBAT|READER|FOXIT|FOXITREADER|PDF|SUMATRA|SUMATRAPDF|NITRO|NUANCE|PDFXCHANGE|TRACKER|XODO|SLIM|JAVELIN|COOL|EXPERT|MASTER|ARCHITECT|ANNOTATOR|EDITOR|CREATOR|CONVERTER|MERGER|SPLITTER|COMPRESSOR|OKULAR|EVINCE|XPDF|MUPDF|ZATHURA|QPDFVIEW|APVLV|EPDFVIEW|PDFMOD|PDFTK|GHOSTSCRIPT|GHOSTVIEW|GSVIEW|PREVIEW|SKIM|PDFPEN|PDFELEMENT|SEJDA|SMALLPDF|ILOVEPDF|SODA",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "pdf_viewing",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-image-editor",
+      "name": "Image Editor",
+      "semantic_value": "Image Editing",
+      "description": "Image editing and manipulation tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "PHOTOSHOP|GIMP|PAINT\\.NET|KRITA|INKSCAPE|ILLUSTRATOR|COREL|CORELDRAW|AFFINITY|PHOTO|DESIGNER|PIXELMATOR|ACORN|SKETCH|FIGMA|CANVA|GRAVIT|VECTR|BOXY|LUNACY|PHOTOPEA|PIXLR|BEFUNKY|FOTOR|RIBBET|IPICCY|SUMOPAINT|PHOTOSCAPE|PHOTOFILTRE|ARTWEAVER|PINTA|KOLOURPAINT|MTPAINT|TUXPAINT|XPAINT|GPAINT|SEASHORE|CHOCOFLOP|DRAWBERRY|LINEFORM|PATTERNODES|IMAENGINE|DARKROOM|RAWTHERAPEE|DARKTABLE|LIGHTROOM|CAPTURE ONE|LUMINAR|ON1|DXO|EXPOSURE|AFTERSHOT|SILKYPIX|PHOTOLAB|PHOTODIRECTOR|PAINTSHOP|PHOTOIMPACT|PHOTOPLUS|PHOTOLINE",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "image_editing",
+      "severity": "info",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "identity-video-editor",
+      "name": "Video Editor",
+      "semantic_value": "Video Editing",
+      "description": "Video editing and production tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "PREMIERE|AFTER EFFECTS|VEGAS|FINAL CUT|DAVINCI|RESOLVE|AVID|MEDIA COMPOSER|EDIUS|LIGHTWORKS|HITFILM|KDENLIVE|OPENSHOT|SHOTCUT|BLENDER|NATRON|OLIVE|FLOWBLADE|PITIVI|CINELERRA|AVIDEMUX|HANDBRAKE|FFMPEG|VIRTUALDUB|MOVAVI|FILMORA|CAMTASIA|SCREENFLOW|OBS|STREAMLABS|XSPLIT|WIRECAST|VMIX|MIRILLIS|BANDICAM|FRAPS|DXTORY|PLAYCLAW|ACTION|SHADOWPLAY|RELIVE|GAMEBAR|CAPTURA|SHAREX|GREENSHOT|LIGHTSHOT|SNAGIT|JING|FASTSTONE|PICPICK|IRFANVIEW",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "video_editing",
+      "severity": "info",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "identity-database-tool",
+      "name": "Database Tool",
+      "semantic_value": "Database Management",
+      "description": "Database management and query tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "SSMS|MYSQL|WORKBENCH|PHPMYADMIN|DBEAVER|DATAGRIP|NAVICAT",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "database_management",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-virtualization",
+      "name": "Virtualization Software",
+      "semantic_value": "Virtual Machine",
+      "description": "Virtualization and VM software",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "VMWARE|WORKSTATION|VIRTUALBOX|VBOX|PARALLELS|HYPER-V|DOCKER",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "virtualization",
+      "severity": "medium",
+      "confidence": 0.85,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-backup-software",
+      "name": "Backup Software",
+      "semantic_value": "Data Backup",
+      "description": "Backup and recovery software",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "VEEAM|ACRONIS|MACRIUM|EASEUS|AOMEI",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "data_backup",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-screen-capture",
+      "name": "Screen Capture Tool",
+      "semantic_value": "Screenshot/Recording",
+      "description": "Screen capture and recording tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "SNAGIT|CAMTASIA|OBS|STREAMLABS|XSPLIT|SHAREX|GREENSHOT",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "screen_capture",
+      "severity": "info",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "identity-encryption-tool",
+      "name": "Encryption Tool",
+      "semantic_value": "Data Encryption",
+      "description": "Encryption and security tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "VERACRYPT|TRUECRYPT|BITLOCKER|7ZIP|WINRAR|GPGTOOLS|GPG",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "data_encryption",
+      "severity": "medium",
+      "confidence": 0.85,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-forensic-tool",
+      "name": "Forensic Tool",
+      "semantic_value": "Digital Forensics",
+      "description": "Digital forensics and investigation tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "FTK|ENCASE|AUTOPSY|X-WAYS|AXIOM|CELLEBRITE|WIRESHARK|VOLATILITY",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "digital_forensics",
+      "severity": "medium",
+      "confidence": 0.9,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-scripting-language",
+      "name": "Scripting Language",
+      "semantic_value": "Script Execution",
+      "description": "Scripting language interpreter",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "PYTHON|PYTHONW|RUBY|PERL|PHP|NODE|NODEJS|POWERSHELL|PWSH|CMD",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "script_execution",
+      "severity": "info",
+      "confidence": 0.8,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-web-server",
+      "name": "Web Server",
+      "semantic_value": "HTTP Server",
+      "description": "Web server software",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "APACHE|HTTPD|NGINX|IIS|W3WP|LIGHTTPD|CADDY|TRAEFIK|HAPROXY|VARNISH|SQUID|TOMCAT|JETTY|JBOSS|WILDFLY|GLASSFISH|PAYARA|WEBLOGIC|WEBSPHERE|RESIN|UNDERTOW|NETTY|VERT\\.X|AKKA|PLAY|SPRAY|FINATRA|RATPACK|SPARK|JAVALIN|MICRONAUT|QUARKUS|HELIDON|GRAILS|SPRING BOOT|DROPWIZARD|LAGOM|HTTP4S|SCALATRA|LIFT|UNFILTERED|COLOSSUS|FINAGLE|TWITTER SERVER",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "web_server",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-vpn-client",
+      "name": "VPN Client",
+      "semantic_value": "VPN Connection",
+      "description": "VPN client software",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "OPENVPN|WIREGUARD|NORDVPN|EXPRESSVPN|SURFSHARK|CYBERGHOST|PIA|PRIVATE INTERNET|PROTONVPN|MULLVAD|IVPN|WINDSCRIBE|TUNNELBEAR|HOTSPOT SHIELD|HIDE\\.ME|PERFECT PRIVACY|AIRVPN|AZIREVPN|BOLEHVPN|CRYPTOSTORM|FREEDOME|GOOSE|HIDE MY ASS|IPVANISH|KEEPSOLID|LIBERTAS|OVPN|PRIVATEVPN|PUREVPN|SAFERVPN|STRONGVPN|TORGUARD|TRUST\\.ZONE|VYPRVPN|ZENMATE|CISCO ANYCONNECT|CHECKPOINT|FORTICLIENT|PALO ALTO|GLOBALPROTECT|PULSE SECURE|JUNIPER|SONICWALL|NETEXTENDER|SOPHOS|CONNECT|PRITUNL|SOFTETHER|HAMACHI|ZEROTIER|TAILSCALE|NEBULA|TINC|N2N",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "vpn_connection",
+      "severity": "medium",
+      "confidence": 0.85,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-torrent-client",
+      "name": "Torrent Client",
+      "semantic_value": "P2P File Sharing",
+      "description": "BitTorrent and P2P client",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "UTORRENT|BITTORRENT|QBITTORRENT|DELUGE|TRANSMISSION|VUZE|AZUREUS|TIXATI|BITCOMET|FROSTWIRE|TRIBLER|HALITE|RTORRENT|KTORRENT|ARIA2|LIBTORRENT|WEBTORRENT|BIGLYBT|PICOTORRENT|FRAGMENTS|LIBRETORRENT|FLUD|TTORRENT|ATORRENT|BITPORT|ZBIGZ|SEEDR|BITLET|TORRENTFREAK|TORRENTZ|RARBG|1337X|THEPIRATEBAY|KICKASS|LIMETORRENTS|TORLOCK|TORRENTDOWNLOADS|EZTV|YIFY|YTS|NYAA|RUTRACKER",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "p2p_file_sharing",
+      "severity": "medium",
+      "confidence": 0.85,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-cloud-storage",
+      "name": "Cloud Storage",
+      "semantic_value": "Cloud Sync",
+      "description": "Cloud storage and sync service",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "DROPBOX|ONEDRIVE|GOOGLEDRIVE|ICLOUD|BOX|MEGA|SYNC",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "cloud_sync",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-download-manager",
+      "name": "Download Manager",
+      "semantic_value": "Download Acceleration",
+      "description": "Download manager and accelerator",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "IDM|INTERNET DOWNLOAD|FREE DOWNLOAD|JDOWNLOADER|ARIA2",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "download_acceleration",
+      "severity": "info",
+      "confidence": 0.8,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "identity-system-cleaner",
+      "name": "System Cleaner",
+      "semantic_value": "System Optimization",
+      "description": "System cleaning and optimization tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "CCLEANER|CLEANMGR|BLEACHBIT|PRIVAZER",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "system_optimization",
+      "severity": "info",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "identity-password-manager",
+      "name": "Password Manager",
+      "semantic_value": "Credential Storage",
+      "description": "Password manager and vault",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "1PASSWORD|LASTPASS|DASHLANE|BITWARDEN|KEEPASS|KEEPASSXC",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "credential_storage",
+      "severity": "info",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "identity-system-monitor",
+      "name": "System Monitor",
+      "semantic_value": "Performance Monitoring",
+      "description": "System performance monitoring tool",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "PERFMON|RESMON|TASKMGR|PROCEXP|PROCMON|HWINFO|CPU-Z",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "performance_monitoring",
+      "severity": "info",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "identity-generic-executable",
+      "name": "Generic Executable",
+      "semantic_value": "Application Execution",
+      "description": "Generic application executable",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "identity_value",
+          "value": "\\.EXE$|\\.COM$|\\.BAT$|\\.CMD$|\\.PS1$|\\.VBS$|\\.JS$|\\.WSF$|\\.MSI$|\\.SCR$|\\.PIF$|\\.APP$|\\.DMG$|\\.PKG$|\\.DEB$|\\.RPM$|\\.APPIMAGE$|\\.SNAP$|\\.FLATPAK$",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "generic_application",
+      "severity": "info",
+      "confidence": 0.5,
+      "disabled": true
+    },
+    {
+      "rule_id": "behavior-suspicious-scripting",
+      "name": "Suspicious Scripting Activity",
+      "semantic_value": "Potential Malicious Script Execution",
+      "description": "Script execution from unusual locations or with suspicious patterns",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "POWERSHELL|WSCRIPT|CSCRIPT|MSHTA",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "registry",
+          "field_name": "key_path",
+          "value": ".*Run.*|.*Startup.*|.*Services.*",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "suspicious_execution",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "behavior-lolbin-abuse",
+      "name": "Living Off The Land Binary",
+      "semantic_value": "LOLBin Execution - Potential Defense Evasion",
+      "description": "Legitimate Windows binaries abused for malicious purposes",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "CERTUTIL|BITSADMIN|POWERSHELL|WMIC|MSHTA|REGSVR32|RUNDLL32",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688|4689",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "lolbin_abuse",
+      "severity": "high",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "behavior-data-exfiltration",
+      "name": "Data Exfiltration Tool",
+      "semantic_value": "Potential Data Exfiltration Activity",
+      "description": "Tools commonly used for data exfiltration",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "CURL|WGET|POWERSHELL|BITSADMIN|CERTUTIL|FTP|RCLONE",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "browser_history",
+          "field_name": "url",
+          "value": ".*",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "data_exfiltration",
+      "severity": "critical",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "behavior-credential-dumping",
+      "name": "Credential Dumping Tool",
+      "semantic_value": "Credential Theft Activity Detected",
+      "description": "Tools used for credential dumping and theft",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "MIMIKATZ|PROCDUMP|LAZAGNE|PWDUMP",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "credential_theft",
+      "severity": "critical",
+      "confidence": 0.95,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "behavior-reconnaissance",
+      "name": "Reconnaissance Tool",
+      "semantic_value": "Network/System Reconnaissance Activity",
+      "description": "Tools used for system and network reconnaissance",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "NMAP|MASSCAN|BLOODHOUND|SHARPHOUND|ADFIND",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688|5156",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "reconnaissance",
+      "severity": "medium",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "behavior-lateral-movement",
+      "name": "Lateral Movement Tool",
+      "semantic_value": "Lateral Movement Activity Detected",
+      "description": "Tools used for lateral movement across network",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "PSEXEC|WMIC|WINRM|SCHTASKS",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4624|4648|4672",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "lateral_movement",
+      "severity": "critical",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "behavior-persistence",
+      "name": "Persistence Mechanism",
+      "semantic_value": "Persistence Establishment Detected",
+      "description": "Tools and methods used to establish persistence",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "SCHTASKS|SC\\.EXE|REG\\.EXE|REGEDIT|POWERSHELL",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "registry",
+          "field_name": "key_path",
+          "value": ".*Run.*|.*Startup.*|.*Services.*|.*Winlogon.*",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "persistence",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "behavior-defense-evasion",
+      "name": "Defense Evasion Tool",
+      "semantic_value": "Defense Evasion Activity Detected",
+      "description": "Tools used to evade security controls",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "TASKKILL|WEVTUTIL|AUDITPOL|POWERSHELL|SDELETE",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "1102|4688|4719",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "defense_evasion",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "behavior-privilege-escalation",
+      "name": "Privilege Escalation Tool",
+      "semantic_value": "Privilege Escalation Attempt Detected",
+      "description": "Tools used for privilege escalation",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "PSEXEC|RUNAS|ELEVATE|FODHELPER|SDCLT",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4672|4673|4674",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "privilege_escalation",
+      "severity": "critical",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "behavior-command-control",
+      "name": "Command and Control Tool",
+      "semantic_value": "C2 Communication Detected",
+      "description": "Tools used for command and control communication",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "COBALT STRIKE|METASPLOIT|EMPIRE|COVENANT",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "command_control",
+      "severity": "critical",
+      "confidence": 0.95,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "behavior-ransomware-indicators",
+      "name": "Ransomware Indicator",
+      "semantic_value": "Potential Ransomware Activity",
+      "description": "Behaviors and tools associated with ransomware",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "VSSADMIN|WBADMIN|BCDEDIT|CIPHER|SDELETE",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688|4663",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "ransomware",
+      "severity": "critical",
+      "confidence": 0.9
+    },
+    {
+      "rule_id": "behavior-suspicious-network",
+      "name": "Suspicious Network Tool",
+      "semantic_value": "Suspicious Network Activity",
+      "description": "Network tools that may indicate malicious activity",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "NETCAT|NC\\.EXE|NCAT|SOCAT|PLINK|NGROK",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "5156|5157|5158",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "suspicious_network",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "behavior-password-cracking",
+      "name": "Password Cracking Tool",
+      "semantic_value": "Password Cracking Activity",
+      "description": "Tools used for password cracking",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "HASHCAT|JOHN|HYDRA|OPHCRACK|MIMIKATZ",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "password_cracking",
+      "severity": "critical",
+      "confidence": 0.9,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "behavior-suspicious-file-ops",
+      "name": "Suspicious File Operation Tool",
+      "semantic_value": "Suspicious File Manipulation",
+      "description": "Tools performing suspicious file operations",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "ATTRIB|ICACLS|TAKEOWN|CIPHER|SDELETE",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4663|4656",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "suspicious_file_ops",
+      "severity": "medium",
+      "confidence": 0.8,
+      "disabled": true
+    },
+    {
+      "rule_id": "evasion-browser-impersonation",
+      "name": "Possible Browser Impersonation",
+      "semantic_value": "Suspicious Browser-Like Name",
+      "description": "Executable with browser-like name that may be impersonating legitimate browser",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "(?:MY|FAKE|NOT)(?:CHROME|FIREFOX|EDGE)",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "evasion",
+      "severity": "high",
+      "confidence": 0.7
+    },
+    {
+      "rule_id": "evasion-office-impersonation",
+      "name": "Possible Office Impersonation",
+      "semantic_value": "Suspicious Office-Like Name",
+      "description": "Executable with Office-like name that may be impersonating legitimate Office application",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "WORD(?!\\.EXE$)|EXCEL(?!\\.EXE$)|MYWORD|FAKEEXCEL",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "evasion",
+      "severity": "high",
+      "confidence": 0.7
+    },
+    {
+      "rule_id": "evasion-system-impersonation",
+      "name": "Possible System Process Impersonation",
+      "semantic_value": "Suspicious System-Like Name",
+      "description": "Executable with system process-like name that may be impersonating legitimate system process",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "SVCHOST(?!\\.EXE$)|SVCH0ST|EXPLORR|SVHOST",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "evasion",
+      "severity": "critical",
+      "confidence": 0.8
+    },
+    {
+      "rule_id": "evasion-security-tool-impersonation",
+      "name": "Possible Security Tool Impersonation",
+      "semantic_value": "Suspicious Security Tool Name",
+      "description": "Executable with security tool-like name that may be impersonating legitimate security software",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "DEFENDER(?!\\.EXE$)|FAKEAVAST|NOTDEFENDER",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "evasion",
+      "severity": "high",
+      "confidence": 0.75
+    },
+    {
+      "rule_id": "evasion-suspicious-suffix",
+      "name": "Suspicious Executable Suffix",
+      "semantic_value": "Suspicious Naming Pattern",
+      "description": "Executable with suspicious suffix that may indicate evasion attempt",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "_CRACK|_KEYGEN|_PATCH|_LOADER|_INJECT|_BYPASS|_HACK|_EXPLOIT|_PAYLOAD|_BACKDOOR|_RAT|_TROJAN|_VIRUS|_MALWARE",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "evasion",
+      "severity": "critical",
+      "confidence": 0.9,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "evasion-typosquatting",
+      "name": "Possible Typosquatting",
+      "semantic_value": "Typosquatted Application Name",
+      "description": "Executable with name similar to legitimate application (typosquatting)",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "CHORME|FIREFO X|OUTLOK|EXCELL|SVCH0ST",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "evasion",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "evasion-double-extension",
+      "name": "Double Extension Pattern",
+      "semantic_value": "Suspicious Double Extension",
+      "description": "Executable with double extension pattern often used to hide true file type",
+      "conditions": [
+        {
+          "feather_id": "_identity",
+          "field_name": "matched_application",
+          "value": "\\.PDF\\.EXE|\\.DOC\\.EXE|\\.XLS\\.EXE|\\.JPG\\.EXE|\\.PNG\\.EXE|\\.TXT\\.EXE|\\.ZIP\\.EXE",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "evasion",
+      "severity": "critical",
+      "confidence": 0.95,
+      "_requires_multi_indicator": true,
+      "_min_indicators": 2
+    },
+    {
+      "rule_id": "evasion-unicode-homoglyph",
+      "name": "Possible Unicode Homoglyph",
+      "semantic_value": "Suspicious Unicode Characters",
+      "description": "Executable name may contain Unicode homoglyphs to impersonate legitimate application",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "value": "CHR0ME|MICR0SOFT|WIND0WS|G00GLE",
+          "operator": "regex"
+        },
+        {
+          "feather_id": "eventlogs",
+          "field_name": "EventID",
+          "value": "4688",
+          "operator": "regex"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "global",
+      "category": "evasion",
+      "severity": "high",
+      "confidence": 0.8
     }
-  ]
+  ],
+  "_modified": "2026-02-04T05:04:21.781182",
+  "_original_backup": "semantic_rules_default_backup_20260126_014211.json",
+  "_multi_indicator_update": "2026-02-04T04:56:20.051776",
+  "_and_logic_update": "2026-02-04T05:04:21.781182"
 }
