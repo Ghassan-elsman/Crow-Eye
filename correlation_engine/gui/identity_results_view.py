@@ -2218,8 +2218,12 @@ class IdentityDetailDialog(QDialog):
                 } for k, v in semantic_info.items() if v]
             }
         
+        # Determine if we have semantic data and feather records to display
+        has_semantic_data = bool(semantic_data and isinstance(semantic_data, dict))
+        has_feather_records = bool(feather_records and isinstance(feather_records, dict))
+        
         # Check if we have semantic_data to display
-        if semantic_data and isinstance(semantic_data, dict):
+        if has_semantic_data:
             # Add Semantic Mappings section
             semantic_group = QGroupBox("🔍 Semantic Mappings")
             semantic_group.setStyleSheet("""
@@ -2287,10 +2291,11 @@ class IdentityDetailDialog(QDialog):
             semantic_table.setMaximumHeight(200)
             
             semantic_layout.addWidget(semantic_table)
+            # Add with no stretch factor when semantic data exists
             layout.addWidget(semantic_group)
         
         # Check if we have feather_records to display
-        if feather_records and isinstance(feather_records, dict):
+        if has_feather_records:
             # Add Feather Records section
             feather_group = QGroupBox("📋 Feather Records")
             feather_group.setStyleSheet("""
@@ -2330,10 +2335,14 @@ class IdentityDetailDialog(QDialog):
                     feather_tabs.addTab(feather_table, feather_name)
             
             feather_layout.addWidget(feather_tabs)
-            layout.addWidget(feather_group)
+            
+            # Add with stretch factor 1 to fill remaining space
+            # If semantic data exists, this takes remaining space (80%)
+            # If no semantic data, this takes all available space (100%)
+            layout.addWidget(feather_group, 1)
         
         # Fallback: display basic data if no semantic or feather records
-        if not semantic_data and not feather_records:
+        if not has_semantic_data and not has_feather_records:
             table = QTableWidget()
             table.setColumnCount(2)
             table.setHorizontalHeaderLabels(['Field', 'Value'])
@@ -2349,9 +2358,9 @@ class IdentityDetailDialog(QDialog):
             table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
             table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
             table.setAlternatingRowColors(True)
-            layout.addWidget(table)
+            # Add with stretch factor 1 to fill available space
+            layout.addWidget(table, 1)
         
-        layout.addStretch()
         return widget
     
     def _create_feather_records_table(self, feather_name: str, records: list) -> QWidget:

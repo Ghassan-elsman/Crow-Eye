@@ -48,6 +48,7 @@ The Correlation Engine is production-ready with a robust dual-engine architectur
   - **[Artifact Type Registry](config/ARTIFACT_TYPE_REGISTRY.md)** - **NEW!** Centralized artifact type definitions.
   - **[Weight Precedence](config/WEIGHT_PRECEDENCE.md)** - **NEW!** Weight resolution hierarchy.
   - **[Configuration Reload](config/CONFIGURATION_RELOAD.md)** - **NEW!** Live configuration updates.
+- **[Semantic Mapping Guide](semantic_mapping/SEMANTIC_MAPPING_GUIDE.md)** - Explains the semantic mapping system, its components, and integration.
 - **[pipeline/PIPELINE_DOCUMENTATION.md](pipeline/PIPELINE_DOCUMENTATION.md)** - Workflow orchestration, pipeline execution, dependency management.
 - **[gui/GUI_DOCUMENTATION.md](gui/GUI_DOCUMENTATION.md)** - User interface components, visualization, timeline widgets.
 - **[integration/INTEGRATION_DOCUMENTATION.md](integration/INTEGRATION_DOCUMENTATION.md)** - Crow-Eye integration, auto-generation, case initialization.
@@ -196,11 +197,12 @@ Total: 13 documentation files (note: `IDENTIFIER_EXTRACTION_README.md` content i
 6. `config/ARTIFACT_TYPE_REGISTRY.md` **NEW!** (Artifact type registry)
 7. `config/WEIGHT_PRECEDENCE.md` **NEW!** (Weight precedence system)
 8. `config/CONFIGURATION_RELOAD.md` **NEW!** (Live configuration reload)
-9. `pipeline/PIPELINE_DOCUMENTATION.md` (7 Python files)
-10. `gui/GUI_DOCUMENTATION.md` (26 Python files)
-11. `integration/INTEGRATION_DOCUMENTATION.md` (7 Python files)
-12. `integration/INTEGRATION_INTERFACES.md` **NEW!** (Integration interfaces)
-13. `WING_FEATHER_GUIDE.md` (Wing vs Feather comparison, relationship flow)
+9. `semantic_mapping/SEMANTIC_MAPPING_GUIDE.md` (Semantic Mapping System, Components, and Integration)
+10. `pipeline/PIPELINE_DOCUMENTATION.md` (7 Python files)
+11. `gui/GUI_DOCUMENTATION.md` (26 Python files)
+12. `integration/INTEGRATION_DOCUMENTATION.md` (7 Python files)
+13. `integration/INTEGRATION_INTERFACES.md` **NEW!** (Integration interfaces)
+14. `WING_FEATHER_GUIDE.md` (Wing vs Feather comparison, relationship flow)
 
 **Total Documentation**: ~10,000 lines covering dual-engine architecture and structural improvements
 
