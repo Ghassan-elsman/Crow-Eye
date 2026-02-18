@@ -2097,6 +2097,15 @@ def main():
     
     print(f"\n[+] Found {len(disks)} physical disk(s):\n")
     
+    disk_props = {
+        'serial_number': lambda d: f"  Serial Number: {d.serial_number}",
+        'disk_signature': lambda d: f"  Disk Signature: {d.disk_signature}",
+        'disk_guid': lambda d: f"  Disk GUID: {d.disk_guid}",
+        'is_removable': lambda d: "  Media Type: Removable",
+        'is_usb': lambda d: "  Interface: USB",
+        'is_bootable': lambda d: "  Bootable: Yes"
+    }
+    
     for disk in disks:
         print(f"{'='*80}")
         print(f"Disk {disk.disk_index}: {disk.model}")
@@ -2105,66 +2114,61 @@ def main():
         print(f"  Interface: {disk.interface_type}")
         print(f"  Partition Style: {disk.partition_style}")
         print(f"  Boot Mode: {disk.boot_mode}")
-        if disk.serial_number:
-            print(f"  Serial Number: {disk.serial_number}")
-        if disk.disk_signature:
-            print(f"  Disk Signature: {disk.disk_signature}")
-        if disk.disk_guid:
-            print(f"  Disk GUID: {disk.disk_guid}")
-        if disk.is_removable:
-            print(f"  Media Type: Removable")
-        if disk.is_usb:
-            print(f"  Interface: USB")
-        if disk.is_bootable:
-            print(f"  Bootable: Yes")
+        
+        for prop, formatter in disk_props.items():
+            if getattr(disk, prop, None):
+                print(formatter(disk))
         
         print(f"\n  Partitions on this disk: {len(disk.partitions)}")
         print(f"  {'-'*76}")
         
+        part_props = {
+            'mountpoint': lambda p: f"    Mount Point: {p.mountpoint}",
+            'volume_label': lambda p: f"    Volume Label: {p.volume_label}",
+            'volume_serial': lambda p: f"    Volume Serial: {p.volume_serial}"
+        }
+        
+        part_size_props = {
+            'partition_guid': lambda p: f"    Partition GUID: {p.partition_guid}",
+            'disk_signature': lambda p: f"    Disk Signature: {p.disk_signature}",
+            'partition_offset': lambda p: f"    Partition Offset: {analyzer.format_size(p.partition_offset)}",
+            'partition_length': lambda p: f"    Partition Length: {analyzer.format_size(p.partition_length)}"
+        }
+        
         for part in disk.partitions:
             print(f"\n  Device: {part.device}")
-            if part.mountpoint:
-                print(f"    Mount Point: {part.mountpoint}")
+            
+            for prop, formatter in part_props.items():
+                if getattr(part, prop, None):
+                    print(formatter(part))
+            
             print(f"    File System: {part.fstype}")
-            if part.volume_label:
-                print(f"    Volume Label: {part.volume_label}")
-            if part.volume_serial:
-                print(f"    Volume Serial: {part.volume_serial}")
             print(f"    Total Size: {analyzer.format_size(part.total_size)}")
+            
             if part.total_size > 0:
                 print(f"    Used: {analyzer.format_size(part.used_size)} ({part.percent_used}%)")
                 print(f"    Free: {analyzer.format_size(part.free_size)}")
+            
             print(f"    Partition Style: {part.partition_style}")
             print(f"    Partition Type: {part.partition_type}")
             
-            if part.partition_guid:
-                print(f"    Partition GUID: {part.partition_guid}")
-            if part.disk_signature:
-                print(f"    Disk Signature: {part.disk_signature}")
-            if part.partition_offset > 0:
-                print(f"    Partition Offset: {analyzer.format_size(part.partition_offset)}")
-            if part.partition_length > 0:
-                print(f"    Partition Length: {analyzer.format_size(part.partition_length)}")
+            for prop, formatter in part_size_props.items():
+                if getattr(part, prop, None) and (prop in ['partition_offset', 'partition_length'] and getattr(part, prop) > 0 or prop not in ['partition_offset', 'partition_length']):
+                    print(formatter(part))
             
-            flags = []
-            if part.is_boot:
-                flags.append("BOOT")
-            if part.is_system:
-                flags.append("SYSTEM")
-            if part.is_swap:
-                flags.append("SWAP")
-            if part.is_linux:
-                flags.append("LINUX")
-            if part.is_efi_system:
-                flags.append("EFI_SYSTEM")
-            if part.is_active:
-                flags.append("ACTIVE")
-            if part.is_hidden:
-                flags.append("HIDDEN")
-            if part.is_removable:
-                flags.append("REMOVABLE")
-            if part.is_usb:
-                flags.append("USB")
+            flags_map = {
+                'is_boot': 'BOOT',
+                'is_system': 'SYSTEM',
+                'is_swap': 'SWAP',
+                'is_linux': 'LINUX',
+                'is_efi_system': 'EFI_SYSTEM',
+                'is_active': 'ACTIVE',
+                'is_hidden': 'HIDDEN',
+                'is_removable': 'REMOVABLE',
+                'is_usb': 'USB'
+            }
+            
+            flags = [flag_name for is_flag, flag_name in flags_map.items() if getattr(part, is_flag, False)]
             
             if flags:
                 print(f"    Flags: {', '.join(flags)}")

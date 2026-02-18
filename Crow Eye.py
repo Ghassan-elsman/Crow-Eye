@@ -4332,16 +4332,16 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.verticalLayout_3.setSpacing(8)  # Increased spacing between green buttons
         except Exception:
             pass
-        self.exprot_json_CSV = QtWidgets.QPushButton(self.side_fram)
-        self.exprot_json_CSV.setStyleSheet(CrowEyeStyles.EXPORT_BUTTON)
+        self.export_json_CSV = QtWidgets.QPushButton(self.side_fram)
+        self.export_json_CSV.setStyleSheet(CrowEyeStyles.EXPORT_BUTTON)
         # Add export icon
         icon_export = QtGui.QIcon()
         icon_export.addPixmap(QtGui.QPixmap("GUI Resources/icons/export.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
-        self.exprot_json_CSV.setIcon(icon_export)
-        self.exprot_json_CSV.setIconSize(QtCore.QSize(16, 16))
-        self.exprot_json_CSV.setText("Export Data") # Ensure text is set
-        self.exprot_json_CSV.setObjectName("loadData")
-        self.verticalLayout_3.addWidget(self.exprot_json_CSV)
+        self.export_json_CSV.setIcon(icon_export)
+        self.export_json_CSV.setIconSize(QtCore.QSize(16, 16))
+        self.export_json_CSV.setText("Export Data") # Ensure text is set
+        self.export_json_CSV.setObjectName("loadData")
+        self.verticalLayout_3.addWidget(self.export_json_CSV)
         
         # Correlation Analysis Button
         self.correlation_button = QtWidgets.QPushButton(self.side_fram)
@@ -5132,11 +5132,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.enable_sorting_for_all_tables()
         self.label.setText(_translate("Crow_Eye", "Case:"))
         self.open_case_btn.setText(_translate("Crow_Eye", "Open case"))
-        self.Creat_case.setText(_translate("Crow_Eye", "Creat case"))
-        self.exprot_json_CSV.setText(_translate("Crow_Eye", "exprot as json and CSV"))
+        self.Creat_case.setText(_translate("Crow_Eye", "Create case"))
+        self.export_json_CSV.setText(_translate("Crow_Eye", "Export as json and CSV"))
         
         self.Live_analysis.setText(_translate("Crow_Eye", "Live analysis "))
-        self.parse_all.setText(_translate("Crow_Eye", "parse all Artifacts"))
+        self.parse_all.setText(_translate("Crow_Eye", "Parse all Artifacts"))
         self.registrybutton.setText(_translate("Crow_Eye", "Registry"))
         self.lnkbutton.setText(_translate("Crow_Eye", "LNK and JUMPLIST"))
 
@@ -5147,10 +5147,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.logbutton.setText(_translate("Crow_Eye", "Event Logs"))
         self.RecycleBinButton.setText(_translate("Crow_Eye", "Recycle Bin"))
         self.SRUMButton.setText(_translate("Crow_Eye", "SRUM"))
-        self.Offline_analysis.setText(_translate("Crow_Eye", "offline analysis"))
+        self.Offline_analysis.setText(_translate("Crow_Eye", "Offline analysis"))
         self.registry_offline.setText(_translate("Crow_Eye", "Registry offline"))
         self.offline_LNK_JL.setText(_translate("Crow_Eye", "Lnk and JL offline"))
-        self.offline_prefetch.setText(_translate("Crow_Eye", "offline_Prefetch"))
+        self.offline_prefetch.setText(_translate("Crow_Eye", "Offline_Prefetch"))
 
         # Initialize computerName_table headers
         if hasattr(self, 'computerName_table'):
@@ -6039,7 +6039,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.MFT_USN_CorrelateButton.clicked.connect(self.run_mft_usn_correlation)
         self.RecycleBinButton.clicked.connect(self.run_recyclebin_analysis)
         self.SRUMButton.clicked.connect(self.run_srum_analysis)
-        self.exprot_json_CSV.clicked.connect(self.export_all_tables)
+        self.export_json_CSV.clicked.connect(self.export_all_tables)
         
         # Connect correlation button
         if hasattr(self, 'correlation_button'):
