@@ -5,9 +5,14 @@ Orchestrate correlation engine execution and monitor progress.
 
 import os
 import sys
+import time
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
@@ -353,12 +358,30 @@ class ExecutionControlWidget(QWidget):
         self._min_progress_interval: float = 0.5  # Minimum 0.5 seconds between progress updates
         self._last_progress_message: str = ""
         
-        # Heartbeat mechanism to keep progress bar alive when no signals are sent
-        self._heartbeat_timer = None
-        self._heartbeat_counter = 0
-        self._is_executing = False
+        # NEW: Performance optimization components (Task 5)
+        from .performance_utils import ProgressThrottler, ProgressEventQueue, BatchedTextWidget, OptimizedHeartbeat, ProgressMessageBuffer
+        
+        self._progress_throttler = None  # Will be initialized after UI
+        self._event_queue = ProgressEventQueue(max_size=1000)
+        self._batched_log = None  # Will be initialized after UI
+        self._heartbeat = None  # Will be initialized after UI
+        self._processing_timer = QTimer()
+        self._processing_timer.timeout.connect(self._process_event_queue)
+        
+        # NEW: Memory-bounded progress message storage (Task 12)
+        self._progress_message_buffer = ProgressMessageBuffer(max_messages=1000, trim_count=200)
+        
+        # NEW: Periodic trimming timer (Task 7)
+        self._trimming_timer = QTimer()
+        self._trimming_timer.timeout.connect(self._periodic_trim_check)
+        self._trimming_timer.setInterval(30000)  # Check every 30 seconds
         
         self._init_ui()
+        
+        # Initialize performance components that depend on UI widgets
+        self._progress_throttler = ProgressThrottler(min_interval_ms=150)  # Increased from 100ms to 150ms for less frequent updates
+        self._batched_log = BatchedTextWidget(self.log_output, batch_window_ms=300)  # Increased from 200ms to 300ms for even less frequent updates
+        self._heartbeat = OptimizedHeartbeat(self.progress_bar, interval_ms=500)
         
         # Setup output redirection after UI is initialized
         self._setup_output_redirection()
@@ -880,8 +903,8 @@ class ExecutionControlWidget(QWidget):
             # Disable execute button
             self.execute_btn.setEnabled(False)
             
-            self.log_output.append("\n⚠ Warning: No Wings configured in pipeline")
-            self.log_output.append("Please add Wings to the pipeline before executing.")
+            self._batched_log.append_text("\n⚠ Warning: No Wings configured in pipeline")
+            self._batched_log.append_text("Please add Wings to the pipeline before executing.")
         else:
             # Populate wings
             for wing_config in pipeline_config.wing_configs:
@@ -904,11 +927,12 @@ class ExecutionControlWidget(QWidget):
         
         # Clear log
         self.log_output.clear()
-        self.log_output.append(f"Pipeline loaded: {pipeline_config.pipeline_name}")
-        self.log_output.append(f"Feathers: {len(pipeline_config.feather_configs)}")
-        self.log_output.append(f"Wings: {len(pipeline_config.wing_configs)}")
-        self.log_output.append(f"Output Directory: {pipeline_config.output_directory or 'output'}")
-        self.log_output.append("\nReady to execute.")
+        self._batched_log.append_text(f"Pipeline loaded: {pipeline_config.pipeline_name}")
+        self._batched_log.append_text(f"Feathers: {len(pipeline_config.feather_configs)}")
+        self._batched_log.append_text(f"Wings: {len(pipeline_config.wing_configs)}")
+        self._batched_log.append_text(f"Output Directory: {pipeline_config.output_directory or 'output'}")
+        self._batched_log.append_text("\nReady to execute.")
+        self._batched_log.flush()  # Flush immediately for user feedback
     
     def _browse_output_dir(self):
         """Browse for output directory"""
@@ -997,19 +1021,19 @@ class ExecutionControlWidget(QWidget):
             # NEW: Apply time period filter
             if hasattr(self, 'start_enabled') and self.start_enabled.isChecked():
                 execution_pipeline.time_period_start = self.start_datetime.dateTime().toString("yyyy-MM-ddTHH:mm:ss")
-                self.log_output.append(f"Time Filter Start: {execution_pipeline.time_period_start}")
+                self._batched_log.append_text(f"Time Filter Start: {execution_pipeline.time_period_start}")
             else:
                 execution_pipeline.time_period_start = None
             
             if hasattr(self, 'end_enabled') and self.end_enabled.isChecked():
                 execution_pipeline.time_period_end = self.end_datetime.dateTime().toString("yyyy-MM-ddTHH:mm:ss")
-                self.log_output.append(f"Time Filter End: {execution_pipeline.time_period_end}")
+                self._batched_log.append_text(f"Time Filter End: {execution_pipeline.time_period_end}")
             else:
                 execution_pipeline.time_period_end = None
             
             # Log if time filter is applied
             if execution_pipeline.time_period_start or execution_pipeline.time_period_end:
-                self.log_output.append(f"✓ Time period filter enabled")
+                self._batched_log.append_text(f"✓ Time period filter enabled")
             
             # NEW: Apply identity filter
             if hasattr(self, 'identity_filter_input') and self.identity_filter_section.isVisible():
@@ -1025,15 +1049,16 @@ class ExecutionControlWidget(QWidget):
             
             # Clear log
             self.log_output.clear()
-            self.log_output.append("Starting correlation execution...")
-            self.log_output.append(f"Output directory: {output_dir}")
-            self.log_output.append(f"Selected wings: {len(selected_wings)}/{len(self.current_pipeline.wing_configs)}")
+            self._batched_log.append_text("Starting correlation execution...")
+            self._batched_log.append_text(f"Output directory: {output_dir}")
+            self._batched_log.append_text(f"Selected wings: {len(selected_wings)}/{len(self.current_pipeline.wing_configs)}")
             
             # List selected wings
             for wing in selected_wings:
                 wing_name = getattr(wing, 'wing_name', 'Unknown Wing')
-                self.log_output.append(f"  - {wing_name}")
-            self.log_output.append("")
+                self._batched_log.append_text(f"  - {wing_name}")
+            self._batched_log.append_text("")
+            self._batched_log.flush()  # Flush immediately for user feedback
             
             # Reset progress bar to indeterminate mode
             self.progress_bar.setMaximum(0)  # Indeterminate - shows activity
@@ -1041,8 +1066,14 @@ class ExecutionControlWidget(QWidget):
             self._last_progress_time = None  # Reset throttling for new execution
             self.status_label.setText("Initializing...")
             
-            # Start heartbeat to keep progress bar alive
-            self._start_heartbeat()
+            # Start optimized heartbeat (Task 5)
+            self._heartbeat.start()
+            
+            # Start event processing timer (Task 5) - increased to 150ms to further reduce UI blocking
+            self._processing_timer.start(150)  # Process queue every 150ms (increased from 100ms)
+            
+            # Start periodic trimming timer (Task 7)
+            self._trimming_timer.start()  # Check every 30 seconds
             
             # print("[ExecutionControl] Creating worker thread...")
             
@@ -1061,14 +1092,32 @@ class ExecutionControlWidget(QWidget):
             
             # print("[ExecutionControl] Connecting signals...")
             
-            # Connect signals
+            # Connect signals with explicit Qt.QueuedConnection for async handling (Task 5)
             self.worker_thread.started.connect(self.engine_wrapper.run)
-            self.engine_wrapper.progress_updated.connect(self._update_progress)
-            self.engine_wrapper.anchor_progress_updated.connect(self._update_anchor_progress)  # NEW
-            self.engine_wrapper.wing_completed.connect(self._on_wing_completed)  # NEW: Connect wing completion
-            self.engine_wrapper.log_message.connect(self._append_to_log, Qt.QueuedConnection)  # NEW: Connect log messages
-            self.engine_wrapper.execution_completed.connect(self._on_execution_completed)
-            self.engine_wrapper.execution_failed.connect(self._on_execution_failed)
+            self.engine_wrapper.progress_updated.connect(
+                self._queue_progress_event, 
+                Qt.QueuedConnection
+            )
+            self.engine_wrapper.anchor_progress_updated.connect(
+                self._queue_progress_event,
+                Qt.QueuedConnection
+            )
+            self.engine_wrapper.wing_completed.connect(
+                self._on_wing_completed,
+                Qt.QueuedConnection
+            )
+            self.engine_wrapper.log_message.connect(
+                self._batched_log.append_text,
+                Qt.QueuedConnection
+            )
+            self.engine_wrapper.execution_completed.connect(
+                self._on_execution_completed,
+                Qt.QueuedConnection
+            )
+            self.engine_wrapper.execution_failed.connect(
+                self._on_execution_failed,
+                Qt.QueuedConnection
+            )
             self.engine_wrapper.execution_completed.connect(self.worker_thread.quit)
             self.engine_wrapper.execution_failed.connect(self.worker_thread.quit)
             self.worker_thread.finished.connect(self._cleanup_thread)
@@ -1109,30 +1158,36 @@ class ExecutionControlWidget(QWidget):
     def _pause_execution(self):
         """Pause execution and save partial results."""
         if self.worker_thread and self.worker_thread.isRunning():
-            # Switch to pausing mode immediately for visual feedback
-            self._switch_to_pausing_mode()
+            # Switch to cancelling mode immediately for visual feedback (Requirement 8.3)
+            self._switch_to_cancelling_mode()
             
             # Request graceful shutdown
             if self.engine_wrapper:
-                self.log_output.append("\n⏸️ Pausing execution - saving partial results...")
-                self.status_label.setText("Pausing execution...")
+                self._batched_log.append_text("\n⏹ Cancelling execution - saving partial results...")
+                self._batched_log.flush()  # Flush immediately for user feedback
+                self.status_label.setText("Cancelling...")  # Requirement 8.3
                 
-                # Set cancellation flag on wrapper
+                # Set cancellation flag on wrapper immediately (Requirement 8.1)
                 self.engine_wrapper.cancel()
                 
-                # Give it time to save partial results
+                # Give it time to save partial results (Requirement 8.4 - within 2 seconds)
                 self.worker_thread.quit()
-                if not self.worker_thread.wait(5000):  # Wait up to 5 seconds
-                    self.log_output.append("⚠️ Force terminating execution...")
+                if not self.worker_thread.wait(2000):  # Wait up to 2 seconds (Requirement 8.4)
+                    self._batched_log.append_text("⚠️ Force terminating execution...")
+                    self._batched_log.flush()
                     self.worker_thread.terminate()
                     self.worker_thread.wait()
             else:
                 self.worker_thread.quit()
                 self.worker_thread.wait()
             
-            self.log_output.append("⏸️ Execution paused by user")
+            self._batched_log.append_text("⏹ Execution cancelled by user")
+            self._batched_log.flush()  # Flush immediately for user feedback
             
-            # Show pause confirmation message
+            # Clean up resources (Requirement 8.5)
+            self._cleanup_after_cancellation()
+            
+            # Show cancellation confirmation message
             partial_results_count = 0
             if self.engine_wrapper and self.engine_wrapper.executor:
                 # Try to get partial results count
@@ -1144,14 +1199,16 @@ class ExecutionControlWidget(QWidget):
             if partial_results_count > 0:
                 QMessageBox.information(
                     self,
-                    "Execution Paused",
-                    f"Execution paused. Saved {partial_results_count} partial results.\n\n"
+                    "Execution Cancelled",
+                    f"Execution cancelled. Saved {partial_results_count} partial results.\n\n"
                     f"Partial results have been saved to the database.\n"
                     f"Click 'Resume' to continue from where you left off."
                 )
-                self.log_output.append(f"✓ Partial results saved: {partial_results_count} identities")
+                self._batched_log.append_text(f"✓ Partial results saved: {partial_results_count} identities")
+                self._batched_log.flush()
             else:
-                self.log_output.append("✓ Partial results have been saved to database")
+                self._batched_log.append_text("✓ Partial results have been saved to database")
+                self._batched_log.flush()
             
             self.status_label.setText("⏸️ Paused - Click Resume to continue")
             
@@ -1215,9 +1272,10 @@ class ExecutionControlWidget(QWidget):
             execution_id = selected_execution['execution_id']
             progress = selected_execution.get('progress_details', {})
             
-            self.log_output.append(f"\n▶️ Resuming execution ID: {execution_id}")
-            self.log_output.append(f"   Progress: {progress.get('percentage_complete', 0):.1f}% complete")
-            self.log_output.append(f"   Existing matches: {selected_execution['total_matches']:,}")
+            self._batched_log.append_text(f"\n▶️ Resuming execution ID: {execution_id}")
+            self._batched_log.append_text(f"   Progress: {progress.get('percentage_complete', 0):.1f}% complete")
+            self._batched_log.append_text(f"   Existing matches: {selected_execution['total_matches']:,}")
+            self._batched_log.flush()  # Flush immediately for user feedback
             
             # Switch back to cancel mode and start execution with resume parameter
             self._switch_to_cancel_mode()
@@ -1322,6 +1380,35 @@ class ExecutionControlWidget(QWidget):
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setToolTip("Pausing execution and saving partial results...")
     
+    def _switch_to_cancelling_mode(self):
+        """Switch button to cancelling mode with animated styling (Requirement 8.3)."""
+        self.cancel_btn.setText("⏹ Cancelling...")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #F59E0B, stop:1 #D97706);
+                color: white;
+                border: 2px solid #B45309;
+                border-radius: 6px;
+                font-size: 10pt;
+                font-weight: bold;
+                padding: 6px 16px;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #FBBF24, stop:1 #F59E0B);
+            }
+            QPushButton:disabled {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #F59E0B, stop:1 #D97706);
+                color: white;
+                border: 2px solid #B45309;
+            }
+        """)
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setToolTip("Cancelling execution and saving partial results...")
+    
     def _switch_to_executing_mode(self):
         """Switch button to executing mode with enhanced styling."""
         self.cancel_btn.setText("⏹ Cancel")
@@ -1357,144 +1444,153 @@ class ExecutionControlWidget(QWidget):
     
     def _update_progress(self, wing_index: int, total_wings: int, status: str):
         """Update progress indicators - simplified"""
-        # Just update status, progress bar stays in indeterminate mode
-        self.status_label.setText(status)
-        # Use the improved _append_to_log method for consistent scrolling
-        self._append_to_log(f"[{wing_index}/{total_wings}] {status}")
+        try:
+            # Validate inputs
+            if not isinstance(wing_index, (int, float)) or not isinstance(total_wings, (int, float)):
+                logger.error(f"Invalid progress values: wing_index={wing_index}, total_wings={total_wings}")
+                return
+            
+            if not isinstance(status, str):
+                logger.error(f"Invalid status type: {type(status)}")
+                status = str(status)  # Try to convert
+            
+            # Just update status, progress bar stays in indeterminate mode
+            self.status_label.setText(status)
+            # Use the improved _append_to_log method for consistent scrolling
+            self._append_to_log(f"[{wing_index}/{total_wings}] {status}")
+        except Exception as e:
+            logger.error(f"Error updating progress: {e}", exc_info=True)
+            # Continue processing - don't crash the UI
     
     def _update_anchor_progress(self, anchor_index: int, total_anchors: int):
         """
         Update progress bar based on anchor processing.
         Shows actual progress with percentage.
         """
-        if total_anchors > 0:
-            # Set to determinate mode with actual progress
-            self.progress_bar.setMaximum(total_anchors)
-            self.progress_bar.setValue(anchor_index)
-            percentage = (anchor_index / total_anchors * 100)
-            self.progress_bar.setFormat(f"{anchor_index:,}/{total_anchors:,} ({percentage:.1f}%)")
-            self.status_label.setText(f"Processing... {anchor_index:,} items processed")
+        try:
+            # Validate inputs
+            if not isinstance(anchor_index, (int, float)) or not isinstance(total_anchors, (int, float)):
+                logger.error(f"Invalid anchor progress values: anchor_index={anchor_index}, total_anchors={total_anchors}")
+                return
             
-            # Reset heartbeat counter since we got a real update
-            self._heartbeat_counter = 0
-            
-            # Force GUI update to prevent lagging
-            try:
-                from PyQt5.QtWidgets import QApplication
-                QApplication.processEvents()
-            except:
-                pass  # Ignore if not in GUI context
-    
-    def _start_heartbeat(self):
-        """Start heartbeat timer to keep progress bar alive during long operations without signals."""
-        if self._heartbeat_timer is None:
-            from PyQt5.QtCore import QTimer
-            self._heartbeat_timer = QTimer(self)
-            self._heartbeat_timer.timeout.connect(self._heartbeat_pulse)
-        
-        self._heartbeat_counter = 0
-        self._is_executing = True
-        self._heartbeat_timer.start(1000)  # Pulse every 1 second
-    
-    def _stop_heartbeat(self):
-        """Stop heartbeat timer."""
-        self._is_executing = False
-        if self._heartbeat_timer:
-            self._heartbeat_timer.stop()
-        self._heartbeat_counter = 0
-    
-    def _heartbeat_pulse(self):
-        """
-        Heartbeat pulse to keep UI responsive when no progress signals are sent.
-        
-        This ensures the progress bar doesn't freeze during long operations
-        where the engine is working but not sending frequent progress updates.
-        """
-        if not self._is_executing:
-            return
-        
-        self._heartbeat_counter += 1
-        
-        # If we haven't received a real progress update in a while, show activity
-        if self._heartbeat_counter > 2:  # After 2 seconds without updates
-            # Keep the progress bar in indeterminate mode or pulse it
-            current_format = self.progress_bar.format()
-            
-            # Add a pulsing indicator to show we're still working
-            dots = "." * ((self._heartbeat_counter % 4))
-            if "Working" in current_format or "Processing" in current_format:
-                # Update the format to show we're alive
-                base_format = current_format.rstrip(".")
-                self.progress_bar.setFormat(f"{base_format}{dots}")
-            
-            # Force GUI update
-            try:
-                from PyQt5.QtWidgets import QApplication
-                QApplication.processEvents()
-            except:
-                pass
+            if total_anchors > 0:
+                # Set to determinate mode with actual progress
+                self.progress_bar.setMaximum(total_anchors)
+                self.progress_bar.setValue(anchor_index)
+                percentage = (anchor_index / total_anchors * 100)
+                self.progress_bar.setFormat(f"{anchor_index:,}/{total_anchors:,} ({percentage:.1f}%)")
+                self.status_label.setText(f"Processing... {anchor_index:,} items processed")
+                
+                # Force GUI update to prevent lagging
+                try:
+                    from PyQt5.QtWidgets import QApplication
+                    QApplication.processEvents()
+                except:
+                    pass  # Ignore if not in GUI context
+        except Exception as e:
+            logger.error(f"Error updating anchor progress: {e}", exc_info=True)
+            # Continue processing - don't crash the UI
     
     def _on_wing_completed(self, summary: dict):
         """Handle individual wing completion - emit signal for parent to create separate tab"""
-        wing_name = summary.get('wing_name', 'Unknown Wing')
-        wing_index = summary.get('wing_index', 0)
-        total_wings = summary.get('total_wings', 1)
-        total_matches = summary.get('total_matches', 0)
-        
-        # Log wing completion
-        self.log_output.append(f"\n✓ Wing {wing_index}/{total_wings} completed: {wing_name}")
-        self.log_output.append(f"  Matches found: {total_matches}")
-        
-        # Emit signal for parent widget to create separate result tab
-        self.wing_completed.emit(summary)
+        try:
+            # Validate summary structure
+            if not isinstance(summary, dict):
+                logger.error(f"Invalid summary type: {type(summary)}")
+                return
+            
+            wing_name = summary.get('wing_name', 'Unknown Wing')
+            wing_index = summary.get('wing_index', 0)
+            total_wings = summary.get('total_wings', 1)
+            total_matches = summary.get('total_matches', 0)
+            
+            # Log wing completion
+            self._batched_log.append_text(f"\n✓ Wing {wing_index}/{total_wings} completed: {wing_name}")
+            self._batched_log.append_text(f"  Matches found: {total_matches}")
+            self._batched_log.flush()  # Flush immediately for user feedback
+            
+            # Emit signal for parent widget to create separate result tab
+            self.wing_completed.emit(summary)
+        except Exception as e:
+            logger.error(f"Error handling wing completion: {e}", exc_info=True)
+            # Continue processing - don't crash the UI
     
     def _on_execution_completed(self, summary: dict):
         """Handle execution completion - all wings finished"""
-        # Stop heartbeat timer
-        self._stop_heartbeat()
-        
-        # Set to determinate mode and show complete
-        self.progress_bar.setMaximum(100)
-        self.progress_bar.setValue(100)
-        self.progress_bar.setFormat("Complete")
-        self.status_label.setText("✓ All wings executed successfully")
-        
-        # Reset button to default state
-        self._switch_to_cancel_mode()
-        
-        # Log summary
-        self.log_output.append("\n" + "=" * 60)
-        self.log_output.append("ALL WINGS EXECUTION COMPLETE")
-        self.log_output.append("=" * 60)
-        self.log_output.append(f"Pipeline: {summary.get('pipeline_name', 'Unknown')}")
-        self.log_output.append(f"Total Wings Executed: {summary.get('total_wings_executed', 0)}")
-        
-        # Show completion message
-        QMessageBox.information(
-            self,
-            "Execution Complete",
-            f"All wings executed successfully!\n\n"
-            f"Total Wings: {summary.get('total_wings_executed', 0)}\n\n"
-            f"Results have been saved to separate tabs."
-        )
-        
-        # Emit signal for parent widget
-        self.execution_completed.emit(summary)
+        try:
+            # Stop processing timer and heartbeat (Task 6)
+            if self._processing_timer.isActive():
+                self._processing_timer.stop()
+            
+            if self._heartbeat:
+                self._heartbeat.stop()
+            
+            # Validate summary structure
+            if not isinstance(summary, dict):
+                logger.error(f"Invalid summary type: {type(summary)}")
+                summary = {}  # Use empty dict as fallback
+            
+            # Set to determinate mode and show complete
+            self.progress_bar.setMaximum(100)
+            self.progress_bar.setValue(100)
+            self.progress_bar.setFormat("Complete")
+            self.status_label.setText("✓ All wings executed successfully")
+            
+            # Reset button to default state
+            self._switch_to_cancel_mode()
+            
+            # Log summary using batched log (Task 5)
+            if self._batched_log:
+                self._batched_log.append_text("\n" + "=" * 60)
+                self._batched_log.append_text("ALL WINGS EXECUTION COMPLETE")
+                self._batched_log.append_text("=" * 60)
+                self._batched_log.append_text(f"Pipeline: {summary.get('pipeline_name', 'Unknown')}")
+                self._batched_log.append_text(f"Total Wings Executed: {summary.get('total_wings_executed', 0)}")
+                self._batched_log.flush()  # Force immediate display
+            
+            # Show completion message
+            QMessageBox.information(
+                self,
+                "Execution Complete",
+                f"All wings executed successfully!\n\n"
+                f"Total Wings: {summary.get('total_wings_executed', 0)}\n\n"
+                f"Results have been saved to separate tabs."
+            )
+            
+            # Emit signal for parent widget
+            self.execution_completed.emit(summary)
+        except Exception as e:
+            logger.error(f"Error handling execution completion: {e}", exc_info=True)
+            # Still try to clean up
+            try:
+                if self._processing_timer.isActive():
+                    self._processing_timer.stop()
+                if self._heartbeat:
+                    self._heartbeat.stop()
+            except:
+                pass
     
     def _on_execution_failed(self, error_message: str):
         """Handle execution failure"""
-        # Stop heartbeat timer
-        self._stop_heartbeat()
+        # Stop processing timer and heartbeat (Task 6)
+        if self._processing_timer.isActive():
+            self._processing_timer.stop()
+        
+        if self._heartbeat:
+            self._heartbeat.stop()
         
         self.status_label.setText("❌ Execution failed")
         
         # Reset button to default state
         self._switch_to_cancel_mode()
         
-        self.log_output.append("\n" + "=" * 60)
-        self.log_output.append("EXECUTION FAILED")
-        self.log_output.append("=" * 60)
-        self.log_output.append(f"Error: {error_message}")
+        # Log error using batched log (Task 5)
+        if self._batched_log:
+            self._batched_log.append_text("\n" + "=" * 60)
+            self._batched_log.append_text("EXECUTION FAILED")
+            self._batched_log.append_text("=" * 60)
+            self._batched_log.append_text(f"Error: {error_message}")
+            self._batched_log.flush()  # Force immediate display
         
         QMessageBox.critical(
             self,
@@ -1504,6 +1600,30 @@ class ExecutionControlWidget(QWidget):
     
     def _cleanup_thread(self):
         """Cleanup worker thread"""
+        # Stop processing timer and heartbeat (Task 5)
+        if self._processing_timer.isActive():
+            self._processing_timer.stop()
+        
+        if self._heartbeat:
+            self._heartbeat.stop()
+        
+        # Stop trimming timer (Task 7)
+        if self._trimming_timer.isActive():
+            self._trimming_timer.stop()
+        
+        # Clear event queue (Task 5)
+        self._event_queue.clear()
+        
+        # Clear progress message buffer (Task 12)
+        if hasattr(self, '_progress_message_buffer'):
+            self._progress_message_buffer.clear()
+        
+        # Flush any remaining batched log messages (Task 7)
+        if self._batched_log:
+            self._batched_log.flush()
+            # Force scroll to bottom to show completion message
+            self._batched_log.force_scroll_to_bottom()
+        
         self.execute_btn.setEnabled(True)
         self.execute_btn.setText("▶️ RUN")
         
@@ -1518,6 +1638,127 @@ class ExecutionControlWidget(QWidget):
         if self.engine_wrapper:
             self.engine_wrapper.deleteLater()
             self.engine_wrapper = None
+    
+    def _cleanup_after_cancellation(self):
+        """
+        Clean up resources after cancellation and re-enable controls (Requirement 8.5).
+        This is called immediately after cancellation to ensure UI is responsive.
+        """
+        # Stop all timers
+        if self._processing_timer.isActive():
+            self._processing_timer.stop()
+        
+        if self._heartbeat:
+            self._heartbeat.stop()
+        
+        if self._trimming_timer.isActive():
+            self._trimming_timer.stop()
+        
+        # Clear event queue and buffers
+        self._event_queue.clear()
+        
+        if hasattr(self, '_progress_message_buffer'):
+            self._progress_message_buffer.clear()
+        
+        # Flush any remaining batched log messages
+        if self._batched_log:
+            self._batched_log.flush()
+        
+        # Re-enable controls (Requirement 8.5)
+        self.execute_btn.setEnabled(True)
+        self.execute_btn.setText("▶️ RUN")
+        
+        # Update status
+        self.status_label.setText("⏹ Execution cancelled")
+        
+        # Switch to resume mode to allow resuming from where we left off
+        self._switch_to_resume_mode()
+    
+    def _queue_progress_event(self, *args):
+        """
+        Queue progress event instead of processing immediately.
+        
+        This method enqueues progress events for batch processing to prevent
+        UI thread blocking during high-frequency progress updates.
+        
+        Args:
+            *args: Variable arguments from progress signal
+        """
+        try:
+            event = {'args': args, 'timestamp': time.time()}
+            self._event_queue.enqueue(event)
+        except Exception as e:
+            logger.error(f"Error queuing progress event: {e}", exc_info=True)
+            # Continue processing - don't let one bad event break everything
+    
+    def _process_event_queue(self):
+        """
+        Process batched events from queue.
+        
+        This method is called by the processing timer to handle queued progress
+        events in batches, applying throttling to limit UI update frequency.
+        """
+        try:
+            queue_size = self._event_queue.size()
+            
+            # Log queue size for debugging (only when queue has events)
+            if queue_size > 0:
+                logger.debug(f"Processing event queue: size={queue_size}, dropped={self._event_queue.get_dropped_count()}")
+            
+            # Adaptive throttling based on queue size
+            interval = self._progress_throttler.get_adaptive_interval(queue_size)
+            
+            if not self._progress_throttler.should_update():
+                return
+            
+            # Process up to 30 events per iteration (reduced from 50 to minimize UI blocking even further)
+            events = self._event_queue.dequeue_batch(max_count=30)
+            
+            if events:
+                # Process only the most recent event for display
+                latest_event = events[-1]
+                
+                # Validate event structure
+                if not isinstance(latest_event, dict):
+                    logger.error(f"Invalid event type: {type(latest_event)}")
+                    return
+                
+                if 'args' not in latest_event:
+                    logger.error(f"Missing 'args' in event: {latest_event}")
+                    return
+                
+                args = latest_event.get('args', ())
+                
+                # Call the original progress update handler with the latest event
+                try:
+                    if len(args) == 3:
+                        # This is a progress_updated signal (wing_index, total_wings, status)
+                        self._update_progress(*args)
+                    elif len(args) == 2:
+                        # This is an anchor_progress_updated signal (anchor_index, total_anchors)
+                        self._update_anchor_progress(*args)
+                    else:
+                        logger.warning(f"Unexpected event args length: {len(args)}")
+                except Exception as e:
+                    logger.error(f"Error processing progress event: {e}", exc_info=True)
+                    # Continue processing - don't let one bad event break everything
+        except Exception as e:
+            logger.error(f"Error in event queue processing: {e}", exc_info=True)
+            # Continue processing - don't crash the UI thread
+    
+    def _periodic_trim_check(self):
+        """
+        Periodically check and trim log output to prevent memory issues.
+        
+        This method is called by the trimming timer to ensure the log widget
+        doesn't grow unbounded during long-running executions.
+        """
+        try:
+            if self._batched_log:
+                self._batched_log.trim_to_size(max_lines=10000)
+        except Exception as e:
+            logger.error(f"Error during periodic trim check: {e}", exc_info=True)
+            # Continue processing - don't crash the UI
     
     def _handle_progress_event(self, event):
         """
@@ -1535,9 +1776,6 @@ class ExecutionControlWidget(QWidget):
                 if time_diff < self._min_progress_interval:
                     return  # Skip this update
             self._last_progress_time = current_time
-            
-            # Reset heartbeat counter since we got a real update
-            self._heartbeat_counter = 0
             
             # Handle new ProgressEvent format
             if hasattr(event, 'event_type') and hasattr(event, 'overall_progress'):
@@ -1638,6 +1876,10 @@ class ExecutionControlWidget(QWidget):
         """
         # Skip empty or whitespace-only messages to prevent empty lines
         if message and message.strip():
+            # Store message in memory-bounded buffer (Task 12)
+            if hasattr(self, '_progress_message_buffer'):
+                self._progress_message_buffer.add_message(message)
+            
             # Use cursor-based insertion for better control over scrolling
             cursor = self.log_output.textCursor()
             cursor.movePosition(cursor.End)
@@ -1745,10 +1987,12 @@ class ExecutionControlWidget(QWidget):
                 selected_executions = dialog.get_selected_executions()
                 
                 if selected_executions:
-                    self.log_output.append(f"\n📂 Loading {len(selected_executions)} execution(s)...")
+                    self._batched_log.append_text(f"\n📂 Loading {len(selected_executions)} execution(s)...")
                     
                     for db_path, execution_id, engine_type in selected_executions:
-                        self.log_output.append(f"   • Execution {execution_id} ({engine_type})")
+                        self._batched_log.append_text(f"   • Execution {execution_id} ({engine_type})")
+                    
+                    self._batched_log.flush()  # Flush immediately for user feedback
                     
                     # Emit signal to load results in main window
                     self.load_results_requested.emit({
@@ -1756,7 +2000,8 @@ class ExecutionControlWidget(QWidget):
                         'output_dir': output_dir
                     })
                 else:
-                    self.log_output.append("\n⚠️ No executions selected")
+                    self._batched_log.append_text("\n⚠️ No executions selected")
+                    self._batched_log.flush()
             
         except ImportError as e:
             QMessageBox.critical(

@@ -709,9 +709,9 @@ class CorrelationProgressReporter:
         elapsed = time.time() - self.start_time
         rate = self.processed_items / elapsed if elapsed > 0 else 0
         
-        # Print to console for immediate feedback
-        print(f"[{self.phase_name}] Progress: {percentage:.1f}% ({self.processed_items:,}/{self.total_items:,}) - {rate:.1f} items/sec")
-        
+        # Use logger.info instead of print() to reduce GUI log widget updates
+        # print() causes immediate stdout redirection which floods the event queue
+        # logger.info is more efficient and can be throttled by the logging system
         logger.info(f"{self.phase_name} Progress: {percentage:.1f}% ({self.processed_items}/{self.total_items}) - {rate:.1f} items/sec")
         
         # Update GUI progress bar if available

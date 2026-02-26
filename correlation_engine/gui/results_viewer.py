@@ -3584,10 +3584,13 @@ class DynamicResultsTabWidget(QWidget):
                     for feather_id, stats in feather_statistics.items():
                         if feather_id.startswith('_'):
                             continue
+                        
                         # Get extracted evidence count (identities_extracted)
                         extracted = stats.get('identities_extracted', 0)
+                        has_extraction_data = extracted > 0  # Track if we have real extraction data
+                        
+                        # Fallback for display purposes only
                         if extracted == 0:
-                            # Fallback to identities_found or matches_created
                             extracted = stats.get('identities_found', 0)
                         if extracted == 0:
                             extracted = stats.get('matches_created', 0)
@@ -3600,8 +3603,14 @@ class DynamicResultsTabWidget(QWidget):
                         records = stats.get('records_processed', 0)
                         # Calculate extraction rate (PRIMARY - what percentage of records had evidence extracted)
                         extraction_percentage = (extracted / records * 100) if records > 0 else 0
-                        # Calculate correlation rate (SECONDARY - what percentage of extracted became correlated)
-                        correlation_percentage = (correlated / extracted * 100) if extracted > 0 else 0
+                        
+                        # Calculate correlation rate (SECONDARY - only if we have real extraction data)
+                        # This prevents showing 100% when extracted and correlated are the same fallback value
+                        if has_extraction_data and extracted > 0:
+                            correlation_percentage = (correlated / extracted * 100)
+                        else:
+                            correlation_percentage = 0  # N/A when using fallback data
+                        
                         extraction_data.append((feather_id, extracted, records, correlated, extraction_percentage, correlation_percentage))
                     
                     # Sort by extraction percentage descending (primary metric)

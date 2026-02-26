@@ -48,7 +48,7 @@ class SettingsDialog(QDialog):
         self.current_config = IntegratedConfiguration(**self.original_config.__dict__)
         
         self.setWindowTitle("Crow-Eye Settings")
-        self.setModal(True)
+        self.setModal(False)  # Non-modal to allow interaction with main window
         self.resize(800, 600)
         
         self._setup_ui()
@@ -1053,6 +1053,19 @@ class SettingsDialog(QDialog):
     def _apply_settings(self):
         """Apply current settings without closing dialog and trigger live reload"""
         try:
+            # Check if correlation is running
+            if self._is_correlation_running():
+                reply = QMessageBox.warning(
+                    self,
+                    "Correlation Running",
+                    "Correlation is currently executing. Changes will apply to the next execution.\n\n"
+                    "Do you want to continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
+            
             # Get current settings from UI
             new_config = self._get_current_settings()
             
@@ -1115,6 +1128,18 @@ class SettingsDialog(QDialog):
             )
             import logging
             logging.error(f"Failed to apply settings: {error_details}")
+    
+    def _is_correlation_running(self) -> bool:
+        """Check if correlation is currently executing.
+        
+        Returns:
+            True if correlation is running, False otherwise
+        """
+        # Check parent widget's execution state
+        if self.parent() and hasattr(self.parent(), 'worker_thread'):
+            return (self.parent().worker_thread is not None and 
+                    self.parent().worker_thread.isRunning())
+        return False
     
     def _ok_clicked(self):
         """Apply settings and close dialog"""

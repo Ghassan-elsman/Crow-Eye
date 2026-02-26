@@ -1067,3 +1067,20 @@ class PipelineExecutor:
     def get_warnings(self) -> List[str]:
         """Get execution warnings"""
         return self.warnings
+    
+    def request_cancellation(self, reason: str = "User requested cancellation"):
+        """
+        Request cancellation of the current execution (Requirement 8.2).
+        This sets the cancellation flag that is checked regularly during execution.
+        
+        Args:
+            reason: Reason for cancellation (for logging)
+        """
+        print(f"\n⚠️ Cancellation requested: {reason}")
+        self._cancelled = True
+        
+        # Also propagate to the engine if it supports cancellation
+        if hasattr(self.engine, '_cancelled'):
+            self.engine._cancelled = True
+        if hasattr(self.engine, 'request_cancellation'):
+            self.engine.request_cancellation(reason)

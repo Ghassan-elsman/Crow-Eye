@@ -246,9 +246,15 @@ class IdentityLevelSemanticProcessor:
                 logger.debug(f"[Identity-Level Semantic Processor] Processing batch {batch_start//batch_size + 1} "
                            f"({batch_start+1}-{batch_end} of {total_identities})")
             
-            # Process each identity in the batch
+            # Process each identity in the batch WITHOUT updating progress per identity
+            # This reduces GUI event queue flooding during semantic mapping
             for identity_record in batch:
-                self._process_single_identity(identity_record, progress_reporter)
+                self._process_single_identity(identity_record, progress_reporter=None)
+            
+            # Update progress once per batch instead of per identity
+            # This significantly reduces the number of progress updates sent to the GUI
+            if progress_reporter:
+                progress_reporter.update(items_processed=len(batch))
     
     def _process_identities_sequentially(self, pending_identities: List[IdentityRecord],
                                         progress_reporter) -> None:
@@ -311,7 +317,9 @@ class IdentityLevelSemanticProcessor:
             
             # Task 8.4: Update progress (will auto-report at 10%, 20%, 30%, etc.)
             # Requirements: 4.2, 4.3, 4.4
-            progress_reporter.update(items_processed=1)
+            # Only update if progress_reporter is provided (batch processing passes None)
+            if progress_reporter:
+                progress_reporter.update(items_processed=1)
             
         except Exception as e:
             # Handle errors gracefully - continue processing other identities
@@ -590,9 +598,15 @@ class IdentityLevelSemanticProcessor:
                 logger.debug(f"[Identity-Level Semantic Processor] Processing batch {batch_start//batch_size + 1} "
                            f"({batch_start+1}-{batch_end} of {total_identities})")
             
-            # Process each identity in the batch
+            # Process each identity in the batch WITHOUT updating progress per identity
+            # This reduces GUI event queue flooding during semantic mapping
             for identity_record in batch:
-                self._process_single_identity(identity_record, progress_reporter)
+                self._process_single_identity(identity_record, progress_reporter=None)
+            
+            # Update progress once per batch instead of per identity
+            # This significantly reduces the number of progress updates sent to the GUI
+            if progress_reporter:
+                progress_reporter.update(items_processed=len(batch))
     
     def _process_identities_sequentially(self, pending_identities: List[IdentityRecord],
                                         progress_reporter) -> None:
@@ -655,7 +669,9 @@ class IdentityLevelSemanticProcessor:
             
             # Task 8.4: Update progress (will auto-report at 10%, 20%, 30%, etc.)
             # Requirements: 4.2, 4.3, 4.4
-            progress_reporter.update(items_processed=1)
+            # Only update if progress_reporter is provided (batch processing passes None)
+            if progress_reporter:
+                progress_reporter.update(items_processed=1)
             
         except Exception as e:
             # Handle errors gracefully - continue processing other identities
@@ -730,9 +746,15 @@ class IdentityLevelSemanticProcessor:
                 logger.debug(f"[Identity-Level Semantic Processor] Processing batch {batch_start//batch_size + 1} "
                            f"({batch_start+1}-{batch_end} of {total_identities})")
             
-            # Process each identity in the batch
+            # Process each identity in the batch WITHOUT updating progress per identity
+            # This reduces GUI event queue flooding during semantic mapping
             for identity_record in batch:
-                self._process_single_identity(identity_record, progress_reporter)
+                self._process_single_identity(identity_record, progress_reporter=None)
+            
+            # Update progress once per batch instead of per identity
+            # This significantly reduces the number of progress updates sent to the GUI
+            if progress_reporter:
+                progress_reporter.update(items_processed=len(batch))
     
     def _process_identities_sequentially(self, pending_identities: List[IdentityRecord],
                                         progress_reporter) -> None:
@@ -795,7 +817,9 @@ class IdentityLevelSemanticProcessor:
             
             # Task 8.4: Update progress (will auto-report at 10%, 20%, 30%, etc.)
             # Requirements: 4.2, 4.3, 4.4
-            progress_reporter.update(items_processed=1)
+            # Only update if progress_reporter is provided (batch processing passes None)
+            if progress_reporter:
+                progress_reporter.update(items_processed=1)
             
         except Exception as e:
             # Handle errors gracefully - continue processing other identities

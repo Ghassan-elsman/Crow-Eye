@@ -1609,12 +1609,14 @@ class MainWindow(QMainWindow):
                     if feather_id not in aggregate_stats['feather_statistics']:
                         aggregate_stats['feather_statistics'][feather_id] = {
                             'identities_found': 0,
+                            'identities_extracted': 0,
                             'records_processed': 0,
                             'matches_created': 0
                         }
                     
                     if isinstance(metadata, dict):
                         aggregate_stats['feather_statistics'][feather_id]['identities_found'] += metadata.get('identities_found', metadata.get('identities_final', 0))
+                        aggregate_stats['feather_statistics'][feather_id]['identities_extracted'] += metadata.get('identities_extracted', metadata.get('identities_found', 0))
                         aggregate_stats['feather_statistics'][feather_id]['records_processed'] += metadata.get('records_processed', 0)
                         aggregate_stats['feather_statistics'][feather_id]['matches_created'] += metadata.get('matches_created', 0)
             

@@ -18,11 +18,61 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QMessageBox, QTextEdit, QTabWidget, QFrame, QProgressDialog, QApplication
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QFont, QBrush
 from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+
+def _search_semantic_data(semantic_data: dict, search_term: str) -> bool:
+    """
+    Search for a term in semantic data structures.
+    
+    Handles all three semantic data structures:
+    1. semantic_mappings array (current structure)
+    2. Direct semantic_value field (legacy structure)
+    3. String values (legacy structure)
+    
+    Args:
+        semantic_data: Dictionary containing semantic data fields
+        search_term: Search term (already lowercased)
+    
+    Returns:
+        True if search term found in any semantic value or rule name, False otherwise
+    """
+    if not semantic_data or not isinstance(semantic_data, dict):
+        return False
+    
+    for key, value in semantic_data.items():
+        # Skip internal keys
+        if key.startswith('_'):
+            continue
+        
+        # Check for semantic_mappings array (current structure)
+        if isinstance(value, dict) and 'semantic_mappings' in value:
+            mappings = value['semantic_mappings']
+            if isinstance(mappings, list) and len(mappings) > 0:
+                first_mapping = mappings[0]
+                if isinstance(first_mapping, dict) and 'semantic_value' in first_mapping:
+                    sem_val = str(first_mapping['semantic_value']).lower()
+                    rule_name = first_mapping.get('rule_name', key).lower()
+                    if search_term in sem_val or search_term in rule_name:
+                        return True
+        
+        # Check for direct semantic_value field (legacy structure)
+        elif isinstance(value, dict) and 'semantic_value' in value:
+            sem_val = str(value['semantic_value']).lower()
+            rule_name = value.get('rule_name', key).lower()
+            if search_term in sem_val or search_term in rule_name:
+                return True
+        
+        # Check for string value (legacy structure)
+        elif isinstance(value, str):
+            if search_term in value.lower() or search_term in key.lower():
+                return True
+    
+    return False
 
 
 class IdentityResultsView(QWidget):
@@ -44,6 +94,13 @@ class IdentityResultsView(QWidget):
         self.current_page = 0
         self.scoring_enabled = False
         self.semantic_enabled = False
+        
+        # Debounce timer for search filter
+        self.search_timer = QTimer()
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(300)  # 300ms delay
+        self.search_timer.timeout.connect(self._apply_filters)
+        
         self.setup_ui()
     
     def setup_ui(self):
@@ -122,7 +179,7 @@ class IdentityResultsView(QWidget):
                 border: 1px solid #00FFFF;
             }
         """)
-        self.identity_filter.textChanged.connect(self._apply_filters)
+        self.identity_filter.textChanged.connect(self._on_search_text_changed)
         top_layout.addWidget(self.identity_filter)
         
         feather_lbl = QLabel("Feather:")
@@ -1665,6 +1722,11 @@ class IdentityResultsView(QWidget):
                 count_item.setForeground(QBrush(QColor("#F44336")))
             self.scoring_table.setItem(row, 1, count_item)
     
+    def _on_search_text_changed(self):
+        """Handle search text changes with debouncing."""
+        self.search_timer.stop()
+        self.search_timer.start()
+    
     def _apply_filters(self):
         """Apply filters with pagination, including semantic value search."""
         text = self.identity_filter.text().lower()
@@ -1689,26 +1751,12 @@ class IdentityResultsView(QWidget):
                 else:
                     anchors_to_check = i.get('anchors', [])
                 
-                # Check if search text matches any semantic value
+                # Check if search text matches any semantic value using helper
                 for anchor in anchors_to_check:
                     semantic_data = anchor.get('semantic_data')
-                    if semantic_data and isinstance(semantic_data, dict):
-                        for key, value in semantic_data.items():
-                            if key.startswith('_'):
-                                continue
-                            # Check semantic value
-                            if isinstance(value, dict) and 'semantic_value' in value:
-                                sem_val = str(value['semantic_value']).lower()
-                                rule_name = value.get('rule_name', key).lower()
-                                if text in sem_val or text in rule_name:
-                                    semantic_match = True
-                                    break
-                            elif isinstance(value, str):
-                                if text in value.lower() or text in key.lower():
-                                    semantic_match = True
-                                    break
-                        if semantic_match:
-                            break
+                    if _search_semantic_data(semantic_data, text):
+                        semantic_match = True
+                        break
             
             # Skip if neither name nor semantic value matches
             if text and not name_match and not semantic_match:
@@ -1750,6 +1798,11 @@ class IdentityResultsView(QWidget):
         self.filtered_identities = filtered
         self.current_page = 0
         self._populate_current_page()
+    def _on_search_text_changed(self):
+        """Handle search text changes with debouncing."""
+        self.search_timer.stop()
+        self.search_timer.start()
+
     
     def _reset_filters(self):
         """Reset filters."""
@@ -2394,13 +2447,14 @@ class IdentityDetailDialog(QDialog):
         all_keys = sorted([k for k in all_keys if k not in excluded_keys])
         
         # Create table with VERTICAL layout (fields as rows)
-        # Columns: Field Name | Record 1 | Record 2 | ... | Record N
+        # Columns: Record 1 | Record 2 | ... | Record N
+        # Rows: Field names (shown in vertical header)
         table = QTableWidget()
         table.setRowCount(len(all_keys))  # Each field is a row
-        table.setColumnCount(len(records) + 1)  # Field name + one column per record
+        table.setColumnCount(len(records))  # One column per record
         
         # Set headers
-        headers = ["Field"] + [f"Record {i+1}" if len(records) > 1 else "Value" for i in range(len(records))]
+        headers = [f"Record {i+1}" if len(records) > 1 else "Value" for i in range(len(records))]
         table.setHorizontalHeaderLabels(headers)
         
         # Set vertical headers (field names)
@@ -2410,12 +2464,7 @@ class IdentityDetailDialog(QDialog):
         
         # Populate table
         for row, key in enumerate(all_keys):
-            # Column 0: Field name
-            field_item = QTableWidgetItem(key)
-            field_item.setFont(QFont("Arial", 9, QFont.Bold))
-            table.setItem(row, 0, field_item)
-            
-            # Columns 1+: Values from each record
+            # Populate values from each record
             for col, record in enumerate(records):
                 if isinstance(record, dict):
                     value = record.get(key, '')
@@ -2428,11 +2477,10 @@ class IdentityDetailDialog(QDialog):
                     
                     item = QTableWidgetItem(display_val)
                     item.setToolTip(str(value))  # Full value in tooltip
-                    table.setItem(row, col + 1, item)
+                    table.setItem(row, col, item)
         
         # Enable column resizing
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Field name column
-        for i in range(1, len(records) + 1):
+        for i in range(len(records)):
             table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch)  # Value columns
         
         # Add row selection highlighting
