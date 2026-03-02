@@ -244,6 +244,10 @@ class TerminalProgressLogger(ProgressListener):
         # Add matches found
         progress_msg += f", {progress.matches_found} matches"
         
+        # Add empty window skip statistics if available (Requirements 3.3)
+        if progress.empty_windows_skipped > 0:
+            progress_msg += f", {progress.empty_windows_skipped} skipped"
+        
         # Add time estimation if available
         if progress.time_remaining_seconds and self.config.show_timing_info:
             remaining = timedelta(seconds=int(progress.time_remaining_seconds))
@@ -325,6 +329,14 @@ class TerminalProgressLogger(ProgressListener):
         self._log_with_timestamp(f"  Total {item_type} processed: {progress.windows_processed}")
         self._log_with_timestamp(f"  Total matches found: {progress.matches_found}")
         self._log_with_timestamp(f"  Total execution time: {total_time}")
+        
+        # Empty window statistics (Requirements 3.3)
+        if progress.empty_windows_skipped > 0:
+            self._log_with_timestamp(f"Empty Window Optimization:")
+            self._log_with_timestamp(f"  Windows with data: {progress.windows_with_data}")
+            self._log_with_timestamp(f"  Empty windows skipped: {progress.empty_windows_skipped}")
+            self._log_with_timestamp(f"  Skip rate: {progress.skip_rate_percentage:.1f}%")
+            self._log_with_timestamp(f"  Time saved by skipping: {progress.time_saved_by_skipping_seconds:.2f}s")
         
         # Processing performance statistics
         if self.processing_times:

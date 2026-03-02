@@ -304,55 +304,101 @@ class CorrelationEngineStyles:
     
     PROGRESS_DIALOG_STYLE = f"""
         QProgressDialog {{
-            background-color: {BG_PRIMARY};
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #1E3A5F, stop:0.5 {BG_PRIMARY}, stop:1 #0F1419);
             border: 2px solid {TEXT_ACCENT};
-            border-radius: 8px;
+            border-radius: 12px;
+            padding: 16px;
         }}
+        
         QProgressDialog QLabel {{
-            color: {TEXT_PRIMARY};
-            font-size: 10pt;
-            padding: 8px;
+            color: #FFFFFF;
+            font-size: 11pt;
+            font-weight: 600;
+            font-family: 'Segoe UI', 'Roboto', sans-serif;
+            padding: 12px 16px;
+            background: transparent;
+            letter-spacing: 0.5px;
         }}
+        
         QProgressBar {{
             background-color: {BG_PANELS};
-            border: 1px solid {BORDER_SUBTLE};
-            border-radius: 4px;
+            border: 2px solid {BORDER_ACCENT};
+            border-radius: 8px;
             text-align: center;
-            color: {TEXT_PRIMARY};
-            font-size: 9pt;
-            font-weight: bold;
-            min-height: 20px;
+            color: #FFFFFF;
+            font-size: 11pt;
+            font-weight: 700;
+            font-family: 'Segoe UI', 'Roboto', sans-serif;
+            min-height: 28px;
+            max-height: 28px;
+            margin: 8px 16px;
         }}
+        
         QProgressBar::chunk {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #00FFFF, stop:0.5 #10B981, stop:1 #00FFFF);
-            border-radius: 3px;
+                stop:0 #00D9FF, stop:0.15 #00FFFF, stop:0.3 #10B981, 
+                stop:0.5 #00FFFF, stop:0.7 #10B981, stop:0.85 #00FFFF, stop:1 #00D9FF);
+            border-radius: 6px;
+            margin: 1px;
         }}
+        
         QPushButton {{
-            background-color: {BG_PANELS};
-            color: {TEXT_PRIMARY};
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 {BG_HOVER}, stop:1 {BG_PANELS});
+            color: #FFFFFF;
             border: 1px solid {BORDER_ACCENT};
-            border-radius: 4px;
-            padding: 6px 16px;
-            font-size: 9pt;
-            min-width: 70px;
+            border-radius: 6px;
+            padding: 8px 20px;
+            font-size: 10pt;
+            font-weight: 600;
+            font-family: 'Segoe UI', 'Roboto', sans-serif;
+            min-width: 80px;
+            margin: 8px;
         }}
+        
         QPushButton:hover {{
-            background-color: {BG_HOVER};
-            border-color: {TEXT_ACCENT};
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #2A4A6F, stop:1 {BG_HOVER});
+            border: 2px solid {TEXT_ACCENT};
             color: {TEXT_ACCENT};
         }}
+        
         QPushButton:pressed {{
-            background-color: {BG_PRIMARY};
+            background: {BG_PRIMARY};
+            border: 2px solid #00B8D4;
+            color: #00B8D4;
+        }}
+        
+        QPushButton:focus {{
+            outline: none;
+            border: 2px solid {TEXT_ACCENT};
         }}
     """
     
     @staticmethod
     def apply_progress_dialog_style(dialog):
-        """Apply Crow Eye styling to a QProgressDialog."""
+        """
+        Apply enhanced Crow Eye styling to a QProgressDialog.
+        
+        Features:
+        - Modern gradient background
+        - Enhanced progress bar with animated gradient
+        - Improved typography and spacing
+        - Better button styling with hover effects
+        """
         dialog.setStyleSheet(CorrelationEngineStyles.PROGRESS_DIALOG_STYLE)
-        dialog.setMinimumWidth(350)
-        dialog.setMinimumHeight(120)
+        dialog.setMinimumWidth(450)
+        dialog.setMinimumHeight(150)
+        
+        # Set window flags for better appearance
+        from PyQt5.QtCore import Qt
+        dialog.setWindowFlags(
+            Qt.Dialog | 
+            Qt.CustomizeWindowHint | 
+            Qt.WindowTitleHint |
+            Qt.WindowCloseButtonHint
+        )
     
     TABLE_STYLE = f"""
         QTableWidget {{

@@ -368,7 +368,7 @@ class Wing:
         if self.correlation_rules.time_window_minutes <= 0:
             errors.append("Time window must be greater than 0")
         
-        if self.correlation_rules.minimum_matches < 2:
-            errors.append("Minimum matches must be at least 2")
+        if self.correlation_rules.minimum_matches < 1:
+            errors.append("Minimum matches must be at least 1")
         
         return (len(errors) == 0, errors)

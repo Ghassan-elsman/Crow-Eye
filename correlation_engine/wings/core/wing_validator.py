@@ -92,8 +92,8 @@ class WingValidator:
             errors.append("Time window cannot exceed 1440 minutes (24 hours)")
         
         # Validate minimum matches
-        if rules.minimum_matches < 2:
-            errors.append("Minimum matches must be at least 2")
+        if rules.minimum_matches < 1:
+            errors.append("Minimum matches must be at least 1")
         
         if rules.minimum_matches > len(wing.feathers):
             errors.append(f"Minimum matches ({rules.minimum_matches}) cannot exceed number of feathers ({len(wing.feathers)})")

@@ -379,9 +379,9 @@ class ExecutionControlWidget(QWidget):
         self._init_ui()
         
         # Initialize performance components that depend on UI widgets
-        self._progress_throttler = ProgressThrottler(min_interval_ms=150)  # Increased from 100ms to 150ms for less frequent updates
-        self._batched_log = BatchedTextWidget(self.log_output, batch_window_ms=300)  # Increased from 200ms to 300ms for even less frequent updates
-        self._heartbeat = OptimizedHeartbeat(self.progress_bar, interval_ms=500)
+        self._progress_throttler = ProgressThrottler(min_interval_ms=50)  # Reduced to 50ms for smoother updates
+        self._batched_log = BatchedTextWidget(self.log_output, batch_window_ms=300)  # Keep log batching at 300ms
+        self._heartbeat = OptimizedHeartbeat(self.progress_bar, interval_ms=100)  # Reduced to 100ms for more frequent visual updates
         
         # Setup output redirection after UI is initialized
         self._setup_output_redirection()
@@ -656,14 +656,37 @@ class ExecutionControlWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)  # No margins for maximum space
         layout.setSpacing(4)
         
-        # Progress bar
+        # Progress bar with enhanced styling
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)  # Start in determinate mode (not animated)
         self.progress_bar.setValue(0)  # Empty bar
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("Ready")
-        self.progress_bar.setMaximumHeight(20)  # Compact progress bar
+        self.progress_bar.setMinimumHeight(24)  # Slightly taller for better visibility
+        self.progress_bar.setMaximumHeight(24)
+        
+        # Apply enhanced progress bar styling
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #1E293B;
+                border: 2px solid #475569;
+                border-radius: 6px;
+                text-align: center;
+                color: #FFFFFF;
+                font-size: 10pt;
+                font-weight: 600;
+                font-family: 'Segoe UI', 'Roboto', sans-serif;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00D9FF, stop:0.15 #00FFFF, stop:0.3 #10B981, 
+                    stop:0.5 #00FFFF, stop:0.7 #10B981, stop:0.85 #00FFFF, stop:1 #00D9FF);
+                border-radius: 4px;
+                margin: 1px;
+            }
+        """)
+        
         layout.addWidget(self.progress_bar)
         
         # Status label

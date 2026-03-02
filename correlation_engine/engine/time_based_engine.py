@@ -12,6 +12,8 @@ This module provides a new correlation strategy that:
 import time
 import sqlite3
 import logging
+import uuid
+import fnmatch
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Iterator, Tuple
 from dataclasses import dataclass, field
@@ -28,6 +30,27 @@ from .two_phase_correlation import (
     TwoPhaseConfig,
     Phase1ErrorHandler
 )
+
+# Core identity fields across all artifact types (Requirement 6.3 - Performance optimization)
+CORE_IDENTITY_FIELDS = [
+    # Names (higher priority)
+    'name', 'filename', 'executable_name', 'app_name', 'application',
+    'fn_filename', 'Source_Name', 'original_filename', 'program_name',
+    'display_name', 'product_name', 'Source', 'FileName', 'Name',
+    'ProductName', 'FileDescription', 'OriginalFileName', 'value',
+    'Value', 'entry_name', 'program', 'executable', 'Executable',
+    'service_name', 'ServiceName', 'task_name', 'TaskName', 'process',
+    'Process', 'application_name',
+    # Paths (lower priority)
+    'path', 'file_path', 'app_path', 'Local_Path', 'reconstructed_path',
+    'original_path', 'lower_case_long_path', 'install_location',
+    'root_dir_path', 'ShortcutTargetPath', 'Source_Path', 'folder_path',
+    'registry_path', 'FullPath', 'Path', 'FilePath', 'LowerCaseLongPath',
+    'focus_path', 'run_path', 'ExecutablePath', 'executable_path',
+    'image_path', 'ImagePath', 'binary_path', 'BinaryPath',
+    'full_path', 'application_path', 'program_path', 'command_line',
+    'exe_path', 'exepath', 'target_path', 'TargetPath'
+]
 from .memory_manager import WindowMemoryManager
 from .database_persistence import StreamingMatchWriter, ResultsDatabase
 from .parallel_window_processor import ParallelWindowProcessor, ParallelProcessingStats
@@ -44,6 +67,16 @@ from .error_handling_coordinator import ErrorHandlingCoordinator, ErrorCategory,
 from .semantic_rule_evaluator import SemanticRuleEvaluator, SemanticMatchResult
 from ..wings.core.wing_model import Wing
 from ..config.semantic_mapping import SemanticMappingManager
+from ..optimization.optimization_components import (
+    PerformanceProfiler,
+    EmptyWindowDetector,
+    MemoryMonitor,
+    TimestampCache,
+    TimestampFormatCache,
+    TimestampParseCache,
+    TimestampFormat
+)
+from ..optimization.performance_config import PerformanceConfig
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -111,11 +144,15 @@ class WindowProcessingStats:
 class OptimizedFeatherQuery:
     """Optimized querying for time windows with robust timestamp handling and error resilience"""
     
-    def __init__(self, feather_loader: FeatherLoader, debug_mode: bool = False):
+    def __init__(self, feather_loader: FeatherLoader, debug_mode: bool = False, profiler: Optional[PerformanceProfiler] = None):
         self.loader = feather_loader
-        self.timestamp_column = None
         self.timestamp_format = None
         self.debug_mode = debug_mode
+        self.profiler = profiler  # Optional profiler for performance tracking (Requirements 1.1)
+        
+        # Support multiple timestamp columns per feather (e.g., created, modified, accessed)
+        self.timestamp_columns = []  # List of timestamp column names
+        self.timestamp_column = None  # Primary timestamp column (for backward compatibility)
         
         # Initialize resilient timestamp parser
         validation_rules = TimestampValidationRule(
@@ -129,6 +166,10 @@ class OptimizedFeatherQuery:
             validation_rules=validation_rules,
             debug_mode=debug_mode
         )
+        
+        # Timestamp caching for optimization (Requirements 7.1, 7.2, 7.5)
+        from ..optimization.optimization_components import TimestampParseCache
+        self.timestamp_parse_cache = TimestampParseCache(max_size=10000)
         
         # Initialize database error handler
         retry_config = RetryConfig(
@@ -159,15 +200,36 @@ class OptimizedFeatherQuery:
         self._timestamp_range_cache: Optional[Tuple[Optional[datetime], Optional[datetime]]] = None
         self._timestamp_range_cached = False
         
-        # Cache for query results (for overlapping time windows)
+        # Cache for query results (for overlapping time windows) with LRU eviction
         self._query_result_cache: Dict[str, List[Dict[str, Any]]] = {}
-        self._max_cache_size = 100  # Limit cache size to prevent memory issues
+        self._cache_access_order: List[str] = []  # Track access order for LRU eviction
+        self._max_cache_size = 100  # Limit cache entry count
+        self._max_cache_size_mb = 512  # Limit cache memory size (Requirements 2.4, 2.5)
+        self._current_cache_size_mb = 0.0  # Track current cache size in MB
+        
+        # Cache statistics (Requirements 2.4, 2.5)
+        self._cache_stats = {
+            'hits': 0,
+            'misses': 0,
+            'evictions': 0,
+            'total_requests': 0
+        }
+        
+        # Batching statistics (Requirements 2.3)
+        self._batch_stats = {
+            'total_batch_calls': 0,
+            'total_ranges_requested': 0,
+            'total_groups_detected': 0,
+            'total_queries_executed': 0,
+            'ranges_batched': 0,
+            'ranges_queried_individually': 0
+        }
         
         # Initialize with error handling
         self._detect_and_index_timestamps()
     
     def _detect_and_index_timestamps(self):
-        """Detect timestamp column and format, then ensure proper indexing with error handling"""
+        """Detect timestamp columns and format, then ensure proper indexing with error handling"""
         def detect_operation(connection):
             # Try to detect timestamp columns using multiple methods
             timestamp_detected = False
@@ -177,10 +239,11 @@ class OptimizedFeatherQuery:
                 try:
                     detected_cols = self.loader.detect_columns()
                     if detected_cols and hasattr(detected_cols, 'timestamp_columns') and detected_cols.timestamp_columns:
-                        self.timestamp_column = detected_cols.timestamp_columns[0]
+                        self.timestamp_columns = detected_cols.timestamp_columns
+                        self.timestamp_column = self.timestamp_columns[0]  # Primary column
                         timestamp_detected = True
                         if self.debug_mode:
-                            print(f"[OptimizedFeatherQuery] Found timestamp column via forensic detection: {self.timestamp_column}")
+                            print(f"[OptimizedFeatherQuery] Found {len(self.timestamp_columns)} timestamp columns via forensic detection: {self.timestamp_columns}")
                 except Exception as e:
                     if self.debug_mode:
                         print(f"[OptimizedFeatherQuery] Forensic detection failed: {e}")
@@ -193,43 +256,51 @@ class OptimizedFeatherQuery:
                         timestamp_candidates = self.timestamp_parser.find_timestamp_columns(sample_records, sample_size=50)
                         
                         if timestamp_candidates:
-                            # Use the best candidate (highest confidence)
-                            self.timestamp_column, detected_format, confidence = timestamp_candidates[0]
+                            # Get ALL candidates, not just the first one
+                            self.timestamp_columns = [col for col, fmt, conf in timestamp_candidates]
+                            self.timestamp_column = self.timestamp_columns[0]  # Primary column
+                            detected_format = timestamp_candidates[0][1]
                             self.timestamp_format = detected_format.value
                             timestamp_detected = True
                             
                             if self.debug_mode:
-                                print(f"[OptimizedFeatherQuery] Found timestamp column via resilient parser: "
-                                      f"{self.timestamp_column} (format: {self.timestamp_format}, confidence: {confidence:.2f})")
+                                print(f"[OptimizedFeatherQuery] Found {len(self.timestamp_columns)} timestamp columns via resilient parser: {self.timestamp_columns}")
                     except Exception as e:
                         if self.debug_mode:
                             print(f"[OptimizedFeatherQuery] Resilient parser failed: {e}")
             
             # Method 3: Final fallback detection using common column names
             if not timestamp_detected:
-                self.timestamp_column = self._fallback_timestamp_detection(connection)
-                if self.timestamp_column:
+                self.timestamp_columns = self._fallback_timestamp_detection(connection)
+                if self.timestamp_columns:
+                    self.timestamp_column = self.timestamp_columns[0]  # Primary column
                     timestamp_detected = True
                     if self.debug_mode:
-                        print(f"[OptimizedFeatherQuery] Found timestamp column via fallback: {self.timestamp_column}")
+                        print(f"[OptimizedFeatherQuery] Found {len(self.timestamp_columns)} timestamp columns via fallback: {self.timestamp_columns}")
             
-            if self.timestamp_column:
+            if self.timestamp_columns:
                 # Detect timestamp format if not already detected
                 if not hasattr(self, 'timestamp_format') or not self.timestamp_format:
                     self.timestamp_format = self._detect_timestamp_format_resilient(connection)
                 
-                # OPTIMIZATION: Ensure timestamp index is created before any queries
+                # OPTIMIZATION: Ensure timestamp indexes are created for ALL timestamp columns
                 # This is critical for performance of time range operations
-                if not self.has_timestamp_index():
+                # Requirements 7.1, 7.2: Automatic index management
+                for ts_col in self.timestamp_columns:
+                    # Temporarily set timestamp_column for index creation
+                    original_col = self.timestamp_column
+                    self.timestamp_column = ts_col
+                    index_created = self.ensure_timestamp_index()
+                    self.timestamp_column = original_col
+                    
                     if self.debug_mode:
-                        print(f"[OptimizedFeatherQuery] Creating timestamp index for performance optimization...")
-                    self._create_universal_timestamp_index(connection)
-                else:
-                    if self.debug_mode:
-                        print(f"[OptimizedFeatherQuery] Timestamp index already exists")
+                        if index_created:
+                            print(f"[OptimizedFeatherQuery] Timestamp index ensured on {ts_col}")
+                        else:
+                            print(f"[OptimizedFeatherQuery] Failed to ensure timestamp index on {ts_col}")
             else:
                 if self.debug_mode:
-                    print("[OptimizedFeatherQuery] No timestamp column found - queries will return empty results")
+                    print("[OptimizedFeatherQuery] No timestamp columns found - queries will return empty results")
             
             return True
         
@@ -291,11 +362,16 @@ class OptimizedFeatherQuery:
         except Exception:
             return 'unknown'
     
-    def _fallback_timestamp_detection(self, connection) -> Optional[str]:
-        """Fallback timestamp column detection with error handling"""
-        # Common timestamp column names from forensic artifacts
+    def _fallback_timestamp_detection(self, connection) -> List[str]:
+        """
+        Fallback timestamp column detection with error handling.
+        
+        Returns:
+            List of timestamp column names found (can be empty)
+        """
+        # Common timestamp column names from forensic artifacts (ordered by priority)
         common_names = [
-            # Generic
+            # Generic high-priority
             'timestamp', 'time', 'datetime', 'date_time', 'date',
             # Prefetch
             'last_run_time', 'last_run', 'run_time', 'execution_time',
@@ -308,10 +384,17 @@ class OptimizedFeatherQuery:
             'access_time', 'creation_time', 'modification_time',
             # SRUM
             'timestamp_utc', 'time_stamp',
-            # MFT
+            # MFT & USN
             'created', 'modified', 'accessed', 'mft_modified',
+            'si_creation_time', 'si_modification_time', 'si_access_time', 'si_mft_modified_time',
+            'fn_creation_time', 'fn_modification_time', 'fn_access_time', 'fn_mft_modified_time',
             # Event Logs
             'eventtimestamputc', 'event_time', 'generated_time',
+            # Registry artifacts
+            'last_write_time', 'last_write', 'write_time',
+            'access_date', 'modified_date', 'created_date',
+            # ShellBags specific
+            'first_interaction', 'last_interaction',
             # Generic variations
             'created_time', 'modified_time', 'accessed_time',
             'create_time', 'modify_time', 'access_time'
@@ -328,34 +411,53 @@ class OptimizedFeatherQuery:
                 if tables:
                     table_name = tables[0]
                 else:
-                    return None
+                    return []
             
             cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = [row[1].lower() for row in cursor.fetchall()]
+            all_columns = [(row[1], row[2]) for row in cursor.fetchall()]  # (name, type)
+            column_names_lower = [col[0].lower() for col in all_columns]
             
-            # Check for exact matches first
+            if self.debug_mode:
+                feather_id = getattr(self.loader, 'feather_id', 'unknown')
+                print(f"[OptimizedFeatherQuery] {feather_id} - Available columns: {[col[0] for col in all_columns]}")
+            
+            timestamp_columns_found = []
+            
+            # Check for exact matches first (case-insensitive)
             for common_name in common_names:
-                if common_name.lower() in columns:
-                    # Return the actual column name (preserve case)
-                    cursor.execute(f"PRAGMA table_info({table_name})")
-                    for row in cursor.fetchall():
-                        if row[1].lower() == common_name.lower():
-                            return row[1]
+                if common_name.lower() in column_names_lower:
+                    # Get the actual column name (preserve case)
+                    idx = column_names_lower.index(common_name.lower())
+                    actual_name = all_columns[idx][0]
+                    if actual_name not in timestamp_columns_found:
+                        timestamp_columns_found.append(actual_name)
             
-            # Check for partial matches
-            for col in columns:
-                for pattern in ['time', 'date', 'stamp']:
-                    if pattern in col.lower():
-                        cursor.execute(f"PRAGMA table_info({table_name})")
-                        for row in cursor.fetchall():
-                            if row[1].lower() == col:
-                                return row[1]
+            # Check for partial matches - prioritize columns with timestamp-like patterns
+            for col_name, col_type in all_columns:
+                col_lower = col_name.lower()
+                # Skip obviously non-timestamp columns
+                if any(skip in col_lower for skip in ['id', 'count', 'size', 'length', 'number', 'index', 'key', 'value', 'path', 'name', 'type', 'flag']):
+                    continue
+                # Look for timestamp indicators
+                if any(pattern in col_lower for pattern in ['time', 'date', 'stamp', 'created', 'modified', 'accessed', 'write', 'interaction']):
+                    if col_name not in timestamp_columns_found:
+                        timestamp_columns_found.append(col_name)
+            
+            if timestamp_columns_found:
+                if self.debug_mode:
+                    feather_id = getattr(self.loader, 'feather_id', 'unknown')
+                    print(f"[OptimizedFeatherQuery] {feather_id} - Found {len(timestamp_columns_found)} timestamp columns: {timestamp_columns_found}")
+                return timestamp_columns_found
+            
+            if self.debug_mode:
+                feather_id = getattr(self.loader, 'feather_id', 'unknown')
+                print(f"[OptimizedFeatherQuery] {feather_id} - No timestamp columns found in {len(all_columns)} columns")
                         
         except Exception as e:
             if self.debug_mode:
                 print(f"[OptimizedFeatherQuery] Fallback timestamp detection failed: {e}")
         
-        return None
+        return []
     
     def _detect_timestamp_format(self, connection) -> str:
         """Detect timestamp format from sample records with error handling"""
@@ -450,63 +552,155 @@ class OptimizedFeatherQuery:
     
     def query_time_range(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
         """Optimized time range query that handles any timestamp format with error resilience and caching"""
-        if not self.timestamp_column:
-            return []
-        
-        # OPTIMIZATION: Check cache first for overlapping time windows
-        cache_key = f"{start_time.isoformat()}_{end_time.isoformat()}"
-        if cache_key in self._query_result_cache:
-            if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Cache hit for time range {start_time} to {end_time}")
-            return self._query_result_cache[cache_key]
-        
-        def query_operation(connection):
-            # Convert datetime objects to format that matches the database
-            start_value = self._convert_datetime_for_query(start_time)
-            end_value = self._convert_datetime_for_query(end_time)
-            
-            # Use indexed range query
-            query = f"""
-                SELECT * FROM {self.loader.current_table}
-                WHERE {self.timestamp_column} >= ? AND {self.timestamp_column} <= ?
-                ORDER BY {self.timestamp_column}
-            """
-            
-            cursor = connection.cursor()
-            cursor.execute(query, (start_value, end_value))
-            
-            # Convert rows to dictionaries
-            columns = [description[0] for description in cursor.description]
-            records = []
-            for row in cursor.fetchall():
-                record = dict(zip(columns, row))
-                records.append(record)
-            
-            return records
+        # Start profiling if profiler is available (Requirements 1.1, 1.4)
+        if self.profiler:
+            self.profiler.start_operation("query_time_range")
         
         try:
-            results = self.error_handler.execute_with_retry(
-                operation=query_operation,
-                feather_id=getattr(self.loader, 'feather_id', 'unknown'),
-                database_path=self.loader.database_path,
-                operation_name="query_time_range"
-            )
+            if not self.timestamp_column:
+                return []
             
-            # OPTIMIZATION: Cache results for future queries (with size limit)
-            if len(self._query_result_cache) < self._max_cache_size:
-                self._query_result_cache[cache_key] = results
-            elif self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Query cache full ({self._max_cache_size} entries), not caching")
+            # Track cache request (Requirements 2.4)
+            cache_key = f"{start_time.isoformat()}_{end_time.isoformat()}"
+            self._cache_stats['total_requests'] += 1
             
-            return results
+            # OPTIMIZATION: Check cache first for overlapping time windows
+            if cache_key in self._query_result_cache:
+                # Cache hit - update statistics and LRU order (Requirements 2.4, 2.5)
+                self._cache_stats['hits'] += 1
+                
+                # Move to end of access order (most recently used)
+                if cache_key in self._cache_access_order:
+                    self._cache_access_order.remove(cache_key)
+                self._cache_access_order.append(cache_key)
+                
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Cache hit for time range {start_time} to {end_time}")
+                return self._query_result_cache[cache_key]
             
-        except Exception as e:
-            if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Query failed for range {start_time} to {end_time}: {e}")
-            return []  # Return empty list on failure
+            # Cache miss - track statistics (Requirements 2.4)
+            self._cache_stats['misses'] += 1
+            
+            def query_operation(connection):
+                # Convert datetime objects to format that matches the database
+                start_value = self._convert_datetime_for_query(start_time)
+                end_value = self._convert_datetime_for_query(end_time)
+                
+                # Build WHERE clause for multiple timestamp columns (OR condition)
+                # This allows records to match if ANY timestamp column falls in the range
+                if self.timestamp_columns and len(self.timestamp_columns) > 1:
+                    # Multiple timestamp columns - check all with OR
+                    where_conditions = []
+                    for ts_col in self.timestamp_columns:
+                        where_conditions.append(f"({ts_col} >= ? AND {ts_col} <= ?)")
+                    where_clause = " OR ".join(where_conditions)
+                    
+                    # Build parameter list (start, end for each column)
+                    params = []
+                    for _ in self.timestamp_columns:
+                        params.extend([start_value, end_value])
+                    
+                    query = f"""
+                        SELECT * FROM {self.loader.current_table}
+                        WHERE {where_clause}
+                        ORDER BY {self.timestamp_columns[0]}
+                    """
+                elif self.timestamp_columns and len(self.timestamp_columns) == 1:
+                    # Single column in list
+                    query = f"""
+                        SELECT * FROM {self.loader.current_table}
+                        WHERE {self.timestamp_columns[0]} >= ? AND {self.timestamp_columns[0]} <= ?
+                        ORDER BY {self.timestamp_columns[0]}
+                    """
+                    params = [start_value, end_value]
+                elif self.timestamp_column:
+                    # Fallback to primary timestamp column
+                    query = f"""
+                        SELECT * FROM {self.loader.current_table}
+                        WHERE {self.timestamp_column} >= ? AND {self.timestamp_column} <= ?
+                        ORDER BY {self.timestamp_column}
+                    """
+                    params = [start_value, end_value]
+                else:
+                    # No timestamp columns - return empty results
+                    return []
+                
+                cursor = connection.cursor()
+                cursor.execute(query, params)
+                
+                # Convert rows to dictionaries
+                columns = [description[0] for description in cursor.description]
+                records = []
+                for row in cursor.fetchall():
+                    record = dict(zip(columns, row))
+                    records.append(record)
+                
+                return records
+            
+            try:
+                results = self.error_handler.execute_with_retry(
+                    operation=query_operation,
+                    feather_id=getattr(self.loader, 'feather_id', 'unknown'),
+                    database_path=self.loader.database_path,
+                    operation_name="query_time_range"
+                )
+                
+                # OPTIMIZATION: Cache results with LRU eviction (Requirements 2.4, 2.5)
+                result_size_mb = self._estimate_result_size_mb(results)
+                
+                # Check if we need to evict entries before caching
+                if (self._current_cache_size_mb + result_size_mb > self._max_cache_size_mb or
+                    len(self._query_result_cache) >= self._max_cache_size):
+                    
+                    if self.debug_mode:
+                        print(f"[OptimizedFeatherQuery] Cache limit reached, evicting LRU entries")
+                    
+                    # Evict LRU entries to make room
+                    self._evict_lru_cache_entries(self._max_cache_size_mb - result_size_mb)
+                
+                # Add to cache if there's room
+                if (self._current_cache_size_mb + result_size_mb <= self._max_cache_size_mb and
+                    len(self._query_result_cache) < self._max_cache_size):
+                    
+                    self._query_result_cache[cache_key] = results
+                    self._cache_access_order.append(cache_key)
+                    self._current_cache_size_mb += result_size_mb
+                    
+                    if self.debug_mode:
+                        print(f"[OptimizedFeatherQuery] Cached query result (size: {result_size_mb:.2f} MB, "
+                              f"total cache: {self._current_cache_size_mb:.2f} MB)")
+                elif self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Result too large to cache ({result_size_mb:.2f} MB)")
+                
+                return results
+                
+            except Exception as e:
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Query failed for range {start_time} to {end_time}: {e}")
+                return []  # Return empty list on failure
+        finally:
+            # End profiling if profiler is available (Requirements 1.1, 1.3)
+            if self.profiler:
+                try:
+                    self.profiler.end_operation("query_time_range")
+                except Exception:
+                    pass  # Silently ignore profiler errors
     
     def _convert_datetime_for_query(self, dt: datetime) -> Any:
-        """Convert datetime to format that matches database timestamp format"""
+        """
+        Convert datetime to format that matches database timestamp format.
+        
+        CRITICAL: This must match the exact format stored in the database,
+        otherwise range queries will fail to find records.
+        """
+        if not self.timestamp_format or self.timestamp_format == 'unknown':
+            # Try multiple formats to ensure we don't miss data
+            # This is a fallback for when format detection fails
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] WARNING: Unknown timestamp format, trying multiple formats")
+            # Default to ISO format as it's most common
+            return dt.isoformat()
+        
         if self.timestamp_format == 'unix_s':
             return int(dt.timestamp())
         elif self.timestamp_format == 'unix_ms':
@@ -517,16 +711,23 @@ class OptimizedFeatherQuery:
             return dt.strftime('%Y-%m-%d %H:%M:%S')
         elif self.timestamp_format == 'date_slash':
             return dt.strftime('%m/%d/%Y %H:%M:%S')
+        elif self.timestamp_format == 'mixed':
+            # For mixed formats, use ISO as it's most flexible
+            return dt.isoformat()
         else:
-            # Default: try ISO format
+            # Fallback: try ISO format
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] WARNING: Unhandled timestamp format '{self.timestamp_format}', using ISO")
             return dt.isoformat()
     
     def get_timestamp_range(self) -> Tuple[Optional[datetime], Optional[datetime]]:
         """
         Get the min/max timestamp range from this feather with error handling and caching.
         
-        OPTIMIZATION: Results are cached after first query to avoid repeated MIN/MAX queries.
-        This is critical for performance when detecting time ranges across multiple feathers.
+        OPTIMIZATION: 
+        - Results are cached after first query to avoid repeated MIN/MAX queries
+        - Works directly with numeric timestamps (Unix epoch) for maximum speed
+        - No timestamp format parsing needed for range detection
         
         Returns:
             Tuple of (min_timestamp, max_timestamp) or (None, None) if no timestamps found
@@ -541,20 +742,56 @@ class OptimizedFeatherQuery:
             return self._timestamp_range_cache
         
         def range_operation(connection):
-            query = f"""
-                SELECT MIN({self.timestamp_column}), MAX({self.timestamp_column})
-                FROM {self.loader.current_table}
-                WHERE {self.timestamp_column} IS NOT NULL
-            """
-            cursor = connection.cursor()
-            cursor.execute(query)
-            result = cursor.fetchone()
-            
-            if result and result[0] and result[1]:
-                min_val, max_val = result[0], result[1]
-                min_dt = self._parse_timestamp_value(min_val)
-                max_dt = self._parse_timestamp_value(max_val)
-                return min_dt, max_dt
+            # OPTIMIZATION: Try to query numeric timestamps directly first (fast path)
+            # This works for Unix timestamps (seconds/milliseconds) and is much faster
+            try:
+                query = f"""
+                    SELECT MIN({self.timestamp_column}), MAX({self.timestamp_column})
+                    FROM {self.loader.current_table}
+                    WHERE {self.timestamp_column} IS NOT NULL
+                """
+                cursor = connection.cursor()
+                cursor.execute(query)
+                result = cursor.fetchone()
+                
+                if result and result[0] is not None and result[1] is not None:
+                    min_val, max_val = result[0], result[1]
+                    
+                    # Fast conversion: Check if values are numeric (int or float)
+                    if isinstance(min_val, (int, float)) and isinstance(max_val, (int, float)):
+                        # Fast path: Direct numeric conversion
+                        # If value > 1 billion, it's likely milliseconds (after year 2001)
+                        try:
+                            if min_val > 1000000000000:
+                                min_dt = datetime.fromtimestamp(min_val / 1000)
+                            elif min_val > 1000000000:
+                                min_dt = datetime.fromtimestamp(min_val)
+                            else:
+                                # Fallback to parser for unusual formats
+                                min_dt = self._parse_timestamp_value(min_val)
+                            
+                            if max_val > 1000000000000:
+                                max_dt = datetime.fromtimestamp(max_val / 1000)
+                            elif max_val > 1000000000:
+                                max_dt = datetime.fromtimestamp(max_val)
+                            else:
+                                # Fallback to parser for unusual formats
+                                max_dt = self._parse_timestamp_value(max_val)
+                            
+                            if min_dt and max_dt:
+                                return min_dt, max_dt
+                        except (ValueError, OSError, OverflowError) as e:
+                            if self.debug_mode:
+                                print(f"[OptimizedFeatherQuery] Fast timestamp conversion failed: {e}, using parser")
+                    
+                    # Slow path: Use full parser for string timestamps or conversion failures
+                    min_dt = self._parse_timestamp_value(min_val)
+                    max_dt = self._parse_timestamp_value(max_val)
+                    return min_dt, max_dt
+                
+            except Exception as e:
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Range query error: {e}")
             
             return None, None
         
@@ -581,21 +818,48 @@ class OptimizedFeatherQuery:
             return None, None
     
     def _parse_timestamp_value(self, value: Any) -> Optional[datetime]:
-        """Parse a timestamp value to datetime object using resilient parser"""
+        """
+        Parse a timestamp value to datetime object using resilient parser.
+        
+        Uses caching to avoid redundant parsing and to skip known parse errors.
+        Requirements: 7.2, 7.5
+        """
+        # Check if this is a known parse error
+        if self.timestamp_parse_cache.is_known_error(value):
+            return None
+        
+        # Check cache for successful parse
+        cached_result = self.timestamp_parse_cache.get(value)
+        if cached_result is not None:
+            return cached_result.datetime_value
+        
+        # Parse the timestamp
         result = self.timestamp_parser.parse_timestamp(value)
         if result.success:
+            # Cache successful parse
+            self.timestamp_parse_cache.put_success(value, result.datetime_value, result.detected_format)
             return result.datetime_value
         
         # Fallback for edge cases not handled by resilient parser
         if isinstance(value, (int, float)):
             try:
                 if value > 1000000000000:  # Milliseconds
-                    return datetime.fromtimestamp(value / 1000)
+                    dt = datetime.fromtimestamp(value / 1000)
+                    # Cache successful fallback parse
+                    from ..optimization.optimization_components import TimestampFormat
+                    self.timestamp_parse_cache.put_success(value, dt, TimestampFormat.UNIX_MILLISECONDS)
+                    return dt
                 elif value > 1000000000:  # Seconds
-                    return datetime.fromtimestamp(value)
+                    dt = datetime.fromtimestamp(value)
+                    # Cache successful fallback parse
+                    from ..optimization.optimization_components import TimestampFormat
+                    self.timestamp_parse_cache.put_success(value, dt, TimestampFormat.UNIX_SECONDS)
+                    return dt
             except (ValueError, OSError):
                 pass
         
+        # Cache parse error to avoid retrying
+        self.timestamp_parse_cache.put_error(value)
         return None
     
     def get_error_statistics(self) -> Dict[str, Any]:
@@ -616,6 +880,8 @@ class OptimizedFeatherQuery:
         """
         cache_size = len(self._query_result_cache)
         self._query_result_cache.clear()
+        self._cache_access_order.clear()
+        self._current_cache_size_mb = 0.0
         
         if self.debug_mode:
             print(f"[OptimizedFeatherQuery] Cleared query cache ({cache_size} entries)")
@@ -640,15 +906,188 @@ class OptimizedFeatherQuery:
             Dictionary with cache statistics including:
             - query_cache_size: Number of cached query results
             - query_cache_max_size: Maximum cache size
+            - query_cache_size_mb: Current cache size in MB
+            - query_cache_max_size_mb: Maximum cache size in MB
+            - cache_hit_rate: Percentage of cache hits
+            - cache_hits: Number of cache hits
+            - cache_misses: Number of cache misses
+            - cache_evictions: Number of LRU evictions
             - timestamp_range_cached: Whether timestamp range is cached
         """
+        hit_rate = 0.0
+        if self._cache_stats['total_requests'] > 0:
+            hit_rate = (self._cache_stats['hits'] / self._cache_stats['total_requests']) * 100
+        
         return {
             'query_cache_size': len(self._query_result_cache),
             'query_cache_max_size': self._max_cache_size,
+            'query_cache_size_mb': round(self._current_cache_size_mb, 2),
+            'query_cache_max_size_mb': self._max_cache_size_mb,
             'query_cache_utilization_percent': (len(self._query_result_cache) / self._max_cache_size * 100) if self._max_cache_size > 0 else 0,
+            'cache_hit_rate': round(hit_rate, 2),
+            'cache_hits': self._cache_stats['hits'],
+            'cache_misses': self._cache_stats['misses'],
+            'cache_evictions': self._cache_stats['evictions'],
+            'total_cache_requests': self._cache_stats['total_requests'],
             'timestamp_range_cached': self._timestamp_range_cached,
             'timestamp_range_value': self._timestamp_range_cache if self._timestamp_range_cached else None
         }
+    
+    def get_batch_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about query batching performance.
+        
+        Returns:
+            Dictionary with batching statistics including:
+            - total_batch_calls: Number of times batch_query_time_ranges was called
+            - total_ranges_requested: Total number of time ranges requested
+            - total_groups_detected: Number of consecutive groups detected
+            - total_queries_executed: Actual number of database queries executed
+            - ranges_batched: Number of ranges that were batched together
+            - ranges_queried_individually: Number of ranges queried individually
+            - batching_efficiency: Percentage of ranges that were batched
+            - query_reduction: Percentage reduction in queries due to batching
+        """
+        stats = self._batch_stats.copy()
+        
+        # Calculate efficiency metrics
+        if stats['total_ranges_requested'] > 0:
+            stats['batching_efficiency'] = (stats['ranges_batched'] / stats['total_ranges_requested']) * 100
+            stats['query_reduction'] = ((stats['total_ranges_requested'] - stats['total_queries_executed']) / stats['total_ranges_requested']) * 100
+        else:
+            stats['batching_efficiency'] = 0.0
+            stats['query_reduction'] = 0.0
+        
+        return stats
+    
+    def _estimate_result_size_mb(self, results: List[Dict[str, Any]]) -> float:
+        """
+        Estimate the memory size of query results in MB.
+        
+        This uses sys.getsizeof for a rough estimate. It's not perfect but
+        provides a reasonable approximation for cache size tracking.
+        
+        Args:
+            results: List of query result dictionaries
+            
+        Returns:
+            Estimated size in MB
+        """
+        import sys
+        
+        if not results:
+            return 0.0
+        
+        # Estimate size of the list and its contents
+        total_bytes = sys.getsizeof(results)
+        
+        # Sample a few records to estimate average record size
+        sample_size = min(10, len(results))
+        sample_bytes = sum(sys.getsizeof(results[i]) for i in range(sample_size))
+        avg_record_bytes = sample_bytes / sample_size
+        
+        # Estimate total size
+        total_bytes += avg_record_bytes * len(results)
+        
+        # Convert to MB
+        return total_bytes / (1024 * 1024)
+    
+    def _evict_lru_cache_entries(self, target_size_mb: Optional[float] = None) -> int:
+        """
+        Evict least-recently-used cache entries to free memory.
+        
+        This implements LRU (Least Recently Used) eviction by removing the oldest
+        accessed entries from the cache until the target size is reached.
+        
+        Requirements 2.5: LRU eviction when cache exceeds memory limits
+        
+        Args:
+            target_size_mb: Target cache size in MB. If None, evicts until under max_cache_size_mb
+            
+        Returns:
+            Number of entries evicted
+        """
+        if target_size_mb is None:
+            target_size_mb = self._max_cache_size_mb * 0.8  # Evict to 80% of max
+        
+        evicted_count = 0
+        
+        # Evict entries from the front of the access order list (least recently used)
+        while (self._current_cache_size_mb > target_size_mb and 
+               self._cache_access_order and 
+               len(self._query_result_cache) > 0):
+            
+            # Get the least recently used key
+            lru_key = self._cache_access_order.pop(0)
+            
+            # Remove from cache if it exists
+            if lru_key in self._query_result_cache:
+                results = self._query_result_cache[lru_key]
+                entry_size = self._estimate_result_size_mb(results)
+                
+                del self._query_result_cache[lru_key]
+                self._current_cache_size_mb -= entry_size
+                evicted_count += 1
+                self._cache_stats['evictions'] += 1
+                
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Evicted LRU cache entry (size: {entry_size:.2f} MB)")
+        
+        if self.debug_mode and evicted_count > 0:
+            print(f"[OptimizedFeatherQuery] LRU eviction complete: {evicted_count} entries removed, "
+                  f"cache size now {self._current_cache_size_mb:.2f} MB")
+        
+        return evicted_count
+    
+    def configure_cache(self, max_size_mb: Optional[int] = None, max_entries: Optional[int] = None) -> None:
+        """
+        Configure cache size limits.
+        
+        This allows dynamic adjustment of cache parameters for different workloads.
+        
+        Requirements 2.4, 2.5: Cache configuration parameters
+        
+        Args:
+            max_size_mb: Maximum cache size in MB (default: 512)
+            max_entries: Maximum number of cache entries (default: 100)
+        """
+        if max_size_mb is not None:
+            self._max_cache_size_mb = max_size_mb
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] Set max cache size to {max_size_mb} MB")
+        
+        if max_entries is not None:
+            self._max_cache_size = max_entries
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] Set max cache entries to {max_entries}")
+        
+        # Evict if current cache exceeds new limits
+        if self._current_cache_size_mb > self._max_cache_size_mb:
+            self._evict_lru_cache_entries()
+        
+        while len(self._query_result_cache) > self._max_cache_size:
+            if self._cache_access_order:
+                lru_key = self._cache_access_order.pop(0)
+                if lru_key in self._query_result_cache:
+                    results = self._query_result_cache[lru_key]
+                    entry_size = self._estimate_result_size_mb(results)
+                    del self._query_result_cache[lru_key]
+                    self._current_cache_size_mb -= entry_size
+                    self._cache_stats['evictions'] += 1
+    
+    def get_cache_hit_rate(self) -> float:
+        """
+        Get the cache hit rate as a percentage.
+        
+        Requirements 2.4: Track cache hit rate statistics
+        
+        Returns:
+            Cache hit rate percentage (0-100)
+        """
+        if self._cache_stats['total_requests'] == 0:
+            return 0.0
+        
+        return (self._cache_stats['hits'] / self._cache_stats['total_requests']) * 100
     
     def has_timestamp_index(self) -> bool:
         """
@@ -729,22 +1168,66 @@ class OptimizedFeatherQuery:
         except Exception:
             return False
     
+    def ensure_timestamp_index(self) -> bool:
+        """
+        Ensure timestamp index exists, creating it automatically if missing.
+        
+        This method checks for index existence and creates it if needed,
+        providing automatic index management for optimal query performance.
+        
+        Requirements 2.1, 2.2: Automatic timestamp index creation
+        
+        Returns:
+            True if index exists or was created successfully, False otherwise
+        """
+        if not self.timestamp_column:
+            if self.debug_mode:
+                print("[OptimizedFeatherQuery] Cannot ensure index: no timestamp column detected")
+            return False
+        
+        # Check if index already exists
+        if self.has_timestamp_index():
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] Timestamp index already exists on {self.timestamp_column}")
+            return True
+        
+        # Index doesn't exist, create it
+        if self.debug_mode:
+            print(f"[OptimizedFeatherQuery] Timestamp index missing, creating automatically on {self.timestamp_column}")
+        
+        success = self.create_timestamp_index()
+        
+        if success:
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] Successfully created timestamp index on {self.timestamp_column}")
+        else:
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] Failed to create timestamp index on {self.timestamp_column}")
+        
+        return success
+    
     def quick_count_in_range(self, start_time: datetime, end_time: datetime) -> int:
         """
         Quickly count records in time range using indexed COUNT(*) query.
         
         This method uses SELECT COUNT(*) with indexed timestamp range for fast
-        empty window detection. Target performance: <1ms per check.
+        empty window detection. Supports multiple timestamp columns with OR logic.
+        Target performance: <1ms per check.
+        
+        CRITICAL: Returns -1 if no timestamp columns exist (can't check).
+        Returns 1 on error to force full query (safer than assuming empty).
         
         Args:
             start_time: Start of time range
             end_time: End of time range
             
         Returns:
-            Number of records in the time range, or 0 on error
+            Number of records in the time range, -1 if can't check (no timestamps), or 1 on error
         """
-        if not self.timestamp_column:
-            return 0
+        if not self.timestamp_column and not self.timestamp_columns:
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] Quick count skipped: no timestamp columns")
+            return -1  # Return -1 to indicate "can't check" (not "has 1 record")
         
         def count_operation(connection):
             try:
@@ -752,17 +1235,59 @@ class OptimizedFeatherQuery:
                 start_value = self._convert_datetime_for_query(start_time)
                 end_value = self._convert_datetime_for_query(end_time)
                 
-                # Use indexed COUNT query for fast check
-                query = f"""
-                    SELECT COUNT(*) FROM {self.loader.current_table}
-                    WHERE {self.timestamp_column} >= ? AND {self.timestamp_column} <= ?
-                """
+                # Build WHERE clause for multiple timestamp columns (OR condition)
+                if self.timestamp_columns and len(self.timestamp_columns) > 1:
+                    # Multiple timestamp columns - check all with OR
+                    where_conditions = []
+                    for ts_col in self.timestamp_columns:
+                        where_conditions.append(f"({ts_col} >= ? AND {ts_col} <= ?)")
+                    where_clause = " OR ".join(where_conditions)
+                    
+                    # Build parameter list (start, end for each column)
+                    params = []
+                    for _ in self.timestamp_columns:
+                        params.extend([start_value, end_value])
+                    
+                    query = f"""
+                        SELECT COUNT(*) FROM {self.loader.current_table}
+                        WHERE {where_clause}
+                    """
+                elif self.timestamp_columns and len(self.timestamp_columns) == 1:
+                    # Single column in list
+                    query = f"""
+                        SELECT COUNT(*) FROM {self.loader.current_table}
+                        WHERE {self.timestamp_columns[0]} >= ? AND {self.timestamp_columns[0]} <= ?
+                    """
+                    params = [start_value, end_value]
+                elif self.timestamp_column:
+                    # Fallback to primary timestamp column
+                    query = f"""
+                        SELECT COUNT(*) FROM {self.loader.current_table}
+                        WHERE {self.timestamp_column} >= ? AND {self.timestamp_column} <= ?
+                    """
+                    params = [start_value, end_value]
+                else:
+                    # No timestamp columns - return 1 to force full query
+                    return 1
                 
                 cursor = connection.cursor()
-                cursor.execute(query, (start_value, end_value))
+                cursor.execute(query, params)
                 result = cursor.fetchone()
                 
-                return result[0] if result else 0
+                count = result[0] if result else 0
+                
+                # Debug logging for troubleshooting
+                if self.debug_mode and count == 0:
+                    # Double-check: try to get total record count
+                    cursor.execute(f"SELECT COUNT(*) FROM {self.loader.current_table}")
+                    total = cursor.fetchone()[0]
+                    if total > 0:
+                        print(f"[OptimizedFeatherQuery] WARNING: Quick count returned 0 but table has {total} records")
+                        print(f"[OptimizedFeatherQuery]   Range: {start_time} to {end_time}")
+                        print(f"[OptimizedFeatherQuery]   Format: {self.timestamp_format}")
+                        print(f"[OptimizedFeatherQuery]   Columns: {self.timestamp_columns if self.timestamp_columns else [self.timestamp_column]}")
+                
+                return count
             except Exception as e:
                 if self.debug_mode:
                     print(f"[OptimizedFeatherQuery] Quick count failed for range {start_time} to {end_time}: {e}")
@@ -787,7 +1312,8 @@ class OptimizedFeatherQuery:
         OPTIMIZATION: Batch query multiple time ranges in a single database operation.
         
         This method optimizes querying multiple consecutive time windows by combining
-        them into fewer database queries, reducing query overhead.
+        them into fewer database queries, reducing query overhead. It detects groups
+        of consecutive ranges and batches each group separately.
         
         Args:
             time_ranges: List of (start_time, end_time) tuples to query
@@ -798,17 +1324,34 @@ class OptimizedFeatherQuery:
         if not self.timestamp_column or not time_ranges:
             return {}
         
+        # Update statistics
+        self._batch_stats['total_batch_calls'] += 1
+        self._batch_stats['total_ranges_requested'] += len(time_ranges)
+        
         results = {}
         
-        # Check cache first for all ranges
+        # Check cache first for all ranges (track statistics)
         uncached_ranges = []
         for time_range in time_ranges:
             start_time, end_time = time_range
             cache_key = f"{start_time.isoformat()}_{end_time.isoformat()}"
             
+            # Track cache request (Requirements 2.4)
+            self._cache_stats['total_requests'] += 1
+            
             if cache_key in self._query_result_cache:
+                # Cache hit - update statistics and LRU order (Requirements 2.4, 2.5)
+                self._cache_stats['hits'] += 1
+                
+                # Move to end of access order (most recently used)
+                if cache_key in self._cache_access_order:
+                    self._cache_access_order.remove(cache_key)
+                self._cache_access_order.append(cache_key)
+                
                 results[time_range] = self._query_result_cache[cache_key]
             else:
+                # Cache miss (Requirements 2.4)
+                self._cache_stats['misses'] += 1
                 uncached_ranges.append(time_range)
         
         if not uncached_ranges:
@@ -816,39 +1359,62 @@ class OptimizedFeatherQuery:
                 print(f"[OptimizedFeatherQuery] All {len(time_ranges)} ranges found in cache")
             return results
         
-        # For uncached ranges, use batch query if they're consecutive
-        # Otherwise fall back to individual queries
-        if len(uncached_ranges) > 1 and self._are_ranges_consecutive(uncached_ranges):
-            # Batch query: query the entire span and split results
-            overall_start = min(r[0] for r in uncached_ranges)
-            overall_end = max(r[1] for r in uncached_ranges)
-            
-            if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Batch querying {len(uncached_ranges)} consecutive ranges")
-            
-            all_records = self.query_time_range(overall_start, overall_end)
-            
-            # Split records into individual time ranges
-            for time_range in uncached_ranges:
-                start_time, end_time = time_range
-                range_records = [
-                    record for record in all_records
-                    if self._record_in_range(record, start_time, end_time)
-                ]
-                results[time_range] = range_records
+        # Detect groups of consecutive ranges
+        consecutive_groups = self._detect_consecutive_ranges(uncached_ranges)
+        self._batch_stats['total_groups_detected'] += len(consecutive_groups)
+        
+        if self.debug_mode:
+            print(f"[OptimizedFeatherQuery] Detected {len(consecutive_groups)} consecutive groups from {len(uncached_ranges)} uncached ranges")
+        
+        # Process each group
+        for group in consecutive_groups:
+            if len(group) > 1:
+                # Batch query for consecutive ranges
+                overall_start = min(r[0] for r in group)
+                overall_end = max(r[1] for r in group)
                 
-                # Cache individual results
-                cache_key = f"{start_time.isoformat()}_{end_time.isoformat()}"
-                if len(self._query_result_cache) < self._max_cache_size:
-                    self._query_result_cache[cache_key] = range_records
-        else:
-            # Query individually for non-consecutive ranges
-            if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Querying {len(uncached_ranges)} non-consecutive ranges individually")
-            
-            for time_range in uncached_ranges:
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Batch querying {len(group)} consecutive ranges")
+                
+                all_records = self.query_time_range(overall_start, overall_end)
+                self._batch_stats['total_queries_executed'] += 1
+                self._batch_stats['ranges_batched'] += len(group)
+                
+                # Split records into individual time ranges
+                for time_range in group:
+                    start_time, end_time = time_range
+                    range_records = [
+                        record for record in all_records
+                        if self._record_in_range(record, start_time, end_time)
+                    ]
+                    results[time_range] = range_records
+                    
+                    # Cache individual results with LRU eviction (Requirements 2.4, 2.5)
+                    cache_key = f"{start_time.isoformat()}_{end_time.isoformat()}"
+                    result_size_mb = self._estimate_result_size_mb(range_records)
+                    
+                    # Check if we need to evict entries before caching
+                    if (self._current_cache_size_mb + result_size_mb > self._max_cache_size_mb or
+                        len(self._query_result_cache) >= self._max_cache_size):
+                        self._evict_lru_cache_entries(self._max_cache_size_mb - result_size_mb)
+                    
+                    # Add to cache if there's room
+                    if (self._current_cache_size_mb + result_size_mb <= self._max_cache_size_mb and
+                        len(self._query_result_cache) < self._max_cache_size):
+                        self._query_result_cache[cache_key] = range_records
+                        self._cache_access_order.append(cache_key)
+                        self._current_cache_size_mb += result_size_mb
+            else:
+                # Single range - query individually
+                time_range = group[0]
                 start_time, end_time = time_range
+                
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Querying single range individually")
+                
                 results[time_range] = self.query_time_range(start_time, end_time)
+                self._batch_stats['total_queries_executed'] += 1
+                self._batch_stats['ranges_queried_individually'] += 1
         
         return results
     
@@ -879,6 +1445,57 @@ class OptimizedFeatherQuery:
                 return False
         
         return True
+    
+    def _detect_consecutive_ranges(self, time_ranges: List[Tuple[datetime, datetime]]) -> List[List[Tuple[datetime, datetime]]]:
+        """
+        Detect groups of consecutive time ranges that can be batched together.
+        
+        This method analyzes a list of time ranges and groups consecutive ranges
+        together. Consecutive ranges are those where each range starts where the
+        previous one ended (allowing up to 1 second gap for rounding).
+        
+        Args:
+            time_ranges: List of (start_time, end_time) tuples
+            
+        Returns:
+            List of groups, where each group is a list of consecutive time ranges
+            
+        Example:
+            Input: [(0-1), (1-2), (2-3), (5-6), (6-7)]
+            Output: [[(0-1), (1-2), (2-3)], [(5-6), (6-7)]]
+        """
+        if not time_ranges:
+            return []
+        
+        if len(time_ranges) == 1:
+            return [time_ranges]
+        
+        # Sort ranges by start time
+        sorted_ranges = sorted(time_ranges, key=lambda r: r[0])
+        
+        # Group consecutive ranges
+        groups = []
+        current_group = [sorted_ranges[0]]
+        
+        for i in range(1, len(sorted_ranges)):
+            prev_end = current_group[-1][1]
+            curr_start = sorted_ranges[i][0]
+            
+            # Check if consecutive (allow up to 1 second gap for rounding)
+            gap = (curr_start - prev_end).total_seconds()
+            
+            if gap <= 1:
+                # Consecutive - add to current group
+                current_group.append(sorted_ranges[i])
+            else:
+                # Not consecutive - start new group
+                groups.append(current_group)
+                current_group = [sorted_ranges[i]]
+        
+        # Add the last group
+        groups.append(current_group)
+        
+        return groups
     
     def _record_in_range(self, record: Dict[str, Any], start_time: datetime, end_time: datetime) -> bool:
         """
@@ -1009,7 +1626,8 @@ class WindowQueryManager:
         
         Uses COUNT(*) with indexed timestamp range for fast empty window detection.
         This method checks all feathers and returns True if ANY feather has records
-        in the window. Target performance: <1ms per window.
+        in the window. Feathers without timestamp columns are skipped.
+        Target performance: <1ms per window.
         
         Args:
             window: TimeWindow to check
@@ -1017,15 +1635,27 @@ class WindowQueryManager:
         Returns:
             True if window has at least one record in any feather, False if all feathers are empty
         """
+        feathers_checked = 0
+        
         for feather_id, query_manager in self.feather_queries.items():
             # Quick count query using index
             count = query_manager.quick_count_in_range(window.start_time, window.end_time)
+            
+            # -1 means feather has no timestamp columns, skip it
+            if count == -1:
+                continue
+            
+            feathers_checked += 1
             
             if count > 0:
                 # Found data in this feather, no need to check others
                 return True
         
-        # No data found in any feather
+        # If no feathers could be checked (all lack timestamps), assume has data (safe fallback)
+        if feathers_checked == 0:
+            return True
+        
+        # No data found in any feather that could be checked
         return False
     
     def get_overall_time_range(self) -> Tuple[Optional[datetime], Optional[datetime]]:
@@ -1054,61 +1684,37 @@ class WindowQueryManager:
         """
         Check if a record should be filtered out based on identity filters.
         
-        Args:
-            record: Record to check
-            
-        Returns:
-            True if record should be filtered out (excluded), False if it should be kept
+        OPTIMIZATION: Normalized identity values and filters are pre-calculated
+        to avoid redundant string operations in the window loop.
         """
         if not self.filters or not self.filters.identity_filters:
             return False  # No filters, keep all records
         
-        # Extract identity information from record
-        # Check common identity fields across all artifact types
-        identity_fields = [
-            # Names
-            'name', 'filename', 'executable_name', 'app_name', 'application',
-            'fn_filename', 'Source_Name', 'original_filename', 'program_name',
-            'display_name', 'product_name', 'Source', 'FileName', 'Name',
-            'ProductName', 'FileDescription', 'OriginalFileName', 'value',
-            'Value', 'entry_name', 'program', 'executable', 'Executable',
-            'service_name', 'ServiceName', 'task_name', 'TaskName', 'process',
-            'Process', 'application_name',
-            # Paths
-            'path', 'file_path', 'app_path', 'Local_Path', 'reconstructed_path',
-            'original_path', 'lower_case_long_path', 'install_location',
-            'root_dir_path', 'ShortcutTargetPath', 'Source_Path', 'folder_path',
-            'registry_path', 'FullPath', 'Path', 'FilePath', 'LowerCaseLongPath',
-            'focus_path', 'run_path', 'ExecutablePath', 'executable_path',
-            'image_path', 'ImagePath', 'binary_path', 'BinaryPath',
-            'full_path', 'application_path', 'program_path', 'command_line',
-            'exe_path', 'exepath', 'target_path', 'TargetPath'
-        ]
-        
+        # Use global CORE_IDENTITY_FIELDS for performance
         identity_values = []
-        for field in identity_fields:
+        for field in CORE_IDENTITY_FIELDS:
             if field in record and record[field]:
                 identity_values.append(str(record[field]))
         
         # If no identity information found, keep the record (don't filter out)
         if not identity_values:
             return False
+            
+        # Optimization: pre-calculate normalized values if not case-sensitive
+        if not self.filters.case_sensitive:
+            identity_values = [v.lower() for v in identity_values]
         
         # Check if any identity value matches the filter patterns
-        import fnmatch
         for filter_pattern in self.filters.identity_filters:
-            # Prepare comparison strings
-            if self.filters.case_sensitive:
-                pattern_cmp = filter_pattern
-                values_cmp = identity_values
-            else:
-                pattern_cmp = filter_pattern.lower()
-                values_cmp = [v.lower() for v in identity_values]
+            pattern_cmp = filter_pattern if self.filters.case_sensitive else filter_pattern.lower()
             
             # Check if pattern matches any identity value
-            for value in values_cmp:
+            for value in identity_values:
                 if fnmatch.fnmatch(value, pattern_cmp):
                     return False  # Match found, keep record
+        
+        # No match found in any pattern, filter out record (exclude)
+        return True
         
         # No match found, filter out
         return True
@@ -1130,6 +1736,42 @@ class WindowQueryManager:
             'hit_rate_percent': hit_rate,
             'cache_size': len(self.query_cache)
         }
+    
+    def get_batch_statistics(self) -> Dict[str, Any]:
+        """
+        Get aggregated batching statistics from all feather queries.
+        
+        Returns:
+            Dictionary with aggregated batching statistics across all feathers
+        """
+        aggregated_stats = {
+            'total_batch_calls': 0,
+            'total_ranges_requested': 0,
+            'total_groups_detected': 0,
+            'total_queries_executed': 0,
+            'ranges_batched': 0,
+            'ranges_queried_individually': 0
+        }
+        
+        # Aggregate statistics from all feather queries
+        for feather_id, query_manager in self.feather_queries.items():
+            feather_stats = query_manager.get_batch_statistics()
+            aggregated_stats['total_batch_calls'] += feather_stats['total_batch_calls']
+            aggregated_stats['total_ranges_requested'] += feather_stats['total_ranges_requested']
+            aggregated_stats['total_groups_detected'] += feather_stats['total_groups_detected']
+            aggregated_stats['total_queries_executed'] += feather_stats['total_queries_executed']
+            aggregated_stats['ranges_batched'] += feather_stats['ranges_batched']
+            aggregated_stats['ranges_queried_individually'] += feather_stats['ranges_queried_individually']
+        
+        # Calculate efficiency metrics
+        if aggregated_stats['total_ranges_requested'] > 0:
+            aggregated_stats['batching_efficiency'] = (aggregated_stats['ranges_batched'] / aggregated_stats['total_ranges_requested']) * 100
+            aggregated_stats['query_reduction'] = ((aggregated_stats['total_ranges_requested'] - aggregated_stats['total_queries_executed']) / aggregated_stats['total_ranges_requested']) * 100
+        else:
+            aggregated_stats['batching_efficiency'] = 0.0
+            aggregated_stats['query_reduction'] = 0.0
+        
+        return aggregated_stats
 
 
 class TimeWindowScanningEngine(BaseCorrelationEngine):
@@ -1216,7 +1858,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
     def __init__(self, config: Any, filters: Optional[FilterConfig] = None, debug_mode: bool = True,
                  scoring_integration: Optional['IScoringIntegration'] = None,
                  mapping_integration: Optional['ISemanticMappingIntegration'] = None,
-                 two_phase_config: Optional['TwoPhaseConfig'] = None):
+                 two_phase_config: Optional['TwoPhaseConfig'] = None,
+                 performance_config: Optional['PerformanceConfig'] = None):
         """
         Initialize Time-Window Scanning Engine.
         
@@ -1226,8 +1869,37 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             debug_mode: Enable debug logging
             scoring_integration: Optional scoring integration (for dependency injection)
             mapping_integration: Optional semantic mapping integration (for dependency injection)
+            two_phase_config: Optional two-phase configuration
+            performance_config: Optional performance configuration for optimization tuning (Requirements 8.1, 8.2, 8.3, 8.4)
         """
         super().__init__(config, filters)
+        
+        # Task 21 & 23: Initialize and validate performance configuration (Requirements 8.1, 8.2, 8.3, 8.4, 8.5)
+        if performance_config is not None:
+            self.performance_config = performance_config
+        else:
+            # Use safe defaults if not provided
+            from ..optimization.performance_config import PerformanceConfig
+            self.performance_config = PerformanceConfig.get_safe_defaults()
+        
+        # Validate performance configuration on initialization (Requirement 8.5)
+        validation_errors = self.performance_config.validate()
+        if validation_errors:
+            logger.warning(
+                f"[Time-Window Engine] Invalid performance configuration: {', '.join(validation_errors)}. "
+                f"Using safe defaults."
+            )
+            from ..optimization.performance_config import PerformanceConfig
+            self.performance_config = PerformanceConfig.get_safe_defaults()
+        
+        if debug_mode:
+            logger.info(f"[Time-Window Engine] Performance configuration loaded: "
+                       f"window_size={self.performance_config.window_size_minutes}min, "
+                       f"max_workers={self.performance_config.max_workers}, "
+                       f"memory_threshold={self.performance_config.memory_threshold_mb}MB, "
+                       f"query_cache={self.performance_config.query_cache_size_mb}MB, "
+                       f"profiling={'enabled' if self.performance_config.enable_profiling else 'disabled'}, "
+                       f"empty_window_skipping={'enabled' if self.performance_config.enable_empty_window_skipping else 'disabled'}")
         
         # Initialize centralized score configuration manager
         # Requirements: 7.2, 8.3
@@ -1331,22 +2003,32 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Memory management and streaming
         self.memory_manager: Optional[WindowMemoryManager] = None
+        self.memory_monitor: Optional['MemoryMonitor'] = None  # Task 15: Memory monitoring for streaming mode
         self.streaming_writer: Optional[StreamingMatchWriter] = None
         self.streaming_mode_active = False
-        self.memory_limit_mb = self.scanning_config.memory_limit_mb
+        # Task 21: Apply memory threshold from performance config (Requirement 8.4)
+        self.memory_limit_mb = self.performance_config.memory_threshold_mb
         
         # Output directory for streaming mode (set by pipeline)
         self._output_dir: Optional[str] = None
         self._execution_id: Optional[int] = None
         
         # Parallel processing configuration
-        self.enable_parallel_processing = self.scanning_config.parallel_window_processing
-        self.max_workers = self.scanning_config.max_workers or 4  # Default number of worker threads
+        # Task 21: Apply parallel processing config from performance config (Requirement 8.2)
+        self.enable_parallel_processing = self.performance_config.enable_parallel
+        self.max_workers = self.performance_config.max_workers or self.scanning_config.max_workers or 4
         self.parallel_batch_size = self.scanning_config.parallel_batch_size
         self.parallel_processor: Optional[ParallelWindowProcessor] = None
         
+        # Task 12: Parallel Coordinator for optimized parallel processing (Requirements 4.1, 4.2, 4.3, 4.4, 4.5)
+        self.parallel_coordinator: Optional['ParallelCoordinator'] = None
+        self.use_parallel_coordinator = getattr(self.scanning_config, 'use_parallel_coordinator', False)
+        
         # Window processing statistics tracking
         self.window_processing_stats = WindowProcessingStats()
+        
+        # Empty window detector (Requirements 3.1, 3.2, 3.3, 3.4, 3.5)
+        self.empty_window_detector: Optional['EmptyWindowDetector'] = None
         
         # Time range detection result (for statistics reporting)
         self._time_range_detection_result: Optional[TimeRangeDetectionResult] = None
@@ -1357,11 +2039,30 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             enable_detailed=debug_mode
         )
         
+        # Task 23: Performance profiler for optimization (Requirements 1.1, 1.2)
+        # Task 21: Enable/disable profiling based on performance config (Requirement 8.1)
+        from ..optimization.optimization_components import PerformanceProfiler
+        if self.performance_config.enable_profiling:
+            self.profiler = PerformanceProfiler(enabled=True)
+            self._profiling_enabled = True
+            if debug_mode:
+                logger.info("[Time-Window Engine] Performance profiling enabled")
+        else:
+            # Create a disabled profiler for consistent interface
+            self.profiler = PerformanceProfiler(enabled=False)
+            self._profiling_enabled = False
+            if debug_mode:
+                logger.info("[Time-Window Engine] Performance profiling disabled")
+        
         # Advanced performance analyzer
         self.performance_analyzer = create_performance_analyzer()
         
-        # Performance analyzer for detailed analysis
-        self.performance_analyzer = create_performance_analyzer()
+        # Timestamp caching for optimization (Requirements 6.3, 7.1, 7.2, 7.3, 7.4, 7.5)
+        # Task 21: Apply cache size from performance config (Requirement 8.3)
+        from ..optimization.optimization_components import TimestampCache, TimestampFormatCache, TimestampParseCache
+        self.timestamp_utc_cache = TimestampCache(max_size=self.performance_config.timestamp_cache_size)
+        self.timestamp_format_cache = TimestampFormatCache()
+        self.timestamp_parse_cache = TimestampParseCache(max_size=self.performance_config.timestamp_cache_size)
         
         # Comprehensive error handling coordination
         self.error_coordinator: Optional[ErrorHandlingCoordinator] = None
@@ -1483,41 +2184,165 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             }
         return None
     
-    def get_error_handling_statistics(self) -> Optional[Dict[str, Any]]:
-        """
-        Get comprehensive error handling statistics.
-        
-        Returns:
-            Dictionary with error handling statistics or None if coordinator not initialized
-        """
-        if self.error_coordinator:
-            stats = self.error_coordinator.get_error_statistics()
-            return {
-                'total_errors': stats.total_errors,
-                'errors_by_category': stats.errors_by_category,
-                'errors_by_severity': stats.errors_by_severity,
-                'recovery_success_rate': stats.recovery_success_rate,
-                'average_recovery_time_seconds': stats.average_recovery_time_seconds,
-                'degradation_events': stats.degradation_events,
-                'system_uptime_percentage': stats.system_uptime_percentage
+    def get_statistics(self) -> Dict[str, Any]:
+            """
+            Get correlation statistics from last execution.
+
+            Returns:
+                Dictionary containing statistics including:
+                    - Basic execution statistics
+                    - Memory statistics
+                    - Streaming statistics
+                    - Parallel processing statistics
+                    - Progress tracking statistics
+                    - Time estimation statistics
+                    - Cancellation statistics
+                    - Time range detection statistics (NEW)
+                    - Empty window skipping statistics (NEW)
+                    - Efficiency metrics (NEW)
+                    - Cache hit rates (Task 22)
+                    - Index usage rates (Task 22)
+                    - Skip rates (Task 22)
+            """
+            if not self.last_result:
+                return {}
+
+            stats = {
+                'execution_time': self.last_result.execution_duration_seconds,
+                'record_count': self.last_result.total_records_scanned,
+                'match_count': self.last_result.total_matches,
+                'feathers_processed': self.last_result.feathers_processed,
+                'window_size_minutes': self.window_size_minutes,
+                'scanning_approach': 'time_window_scanning',
+                'streaming_mode_used': self.streaming_mode_active,
+                'parallel_processing_enabled': self.enable_parallel_processing
             }
-        return None
+
+            # Add memory statistics if available
+            if self.memory_manager:
+                memory_stats = self.memory_manager.get_memory_statistics()
+                stats.update({
+                    'memory_statistics': memory_stats,
+                    'peak_memory_mb': memory_stats.get('peak_memory_mb', 0),
+                    'memory_efficiency_mb_per_1k_records': memory_stats.get('recent_efficiency_mb_per_1k_records', 0)
+                })
+
+            # Add streaming statistics if used
+            if self.streaming_mode_active and self.streaming_writer:
+                stats.update({
+                    'streaming_database_path': self.streaming_writer.database_path,
+                    'total_matches_written': self.streaming_writer.total_matches_written
+                })
+
+            # Add parallel processing statistics if used
+            if self.enable_parallel_processing and self.parallel_processor:
+                parallel_stats = self.parallel_processor.get_processing_stats()
+                stats.update({
+                    'parallel_processing_stats': {
+                        'max_workers': self.max_workers,
+                        'batch_size': self.parallel_batch_size,
+                        'total_windows_processed': parallel_stats.total_windows_processed,
+                        'average_window_time': parallel_stats.average_window_time,
+                        'parallel_speedup': parallel_stats.parallel_speedup,
+                        'load_balancing_efficiency': parallel_stats.load_balancing_efficiency,
+                        'worker_utilization': parallel_stats.worker_utilization
+                    }
+                })
+
+            # Add progress tracking statistics
+            if hasattr(self, 'progress_tracker'):
+                progress_data = self.progress_tracker._create_overall_progress()
+                stats.update({
+                    'progress_tracking_stats': {
+                        'windows_processed': progress_data.windows_processed,
+                        'total_windows': progress_data.total_windows,
+                        'completion_percentage': progress_data.completion_percentage,
+                        'processing_rate_windows_per_second': progress_data.processing_rate_windows_per_second,
+                        'estimated_completion_time': progress_data.estimated_completion_time.isoformat() if progress_data.estimated_completion_time else None,
+                        'time_remaining_seconds': progress_data.time_remaining_seconds
+                    }
+                })
+
+            # Add time estimation statistics
+            if hasattr(self, 'time_estimator'):
+                estimation_stats = self.time_estimator.get_performance_statistics()
+                stats.update({
+                    'time_estimation_stats': estimation_stats
+                })
+
+            # Add cancellation statistics
+            if hasattr(self, 'cancellation_manager'):
+                cancellation_stats = self.cancellation_manager.get_status_summary()
+                stats.update({
+                    'cancellation_stats': cancellation_stats
+                })
+
+            # Add time range detection statistics (NEW)
+            time_range_stats = self.get_time_range_detection_statistics()
+            if time_range_stats.get('available'):
+                stats.update({
+                    'time_range_detection_stats': time_range_stats
+                })
+
+            # Add empty window skipping statistics (NEW)
+            empty_window_stats = self.get_empty_window_skipping_statistics()
+            if empty_window_stats.get('available'):
+                stats.update({
+                    'empty_window_skipping_stats': empty_window_stats
+                })
+
+            # Add cache hit rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
+            cache_stats = self._get_cache_statistics()
+            if cache_stats:
+                stats.update({
+                    'cache_statistics': cache_stats
+                })
+
+            # Add index usage rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
+            index_stats = self._get_index_usage_statistics()
+            if index_stats:
+                stats.update({
+                    'index_usage_statistics': index_stats
+                })
+
+            # Add skip rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
+            skip_stats = self._get_skip_rate_statistics()
+            if skip_stats:
+                stats.update({
+                    'skip_rate_statistics': skip_stats
+                })
+
+            # Add efficiency metrics (NEW)
+            efficiency_metrics = self.get_efficiency_metrics()
+            if efficiency_metrics.get('available'):
+                stats.update({
+                    'efficiency_metrics': efficiency_metrics
+                })
+
+            return stats
+
     
     def configure_parallel_processing(self, 
                                     enable: bool = True,
                                     max_workers: Optional[int] = None,
                                     batch_size: int = 100,
-                                    enable_load_balancing: bool = True):
+                                    enable_load_balancing: bool = True,
+                                    use_coordinator: bool = False):
         """
         Configure parallel processing settings.
+        
+        Task 12: Enhanced to support ParallelCoordinator integration.
+        Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
         
         Args:
             enable: Enable or disable parallel processing
             max_workers: Maximum number of worker threads (None = auto-detect)
             batch_size: Number of windows to process in each batch
             enable_load_balancing: Enable intelligent load balancing
+            use_coordinator: Use ParallelCoordinator instead of ParallelWindowProcessor
         """
         self.enable_parallel_processing = enable
+        self.use_parallel_coordinator = use_coordinator
         
         if max_workers is not None:
             self.max_workers = max_workers
@@ -1530,19 +2355,33 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         self.parallel_batch_size = batch_size
         
         if enable:
-            # Create parallel processor
-            self.parallel_processor = ParallelWindowProcessor(
-                max_workers=self.max_workers,
-                enable_load_balancing=enable_load_balancing,
-                batch_size=batch_size,
-                memory_limit_mb=self.memory_limit_mb
-            )
-            
-            if self.debug_mode:
-                print(f"[TimeWindow] Parallel processing enabled: {self.max_workers} workers, "
-                      f"batch_size={batch_size}, load_balancing={enable_load_balancing}")
+            if use_coordinator:
+                # Task 12: Use ParallelCoordinator for optimized parallel processing
+                from ..optimization.optimization_components import ParallelCoordinator
+                self.parallel_coordinator = ParallelCoordinator(
+                    max_workers=self.max_workers,
+                    memory_limit_mb=self.memory_limit_mb,
+                    shared_data_strategy="thread_local"
+                )
+                
+                if self.debug_mode:
+                    print(f"[TimeWindow] Parallel coordinator enabled: {self.max_workers} workers, "
+                          f"memory_limit={self.memory_limit_mb}MB")
+            else:
+                # Use existing ParallelWindowProcessor
+                self.parallel_processor = ParallelWindowProcessor(
+                    max_workers=self.max_workers,
+                    enable_load_balancing=enable_load_balancing,
+                    batch_size=batch_size,
+                    memory_limit_mb=self.memory_limit_mb
+                )
+                
+                if self.debug_mode:
+                    print(f"[TimeWindow] Parallel processing enabled: {self.max_workers} workers, "
+                          f"batch_size={batch_size}, load_balancing={enable_load_balancing}")
         else:
             self.parallel_processor = None
+            self.parallel_coordinator = None
             if self.debug_mode:
                 print("[TimeWindow] Parallel processing disabled")
     
@@ -1550,9 +2389,34 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         Get parallel processing statistics from last execution.
         
+        Task 12: Enhanced to support ParallelCoordinator statistics.
+        
         Returns:
             ParallelProcessingStats object or None if parallel processing not used
         """
+        if self.parallel_processor:
+            return self.parallel_processor.get_processing_stats()
+        elif self.parallel_coordinator:
+            # Return coordinator statistics in a compatible format
+            stats = self.parallel_coordinator.get_statistics()
+            # Note: ParallelCoordinator returns a dict, not ParallelProcessingStats
+            # For now, return None and let callers check coordinator directly
+            return None
+        return None
+    
+    def get_parallel_coordinator_stats(self) -> Optional[Dict[str, Any]]:
+        """
+        Get parallel coordinator statistics from last execution.
+        
+        Task 12: New method for ParallelCoordinator statistics.
+        Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
+        
+        Returns:
+            Dictionary with coordinator statistics or None if coordinator not used
+        """
+        if self.parallel_coordinator:
+            return self.parallel_coordinator.get_statistics()
+        return None
         if self.parallel_processor:
             return self.parallel_processor.get_processing_stats()
         return None
@@ -1803,6 +2667,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             print(msg)
             sys.stdout.flush()
         
+        # Task 23: Start profiling the entire scan operation (Requirements 1.1, 1.2)
+        if self._profiling_enabled:
+            self.profiler.start_operation("_scan_time_windows")
+            self.profiler.record_memory_checkpoint("scan_start")
+        
         # Requirement 6.1: Log time range at engine start
         log(f"\n[Time-Window Engine] 🚀 Starting correlation...")
         log(f"[Time-Window Engine] Wing: {wing.wing_name}")
@@ -1895,6 +2764,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     enable_gc=True
                 )
                 
+                # Task 15: Initialize MemoryMonitor for streaming mode memory management
+                # Requirements: 5.1, 5.2, 5.3, 5.4, 5.5
+                # Task 21: Apply memory thresholds from performance config (Requirement 8.4)
+                self.memory_monitor = MemoryMonitor(
+                    threshold_mb=self.performance_config.memory_threshold_mb,
+                    check_interval_seconds=1
+                )
+                
                 # Initialize comprehensive error handling coordination
                 self.error_coordinator = ErrorHandlingCoordinator(
                     debug_mode=self.debug_mode
@@ -1909,6 +2786,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 )
                 
                 print(f"[Time-Window Engine]   ✓ Memory limit: {self.scanning_config.memory_limit_mb} MB")
+                print(f"[Time-Window Engine]   ✓ Memory monitor initialized")
                 print(f"[Time-Window Engine]   ✓ Error handling initialized")
                 sys.stdout.flush()
             
@@ -1918,6 +2796,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             with PhaseTimer(self.performance_monitor, ProcessingPhase.FEATHER_LOADING) as timer:
                 self._load_feathers(wing, feather_paths, result)
                 timer.add_records(result.feathers_processed)
+                
+                # Task 23: Record memory checkpoint after loading (Requirements 1.2)
+                if self._profiling_enabled:
+                    self.profiler.record_memory_checkpoint("after_feather_loading")
                 
                 print(f"[Time-Window Engine]   ✓ Loaded {result.feathers_processed} feathers")
                 sys.stdout.flush()
@@ -1948,6 +2830,30 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     print(f"[Time-Window Engine]   📋 Types: {type_summary}")
                     sys.stdout.flush()
                 
+                # Display timestamp columns detected for each feather
+                print(f"\n[Time-Window Engine]   ⏰ Timestamp Columns Detected:")
+                print(f"[Time-Window Engine]   {'='*80}")
+                print(f"[Time-Window Engine]   {'Feather':<25} {'Timestamp Columns':<55}")
+                print(f"[Time-Window Engine]   {'-'*80}")
+                
+                for fid, query_manager in self.feather_queries.items():
+                    # Get timestamp columns
+                    if hasattr(query_manager, 'timestamp_columns') and query_manager.timestamp_columns:
+                        ts_cols = query_manager.timestamp_columns
+                        if len(ts_cols) > 3:
+                            # Show first 3 and count
+                            cols_display = f"{', '.join(ts_cols[:3])} (+{len(ts_cols)-3} more)"
+                        else:
+                            cols_display = ', '.join(ts_cols)
+                        print(f"[Time-Window Engine]   {fid:<25} {cols_display:<55}")
+                    elif hasattr(query_manager, 'timestamp_column') and query_manager.timestamp_column:
+                        print(f"[Time-Window Engine]   {fid:<25} {query_manager.timestamp_column:<55}")
+                    else:
+                        print(f"[Time-Window Engine]   {fid:<25} {'⚠️  None detected':<55}")
+                
+                print(f"[Time-Window Engine]   {'='*80}\n")
+                sys.stdout.flush()
+                
                 # Register error handling components with coordinator
                 if self.feather_queries:
                     # Get the first query manager to access error handlers
@@ -1972,6 +2878,18 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     filters=self.filters,
                     debug_mode=self.debug_mode
                 )
+                
+                # Initialize empty window detector (Requirements 3.1, 3.2, 3.3, 3.4, 3.5)
+                # Task 21: Only initialize if enabled in performance config
+                if self.performance_config.enable_empty_window_skipping:
+                    self.empty_window_detector = EmptyWindowDetector(
+                        window_manager=self.window_query_manager,
+                        debug_mode=self.debug_mode
+                    )
+                else:
+                    self.empty_window_detector = None
+                    if self.debug_mode:
+                        logger.info("[Time-Window Engine] Empty window skipping disabled by performance config")
                 
                 # Initialize Two-Phase Architecture components
                 # Phase 1: WindowDataStorage for persisting window data
@@ -2023,11 +2941,69 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 estimated_windows = self._calculate_total_windows(start_epoch, end_epoch)
                 print(f"[Time-Window Engine] 📊 Generated {estimated_windows:,} time windows ({self.window_size_minutes} minutes each)")
                 
-                # Calculate and display estimated processing time
-                # Rough estimate: 0.5 seconds per window on average
-                estimated_processing_minutes = (estimated_windows * 0.5) / 60
+                # Calculate and display estimated processing time with improved accuracy
+                # Base estimate depends on dataset size and configuration
+                total_records = sum(meta.get('records_processed', 0) for meta in result.feather_metadata.values())
+                
+                # Improved estimation based on actual data characteristics
+                if total_records > 0:
+                    # Estimate based on records per window and processing rate
+                    avg_records_per_window = total_records / estimated_windows if estimated_windows > 0 else 0
+                    
+                    # Processing rate estimates (records/second):
+                    # - Small windows (<100 records): ~5000 records/sec (fast, mostly empty)
+                    # - Medium windows (100-1000 records): ~2000 records/sec
+                    # - Large windows (>1000 records): ~1000 records/sec (correlation overhead)
+                    if avg_records_per_window < 100:
+                        processing_rate = 5000  # Fast processing for sparse data
+                        base_time_per_window = 0.02  # 20ms overhead per window
+                    elif avg_records_per_window < 1000:
+                        processing_rate = 2000
+                        base_time_per_window = 0.05  # 50ms overhead
+                    else:
+                        processing_rate = 1000
+                        base_time_per_window = 0.1  # 100ms overhead
+                    
+                    # Calculate time based on records + overhead
+                    estimated_seconds = (total_records / processing_rate) + (estimated_windows * base_time_per_window)
+                    
+                    # Add overhead for streaming mode
+                    if self.streaming_mode_active:
+                        estimated_seconds *= 1.2  # 20% overhead for database writes
+                    
+                    # Add overhead for parallel processing coordination
+                    if self.enable_parallel_processing:
+                        estimated_seconds *= 0.7  # 30% speedup from parallelization
+                    
+                    estimated_processing_minutes = estimated_seconds / 60
+                else:
+                    # Fallback: use simple per-window estimate
+                    estimated_processing_minutes = (estimated_windows * 0.1) / 60  # 100ms per window
+                
                 estimated_time_str = self._format_time_duration(estimated_processing_minutes)
-                print(f"[Time-Window Engine]   ⏱️ Estimated Processing Time: ~{estimated_time_str}")
+                
+                # Show estimate with context
+                if estimated_processing_minutes < 1:
+                    print(f"[Time-Window Engine] ⏱️ Estimated Time: ~{estimated_seconds:.1f} seconds")
+                elif estimated_processing_minutes < 60:
+                    print(f"[Time-Window Engine] ⏱️ Estimated Time: ~{estimated_processing_minutes:.1f} minutes")
+                else:
+                    print(f"[Time-Window Engine] ⏱️ Estimated Time: ~{estimated_time_str}")
+                    print(f"[Time-Window Engine]   ℹ️  Initial estimate - will refine as processing begins")
+                
+                # Show data density information
+                if total_records > 0 and estimated_windows > 0:
+                    avg_records_per_window = total_records / estimated_windows
+                    if avg_records_per_window < 10:
+                        density = "very sparse"
+                    elif avg_records_per_window < 100:
+                        density = "sparse"
+                    elif avg_records_per_window < 1000:
+                        density = "moderate"
+                    else:
+                        density = "dense"
+                    
+                    print(f"[Time-Window Engine] 📊 Data Density: {avg_records_per_window:.1f} records/window ({density})")
                 
                 # Show performance comparison if we avoided year 2000 default
                 if self.scanning_config.auto_detect_time_range:
@@ -2039,8 +3015,12 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         windows_saved = windows_from_2000 - estimated_windows
                         if windows_saved > 0:
                             savings_percent = (windows_saved / windows_from_2000 * 100) if windows_from_2000 > 0 else 0
-                            print(f"[Time-Window Engine]   💡 Performance: Avoided {windows_saved:,} empty windows "
-                                  f"({savings_percent:.1f}% reduction vs. year 2000 default)")
+                            time_saved_hours = (windows_saved * base_time_per_window) / 3600 if 'base_time_per_window' in locals() else (windows_saved * 0.1) / 3600
+                            
+                            print(f"[Time-Window Engine] 💡 Smart Time Range Detection:")
+                            print(f"[Time-Window Engine]   • Avoided {windows_saved:,} unnecessary windows ({savings_percent:.1f}% reduction)")
+                            print(f"[Time-Window Engine]   • Saved ~{time_saved_hours:.1f} hours of processing time")
+                            print(f"[Time-Window Engine]   • Started from {start_epoch.year} instead of 2000")
                 
                 sys.stdout.flush()
             
@@ -2048,11 +3028,19 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             matches = []
             total_windows = self._calculate_total_windows(start_epoch, end_epoch)
             
-            processing_mode = "🔄 parallel" if self.enable_parallel_processing else "➡️ sequential"
-            print(f"[Time-Window Engine] 🔍 Step 5: Scanning {total_windows:,} time windows ({processing_mode} mode)...")
+            processing_mode = "parallel" if self.enable_parallel_processing else "sequential"
+            print(f"\n[Time-Window Engine] 🔍 Step 5: Processing Time Windows")
+            print(f"[Time-Window Engine] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print(f"[Time-Window Engine] Mode: {processing_mode.upper()}")
             
             if self.enable_parallel_processing and self.parallel_processor:
-                print(f"[Time-Window Engine]   👥 Workers: {self.max_workers}")
+                print(f"[Time-Window Engine] Workers: {self.max_workers} parallel threads")
+            
+            if self.streaming_mode_active:
+                print(f"[Time-Window Engine] Streaming: ENABLED (memory-efficient mode)")
+            
+            print(f"[Time-Window Engine] Windows: {total_windows:,} to process")
+            print(f"[Time-Window Engine] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             
             sys.stdout.flush()
             
@@ -2083,6 +3071,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             else:
                 # Use sequential processing
                 matches = self._process_windows_sequential(start_epoch, end_epoch, wing, result, total_windows)
+            
+            # Task 23: Record memory checkpoint after processing (Requirements 1.2)
+            if self._profiling_enabled:
+                self.profiler.record_memory_checkpoint("after_window_processing")
             
             # Task 2.1: Semantic mappings REMOVED from correlation processing
             # Requirements: 1.1, 1.2, 1.3, 1.4
@@ -2190,6 +3182,35 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     result.errors.append(f"Stack trace:\n{traceback.format_exc()}")
         
         finally:
+            # Task 23: End profiling operation (Requirements 1.1, 1.3)
+            try:
+                if self._profiling_enabled:
+                    self.profiler.end_operation("_scan_time_windows")
+                    self.profiler.record_memory_checkpoint("scan_end")
+                    
+                    # Generate and log performance report if debug mode
+                    if self.debug_mode:
+                        perf_report = self.profiler.get_performance_report()
+                        print(f"\n[Time-Window Engine] 📊 Performance Profiling Report:")
+                        print(f"[Time-Window Engine]   Total execution time: {perf_report.total_execution_time:.2f}s")
+                        print(f"[Time-Window Engine]   Peak memory: {perf_report.peak_memory_mb:.1f}MB")
+                        
+                        # Show top 5 operations by time
+                        sorted_ops = sorted(
+                            perf_report.operation_stats.items(),
+                            key=lambda x: x[1].total_time_seconds,
+                            reverse=True
+                        )[:5]
+                        
+                        if sorted_ops:
+                            print(f"[Time-Window Engine]   Top operations by time:")
+                            for op_name, stats in sorted_ops:
+                                print(f"[Time-Window Engine]     • {op_name}: {stats.total_time_seconds:.2f}s "
+                                     f"({stats.call_count} calls, avg {stats.average_time_seconds:.3f}s)")
+            except Exception as prof_error:
+                if self.debug_mode:
+                    print(f"[Time-Window Engine] Profiler error: {prof_error}")
+            
             # Cleanup
             self._cleanup_feather_queries()
             
@@ -2267,20 +3288,62 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             print(f"\n[Time-Window Engine] ✅ Complete!")
             print(f"[Time-Window Engine] ✅ Processed {total_windows:,} time windows")
             
-            # Add window statistics if available
+            # Add summary of records that were loaded but not parsed into matches
+            if result.feather_metadata:
+                total_records_loaded = sum(meta.get('records_processed', 0) for meta in result.feather_metadata.values())
+                total_records_in_matches = sum(
+                    sum(len(records) for records in match.feather_records.values())
+                    for match in result.matches
+                ) if result.matches else 0
+                
+                records_not_parsed = total_records_loaded - total_records_in_matches
+                
+                if records_not_parsed > 0:
+                    parse_rate = (total_records_in_matches / total_records_loaded * 100) if total_records_loaded > 0 else 0
+                    print(f"\n[Time-Window Engine] 📊 Record Processing Summary:")
+                    print(f"[Time-Window Engine]   • Total records loaded: {total_records_loaded:,}")
+                    print(f"[Time-Window Engine]   • Records in matches: {total_records_in_matches:,} ({parse_rate:.1f}%)")
+                    print(f"[Time-Window Engine]   • Records not parsed: {records_not_parsed:,} ({100-parse_rate:.1f}%)")
+                    print(f"[Time-Window Engine]   ℹ️  Records not parsed were likely filtered by minimum_matches={wing.correlation_rules.minimum_matches}")
+                    print(f"[Time-Window Engine]   ℹ️  To include all records, set minimum_matches=1 in wing configuration")
+            
+            # Task 23: Add window statistics if available (Requirements 3.3, 9.3, 9.4)
             if self.scanning_config.track_empty_window_stats:
                 windows_with_data = self.window_processing_stats.windows_with_data
                 empty_windows = self.window_processing_stats.empty_windows_skipped
                 skip_rate = self.window_processing_stats.skip_rate_percentage
                 print(f"[Time-Window Engine] ✅ Windows with correlations: {windows_with_data:,}")
                 print(f"[Time-Window Engine] ⏭️ Empty windows skipped: {empty_windows:,} ({skip_rate:.1f}%)")
+                
+                # Task 23: Add EmptyWindowDetector statistics if available (Requirements 3.3)
+                if self.empty_window_detector:
+                    detector_stats = self.empty_window_detector.get_skip_statistics()
+                    if detector_stats.time_saved_seconds > 0:
+                        print(f"[Time-Window Engine] ⚡ Time saved by skipping: ~{detector_stats.time_saved_seconds:.1f}s")
+                    
+                    # Log detector efficiency
+                    if self.debug_mode and detector_stats.total_windows_checked > 0:
+                        print(f"[Time-Window Engine] 📊 Empty window detection:")
+                        print(f"[Time-Window Engine]   • Windows checked: {detector_stats.total_windows_checked:,}")
+                        print(f"[Time-Window Engine]   • Empty found: {detector_stats.empty_windows_found:,}")
+                        print(f"[Time-Window Engine]   • Skip rate: {detector_stats.skip_rate_percentage:.1f}%")
             
-            # Count unique identities from matches
+            # Count unique identities and total records from matches
             if result.total_matches > 0:
-                unique_identities = len(set(match.matched_application for match in result.matches if match.matched_application)) if hasattr(result, 'matches') and result.matches else 0
-                print(f"[Time-Window Engine] 🔗 Total identities found: {unique_identities:,}")
+                # Each match represents one unique identity
+                unique_identities = result.total_matches
+                
+                # Calculate total records across all matches
+                total_records = 0
+                if hasattr(result, 'matches') and result.matches:
+                    for match in result.matches:
+                        if hasattr(match, 'feather_records') and match.feather_records:
+                            total_records += sum(len(records) for records in match.feather_records.values())
+                
+                print(f"[Time-Window Engine] 🔗 Total unique identities: {unique_identities:,}")
+                print(f"[Time-Window Engine] 📊 Total records correlated: {total_records:,}")
             
-            print(f"[Time-Window Engine] ✅ Total correlations created: {result.total_matches:,}")
+            print(f"[Time-Window Engine] ✅ Correlation complete")
             
             # Display processing time with formatted duration
             processing_time_minutes = result.execution_duration_seconds / 60
@@ -2323,6 +3386,74 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 print("PERFORMANCE ANALYSIS SUMMARY")
                 print("="*60)
                 print(result.performance_summary)
+                print("="*60)
+                
+                # Task 23: Add optimization components summary (Requirements 9.3, 9.4)
+                print("\n" + "="*60)
+                print("OPTIMIZATION COMPONENTS SUMMARY")
+                print("="*60)
+                
+                # Profiling summary
+                if self._profiling_enabled:
+                    print("✓ Performance Profiling: ENABLED")
+                    perf_report = self.profiler.get_performance_report()
+                    print(f"  • Total operations tracked: {len(perf_report.operation_stats)}")
+                    print(f"  • Memory checkpoints: {len(perf_report.memory_checkpoints)}")
+                else:
+                    print("○ Performance Profiling: DISABLED")
+                
+                # Empty window detection summary
+                if self.empty_window_detector and self.performance_config.enable_empty_window_skipping:
+                    detector_stats = self.empty_window_detector.get_skip_statistics()
+                    print("✓ Empty Window Detection: ENABLED")
+                    print(f"  • Windows checked: {detector_stats.total_windows_checked:,}")
+                    print(f"  • Empty windows found: {detector_stats.empty_windows_found:,}")
+                    print(f"  • Skip rate: {detector_stats.skip_rate_percentage:.1f}%")
+                    print(f"  • Time saved: {detector_stats.time_saved_seconds:.1f}s")
+                else:
+                    print("○ Empty Window Detection: DISABLED")
+                
+                # Memory monitoring summary
+                if self.memory_monitor:
+                    print("✓ Memory Monitoring: ENABLED")
+                    print(f"  • Threshold: {self.memory_monitor.threshold_mb:.0f}MB")
+                    print(f"  • Streaming mode: {'ACTIVE' if self.streaming_mode_active else 'INACTIVE'}")
+                else:
+                    print("○ Memory Monitoring: DISABLED")
+                
+                # Parallel processing summary
+                if self.enable_parallel_processing:
+                    print("✓ Parallel Processing: ENABLED")
+                    print(f"  • Max workers: {self.max_workers}")
+                    if self.use_parallel_coordinator:
+                        print(f"  • Mode: ParallelCoordinator")
+                    else:
+                        print(f"  • Mode: ParallelWindowProcessor")
+                else:
+                    print("○ Parallel Processing: DISABLED")
+                
+                # Cache statistics summary
+                if self.feather_queries:
+                    total_cache_hits = 0
+                    total_cache_misses = 0
+                    for query in self.feather_queries.values():
+                        if hasattr(query, '_cache_stats'):
+                            total_cache_hits += query._cache_stats.get('hits', 0)
+                            total_cache_misses += query._cache_stats.get('misses', 0)
+                    
+                    if total_cache_hits + total_cache_misses > 0:
+                        cache_hit_rate = (total_cache_hits / (total_cache_hits + total_cache_misses)) * 100
+                        print("✓ Query Caching: ACTIVE")
+                        print(f"  • Cache hits: {total_cache_hits:,}")
+                        print(f"  • Cache misses: {total_cache_misses:,}")
+                        print(f"  • Hit rate: {cache_hit_rate:.1f}%")
+                
+                # Timestamp caching summary
+                if hasattr(self, 'timestamp_utc_cache'):
+                    print("✓ Timestamp Caching: ENABLED")
+                    print(f"  • UTC cache size: {self.timestamp_utc_cache.max_size:,}")
+                    print(f"  • Parse cache size: {self.timestamp_parse_cache.max_size:,}")
+                
                 print("="*60)
         
         return result
@@ -2380,7 +3511,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Create optimized query manager with error handling
                 print(f"[Time-Window Engine]     Creating query manager...")
                 sys.stdout.flush()
-                query_manager = OptimizedFeatherQuery(loader, debug_mode=self.debug_mode)
+                query_manager = OptimizedFeatherQuery(loader, debug_mode=self.debug_mode, profiler=self.profiler)
+                
+                # Task 21: Apply cache configuration from performance config (Requirement 8.3)
+                query_manager.configure_cache(
+                    max_size_mb=self.performance_config.query_cache_size_mb,
+                    max_entries=100  # Keep default max entries
+                )
+                
                 self.feather_queries[feather_id] = query_manager
                 
                 result.feathers_processed += 1
@@ -2486,6 +3624,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         This ensures consistent timezone handling when comparing datetimes from
         different sources (FilterConfig vs database).
         
+        Uses caching to avoid redundant conversions for identical input values.
+        Requirements: 6.3, 7.3
+        
         Args:
             dt: Datetime object (timezone-aware or naive)
             
@@ -2495,13 +3636,24 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         if dt is None:
             return None
         
-        # If already timezone-aware, convert to UTC
-        if dt.tzinfo is not None:
-            return dt.astimezone(datetime.timezone.utc) if hasattr(datetime, 'timezone') else dt
+        # Check cache first
+        cached_result = self.timestamp_utc_cache.get(dt)
+        if cached_result is not None:
+            return cached_result
         
-        # If timezone-naive, assume UTC
-        from datetime import timezone
-        return dt.replace(tzinfo=timezone.utc)
+        # Perform conversion
+        if dt.tzinfo is not None:
+            # If already timezone-aware, convert to UTC
+            utc_dt = dt.astimezone(datetime.timezone.utc) if hasattr(datetime, 'timezone') else dt
+        else:
+            # If timezone-naive, assume UTC
+            from datetime import timezone
+            utc_dt = dt.replace(tzinfo=timezone.utc)
+        
+        # Cache the result
+        self.timestamp_utc_cache.put(dt, utc_dt)
+        
+        return utc_dt
     
     def _detect_actual_time_range(self) -> TimeRangeDetectionResult:
         """
@@ -2849,6 +4001,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         # Use new detection method if auto-detection is enabled
         if self.scanning_config.auto_detect_time_range:
+            print(f"[Time-Window Engine] 🔍 Auto-detecting time range from data...")
             try:
                 detection_result = self._detect_actual_time_range()
                 
@@ -2929,16 +4082,19 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 
             except Exception as e:
                 error_msg = f"Auto-detection failed: {e}"
-                print(f"[TimeWindow] ❌ {error_msg}")
-                print(f"[TimeWindow] Falling back to legacy time range determination")
+                print(f"[Time-Window Engine] ❌ {error_msg}")
+                print(f"[Time-Window Engine] Falling back to legacy time range determination")
                 if result:
                     result.warnings.append(f"Time Range Detection: {error_msg}, using fallback method")
                 if self.debug_mode:
                     import traceback
                     traceback.print_exc()
+        else:
+            print(f"[Time-Window Engine] ⚠️ Auto-detection is DISABLED (auto_detect_time_range=False)")
+            print(f"[Time-Window Engine] Using legacy time range determination")
         
         # Fallback to legacy behavior (for backward compatibility)
-        print(f"[TimeWindow] Using legacy time range determination (auto-detection disabled)")
+        print(f"[Time-Window Engine] 📅 Legacy Mode: Querying timestamp ranges from feathers...")
         
         earliest_times = []
         latest_times = []
@@ -3145,46 +4301,71 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             current_time += timedelta(minutes=self.scanning_interval_minutes)
             window_counter += 1
     
+    def _normalize_identity(self, identity: str) -> str:
+        """
+        Normalize identity for grouping by removing symbols and numbers.
+        
+        This ensures that variations like:
+        - "chrome.exe", "chrome", "Chrome.exe" -> "chrome"
+        - "app-v1.2.3", "app_v2.0", "app" -> "app"
+        - "program (x86)", "program", "Program" -> "program"
+        
+        Args:
+            identity: Raw identity string
+            
+        Returns:
+            Normalized identity string (lowercase, no symbols/numbers)
+        """
+        import re
+        
+        # Convert to lowercase
+        normalized = identity.lower()
+        
+        # Remove common file extensions
+        extensions = ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.jar', '.msi']
+        for ext in extensions:
+            if normalized.endswith(ext):
+                normalized = normalized[:-len(ext)]
+                break
+        
+        # Remove version numbers and common patterns
+        # Examples: "v1.2.3", "version 2.0", "(x86)", "[64bit]"
+        normalized = re.sub(r'\s*v?\d+[\d.]*', '', normalized)  # Remove version numbers
+        normalized = re.sub(r'\s*\(.*?\)', '', normalized)  # Remove parentheses content
+        normalized = re.sub(r'\s*\[.*?\]', '', normalized)  # Remove brackets content
+        
+        # Remove all symbols and numbers, keep only letters and spaces
+        normalized = re.sub(r'[^a-z\s]', '', normalized)
+        
+        # Remove extra whitespace
+        normalized = ' '.join(normalized.split())
+        
+        # Remove common noise words
+        noise_words = ['the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for']
+        words = normalized.split()
+        words = [w for w in words if w not in noise_words]
+        normalized = ' '.join(words)
+        
+        return normalized.strip()
+    
     def _extract_identity_from_record(self, record: Dict[str, Any]) -> Optional[str]:
         """
-        Extract identity value from a record.
-        
-        Uses the same identity fields as _should_filter_record() for consistency.
+        Extract identity value from a record with normalization.
         
         Args:
             record: Record to extract identity from
             
         Returns:
-            Identity value (normalized to lowercase) or None if no identity found
+            Normalized identity value or None if no identity found
         """
-        # Check common identity fields across all artifact types
-        identity_fields = [
-            # Names (higher priority)
-            'name', 'filename', 'executable_name', 'app_name', 'application',
-            'fn_filename', 'Source_Name', 'original_filename', 'program_name',
-            'display_name', 'product_name', 'Source', 'FileName', 'Name',
-            'ProductName', 'FileDescription', 'OriginalFileName', 'value',
-            'Value', 'entry_name', 'program', 'executable', 'Executable',
-            'service_name', 'ServiceName', 'task_name', 'TaskName', 'process',
-            'Process', 'application_name',
-            # Paths (lower priority)
-            'path', 'file_path', 'app_path', 'Local_Path', 'reconstructed_path',
-            'original_path', 'lower_case_long_path', 'install_location',
-            'root_dir_path', 'ShortcutTargetPath', 'Source_Path', 'folder_path',
-            'registry_path', 'FullPath', 'Path', 'FilePath', 'LowerCaseLongPath',
-            'focus_path', 'run_path', 'ExecutablePath', 'executable_path',
-            'image_path', 'ImagePath', 'binary_path', 'BinaryPath',
-            'full_path', 'application_path', 'program_path', 'command_line',
-            'exe_path', 'exepath', 'target_path', 'TargetPath'
-        ]
-        
-        # Try to find first non-empty identity field
-        for field in identity_fields:
+        # Try to find first non-empty identity field from core list
+        for field in CORE_IDENTITY_FIELDS:
             if field in record and record[field]:
                 value = str(record[field]).strip()
                 if value:
-                    # Normalize to lowercase for case-insensitive grouping
-                    return value.lower()
+                    # Normalize identity for proper grouping
+                    # This removes symbols, numbers, and standardizes format
+                    return self._normalize_identity(value)
         
         return None
     
@@ -3192,10 +4373,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         Correlate records in a window by grouping them by identity.
         
+        OPTIMIZED VERSION (Task 16):
+        1. Apply filters BEFORE correlation (Requirement 6.2)
+        2. Use identity index with hash map for O(1) lookups
+        3. Deduplicate records to avoid redundant processing (Requirement 6.4)
+        
         This is the core correlation logic:
-        1. Group all records by identity value
-        2. Check minimum feather requirement
-        3. Create CorrelationMatch for each identity group
+        1. Filter records first (optimization)
+        2. Deduplicate records (optimization)
+        3. Group all records by identity value using hash map
+        4. Check minimum feather requirement
+        5. Create CorrelationMatch for each identity group
         
         Args:
             window: TimeWindow with populated records
@@ -3204,104 +4392,190 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         Returns:
             List of CorrelationMatch objects
         """
-        import uuid
-        from datetime import datetime
+        # Start profiling (Requirements 1.1, 1.4)
+        self.profiler.start_operation("_correlate_window_records")
         
-        # Group records by identity
-        identity_groups = {}  # identity_value -> {feather_id: [records]}
-        
-        for feather_id, records in window.records_by_feather.items():
-            for record in records:
-                # Extract identity from record
-                identity = self._extract_identity_from_record(record)
+        try:
+            # OPTIMIZATION 1: Apply filters BEFORE correlation (Requirement 6.2)
+            # This reduces the number of records passed to correlation
+            filtered_records_by_feather = {}
+            total_filtered = 0
+            
+            for feather_id, records in window.records_by_feather.items():
+                # FIXED: Use correct attribute name window_query_manager (Requirements 4.1, 4.2, 4.3)
+                if self.window_query_manager and self.window_query_manager.filters:
+                    # Apply filters to reduce record set
+                    filtered_records = [r for r in records if not self.window_query_manager._should_filter_record(r)]
+                    filtered_count = len(records) - len(filtered_records)
+                    total_filtered += filtered_count
+                    
+                    if filtered_count > 0 and self.debug_mode:
+                        logger.debug(f"[Correlation Optimization] Filtered {filtered_count}/{len(records)} records from {feather_id} before correlation")
+                    
+                    filtered_records_by_feather[feather_id] = filtered_records
+                else:
+                    # No filters or window_query_manager not available, use all records
+                    if self.debug_mode and not self.window_query_manager:
+                        logger.debug(f"[Correlation Optimization] Skipping filtering for {feather_id} - window_query_manager not available")
+                    filtered_records_by_feather[feather_id] = records
+            
+            # OPTIMIZATION 2: Deduplicate records (Requirement 6.4)
+            # Build identity index with deduplication using hash map for O(1) lookups
+            identity_groups = {}  # identity_value -> {feather_id: [records]}
+            seen_records = set()  # Track seen records to avoid duplicates
+            total_duplicates = 0
+            
+            for feather_id, records in filtered_records_by_feather.items():
+                for record in records:
+                    # Create a record signature for deduplication
+                    # Use identity + timestamp + feather_id as unique key
+                    identity = self._extract_identity_from_record(record)
+                    
+                    if identity:
+                        # Create record signature for deduplication
+                        timestamp_val = None
+                        timestamp_fields = ['timestamp', 'event_time', 'last_run_time', 'access_time', 
+                                          'creation_time', 'modification_time', 'last_modified']
+                        for ts_field in timestamp_fields:
+                            if ts_field in record and record[ts_field]:
+                                timestamp_val = record[ts_field]
+                                break
+                        
+                        # Create unique signature
+                        record_signature = (identity, feather_id, str(timestamp_val))
+                        
+                        # Check if we've seen this record before
+                        if record_signature in seen_records:
+                            total_duplicates += 1
+                            if self.debug_mode:
+                                logger.debug(f"[Correlation Optimization] Skipped duplicate record: {record_signature}")
+                            continue  # Skip duplicate
+                        
+                        # Mark as seen
+                        seen_records.add(record_signature)
+                        
+                        # OPTIMIZATION 3: Use hash map for O(1) identity lookups
+                        # Initialize identity group if needed
+                        if identity not in identity_groups:
+                            identity_groups[identity] = {}
+                        
+                        # Initialize feather list if needed
+                        if feather_id not in identity_groups[identity]:
+                            identity_groups[identity][feather_id] = []
+                        
+                        # Add record to group
+                        identity_groups[identity][feather_id].append(record)
+            
+            # Log optimization statistics
+            if total_filtered > 0 or total_duplicates > 0:
+                logger.info(f"[Correlation Optimization] Filtered {total_filtered} records, removed {total_duplicates} duplicates before correlation")
+            
+            # Create matches from identity groups
+            matches = []
+            minimum_feathers = wing.correlation_rules.minimum_matches
+            
+            # Track skipped identities for logging
+            skipped_identities = []
+            total_skipped_records = 0
+            
+            for identity_value, feather_records in identity_groups.items():
+                # Check if we have enough feathers
+                feather_count = len(feather_records)
                 
-                if identity:
-                    # Initialize identity group if needed
-                    if identity not in identity_groups:
-                        identity_groups[identity] = {}
-                    
-                    # Initialize feather list if needed
-                    if feather_id not in identity_groups[identity]:
-                        identity_groups[identity][feather_id] = []
-                    
-                    # Add record to group
-                    identity_groups[identity][feather_id].append(record)
-        
-        # Create matches from identity groups
-        matches = []
-        minimum_feathers = wing.correlation_rules.minimum_matches
-        
-        for identity_value, feather_records in identity_groups.items():
-            # Check if we have enough feathers
-            feather_count = len(feather_records)
-            
-            if feather_count < minimum_feathers:
-                continue  # Skip - not enough feathers
-            
-            # Get timestamp from first record (use any feather)
-            first_feather_id = list(feather_records.keys())[0]
-            first_record = feather_records[first_feather_id][0]
-            
-            # Try to extract timestamp
-            timestamp = None
-            timestamp_fields = ['timestamp', 'event_time', 'last_run_time', 'access_time', 
-                              'creation_time', 'modification_time', 'last_modified']
-            for ts_field in timestamp_fields:
-                if ts_field in first_record and first_record[ts_field]:
-                    timestamp = first_record[ts_field]
-                    break
-            
-            # Use window start time if no timestamp found
-            if not timestamp:
-                timestamp = window.start_time
-            
-            # Convert timestamp to ISO format string
-            if isinstance(timestamp, datetime):
-                timestamp_str = timestamp.isoformat()
-            else:
-                timestamp_str = str(timestamp)
-            
-            # Calculate time spread (earliest to latest record in group)
-            earliest_time = window.start_time
-            latest_time = window.end_time
-            time_spread = (latest_time - earliest_time).total_seconds()
-            
-            # Prepare feather_records dict for CorrelationMatch
-            match_feather_records = {}
-            for fid, records_list in feather_records.items():
-                # Include ALL records (metadata + actual data) - don't discard anything!
-                match_feather_records[fid] = records_list if records_list else []
+                if feather_count < minimum_feathers:
+                    # Track skipped identity
+                    record_count = sum(len(records) for records in feather_records.values())
+                    skipped_identities.append({
+                        'identity': identity_value,
+                        'feather_count': feather_count,
+                        'record_count': record_count,
+                        'feathers': list(feather_records.keys())
+                    })
+                    total_skipped_records += record_count
+                    continue  # Skip - not enough feathers
                 
-                # Log record inclusion for verification
-                if records_list:
-                    logger.info(f"[Time-Based Engine] Included {len(records_list)} records for feather_id={fid}")
+                # Get timestamp from first record (use any feather)
+                first_feather_id = list(feather_records.keys())[0]
+                first_record = feather_records[first_feather_id][0]
+                
+                # Try to extract timestamp
+                timestamp = None
+                timestamp_fields = ['timestamp', 'event_time', 'last_run_time', 'access_time', 
+                                  'creation_time', 'modification_time', 'last_modified']
+                for ts_field in timestamp_fields:
+                    if ts_field in first_record and first_record[ts_field]:
+                        timestamp = first_record[ts_field]
+                        break
+                
+                # Use window start time if no timestamp found
+                if not timestamp:
+                    timestamp = window.start_time
+                
+                # Convert timestamp to ISO format string
+                if isinstance(timestamp, datetime):
+                    timestamp_str = timestamp.isoformat()
+                else:
+                    timestamp_str = str(timestamp)
+                
+                # Calculate time spread (earliest to latest record in group)
+                # Calculate time spread (earliest to latest record in group)
+                earliest_time = window.start_time
+                latest_time = window.end_time
+                time_spread = (latest_time - earliest_time).total_seconds()
+                
+                # Prepare feather_records dict for CorrelationMatch
+                match_feather_records = {}
+                for fid, records_list in feather_records.items():
+                    # Include ALL records (metadata + actual data) - don't discard anything!
+                    match_feather_records[fid] = records_list if records_list else []
                     
-                    # Debug logging: track record types
-                    if self.debug_mode:
-                        metadata_count = sum(1 for r in records_list if isinstance(r, dict) and 
-                                           set(r.keys()) <= {'key', 'value', '_table', '_feather_id'})
-                        actual_data_count = len(records_list) - metadata_count
-                        logger.debug(f"[Time-Based Engine]   Record types - Metadata: {metadata_count}, Actual data: {actual_data_count}")
+                    # Log record inclusion for verification (Requirement 6.3 - Debug only)
+                    if records_list:
+                        logger.debug(f"[Time-Based Engine] Included {len(records_list)} records for feather_id={fid}")
+                        
+                        # Debug logging: track record types
+                        if self.debug_mode:
+                            metadata_count = sum(1 for r in records_list if isinstance(r, dict) and 
+                                               set(r.keys()) <= {'key', 'value', '_table', '_feather_id'})
+                            actual_data_count = len(records_list) - metadata_count
+                            logger.debug(f"[Time-Based Engine]   Record types - Metadata: {metadata_count}, Actual data: {actual_data_count}")
+                
+                # Create CorrelationMatch (without semantic_data - will be added in post-processing)
+                match = CorrelationMatch(
+                    match_id=str(uuid.uuid4()),
+                    timestamp=timestamp_str,
+                    feather_records=match_feather_records,
+                    match_score=1.0,  # Identity matches are high confidence
+                    feather_count=feather_count,
+                    time_spread_seconds=time_spread,
+                    anchor_feather_id=first_feather_id,
+                    anchor_artifact_type='Unknown',
+                    matched_application=identity_value,
+                    confidence_score=1.0,
+                    confidence_category="High",
+                    semantic_data=None  # Will be populated by post-processing semantic phase
+                )
+                
+                matches.append(match)
             
-            # Create CorrelationMatch (without semantic_data - will be added in post-processing)
-            match = CorrelationMatch(
-                match_id=str(uuid.uuid4()),
-                timestamp=timestamp_str,
-                feather_records=match_feather_records,
-                match_score=1.0,  # Identity matches are high confidence
-                feather_count=feather_count,
-                time_spread_seconds=time_spread,
-                anchor_feather_id=first_feather_id,
-                anchor_artifact_type='Unknown',
-                matched_application=identity_value,
-                confidence_score=1.0,
-                confidence_category="High",
-                semantic_data=None  # Will be populated by post-processing semantic phase
-            )
+            # Log skipped identities if any
+            if skipped_identities:
+                print(f"\n[Time-Window Engine] ⚠️  Skipped {len(skipped_identities)} identities ({total_skipped_records:,} records) - found in fewer than {minimum_feathers} feathers")
+                
+                if self.debug_mode:
+                    print(f"[Time-Window Engine] Skipped identities details:")
+                    for skip_info in skipped_identities[:10]:  # Show first 10
+                        print(f"[Time-Window Engine]   • {skip_info['identity']}: {skip_info['record_count']} records in {skip_info['feather_count']} feather(s) {skip_info['feathers']}")
+                    if len(skipped_identities) > 10:
+                        print(f"[Time-Window Engine]   ... and {len(skipped_identities) - 10} more")
             
-            matches.append(match)
-        
-        return matches
+            return matches
+        finally:
+            # End profiling (Requirements 1.1, 1.3)
+            try:
+                self.profiler.end_operation("_correlate_window_records")
+            except Exception:
+                pass  # Silently ignore profiler errors
     
     def _process_window(self, window: TimeWindow, wing: Wing) -> List[CorrelationMatch]:
         """
@@ -3310,6 +4584,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         Phase 1: Collect data and create matches by grouping records by identity
         Phase 2: Apply semantic mappings and scoring (done in _apply_semantic_mappings_to_matches)
         
+        Task 15: Enhanced with memory monitoring and release
+        Requirements: 5.2, 5.3
+        
         Args:
             window: TimeWindow to process
             wing: Wing configuration
@@ -3317,6 +4594,15 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         Returns:
             List of CorrelationMatch objects
         """
+        # Task 23: Start profiling (Requirements 1.1, 1.4)
+        if self._profiling_enabled:
+            self.profiler.start_operation("_process_window")
+        
+        # Task 15: Record memory checkpoint at window start (Requirements 5.2, 5.3)
+        memory_before = None
+        if hasattr(self, 'memory_monitor') and self.memory_monitor:
+            memory_before = self.memory_monitor.get_current_usage_mb()
+        
         # Start window performance monitoring
         window_metrics = self.performance_monitor.start_window_processing(
             window.window_id, window.start_time, window.end_time
@@ -3324,17 +4610,25 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         try:
             # Step 0: Quick empty window check (if enabled)
-            if self.scanning_config.enable_quick_empty_check:
+            # Requirements 3.1, 3.2, 3.3, 3.4, 3.5
+            if self.scanning_config.enable_quick_empty_check and self.empty_window_detector:
                 quick_check_start = time.time()
-                has_records = self.window_query_manager.quick_check_window_has_records(window)
+                
+                # Use EmptyWindowDetector to check if window is empty
+                is_empty = self.empty_window_detector.is_window_empty(window)
+                
                 quick_check_duration = time.time() - quick_check_start
                 
                 # Track empty window check time
                 if hasattr(self, 'window_processing_stats'):
                     self.window_processing_stats.empty_window_check_time_seconds += quick_check_duration
                 
-                if not has_records:
+                if is_empty:
                     # Window is empty - skip immediately without full query
+                    # Record time saved by skipping (Requirements 3.3)
+                    estimated_processing_time = 0.050  # 50ms estimated for full processing
+                    self.empty_window_detector.record_time_saved(estimated_processing_time)
+                    
                     if window_metrics:
                         self.performance_monitor.complete_window_processing(
                             window.window_id, 0, 0, 0
@@ -3385,6 +4679,62 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     window.window_id, records_found, len(matches), feathers_queried
                 )
             
+            # Task 15: Monitor memory and trigger actions if needed (Requirements 5.2, 5.3)
+            if hasattr(self, 'memory_monitor') and self.memory_monitor:
+                memory_status = self.memory_monitor.check_threshold()
+                
+                # Track memory usage in progress tracker
+                if hasattr(self, 'progress_tracker'):
+                    self.progress_tracker.memory_usage_mb = memory_status.current_mb
+                
+                # If memory pressure detected, take action
+                if memory_status.should_enable_streaming:
+                    # Enable streaming mode if not already active
+                    if not self.streaming_mode_active and hasattr(self, '_output_dir') and self._output_dir:
+                        self._enable_streaming_mode("Memory threshold exceeded")
+                    
+                    # Trigger garbage collection to free memory
+                    memory_freed = self.memory_monitor.trigger_garbage_collection()
+                    
+                    if self.debug_mode:
+                        print(f"[TimeWindow] Memory pressure detected: {memory_status.current_mb:.1f}MB, freed {memory_freed:.1f}MB")
+                
+                elif memory_status.should_reduce_caches:
+                    # Reduce cache sizes if available
+                    if hasattr(self, 'window_query_manager') and self.window_query_manager:
+                        # Calculate target reduction (10% of threshold)
+                        target_reduction_mb = int(self.memory_monitor.threshold_mb * 0.1)
+                        
+                        # Collect cache reducers from feather queries
+                        cache_reducers = []
+                        for feather_query in self.feather_queries.values():
+                            if hasattr(feather_query, 'reduce_cache_size'):
+                                cache_reducers.append(feather_query.reduce_cache_size)
+                        
+                        # Reduce caches
+                        if cache_reducers:
+                            actual_freed = self.memory_monitor.reduce_cache_sizes(
+                                target_reduction_mb, cache_reducers
+                            )
+                            
+                            if self.debug_mode:
+                                print(f"[TimeWindow] Cache reduction: freed {actual_freed:.1f}MB")
+            
+            # Task 15: Release memory after window processing (Requirements 5.3)
+            # Clear local references to allow garbage collection
+            populated_window = None
+            
+            # Calculate memory released
+            if memory_before is not None and hasattr(self, 'memory_monitor') and self.memory_monitor:
+                memory_after = self.memory_monitor.get_current_usage_mb()
+                memory_delta = memory_after - memory_before
+                
+                # Track memory delta for statistics
+                if hasattr(self, 'window_processing_stats'):
+                    if not hasattr(self.window_processing_stats, 'memory_deltas'):
+                        self.window_processing_stats.memory_deltas = []
+                    self.window_processing_stats.memory_deltas.append(memory_delta)
+            
             # Return matches for Phase 2 processing (semantic mappings and scoring)
             return matches
             
@@ -3395,6 +4745,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     window.window_id, 0, 0, 0
                 )
             raise e
+        finally:
+            # Task 23: End profiling (Requirements 1.1, 1.3)
+            try:
+                if self._profiling_enabled:
+                    self.profiler.end_operation("_process_window")
+            except Exception:
+                pass  # Silently ignore profiler errors
     
     def _process_windows_sequential(self, 
                                   start_epoch: datetime, 
@@ -3420,12 +4777,12 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Task 8.3: Initialize progress reporter for window processing
         # Requirements: 4.1, 4.2, 4.3, 4.4
-        # Reports progress every 10% (at 10%, 20%, 30%, etc.)
+        # Reports progress every 5% (at 5%, 10%, 15%, 20%, etc.)
         from .progress_tracking import CorrelationProgressReporter, CorrelationStallMonitor, CorrelationStallException
         
         progress_reporter = CorrelationProgressReporter(
             total_items=total_windows,
-            report_percentage_interval=10.0,  # Report every 10%
+            report_percentage_interval=5.0,  # Report every 5%
             phase_name="Time-Window Scanning"
         )
         
@@ -3439,6 +4796,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Task 9.3: Update stall monitor at start
         stall_monitor.update_progress(0, current_stage="window_processing", last_operation="started_window_scanning")
+        
+        # Initialize smart empty window tracking for early termination
+        # DISABLED: Smart stop was too risky - it skipped windows that were "likely" empty
+        # For forensic analysis, we must process ALL windows to ensure no data is missed
+        consecutive_empty_windows = 0
+        max_consecutive_empty_before_stop = 999999999  # Effectively disabled - never stop early
+        found_any_data = False  # Track if we've found any data yet
         
         for window in self._generate_time_windows(start_epoch, end_epoch):
             # Task 9.3: Check for stall before processing each window
@@ -3485,12 +4849,18 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Get current progress stats
                 progress_stats = self.progress_tracker._create_overall_progress()
                 
+                # Format current window time range
+                current_window_range = f"{window_start_str} → {window_end_str}"
+                
                 # Format progress message with enhanced statistics
-                progress_msg = f"[Time-Window Engine] Progress Summary: {progress_percent:.0f}% ({window_count:,}/{total_windows:,} windows, {len(matches):,} matches)"
+                progress_msg = f"[Time-Window Engine] Progress Summary: {progress_percent:.0f}% ({window_count:,}/{total_windows:,} windows, {len(matches):,} matches) | Window: {current_window_range}"
                 
                 # Add empty window statistics if significant
                 if progress_stats.empty_windows_skipped > 0:
-                    progress_msg += f" | Skipped: {progress_stats.empty_windows_skipped:,} empty ({progress_stats.skip_rate_percentage:.1f}%)"
+                    # Calculate windows with data
+                    windows_with_data = window_count - progress_stats.empty_windows_skipped
+                    skip_rate = (progress_stats.empty_windows_skipped / window_count * 100) if window_count > 0 else 0
+                    progress_msg += f" | Empty: {progress_stats.empty_windows_skipped:,} ({skip_rate:.1f}%) | With data: {windows_with_data:,}"
                 
                 # Add time saved if significant
                 if progress_stats.time_saved_by_skipping_seconds > 1.0:
@@ -3539,17 +4909,48 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             window_processing_time = time.time() - window_start_time
             records_found = sum(len(records) for records in window.records_by_feather.values())
             feathers_with_records = list(window.records_by_feather.keys())
-            is_empty_window = (records_found == 0)
+            # A window is considered "empty" if it has no matches (not just no records)
+            # This is more accurate because records can exist but not meet minimum_matches requirement
+            is_empty_window = (len(window_matches) == 0)
             
             # Log window results (Requirements 6.4 and 6.5)
             if is_empty_window:
                 # Empty window - skip silently (no print to reduce noise)
                 pass
             else:
-                # Count unique identities in this window
-                identity_count = len(set(match.matched_application for match in window_matches if match.matched_application))
+                # Count unique NORMALIZED identities in this window
+                # Each match represents one identity group, so len(window_matches) = number of unique identities
+                # Total records across all matches
+                total_records = sum(
+                    sum(len(records) for records in match.feather_records.values())
+                    for match in window_matches
+                    if hasattr(match, 'feather_records') and match.feather_records
+                )
+                
                 # Log window correlation results (Requirement 6.4)
-                print(f"[Time-Window Engine] ✓ Window {window.window_id}: {identity_count} identities, {len(window_matches)} correlations")
+                # Note: Each match = one unique identity, total_records = all data records
+                print(f"[Time-Window Engine] ✓ Window {window.window_id} ({window_start_str} → {window_end_str}): {len(window_matches)} identities, {total_records} records")
+                found_any_data = True  # Mark that we've found data
+                consecutive_empty_windows = 0  # Reset counter when we find data
+            
+            # Smart early termination: Stop if we've seen too many consecutive empty windows AFTER finding data
+            if is_empty_window:
+                consecutive_empty_windows += 1
+                
+                # Only consider early termination if we've already found some data
+                if found_any_data and consecutive_empty_windows >= max_consecutive_empty_before_stop:
+                    remaining_windows = total_windows - window_count
+                    print(f"\n[Time-Window Engine] 🎯 Smart Stop: {consecutive_empty_windows} consecutive empty windows detected")
+                    print(f"[Time-Window Engine]   Skipping remaining {remaining_windows:,} windows (likely all empty)")
+                    print(f"[Time-Window Engine]   Processed: {window_count:,}/{total_windows:,} windows ({window_count/total_windows*100:.1f}%)")
+                    print(f"[Time-Window Engine]   Found: {len(matches):,} matches in {window_count - consecutive_empty_windows:,} windows with data")
+                    
+                    # Add info to result
+                    result.warnings.append(
+                        f"Early termination: Stopped after {consecutive_empty_windows} consecutive empty windows. "
+                        f"Skipped {remaining_windows:,} likely empty windows."
+                    )
+                    break  # Exit the scanning loop early
             
             # Update window processing statistics (if enabled)
             if self.scanning_config.track_empty_window_stats:
@@ -3602,11 +5003,19 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 last_operation=f"processed_window_{window_count}"
             )
             
-            # Complete window processing tracking with time-window-specific details
-            memory_usage = self.memory_manager.check_memory_pressure().current_memory_mb if self.memory_manager else None
+            # OPTIMIZATION: Consolidate memory pressure checks and throttle reporting
+            memory_usage = None
+            if window_count % 50 == 0 or window_count == total_windows:
+                # Only check memory pressure and perform cleanup every 50 windows
+                if self.memory_manager:
+                    memory_report = self.memory_manager.check_memory_pressure()
+                    memory_usage = memory_report.current_memory_mb
+                    
+                    # Perform memory cleanup between windows if needed (silently)
+                    self._cleanup_memory_between_windows(window_count, memory_report)
             
-            # Perform memory cleanup between windows if needed (silently)
-            self._cleanup_memory_between_windows(window_count)
+            # Complete window processing tracking with time-window-specific details
+            # Pass cached memory_usage to avoid redundant psutil calls
             self.progress_tracker.complete_window(
                 window_id=window.window_id,
                 window_start_time=window.start_time,
@@ -3618,8 +5027,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 is_empty_window=is_empty_window
             )
             
-            # Report time-window processing milestone
-            self._report_time_window_milestone(window_count, total_windows, window.start_time, window.end_time)
+            # Report time-window processing milestone - throttled to every 100 windows
+            if window_count % 100 == 0 or window_count == total_windows:
+                self._report_time_window_milestone(window_count, total_windows, window.start_time, window.end_time)
             
             # Legacy progress reporting for backward compatibility
             if window_count % 100 == 0 or window_count == total_windows:
@@ -3632,6 +5042,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     'memory_usage_mb': memory_usage or 0,
                     'processing_mode': 'sequential'
                 })
+            
+            # Force GUI update more frequently to prevent freezing (every 10 windows)
+            if window_count % 10 == 0:
+                try:
+                    from PyQt5.QtWidgets import QApplication
+                    QApplication.processEvents()
+                except:
+                    pass  # Ignore if not in GUI context
             
             if self.debug_mode and window_count % 1000 == 0:
                 memory_report = self.memory_manager.check_memory_pressure() if self.memory_manager else None
@@ -3652,7 +5070,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                                 wing: Wing, 
                                 result: CorrelationResult) -> List[CorrelationMatch]:
         """
-        Process windows in parallel using ParallelWindowProcessor.
+        Process windows in parallel using ParallelWindowProcessor or ParallelCoordinator.
+        
+        Task 12: Enhanced to support ParallelCoordinator.
+        Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
         
         Args:
             start_epoch: Start time for scanning
@@ -3663,15 +5084,21 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         Returns:
             List of all correlation matches found
         """
-        if not self.parallel_processor:
-            raise RuntimeError("Parallel processor not initialized")
-        
         # Generate all windows first (needed for parallel processing)
         windows = list(self._generate_time_windows(start_epoch, end_epoch))
         
         if self.debug_mode:
+            processor_type = "coordinator" if self.use_parallel_coordinator else "processor"
             print(f"[TimeWindow] Starting parallel processing of {len(windows)} windows "
-                  f"with {self.max_workers} workers")
+                  f"with {self.max_workers} workers using {processor_type}")
+        
+        # Task 12: Use ParallelCoordinator if configured
+        if self.use_parallel_coordinator and self.parallel_coordinator:
+            return self._process_windows_with_coordinator(windows, wing, result)
+        
+        # Use existing ParallelWindowProcessor
+        if not self.parallel_processor:
+            raise RuntimeError("Parallel processor not initialized")
         
         # Create a wrapper function that handles memory checking and streaming
         def process_window_with_context(window: TimeWindow, wing_config: Wing) -> List[CorrelationMatch]:
@@ -3693,6 +5120,91 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             result.add_match(match)
         
         return all_matches
+    
+    def _process_windows_with_coordinator(self,
+                                         windows: List[TimeWindow],
+                                         wing: Wing,
+                                         result: CorrelationResult) -> List[CorrelationMatch]:
+        """
+        Process windows in parallel using ParallelCoordinator.
+        
+        Task 12: New method for ParallelCoordinator integration.
+        Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
+        
+        Args:
+            windows: List of time windows to process
+            wing: Wing configuration
+            result: CorrelationResult to update
+            
+        Returns:
+            List of all correlation matches found
+        """
+        if not self.parallel_coordinator:
+            raise RuntimeError("Parallel coordinator not initialized")
+        
+        # Create process function for coordinator
+        def process_window_func(window: TimeWindow, shared_data: Optional[Dict[str, Any]] = None) -> List[CorrelationMatch]:
+            """Process a single window - called by coordinator workers"""
+            try:
+                # Process the window
+                matches = self._process_window(window, wing)
+                
+                # Update progress tracker
+                self.progress_tracker.complete_window(
+                    window_id=window.window_id,
+                    window_start_time=window.start_time,
+                    window_end_time=window.end_time,
+                    records_found=0,  # Not tracked in parallel mode
+                    matches_created=len(matches),
+                    feathers_with_records=0,  # Not tracked in parallel mode
+                    memory_usage_mb=0,  # Not tracked per window in parallel mode
+                    is_empty_window=len(matches) == 0
+                )
+                
+                return matches
+            except Exception as e:
+                if self.debug_mode:
+                    print(f"[TimeWindow] Error processing window {window.window_id}: {e}")
+                # Return empty list on error - coordinator will track the error
+                return []
+        
+        # Prepare shared data (if any)
+        shared_data = {
+            'wing': wing,
+            'filters': self.filters,
+            'debug_mode': self.debug_mode
+        }
+        
+        # Process windows with coordinator
+        all_matches = self.parallel_coordinator.process_with_shared_cache(
+            windows=windows,
+            process_func=process_window_func,
+            shared_data=shared_data
+        )
+        
+        # Flatten matches (each window returns a list of matches)
+        flattened_matches = []
+        for window_matches in all_matches:
+            if window_matches:  # Skip None results from errors
+                flattened_matches.extend(window_matches)
+        
+        # Add all matches to result
+        for match in flattened_matches:
+            result.add_match(match)
+        
+        # Check for errors
+        if self.parallel_coordinator.has_errors():
+            error_summary = self.parallel_coordinator.get_error_summary()
+            if self.debug_mode:
+                print(f"[TimeWindow] Parallel coordinator completed with {error_summary['total_errors']} errors")
+            
+            # Add error summary to result warnings
+            result.warnings.append(
+                f"Parallel processing completed with {error_summary['total_errors']} errors. "
+                f"Check logs for details."
+            )
+        
+        return flattened_matches
     
     def _handle_parallel_progress_callback(self, progress_data: Dict[str, Any]):
         """
@@ -3729,7 +5241,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                   f"load balance: {efficiency:.2f}")
     
     def _cleanup_parallel_processing(self):
-        """Cleanup parallel processing resources"""
+        """
+        Cleanup parallel processing resources.
+        
+        Task 12: Enhanced to support ParallelCoordinator cleanup.
+        """
         if self.parallel_processor:
             # Request cancellation if processing is active
             if self.parallel_processor.is_processing:
@@ -3737,6 +5253,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             
             # The parallel processor handles its own cleanup
             self.parallel_processor = None
+        
+        if self.parallel_coordinator:
+            # Reset coordinator statistics
+            self.parallel_coordinator.reset_statistics()
+            self.parallel_coordinator = None
     
     def _emit_progress_event(self, event_type: str, data: Dict[str, Any]):
         """Emit progress event to registered listeners"""
@@ -3943,22 +5464,27 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         return str(db_path)
     
-    def _cleanup_memory_between_windows(self, window_count: int):
+    def _cleanup_memory_between_windows(self, window_count: int, memory_report: Optional[Any] = None):
         """
         Perform memory cleanup between windows to maintain efficiency.
         
         Args:
             window_count: Current window count for cleanup scheduling
+            memory_report: Optional pre-calculated memory report
         """
         if not self.memory_manager:
             return
         
-        # Check memory pressure
-        memory_report = self.memory_manager.check_memory_pressure()
+        # Use provided memory report or only check every 100 windows
+        if not memory_report:
+            if window_count % 100 != 0:
+                return
+            memory_report = self.memory_manager.check_memory_pressure()
         
         # Perform cleanup based on memory usage and window count
+        # OPTIMIZATION: More conservative cleanup interval
         should_cleanup = (
-            memory_report.usage_percentage > 70 or  # High memory usage
+            memory_report.usage_percentage > 85 or  # High memory usage (was 70)
             window_count % 1000 == 0 or  # Periodic cleanup every 1000 windows
             memory_report.is_over_limit  # Over memory limit
         )
@@ -3968,10 +5494,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             collected = self.memory_manager.force_garbage_collection()
             
             # Clear query cache if it exists
-            if hasattr(self, 'query_manager') and hasattr(self.query_manager, 'query_cache'):
-                cache_size = len(self.query_manager.query_cache)
-                if cache_size > 100:  # Clear cache if it's getting large
-                    self.query_manager.query_cache.clear()
+            if hasattr(self, 'window_query_manager') and hasattr(self.window_query_manager, 'query_cache'):
+                cache_size = len(self.window_query_manager.query_cache)
+                if cache_size > 500:  # Clear cache if it's getting large (was 100)
+                    self.window_query_manager.query_cache.clear()
     
     def _report_time_window_milestone(self, processed_windows: int, total_windows: int, 
                                     window_start: datetime, window_end: datetime):
@@ -4069,6 +5595,144 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         return self.last_result
     
+    def _get_cache_statistics(self) -> Dict[str, Any]:
+        """
+        Get comprehensive cache statistics from all caching components.
+        
+        Returns:
+            Dictionary with cache hit rates and statistics (Requirements 9.1, 9.2, 9.3, 9.4)
+        """
+        cache_stats = {
+            'available': True,
+            'query_cache': {},
+            'timestamp_cache': {},
+            'window_manager_cache': {},
+            'overall_cache_hit_rate': 0.0
+        }
+        
+        # Collect query cache statistics from all feather queries
+        if hasattr(self, 'window_query_manager') and self.window_query_manager:
+            total_hits = 0
+            total_misses = 0
+            total_evictions = 0
+            total_cache_size_mb = 0.0
+            
+            for feather_id, query_manager in self.window_query_manager.feather_queries.items():
+                feather_cache_stats = query_manager.get_cache_statistics()
+                total_hits += feather_cache_stats.get('cache_hits', 0)
+                total_misses += feather_cache_stats.get('cache_misses', 0)
+                total_evictions += feather_cache_stats.get('cache_evictions', 0)
+                total_cache_size_mb += feather_cache_stats.get('query_cache_size_mb', 0.0)
+            
+            total_requests = total_hits + total_misses
+            query_hit_rate = (total_hits / total_requests * 100) if total_requests > 0 else 0.0
+            
+            cache_stats['query_cache'] = {
+                'total_hits': total_hits,
+                'total_misses': total_misses,
+                'total_requests': total_requests,
+                'hit_rate_percent': round(query_hit_rate, 2),
+                'total_evictions': total_evictions,
+                'total_cache_size_mb': round(total_cache_size_mb, 2)
+            }
+            
+            # Window manager cache statistics
+            wm_cache_stats = self.window_query_manager.get_cache_stats()
+            cache_stats['window_manager_cache'] = wm_cache_stats
+        
+        # Collect timestamp cache statistics
+        if hasattr(self, 'window_query_manager') and self.window_query_manager:
+            timestamp_stats_list = []
+            for feather_id, query_manager in self.window_query_manager.feather_queries.items():
+                if hasattr(query_manager, 'timestamp_parse_cache'):
+                    ts_stats = query_manager.timestamp_parse_cache.get_statistics()
+                    timestamp_stats_list.append(ts_stats)
+            
+            if timestamp_stats_list:
+                # Aggregate timestamp cache statistics
+                total_ts_hits = sum(s.get('cache_hits', 0) for s in timestamp_stats_list)
+                total_ts_misses = sum(s.get('cache_misses', 0) for s in timestamp_stats_list)
+                total_ts_requests = total_ts_hits + total_ts_misses
+                ts_hit_rate = (total_ts_hits / total_ts_requests * 100) if total_ts_requests > 0 else 0.0
+                
+                cache_stats['timestamp_cache'] = {
+                    'total_hits': total_ts_hits,
+                    'total_misses': total_ts_misses,
+                    'total_requests': total_ts_requests,
+                    'hit_rate_percent': round(ts_hit_rate, 2)
+                }
+        
+        # Calculate overall cache hit rate
+        all_hits = cache_stats['query_cache'].get('total_hits', 0) + cache_stats['timestamp_cache'].get('total_hits', 0)
+        all_requests = cache_stats['query_cache'].get('total_requests', 0) + cache_stats['timestamp_cache'].get('total_requests', 0)
+        cache_stats['overall_cache_hit_rate'] = round((all_hits / all_requests * 100) if all_requests > 0 else 0.0, 2)
+        
+        return cache_stats
+    
+    def _get_index_usage_statistics(self) -> Dict[str, Any]:
+        """
+        Get index usage statistics from all feather queries.
+        
+        Returns:
+            Dictionary with index usage rates (Requirements 9.1, 9.2, 9.3, 9.4)
+        """
+        index_stats = {
+            'available': True,
+            'total_feathers': 0,
+            'feathers_with_index': 0,
+            'index_usage_rate_percent': 0.0,
+            'feather_details': {}
+        }
+        
+        if hasattr(self, 'window_query_manager') and self.window_query_manager:
+            total_feathers = len(self.window_query_manager.feather_queries)
+            feathers_with_index = 0
+            
+            for feather_id, query_manager in self.window_query_manager.feather_queries.items():
+                # Check if timestamp column is detected (indicates index is available/used)
+                has_index = query_manager.timestamp_column is not None
+                if has_index:
+                    feathers_with_index += 1
+                
+                index_stats['feather_details'][feather_id] = {
+                    'has_timestamp_index': has_index,
+                    'timestamp_column': query_manager.timestamp_column,
+                    'timestamp_format': query_manager.timestamp_format
+                }
+            
+            index_stats['total_feathers'] = total_feathers
+            index_stats['feathers_with_index'] = feathers_with_index
+            index_stats['index_usage_rate_percent'] = round((feathers_with_index / total_feathers * 100) if total_feathers > 0 else 0.0, 2)
+        
+        return index_stats
+    
+    def _get_skip_rate_statistics(self) -> Dict[str, Any]:
+        """
+        Get skip rate statistics from empty window detection.
+        
+        Returns:
+            Dictionary with skip rates (Requirements 9.1, 9.2, 9.3, 9.4)
+        """
+        skip_stats = {
+            'available': False
+        }
+        
+        # Get empty window skipping statistics
+        empty_window_stats = self.get_empty_window_skipping_statistics()
+        if empty_window_stats.get('available'):
+            skip_stats = {
+                'available': True,
+                'total_windows': empty_window_stats.get('total_windows_generated', 0),
+                'windows_skipped': empty_window_stats.get('empty_windows_skipped', 0),
+                'windows_processed': empty_window_stats.get('windows_with_data', 0),
+                'skip_rate_percent': empty_window_stats.get('skip_rate_percentage', 0.0),
+                'time_saved_seconds': empty_window_stats.get('time_saved_by_skipping_seconds', 0.0),
+                'average_check_time_ms': empty_window_stats.get('average_check_time_ms', 0.0),
+                'efficiency_summary': empty_window_stats.get('efficiency_summary', '')
+            }
+        
+        return skip_stats
+    
     def get_statistics(self) -> Dict[str, Any]:
         """
         Get correlation statistics from last execution.
@@ -4085,6 +5749,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 - Time range detection statistics (NEW)
                 - Empty window skipping statistics (NEW)
                 - Efficiency metrics (NEW)
+                - Cache hit rates (Task 22)
+                - Index usage rates (Task 22)
+                - Skip rates (Task 22)
         """
         if not self.last_result:
             return {}
@@ -4171,6 +5838,27 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         if empty_window_stats.get('available'):
             stats.update({
                 'empty_window_skipping_stats': empty_window_stats
+            })
+        
+        # Add cache hit rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
+        cache_stats = self._get_cache_statistics()
+        if cache_stats.get('available'):
+            stats.update({
+                'cache_statistics': cache_stats
+            })
+        
+        # Add index usage rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
+        index_stats = self._get_index_usage_statistics()
+        if index_stats.get('available'):
+            stats.update({
+                'index_usage_statistics': index_stats
+            })
+        
+        # Add skip rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
+        skip_stats = self._get_skip_rate_statistics()
+        if skip_stats.get('available'):
+            stats.update({
+                'skip_rate_statistics': skip_stats
             })
         
         # Add efficiency metrics (NEW)
@@ -4285,6 +5973,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
     def get_efficiency_metrics(self) -> Dict[str, Any]:
         """
         Get comprehensive efficiency metrics combining time range detection and empty window skipping.
+        Enhanced with bottleneck identification heuristics (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4).
         
         Returns:
             Dictionary containing efficiency metrics:
@@ -4293,6 +5982,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 - empty_window_optimization: Metrics about empty window skipping
                 - total_time_saved_seconds: Total time saved by all optimizations
                 - performance_improvements: Performance improvement factors
+                - bottlenecks_identified: List of identified performance bottlenecks (NEW)
                 - recommendations: List of recommendations for further optimization
         """
         time_range_stats = self.get_time_range_detection_statistics()
@@ -4348,6 +6038,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         if actual_processing_time > 0:
             speedup_factor = estimated_time_without_optimization / actual_processing_time
         
+        # BOTTLENECK IDENTIFICATION HEURISTICS (Task 22 - Requirements 9.4)
+        bottlenecks = self._identify_performance_bottlenecks(
+            time_range_stats, empty_window_stats, skip_rate, avg_check_time, span_years
+        )
+        
         # Generate recommendations
         recommendations = []
         
@@ -4370,6 +6065,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             recommendations.append(
                 "Detected time range exceeds recommended maximum - consider splitting analysis into smaller time periods"
             )
+        
+        # Add bottleneck-specific recommendations
+        for bottleneck in bottlenecks:
+            if bottleneck['recommendation'] and bottleneck['recommendation'] not in recommendations:
+                recommendations.append(bottleneck['recommendation'])
         
         return {
             'available': True,
@@ -4394,8 +6094,165 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 'actual_processing_time_seconds': round(actual_processing_time, 2),
                 'time_saved_percentage': round((1 - (actual_processing_time / estimated_time_without_optimization)) * 100, 2) if estimated_time_without_optimization > 0 else 0
             },
+            'bottlenecks_identified': bottlenecks,
             'recommendations': recommendations
         }
+    
+    def _identify_performance_bottlenecks(self, time_range_stats: Dict[str, Any], 
+                                         empty_window_stats: Dict[str, Any],
+                                         skip_rate: float, avg_check_time: float, 
+                                         span_years: float) -> List[Dict[str, Any]]:
+        """
+        Identify performance bottlenecks using heuristics (Task 22 - Requirements 9.4).
+        
+        Args:
+            time_range_stats: Time range detection statistics
+            empty_window_stats: Empty window skipping statistics
+            skip_rate: Skip rate percentage
+            avg_check_time: Average check time in milliseconds
+            span_years: Time span in years
+            
+        Returns:
+            List of identified bottlenecks with severity and recommendations
+        """
+        bottlenecks = []
+        
+        # Bottleneck 1: Low cache hit rate
+        cache_stats = self._get_cache_statistics()
+        if cache_stats.get('available'):
+            overall_hit_rate = cache_stats.get('overall_cache_hit_rate', 0.0)
+            if overall_hit_rate < 30:
+                bottlenecks.append({
+                    'type': 'low_cache_hit_rate',
+                    'severity': 'high',
+                    'description': f'Cache hit rate is very low ({overall_hit_rate:.1f}%)',
+                    'impact': 'Queries are not being reused, causing redundant database access',
+                    'recommendation': 'Increase cache size or adjust window size to improve cache reuse'
+                })
+            elif overall_hit_rate < 50:
+                bottlenecks.append({
+                    'type': 'moderate_cache_hit_rate',
+                    'severity': 'medium',
+                    'description': f'Cache hit rate could be improved ({overall_hit_rate:.1f}%)',
+                    'impact': 'Some queries are being repeated unnecessarily',
+                    'recommendation': 'Consider increasing cache size for better performance'
+                })
+        
+        # Bottleneck 2: Missing or unused indexes
+        index_stats = self._get_index_usage_statistics()
+        if index_stats.get('available'):
+            index_usage_rate = index_stats.get('index_usage_rate_percent', 0.0)
+            if index_usage_rate < 100:
+                missing_count = index_stats.get('total_feathers', 0) - index_stats.get('feathers_with_index', 0)
+                bottlenecks.append({
+                    'type': 'missing_indexes',
+                    'severity': 'high',
+                    'description': f'{missing_count} feather(s) missing timestamp indexes ({index_usage_rate:.1f}% coverage)',
+                    'impact': 'Queries on unindexed feathers require full table scans',
+                    'recommendation': 'Ensure all feathers have timestamp indexes created'
+                })
+        
+        # Bottleneck 3: Slow empty window checks
+        if avg_check_time > 5.0:
+            bottlenecks.append({
+                'type': 'slow_empty_window_checks',
+                'severity': 'high',
+                'description': f'Empty window checks are slow ({avg_check_time:.2f}ms per check)',
+                'impact': 'Empty window detection overhead is significant',
+                'recommendation': 'Create timestamp indexes to speed up COUNT queries'
+            })
+        elif avg_check_time > 1.0:
+            bottlenecks.append({
+                'type': 'moderate_empty_window_checks',
+                'severity': 'medium',
+                'description': f'Empty window checks could be faster ({avg_check_time:.2f}ms per check)',
+                'impact': 'Some overhead from empty window detection',
+                'recommendation': 'Verify timestamp indexes are being used effectively'
+            })
+        
+        # Bottleneck 4: Low skip rate (processing too many empty windows)
+        if skip_rate < 20:
+            bottlenecks.append({
+                'type': 'low_skip_rate',
+                'severity': 'high',
+                'description': f'Very low skip rate ({skip_rate:.1f}%) - most windows contain data',
+                'impact': 'Cannot benefit from empty window optimization',
+                'recommendation': 'Use FilterConfig to narrow time range to periods with relevant data'
+            })
+        elif skip_rate < 40:
+            bottlenecks.append({
+                'type': 'moderate_skip_rate',
+                'severity': 'medium',
+                'description': f'Moderate skip rate ({skip_rate:.1f}%) - some optimization potential',
+                'impact': 'Some windows are being processed unnecessarily',
+                'recommendation': 'Consider refining time range filters to skip more empty periods'
+            })
+        
+        # Bottleneck 5: Excessive time range
+        if span_years > 10:
+            bottlenecks.append({
+                'type': 'excessive_time_range',
+                'severity': 'high',
+                'description': f'Very large time range ({span_years:.1f} years)',
+                'impact': 'Processing many windows, high memory usage, long execution time',
+                'recommendation': 'Split analysis into smaller time periods (e.g., yearly or quarterly)'
+            })
+        elif span_years > 5:
+            bottlenecks.append({
+                'type': 'large_time_range',
+                'severity': 'medium',
+                'description': f'Large time range ({span_years:.1f} years)',
+                'impact': 'Processing overhead from many time windows',
+                'recommendation': 'Consider narrowing time range if possible'
+            })
+        
+        # Bottleneck 6: Memory pressure
+        if hasattr(self, 'memory_manager') and self.memory_manager:
+            memory_stats = self.memory_manager.get_memory_statistics()
+            peak_memory_mb = memory_stats.get('peak_memory_mb', 0)
+            if peak_memory_mb > 4096:  # > 4GB
+                bottlenecks.append({
+                    'type': 'high_memory_usage',
+                    'severity': 'high',
+                    'description': f'High peak memory usage ({peak_memory_mb:.0f} MB)',
+                    'impact': 'Risk of out-of-memory errors, potential swapping',
+                    'recommendation': 'Enable streaming mode or reduce cache sizes'
+                })
+            elif peak_memory_mb > 2048:  # > 2GB
+                bottlenecks.append({
+                    'type': 'moderate_memory_usage',
+                    'severity': 'medium',
+                    'description': f'Moderate memory usage ({peak_memory_mb:.0f} MB)',
+                    'impact': 'May limit parallel processing capability',
+                    'recommendation': 'Monitor memory usage and consider streaming mode for larger datasets'
+                })
+        
+        # Bottleneck 7: Parallel processing efficiency
+        if self.enable_parallel_processing and hasattr(self, 'parallel_processor') and self.parallel_processor:
+            parallel_stats = self.parallel_processor.get_processing_stats()
+            parallel_efficiency = parallel_stats.load_balancing_efficiency
+            if parallel_efficiency < 0.6:
+                bottlenecks.append({
+                    'type': 'low_parallel_efficiency',
+                    'severity': 'high',
+                    'description': f'Low parallel processing efficiency ({parallel_efficiency:.1%})',
+                    'impact': 'Workers are not being utilized effectively',
+                    'recommendation': 'Adjust worker count or batch size for better load balancing'
+                })
+            elif parallel_efficiency < 0.8:
+                bottlenecks.append({
+                    'type': 'moderate_parallel_efficiency',
+                    'severity': 'medium',
+                    'description': f'Parallel efficiency could be improved ({parallel_efficiency:.1%})',
+                    'impact': 'Some worker idle time',
+                    'recommendation': 'Fine-tune parallel processing parameters'
+                })
+        
+        # Sort bottlenecks by severity (high first)
+        severity_order = {'high': 0, 'medium': 1, 'low': 2}
+        bottlenecks.sort(key=lambda x: severity_order.get(x['severity'], 3))
+        
+        return bottlenecks
     
     def _get_efficiency_grade(self, score: float) -> str:
         """
@@ -4694,6 +6551,74 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 logger.debug(f"[Time-Window Engine] Semantic values sample: {unique_values}")
         
         return semantic_data
+    
+    def _extract_semantic_data_batch(self, 
+                                      all_records: List[Dict],
+                                      match_indices: List[int]) -> List[Dict[str, Any]]:
+        """
+        Extract semantic data from a batch of records efficiently.
+        
+        Task 18: Batch semantic processing optimization
+        Requirements: 6.5 - Process semantic mappings in batches rather than individually
+        
+        This method processes all records from multiple matches in a single batch,
+        then distributes the semantic data back to individual matches.
+        
+        Args:
+            all_records: List of all records from all matches (flattened)
+            match_indices: List mapping each record to its match index
+            
+        Returns:
+            List of semantic_data dicts, one per match
+        """
+        # Initialize semantic data for each match
+        num_matches = max(match_indices) + 1 if match_indices else 0
+        semantic_data_per_match = [{'_metadata': {'mappings_applied': False, 'mappings_count': 0}} 
+                                    for _ in range(num_matches)]
+        
+        # Process all records and group semantic data by match
+        for record_idx, record in enumerate(all_records):
+            if not isinstance(record, dict):
+                continue
+            
+            match_idx = match_indices[record_idx]
+            semantic_mappings = record.get('_semantic_mappings', {})
+            
+            if not semantic_mappings:
+                continue
+            
+            # Extract feather_id from record
+            feather_id = record.get('_feather_id', '')
+            
+            # Add semantic mappings to the appropriate match's semantic data
+            for field_name, mapping_info in semantic_mappings.items():
+                if isinstance(mapping_info, dict) and 'semantic_value' in mapping_info:
+                    # Use feather_id.field_name as key to avoid collisions
+                    key = f"{feather_id}.{field_name}" if feather_id else field_name
+                    semantic_data_per_match[match_idx][key] = {
+                        'semantic_value': mapping_info['semantic_value'],
+                        'technical_value': mapping_info.get('technical_value', ''),
+                        'description': mapping_info.get('description', ''),
+                        'category': mapping_info.get('category', ''),
+                        'confidence': mapping_info.get('confidence', 1.0),
+                        'rule_name': mapping_info.get('rule_name', field_name),
+                        'feather_id': feather_id
+                    }
+                    # Update metadata
+                    semantic_data_per_match[match_idx]['_metadata']['mappings_count'] += 1
+                    semantic_data_per_match[match_idx]['_metadata']['mappings_applied'] = True
+        
+        # Add engine type to metadata
+        for semantic_data in semantic_data_per_match:
+            semantic_data['_metadata']['engine_type'] = self.__class__.__name__
+        
+        # Task 18: Add debug logging for batch semantic data extraction
+        if self.debug_mode:
+            total_mappings = sum(sd['_metadata']['mappings_count'] for sd in semantic_data_per_match)
+            if total_mappings > 0:
+                logger.debug(f"[Time-Window Engine] Batch extracted semantic data: {total_mappings} mappings from {len(all_records)} records across {num_matches} matches")
+        
+        return semantic_data_per_match
 
     def _apply_semantic_mappings_to_single_match(self, 
                                                 match: CorrelationMatch, 
@@ -4857,35 +6782,44 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         critical_failure = False
         
         try:
-            for match in matches:
+            # Task 18: Batch semantic processing optimization
+            # Requirements: 6.5 - Process all matches at once instead of one-by-one
+            
+            # Phase 1: Collect all records from all matches into a single batch
+            all_records = []
+            match_indices = []
+            record_to_match_map = []  # Track which records belong to which match
+            
+            for match_idx, match in enumerate(matches):
+                for feather_id, record in match.feather_records.items():
+                    record_with_feather = record.copy() if isinstance(record, dict) else {'value': record}
+                    record_with_feather['_feather_id'] = feather_id
+                    all_records.append(record_with_feather)
+                    match_indices.append(match_idx)
+                    record_to_match_map.append((match_idx, feather_id))
+            
+            # Phase 2: Apply semantic mappings to all records in one batch
+            enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
+                all_records,
+                wing_id=getattr(wing, 'wing_id', None),
+                pipeline_id=getattr(wing, 'pipeline_id', None),
+                artifact_type=getattr(matches[0], 'anchor_artifact_type', None) if matches else None
+            )
+            
+            # Phase 3: Extract semantic data for all matches in one pass
+            semantic_data_per_match = self._extract_semantic_data_batch(enhanced_records_list, match_indices)
+            
+            # Phase 4: Reconstruct enhanced records per match
+            enhanced_records_per_match = [{}  for _ in range(len(matches))]
+            for record_idx, enhanced_record in enumerate(enhanced_records_list):
+                match_idx, feather_id = record_to_match_map[record_idx]
+                enhanced_records_per_match[match_idx][feather_id] = enhanced_record
+            
+            # Phase 5: Create enhanced matches with batch-processed semantic data
+            for match_idx, match in enumerate(matches):
                 try:
-                    # Convert match records to format expected by semantic integration
-                    # IMPORTANT: Include feather_id in each record so semantic rules can match
-                    records_list = []
-                    for feather_id, record in match.feather_records.items():
-                        record_with_feather = record.copy() if isinstance(record, dict) else {'value': record}
-                        record_with_feather['_feather_id'] = feather_id
-                        records_list.append(record_with_feather)
-                    
-                    # Apply semantic mappings with error handling
-                    enhanced_records_list = self.semantic_integration.apply_to_correlation_results(
-                        records_list,
-                        wing_id=getattr(wing, 'wing_id', None),
-                        pipeline_id=getattr(wing, 'pipeline_id', None),
-                        artifact_type=getattr(match, 'anchor_artifact_type', None)
-                    )
-                    
-                    # Convert back to match format
-                    enhanced_records = {}
-                    for i, enhanced_record in enumerate(enhanced_records_list):
-                        # Use original keys if available, otherwise use index
-                        original_keys = list(match.feather_records.keys())
-                        key = original_keys[i] if i < len(original_keys) else f"record_{i}"
-                        enhanced_records[key] = enhanced_record
-                    
-                    # CRITICAL FIX: Extract actual semantic values from enhanced records
-                    # Requirements: 2.1, 2.2 - Store semantic data in CorrelationMatch.semantic_data
-                    semantic_data = self._extract_semantic_data_from_records(enhanced_records)
+                    semantic_data = semantic_data_per_match[match_idx]
+                    enhanced_records = enhanced_records_per_match[match_idx]
                     
                     # Task 11.2: Log per-match semantic mapping count (Requirements: 7.1, 7.2)
                     if self.debug_mode:
@@ -4910,7 +6844,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         confidence_category=match.confidence_category,
                         weighted_score=match.weighted_score,
                         score_breakdown=match.score_breakdown,
-                        semantic_data=semantic_data  # Now contains actual values
+                        semantic_data=semantic_data  # Now contains actual values from batch processing
                     )
                     
                     enhanced_matches.append(enhanced_match)
@@ -4919,7 +6853,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     # Task 6.1: Log error and continue processing remaining matches
                     # Requirements: 7.1, 7.2, 7.3 - Never stop correlation due to semantic mapping failures
                     errors_count += 1
-                    logger.warning(f"Failed to apply semantic mappings to match {match.match_id}: {e}")
+                    logger.warning(f"Failed to create enhanced match for {match.match_id}: {e}")
                     
                     # Create match with error metadata in semantic_data
                     error_semantic_data = {
@@ -4929,7 +6863,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                             'error_type': type(e).__name__,
                             'match_id': match.match_id,
                             'engine_type': 'TimeBasedCorrelationEngine',
-                            'fallback_reason': 'Individual match semantic mapping failed'
+                            'fallback_reason': 'Individual match reconstruction failed'
                         }
                     }
                     

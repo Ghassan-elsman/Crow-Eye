@@ -791,6 +791,11 @@ class ProgressTracker:
         self.operation_start_time: Optional[datetime] = None
         self.last_window_start_time: Optional[datetime] = None
         
+        # Performance optimization: Cache overall progress data
+        self._last_overall_progress_cache: Optional[OverallProgressData] = None
+        self._last_overall_progress_time: float = 0.0
+        self._overall_progress_cache_duration: float = 0.25  # Cache for 250ms
+        
         # Track actual processing rate (windows per second including empty windows)
         self._actual_windows_processed_for_rate = 0
         
@@ -1198,7 +1203,30 @@ class ProgressTracker:
         self.cancellation_token.register_callback(callback)
     
     def _create_overall_progress(self) -> OverallProgressData:
-        """Create overall progress data snapshot with accurate time estimates"""
+        """
+        Create overall progress data snapshot with accurate time estimates.
+        
+        OPTIMIZATION: Caches result for a short duration to prevent redundant
+        expensive calculations during high-frequency events.
+        """
+        import time
+        current_time_float = time.time()
+        
+        # Check cache (Requirement 6.3 - Performance optimization)
+        if (self._last_overall_progress_cache and 
+            (current_time_float - self._last_overall_progress_time) < self._overall_progress_cache_duration):
+            # Update frequently changing fields in the cached object 
+            # as these are cheap to update and might have changed
+            self._last_overall_progress_cache.windows_processed = self.windows_processed
+            self._last_overall_progress_cache.matches_found = self.matches_found
+            self._last_overall_progress_cache.current_window_time = self.current_window_time
+            # Update empty window statistics (Requirements 3.3)
+            self._last_overall_progress_cache.windows_with_data = self.windows_with_data
+            self._last_overall_progress_cache.empty_windows_skipped = self.empty_windows_skipped
+            self._last_overall_progress_cache.skip_rate_percentage = self.skip_rate_percentage
+            self._last_overall_progress_cache.time_saved_by_skipping_seconds = self.time_saved_by_skipping_seconds
+            return self._last_overall_progress_cache
+            
         # Calculate processing rate based on actual elapsed time
         processing_rate = None
         if self.operation_start_time and self.windows_processed > 0:
@@ -1206,7 +1234,8 @@ class ProgressTracker:
             if elapsed_seconds > 0:
                 processing_rate = self.windows_processed / elapsed_seconds
         
-        return OverallProgressData(
+        # Calculate new snapshot (expensive)
+        new_progress = OverallProgressData(
             windows_processed=self.windows_processed,
             total_windows=self.total_windows,
             matches_found=self.matches_found,
@@ -1226,6 +1255,12 @@ class ProgressTracker:
             skip_rate_percentage=self.skip_rate_percentage,
             time_saved_by_skipping_seconds=self.time_saved_by_skipping_seconds
         )
+        
+        # Update cache
+        self._last_overall_progress_cache = new_progress
+        self._last_overall_progress_time = current_time_float
+        
+        return new_progress
     
     def _emit_progress_update(self):
         """Emit a general progress update event"""
@@ -1240,9 +1275,40 @@ class ProgressTracker:
         """
         Emit a progress event to all listeners.
         
+        OPTIMIZATION: Throttles high-frequency events to maintain engine performance.
+        
         Args:
             event: ProgressEvent to emit
         """
+        import time
+        current_time = time.time()
+        
+        # Initialize throttling state if needed
+        if not hasattr(self, '_last_event_times'):
+            self._last_event_times = {}
+        
+        # Determine throttle duration based on event type
+        throttle_duration = 0.0
+        if event.event_type == ProgressEventType.DATABASE_QUERY_PROGRESS:
+            throttle_duration = 0.5  # 500ms for database queries (very frequent)
+        elif event.event_type == ProgressEventType.WINDOW_PROGRESS:
+            throttle_duration = 0.25  # 250ms for progress updates
+        elif event.event_type == ProgressEventType.WINDOW_COMPLETE:
+            # Only emit completion for every N windows or based on time to reduce overhead
+            if self.windows_processed % 10 != 0 and self.windows_processed < self.total_windows:
+                throttle_duration = 0.1  # 100ms for window completion
+        
+        # Apply throttling
+        if throttle_duration > 0:
+            last_time = self._last_event_times.get(event.event_type, 0.0)
+            if (current_time - last_time) < throttle_duration:
+                # Still within throttle window, skip unless it's the very last item
+                if self.windows_processed < self.total_windows:
+                    return
+        
+        # Update last event time
+        self._last_event_times[event.event_type] = current_time
+        
         for listener in self.listeners:
             try:
                 listener.on_progress_event(event)
