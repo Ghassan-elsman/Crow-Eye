@@ -187,13 +187,34 @@ class FeatherLoader:
                 f"Schema validation failed: no data tables found in {self.database_path}"
             )
         
-        # Use the first data table (or 'feather_data' if it exists)
-        if 'feather_data' in data_tables:
-            self.current_table = 'feather_data'
+        # MULTI-TABLE SUPPORT: Detect artifacts with multiple tables (like AmCache)
+        # If multiple tables exist and they share common columns, create a union view
+        if len(data_tables) > 1:
+            logger.info(f"Detected multi-table artifact with {len(data_tables)} tables: {data_tables}")
+            
+            # Check if this looks like AmCache (multiple Inventory* tables)
+            amcache_tables = [t for t in data_tables if t.startswith('Inventory') or t.startswith('inventory')]
+            
+            if len(amcache_tables) > 1:
+                logger.info(f"Detected AmCache artifact with {len(amcache_tables)} Inventory tables")
+                # Create a union view combining all AmCache tables
+                self._create_amcache_union_view(cursor, amcache_tables)
+                self.current_table = 'amcache_union_view'
+                logger.info(f"Created union view 'amcache_union_view' combining {len(amcache_tables)} tables")
+            else:
+                # Use the first data table (or 'feather_data' if it exists)
+                if 'feather_data' in data_tables:
+                    self.current_table = 'feather_data'
+                else:
+                    self.current_table = data_tables[0]
+                logger.info(f"Using data table: {self.current_table}")
         else:
-            self.current_table = data_tables[0]
-        
-        logger.info(f"Using data table: {self.current_table}")
+            # Single table - use it
+            if 'feather_data' in data_tables:
+                self.current_table = 'feather_data'
+            else:
+                self.current_table = data_tables[0]
+            logger.info(f"Using data table: {self.current_table}")
         
         # Check if feather_metadata table exists (optional)
         cursor.execute(
@@ -203,6 +224,69 @@ class FeatherLoader:
         
         if not has_metadata:
             logger.warning(f"No feather_metadata table found in {self.database_path}, using metadata-optional mode")
+    
+    def _create_amcache_union_view(self, cursor, tables: List[str]):
+        """
+        Create a UNION view combining multiple AmCache tables.
+        
+        This allows querying all AmCache tables (InventoryApplication, InventoryApplicationFile, etc.)
+        as a single unified table for correlation.
+        
+        Args:
+            cursor: Database cursor
+            tables: List of table names to union
+        """
+        try:
+            # Drop view if it exists
+            cursor.execute("DROP VIEW IF EXISTS amcache_union_view")
+            
+            # Get common columns across all tables
+            # We'll use a subset of columns that are likely to exist in most tables
+            common_columns = []
+            table_columns = {}
+            
+            for table in tables:
+                cursor.execute(f"PRAGMA table_info({table})")
+                cols = [row[1] for row in cursor.fetchall()]
+                table_columns[table] = cols
+            
+            # Find columns that exist in at least one table
+            all_columns = set()
+            for cols in table_columns.values():
+                all_columns.update(cols)
+            
+            # Build SELECT statements for each table
+            select_statements = []
+            for table in tables:
+                cols = table_columns[table]
+                
+                # Build column list with NULL for missing columns
+                col_expressions = []
+                for col in sorted(all_columns):
+                    if col in cols:
+                        col_expressions.append(f"{col}")
+                    else:
+                        col_expressions.append(f"NULL as {col}")
+                
+                # Add table source column
+                col_expressions.append(f"'{table}' as _source_table")
+                
+                select_stmt = f"SELECT {', '.join(col_expressions)} FROM {table}"
+                select_statements.append(select_stmt)
+            
+            # Create UNION ALL view
+            union_query = " UNION ALL ".join(select_statements)
+            create_view_sql = f"CREATE VIEW amcache_union_view AS {union_query}"
+            
+            cursor.execute(create_view_sql)
+            self.connection.commit()
+            
+            logger.info(f"Successfully created amcache_union_view with {len(all_columns)} columns from {len(tables)} tables")
+            
+        except Exception as e:
+            logger.error(f"Failed to create AmCache union view: {e}")
+            # Fall back to using first table
+            raise
     
     @staticmethod
     def validate_schema_standalone(database_path: str) -> tuple[bool, List[str]]:

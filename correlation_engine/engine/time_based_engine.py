@@ -35,12 +35,12 @@ from .two_phase_correlation import (
 CORE_IDENTITY_FIELDS = [
     # Names (higher priority)
     'name', 'filename', 'executable_name', 'app_name', 'application',
-    'fn_filename', 'Source_Name', 'original_filename', 'program_name',
+    'fn_filename', 'Source_Name', 'original_filename', 'original_file_name', 'program_name',
     'display_name', 'product_name', 'Source', 'FileName', 'Name',
     'ProductName', 'FileDescription', 'OriginalFileName', 'value',
     'Value', 'entry_name', 'program', 'executable', 'Executable',
     'service_name', 'ServiceName', 'task_name', 'TaskName', 'process',
-    'Process', 'application_name',
+    'Process', 'application_name', 'publisher', 'Publisher',
     # Paths (lower priority)
     'path', 'file_path', 'app_path', 'Local_Path', 'reconstructed_path',
     'original_path', 'lower_case_long_path', 'install_location',
@@ -232,51 +232,172 @@ class OptimizedFeatherQuery:
         """Detect timestamp columns and format, then ensure proper indexing with error handling"""
         def detect_operation(connection):
             # Try to detect timestamp columns using multiple methods
-            timestamp_detected = False
+            # IMPORTANT: Run ALL methods and combine results for maximum coverage
+            all_detected_columns = []
             
             # Method 1: Try forensic patterns if detect_columns exists
             if hasattr(self.loader, 'detect_columns'):
                 try:
                     detected_cols = self.loader.detect_columns()
                     if detected_cols and hasattr(detected_cols, 'timestamp_columns') and detected_cols.timestamp_columns:
-                        self.timestamp_columns = detected_cols.timestamp_columns
-                        self.timestamp_column = self.timestamp_columns[0]  # Primary column
-                        timestamp_detected = True
+                        all_detected_columns.extend(detected_cols.timestamp_columns)
                         if self.debug_mode:
-                            print(f"[OptimizedFeatherQuery] Found {len(self.timestamp_columns)} timestamp columns via forensic detection: {self.timestamp_columns}")
+                            print(f"[OptimizedFeatherQuery] Method 1 (forensic): Found {len(detected_cols.timestamp_columns)} columns: {detected_cols.timestamp_columns}")
                 except Exception as e:
                     if self.debug_mode:
                         print(f"[OptimizedFeatherQuery] Forensic detection failed: {e}")
             
-            # Method 2: Use resilient timestamp parser
-            if not timestamp_detected:
-                sample_records = self._get_sample_records_safe(connection, 100)
-                if sample_records:
+            # Method 2: Enhanced smart detection - sample ALL columns and detect timestamp patterns
+            # This catches timestamp columns with unusual names and detects their formats
+            # CRITICAL: This method ALWAYS runs with robust error handling
+            column_formats = {}  # Track format for each column
+            parser_columns = []
+            
+            try:
+                cursor = connection.cursor()
+                table_name = self.loader.current_table if hasattr(self.loader, 'current_table') else None
+                
+                # Fallback: Find any table if current_table is not set
+                if not table_name:
                     try:
-                        timestamp_candidates = self.timestamp_parser.find_timestamp_columns(sample_records, sample_size=50)
-                        
-                        if timestamp_candidates:
-                            # Get ALL candidates, not just the first one
-                            self.timestamp_columns = [col for col, fmt, conf in timestamp_candidates]
-                            self.timestamp_column = self.timestamp_columns[0]  # Primary column
-                            detected_format = timestamp_candidates[0][1]
-                            self.timestamp_format = detected_format.value
-                            timestamp_detected = True
-                            
-                            if self.debug_mode:
-                                print(f"[OptimizedFeatherQuery] Found {len(self.timestamp_columns)} timestamp columns via resilient parser: {self.timestamp_columns}")
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1")
+                        result = cursor.fetchone()
+                        if result:
+                            table_name = result[0]
                     except Exception as e:
                         if self.debug_mode:
-                            print(f"[OptimizedFeatherQuery] Resilient parser failed: {e}")
-            
-            # Method 3: Final fallback detection using common column names
-            if not timestamp_detected:
-                self.timestamp_columns = self._fallback_timestamp_detection(connection)
-                if self.timestamp_columns:
-                    self.timestamp_column = self.timestamp_columns[0]  # Primary column
-                    timestamp_detected = True
+                            print(f"[OptimizedFeatherQuery] Method 2: Could not find table - {e}")
+                        table_name = None
+                
+                if table_name:
+                    # Get all columns with error handling
+                    try:
+                        cursor.execute(f"PRAGMA table_info({table_name})")
+                        all_cols = [row[1] for row in cursor.fetchall()]
+                    except Exception as e:
+                        if self.debug_mode:
+                            print(f"[OptimizedFeatherQuery] Method 2: Could not get columns - {e}")
+                        all_cols = []
+                    
+                    if all_cols:
+                        if self.debug_mode:
+                            print(f"[OptimizedFeatherQuery] Method 2 (smart): Analyzing {len(all_cols)} columns for timestamp patterns...")
+                        
+                        # Sample random values from each column and test if they're timestamps
+                        for col in all_cols:
+                            # Skip columns already found by Method 1
+                            if col in all_detected_columns:
+                                continue
+                            
+                            # Skip obviously non-timestamp columns by name
+                            col_lower = col.lower()
+                            if any(skip in col_lower for skip in ['id', 'count', 'size', 'length', 'hash', 'key', 'flag']):
+                                continue
+                            
+                            try:
+                                # Get random sample of non-NULL values with timeout protection
+                                cursor.execute(f"""
+                                    SELECT {col} FROM {table_name} 
+                                    WHERE {col} IS NOT NULL 
+                                    ORDER BY RANDOM() 
+                                    LIMIT 10
+                                """)
+                                samples = [row[0] for row in cursor.fetchall()]
+                                
+                                if not samples:
+                                    continue
+                                
+                                # Test if values look like timestamps and detect format
+                                timestamp_count = 0
+                                detected_formats = {}
+                                
+                                for value in samples:
+                                    try:
+                                        result = self.timestamp_parser.parse_timestamp(value)
+                                        if result.success:
+                                            timestamp_count += 1
+                                            # Track which format was detected
+                                            fmt = result.detected_format.value if hasattr(result.detected_format, 'value') else str(result.detected_format)
+                                            detected_formats[fmt] = detected_formats.get(fmt, 0) + 1
+                                    except Exception:
+                                        # Skip individual parse errors
+                                        continue
+                                
+                                # If >50% of samples are valid timestamps, consider it a timestamp column
+                                if timestamp_count >= len(samples) * 0.5:
+                                    parser_columns.append(col)
+                                    
+                                    # Store the most common format for this column
+                                    if detected_formats:
+                                        most_common_format = max(detected_formats, key=detected_formats.get)
+                                        column_formats[col] = most_common_format
+                                        
+                                        if self.debug_mode:
+                                            print(f"[OptimizedFeatherQuery]   ✓ {col}: {timestamp_count}/{len(samples)} samples are timestamps (format: {most_common_format})")
+                                    else:
+                                        if self.debug_mode:
+                                            print(f"[OptimizedFeatherQuery]   ✓ {col}: {timestamp_count}/{len(samples)} samples are timestamps")
+                            
+                            except Exception as e:
+                                # Log but continue with other columns
+                                if self.debug_mode:
+                                    print(f"[OptimizedFeatherQuery]   ✗ {col}: Error sampling - {e}")
+                                continue
+                        
+                        if parser_columns:
+                            all_detected_columns.extend(parser_columns)
+                            
+                            # Store format for first detected column if we don't have one yet
+                            if not hasattr(self, 'timestamp_format') or not self.timestamp_format:
+                                if column_formats:
+                                    self.timestamp_format = list(column_formats.values())[0]
+                            
+                            if self.debug_mode:
+                                print(f"[OptimizedFeatherQuery] Method 2 (smart): Found {len(parser_columns)} columns: {parser_columns}")
+                                if column_formats:
+                                    print(f"[OptimizedFeatherQuery] Method 2 (smart): Detected formats: {column_formats}")
+                        else:
+                            if self.debug_mode:
+                                print(f"[OptimizedFeatherQuery] Method 2 (smart): No additional timestamp columns found")
+                    else:
+                        if self.debug_mode:
+                            print(f"[OptimizedFeatherQuery] Method 2 (smart): No columns found in table")
+                else:
                     if self.debug_mode:
-                        print(f"[OptimizedFeatherQuery] Found {len(self.timestamp_columns)} timestamp columns via fallback: {self.timestamp_columns}")
+                        print(f"[OptimizedFeatherQuery] Method 2 (smart): No table available for analysis")
+            
+            except Exception as e:
+                # Method 2 failed completely - log but don't crash
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Method 2 (smart) failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # GUARANTEE: Method 2 always completes, even if it finds nothing
+            if self.debug_mode:
+                print(f"[OptimizedFeatherQuery] Method 2 (smart): Completed (found {len(parser_columns)} columns)")
+            
+            # Method 3: ALWAYS run fallback detection to catch any missed columns
+            fallback_columns = self._fallback_timestamp_detection(connection)
+            if fallback_columns:
+                all_detected_columns.extend(fallback_columns)
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] Method 3 (fallback): Found {len(fallback_columns)} columns: {fallback_columns}")
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            self.timestamp_columns = []
+            for col in all_detected_columns:
+                if col not in seen:
+                    seen.add(col)
+                    self.timestamp_columns.append(col)
+            
+            # Set primary column
+            if self.timestamp_columns:
+                self.timestamp_column = self.timestamp_columns[0]
+                
+                if self.debug_mode:
+                    print(f"[OptimizedFeatherQuery] TOTAL: {len(self.timestamp_columns)} unique timestamp columns: {self.timestamp_columns}")
             
             if self.timestamp_columns:
                 # Detect timestamp format if not already detected
@@ -374,7 +495,7 @@ class OptimizedFeatherQuery:
             # Generic high-priority
             'timestamp', 'time', 'datetime', 'date_time', 'date',
             # Prefetch
-            'last_run_time', 'last_run', 'run_time', 'execution_time',
+            'last_run_time', 'last_run', 'last_executed', 'run_time', 'execution_time',
             # ShimCache
             'last_modified', 'last_modified_readable', 'modified_time',
             # AmCache
@@ -397,7 +518,10 @@ class OptimizedFeatherQuery:
             'first_interaction', 'last_interaction',
             # Generic variations
             'created_time', 'modified_time', 'accessed_time',
-            'create_time', 'modify_time', 'access_time'
+            'create_time', 'modify_time', 'access_time',
+            'created_on', 'modified_on', 'accessed_on',
+            # Parser timestamps (lower priority - only use if no artifact timestamps found)
+            'parsed_at', 'parsed_timestamp'
         ]
         
         try:
@@ -436,8 +560,22 @@ class OptimizedFeatherQuery:
             for col_name, col_type in all_columns:
                 col_lower = col_name.lower()
                 # Skip obviously non-timestamp columns
-                if any(skip in col_lower for skip in ['id', 'count', 'size', 'length', 'number', 'index', 'key', 'value', 'path', 'name', 'type', 'flag']):
+                # NOTE: Don't skip columns with 'name' as some artifacts use 'filename' for identity, not timestamp
+                if any(skip in col_lower for skip in ['id', 'count', 'size', 'length', 'number', 'index', 'key', 'value', 'type', 'flag']):
                     continue
+                
+                # Skip columns that are durations/cycles, not timestamps
+                if any(duration in col_lower for duration in ['cycle_time', 'duration', 'elapsed', 'interval', 'period']):
+                    continue
+                
+                # Skip columns that are positions/counters, not timestamps
+                if any(position in col_lower for position in ['position', 'sequence', 'record_number', 'entry_number']):
+                    continue
+                
+                # Skip JSON/array columns that contain multiple timestamps (not queryable as single timestamp)
+                if any(json_col in col_lower for json_col in ['run_times', 'times_array', 'timestamps_json']):
+                    continue
+                
                 # Look for timestamp indicators
                 if any(pattern in col_lower for pattern in ['time', 'date', 'stamp', 'created', 'modified', 'accessed', 'write', 'interaction']):
                     if col_name not in timestamp_columns_found:
@@ -2846,6 +2984,25 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         else:
                             cols_display = ', '.join(ts_cols)
                         print(f"[Time-Window Engine]   {fid:<25} {cols_display:<55}")
+                        
+                        # DEBUG: Show sample timestamp values to verify data exists
+                        if self.debug_mode and hasattr(query_manager, 'loader') and query_manager.loader:
+                            try:
+                                conn = query_manager.loader.connection
+                                cursor = conn.cursor()
+                                table = query_manager.loader.current_table
+                                
+                                # Check each timestamp column for non-NULL values
+                                for ts_col in ts_cols[:3]:  # Check first 3 columns
+                                    cursor.execute(f"SELECT {ts_col} FROM {table} WHERE {ts_col} IS NOT NULL LIMIT 1")
+                                    sample = cursor.fetchone()
+                                    if sample:
+                                        print(f"[Time-Window Engine]     └─ {ts_col}: {sample[0]} (sample)")
+                                    else:
+                                        print(f"[Time-Window Engine]     └─ {ts_col}: ⚠️  ALL NULL")
+                            except Exception as e:
+                                if self.debug_mode:
+                                    print(f"[Time-Window Engine]     └─ Could not sample: {e}")
                     elif hasattr(query_manager, 'timestamp_column') and query_manager.timestamp_column:
                         print(f"[Time-Window Engine]   {fid:<25} {query_manager.timestamp_column:<55}")
                     else:
