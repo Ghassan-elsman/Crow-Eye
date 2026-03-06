@@ -34,15 +34,7 @@ Crow Eye is a comprehensive Windows forensics tool designed to collect, parse, a
 ## Created by
 Ghassan Elsman
 
-## 💖 Support the Project
 
-Crow-Eye is a free, open-source Windows Forensics Engine built and maintained solely by one person. Every parser, every correlation rule, every new artifact supported represents hours of deep research, reverse engineering raw hexadecimal binary structures, and intensive engineering work done independently.
-
-By supporting Crow-Eye, you are not just donating to a tool. You are directly funding the future of open and accessible digital forensics. Your contribution keeps the research going, accelerates the development of new artifact parsers, and ensures that professional-grade forensics remains free for every investigator, student, and curious person in the world regardless of their budget or background.
-
-Every contribution, no matter the size, makes a real difference to an independent developer who chose to build something meaningful over something profitable.
-
-[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
 
 ## Vision: Forensics for Everyone
 
@@ -702,3 +694,13 @@ See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.
 ## Development Credits
 - Jump List/LNK parsing based on work by Saleh Muhaysin
 - Created and maintained by Ghassan Elsman
+
+  ## 💖 Support the Project
+
+Crow-Eye is a free, open-source Windows Forensics Engine built and maintained solely by one person. Every parser, every correlation rule, every new artifact supported represents hours of deep research, reverse engineering raw hexadecimal binary structures, and intensive engineering work done independently.
+
+By supporting Crow-Eye, you are not just donating to a tool. You are directly funding the future of open and accessible digital forensics. Your contribution keeps the research going, accelerates the development of new artifact parsers, and ensures that professional-grade forensics remains free for every investigator, student, and curious person in the world regardless of their budget or background.
+
+Every contribution, no matter the size, makes a real difference to an independent developer who chose to build something meaningful over something profitable.
+
+[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
