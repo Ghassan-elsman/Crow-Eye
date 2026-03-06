@@ -695,7 +695,7 @@ See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.
 - Jump List/LNK parsing based on work by Saleh Muhaysin
 - Created and maintained by Ghassan Elsman
 
-  ## 💖 Support the Project
+## 💖 Support the Project
 
 Crow-Eye is a free, open-source Windows Forensics Engine built and maintained solely by one person. Every parser, every correlation rule, every new artifact supported represents hours of deep research, reverse engineering raw hexadecimal binary structures, and intensive engineering work done independently.
 
