@@ -14,7 +14,6 @@
 - [Overview](#overview)
 - [Created by](#created-by)
 - [💖 Support the Project](#-support-the-project)
-- [💬 Community & Support](#-community--support)
 - [Supported Artifacts](#supported-artifacts)
 - [Installation](#installation)
 - [How to Use Crow Eye](#how-to-use-crow-eye)
@@ -28,6 +27,7 @@
 - [Correlation Engine](#-correlation-engine)
 - [Coming Soon Features](#-coming-soon-features)
 - [Development Credits](#development-credits)
+- [💬 Community & Support](#-community--support)
 
 ## Overview
 
@@ -36,37 +36,8 @@ Crow Eye is a comprehensive Windows forensics tool designed to collect, parse, a
 ## Created by
 Ghassan Elsman
 
-## 💖 Support the Project
 
-Crow-Eye is a free, open-source Windows Forensics Engine built and maintained solely by one person. Every parser, every correlation rule, every new artifact supported represents hours of deep research, reverse engineering raw hexadecimal binary structures, and intensive engineering work done independently.
 
-By supporting Crow-Eye, you are not just donating to a tool. You are directly funding the future of open and accessible digital forensics. Your contribution keeps the research going, accelerates the development of new artifact parsers, and ensures that professional-grade forensics remains free for every investigator, student, and curious person in the world regardless of their budget or background.
-
-Every contribution, no matter the size, makes a real difference to an independent developer who chose to build something meaningful over something profitable.
-
-[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
-[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
-
-### 🚀 Sponsorship Tiers
-
-Support Crow-Eye by choosing a sponsorship tier that fits your needs:
-
-*   **💾 Bit Tracer ($10/mo)**: Official GitHub Sponsor badge and your name in `SPONSORS.md`.
-*   **🧩 Byte Parser ($25/mo)**: Your name/logo in `README.md` and "Verified Supporter" role.
-*   **🐝 Hive Master ($50/mo)**: Engineering deep-dives, strategy discussions, and early access.
-*   **⚔️ Kernel Commander ($250/mo)**: Case-specific support and strategic roadmap influence.
-
-See [SPONSORS.md](SPONSORS.md) for full details on each tier.
-
-## 💬 Community & Support
-
-Join our growing community to get faster support, share your investigation techniques, and discuss the future of Crow-eye!
-
-[![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
-
-- **Faster Support**: Get direct help from the developer and experienced users.
-- **Discussions**: Share your forensic findings and discuss new artifact research.
-- **Announcements**: Stay updated on the latest releases and experimental features.
 
 ## Vision: Forensics for Everyone
 
@@ -125,6 +96,27 @@ The project focuses on:
 - Enabling peer review, transparency, and academic collaboration
 - Contributing to the forensics community's collective knowledge
 
+## 💖 Support the Project
+
+Crow-Eye is a free, open-source Windows Forensics Engine built and maintained solely by one person. Every parser, every correlation rule, every new artifact supported represents hours of deep research, reverse engineering raw hexadecimal binary structures, and intensive engineering work done independently.
+
+By supporting Crow-Eye, you are not just donating to a tool. You are directly funding the future of open and accessible digital forensics. Your contribution keeps the research going, accelerates the development of new artifact parsers, and ensures that professional-grade forensics remains free for every investigator, student, and curious person in the world regardless of their budget or background.
+
+Every contribution, no matter the size, makes a real difference to an independent developer who chose to build something meaningful over something profitable.
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
+[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
+
+### 🚀 Sponsorship Tiers
+
+Support Crow-Eye by choosing a sponsorship tier that fits your needs:
+
+*   **💾 Bit Tracer ($10/mo)**: Official GitHub Sponsor badge and your name in `SPONSORS.md`.
+*   **🧩 Byte Parser ($25/mo)**: Your name/logo in `README.md` and "Verified Supporter" role.
+*   **🐝 Hive Master ($50/mo)**: Engineering deep-dives, strategy discussions, and early access.
+*   **⚔️ Kernel Commander ($250/mo)**: Case-specific support and strategic roadmap influence.
+
+See [SPONSORS.md](SPONSORS.md) for full details on each tier.
 
 
 ## Supported Artifacts
@@ -187,15 +179,10 @@ Crow-Claw is our specialized acquisition engine designed to collect and preserve
 
 ### 🔍 Offline Analysis (Offline Importer)
 The Offline Importer allows investigators to analyze artifacts collected from any source without needing a live connection to the target system.
-
-![Offline Importer](C:/Users/Ghass/Pictures/offline-importer.png)
-
 - **Universal Input**: Input a complete directory of artifacts or select individual files for analysis.
 - **Smart Identification (SCAN)**: Hit **SCAN** to walk through the source data; Crow-Eye automatically identifies and indexes every supported artifact type using forensic signatures. This updates the case's **Scan Index** metadata without moving any files.
 - **Forensic Preservation (COLLECT)**: After scanning, you can hit **📦 Collect Artifacts** to physically copy the identified files into your Case's `live_acquisition` folder, organizing them by type (e.g., Registry, Prefetch, Event Logs).
 - **Granular Control (PARSE)**: Use the **Parse Artifact** window to review identified items. Every tab displays all files of a specific type (e.g., AMCACHE, EVTX, PREFETCH), allowing you to select specific files or the entire set for parsing into the forensic database.
-
-![Parse Offline Artifacts](C:/Users/Ghass/Pictures/parse-offline-artifacts.png)
 
 #### ❓ What is the difference between SCAN and COLLECT?
 
@@ -727,4 +714,15 @@ See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.
 
 ## Development Credits
 - Jump List/LNK parsing based on work by Saleh Muhaysin
+
+## 💬 Community & Support
+
+Join our growing community to get faster support, share your investigation techniques, and discuss the future of Crow-eye!
+
+[![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
+
+- **Faster Support**: Get direct help from the developer and experienced users.
+- **Discussions**: Share your forensic findings and discuss new artifact research.
+- **Announcements**: Stay updated on the latest releases and experimental features.
+
 - Created and maintained by Ghassan Elsman
