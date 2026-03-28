@@ -196,6 +196,152 @@ class CaseConfigurationManager:
         """
         return self.current_case_id
     
+    def set_live_acquisition_path(self, case_id: str, path: str) -> bool:
+        """
+        Set the live acquisition directory path for a case.
+        
+        Args:
+            case_id: Case identifier
+            path: New path for live acquisition directory
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Validate path
+            if not self._validate_directory_path(path):
+                logger.error(f"Invalid directory path: {path}")
+                return False
+            
+            case_dir = self.cases_dir / case_id
+            config_file = case_dir / "case_config.json"
+            
+            # Create case directory if it doesn't exist
+            if not case_dir.exists():
+                case_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created case directory: {case_dir}")
+            
+            # Load existing configuration or create new one
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+            else:
+                config = {
+                    'case_id': case_id,
+                    'created_at': datetime.now().isoformat()
+                }
+            
+            # Update live acquisition path
+            config['live_acquisition_path'] = path
+            config['modified_at'] = datetime.now().isoformat()
+            
+            # Save configuration
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            # Create change event
+            event = ConfigurationChangeEvent(
+                case_id=case_id,
+                change_type='updated',
+                component='live_acquisition_path',
+                timestamp=datetime.now().isoformat(),
+                details={
+                    'operation': 'set_live_acquisition_path',
+                    'path': path
+                }
+            )
+            
+            self._notify_change_listeners(event)
+            
+            logger.info(f"Set live acquisition path for {case_id}: {path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to set live acquisition path for {case_id}: {e}")
+            return False
+    
+    def create_live_acquisition_directory(self, case_id: str) -> Optional[str]:
+        """
+        Create the default live_acquisition directory for a case.
+        
+        Args:
+            case_id: Case identifier
+            
+        Returns:
+            Path to created directory or None if failed
+        """
+        try:
+            case_dir = self.cases_dir / case_id
+            
+            # Create case directory if it doesn't exist
+            if not case_dir.exists():
+                case_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created case directory: {case_dir}")
+            
+            # Create live_acquisition directory
+            live_acq_dir = case_dir / "live_acquisition"
+            live_acq_dir.mkdir(parents=True, exist_ok=True)
+            
+            live_acq_path = str(live_acq_dir)
+            
+            # Update configuration with the path
+            self.set_live_acquisition_path(case_id, live_acq_path)
+            
+            # Create change event
+            event = ConfigurationChangeEvent(
+                case_id=case_id,
+                change_type='created',
+                component='live_acquisition_directory',
+                timestamp=datetime.now().isoformat(),
+                details={
+                    'operation': 'create_live_acquisition_directory',
+                    'path': live_acq_path
+                }
+            )
+            
+            self._notify_change_listeners(event)
+            
+            logger.info(f"Created live acquisition directory for {case_id}: {live_acq_path}")
+            return live_acq_path
+            
+        except Exception as e:
+            logger.error(f"Failed to create live acquisition directory for {case_id}: {e}")
+            return None
+    
+    def _validate_directory_path(self, path: str) -> bool:
+        """
+        Validate a directory path for security and correctness.
+        
+        Args:
+            path: Directory path to validate
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            # Convert to Path object
+            path_obj = Path(path)
+            
+            # Check for path traversal attempts
+            resolved_path = path_obj.resolve()
+            
+            # Check for invalid characters (basic check)
+            invalid_chars = ['<', '>', '|', '\0']
+            if any(char in str(path) for char in invalid_chars):
+                logger.warning(f"Path contains invalid characters: {path}")
+                return False
+            
+            # Check if path is absolute or can be made absolute
+            if not path_obj.is_absolute():
+                # Allow relative paths within the cases directory
+                logger.debug(f"Path is relative: {path}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Path validation failed for {path}: {e}")
+            return False
+    
     def compare_case_configurations(self, 
                                   source_case_id: str, 
                                   target_case_id: str,
@@ -1138,3 +1284,361 @@ class CaseConfigurationManager:
                 'error': str(e),
                 'end_time': datetime.now().isoformat()
             }
+    def set_scanned_artifacts(self, case_id: str, artifacts: List[Dict[str, Any]]) -> bool:
+        """
+        Save scanned artifacts metadata to the case configuration.
+        Organizes artifacts by type with sorted paths.
+
+        Args:
+            case_id: Case identifier
+            artifacts: List of artifact dictionaries containing 'type', 'path', 'name'
+
+        Returns:
+            True if successful, False otherwise
+            
+        Requirements: 3.1, 3.2, 3.3, 3.4
+        """
+        try:
+            case_dir = self.cases_dir / case_id
+            config_file = case_dir / "case_config.json"
+
+            # Create case directory if it doesn't exist
+            if not case_dir.exists():
+                case_dir.mkdir(parents=True, exist_ok=True)
+
+            # Load existing configuration or create new one
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+            else:
+                config = {
+                    'case_id': case_id,
+                    'created_at': datetime.now().isoformat(),
+                    'version': '1.0'
+                }
+
+            # Organize artifacts by type with sorted paths
+            artifacts_by_type = {}
+            for artifact in artifacts:
+                artifact_type = artifact.get('type', 'Unknown')
+                if artifact_type == 'Unknown':
+                    continue  # Skip unknown artifacts
+                
+                if artifact_type not in artifacts_by_type:
+                    artifacts_by_type[artifact_type] = []
+                
+                # Validate path exists
+                artifact_path = artifact.get('path', '')
+                if artifact_path and os.path.exists(artifact_path):
+                    # Create artifact metadata with required fields
+                    artifact_metadata = {
+                        'path': artifact_path,
+                        'name': artifact.get('name', os.path.basename(artifact_path)),
+                        'size': artifact.get('size', os.path.getsize(artifact_path) if os.path.exists(artifact_path) else 0),
+                        'hash': artifact.get('hash', ''),
+                        'scanned': artifact.get('scanned', datetime.now().isoformat()),
+                        'parsed': artifact.get('parsed', False)
+                    }
+                    artifacts_by_type[artifact_type].append(artifact_metadata)
+            
+            # Sort artifacts within each type alphabetically by path
+            for artifact_type in artifacts_by_type:
+                artifacts_by_type[artifact_type].sort(key=lambda x: x['path'])
+
+            # Update scanned artifacts with organized structure
+            config['scanned_artifacts'] = artifacts_by_type
+            config['modified_at'] = datetime.now().isoformat()
+            
+            # Atomic write using temp file + rename
+            temp_file = config_file.with_suffix('.tmp')
+            with open(temp_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            # Atomic rename
+            temp_file.replace(config_file)
+
+            # Create change event
+            total_artifacts = sum(len(artifacts) for artifacts in artifacts_by_type.values())
+            event = ConfigurationChangeEvent(
+                case_id=case_id,
+                change_type='updated',
+                component='scanned_artifacts',
+                timestamp=datetime.now().isoformat(),
+                details={
+                    'operation': 'set_scanned_artifacts',
+                    'count': total_artifacts,
+                    'types': list(artifacts_by_type.keys())
+                }
+            )
+
+            self._notify_change_listeners(event)
+
+            logger.info(f"Saved {total_artifacts} scanned artifacts across {len(artifacts_by_type)} types for case {case_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to save scanned artifacts for {case_id}: {e}")
+            return False
+
+    def get_scanned_artifacts(self, case_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get scanned artifacts metadata from the case configuration.
+        Returns artifacts organized by type.
+
+        Args:
+            case_id: Case identifier
+
+        Returns:
+            Dictionary mapping artifact type to list of artifact metadata,
+            or empty dict if not found
+            
+        Requirements: 3.5
+        """
+        try:
+            case_dir = self.cases_dir / case_id
+            config_file = case_dir / "case_config.json"
+
+            if not config_file.exists():
+                return {}
+
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+
+            scanned_artifacts = config.get('scanned_artifacts', {})
+            
+            # Handle old format (list) and convert to new format (dict)
+            if isinstance(scanned_artifacts, list):
+                logger.warning(f"Converting old scanned_artifacts format for case {case_id}")
+                # Convert old list format to new dict format
+                artifacts_by_type = {}
+                for artifact in scanned_artifacts:
+                    artifact_type = artifact.get('type', 'Unknown')
+                    if artifact_type not in artifacts_by_type:
+                        artifacts_by_type[artifact_type] = []
+                    artifacts_by_type[artifact_type].append(artifact)
+                return artifacts_by_type
+            
+            return scanned_artifacts
+
+        except Exception as e:
+            logger.error(f"Failed to get scanned artifacts for {case_id}: {e}")
+            return {}
+    
+    def get_scanned_artifacts_by_type(self, case_id: str, artifact_type: str) -> List[Dict[str, Any]]:
+        """
+        Get scanned artifacts of a specific type from case configuration.
+        
+        Args:
+            case_id: Case identifier
+            artifact_type: Type of artifact (e.g., "Registry", "Prefetch")
+        
+        Returns:
+            List of artifact metadata dictionaries for the specified type
+            
+        Requirements: 3.7
+        """
+        try:
+            all_artifacts = self.get_scanned_artifacts(case_id)
+            return all_artifacts.get(artifact_type, [])
+        except Exception as e:
+            logger.error(f"Failed to get {artifact_type} artifacts for {case_id}: {e}")
+            return []
+
+    def get_live_acquisition_path(self, case_id: str) -> Optional[str]:
+        """
+        Get the live acquisition directory path for a case.
+        
+        For legacy cases without a configured path, automatically creates
+        the live_acquisition directory and updates the configuration.
+
+        Args:
+            case_id: Case identifier
+
+        Returns:
+            Path to live_acquisition directory or None if not configured
+        """
+        try:
+            case_dir = self.cases_dir / case_id
+            config_file = case_dir / "case_config.json"
+
+            if not config_file.exists():
+                logger.warning(f"Case configuration file not found for {case_id}")
+                return None
+
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+
+            live_acq_path = config.get('live_acquisition_path')
+
+            if live_acq_path:
+                logger.debug(f"Retrieved live acquisition path for {case_id}: {live_acq_path}")
+                return live_acq_path
+            else:
+                # Legacy case without live_acquisition_path configured (Task 14.1)
+                # Automatically create directory and update configuration
+                default_path = str(case_dir / "live_acquisition")
+                logger.info(f"Legacy case detected: {case_id}. Creating live_acquisition directory: {default_path}")
+                
+                # Create the directory
+                Path(default_path).mkdir(parents=True, exist_ok=True)
+                
+                # Update configuration
+                config['live_acquisition_path'] = default_path
+                config['modified_at'] = datetime.now().isoformat()
+                
+                with open(config_file, 'w') as f:
+                    json.dump(config, f, indent=2)
+                
+                logger.info(f"Updated legacy case {case_id} with live_acquisition_path: {default_path}")
+                return default_path
+
+        except Exception as e:
+            logger.error(f"Failed to get live acquisition path for {case_id}: {e}")
+            return None
+
+    def set_live_acquisition_path(self, case_id: str, path: str) -> bool:
+        """
+        Set the live acquisition directory path for a case.
+
+        Args:
+            case_id: Case identifier
+            path: New path for live acquisition directory
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Validate path
+            if not self._validate_directory_path(path):
+                logger.error(f"Invalid directory path: {path}")
+                return False
+
+            case_dir = self.cases_dir / case_id
+            config_file = case_dir / "case_config.json"
+
+            # Create case directory if it doesn't exist
+            if not case_dir.exists():
+                case_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created case directory: {case_dir}")
+
+            # Load existing configuration or create new one
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+            else:
+                config = {
+                    'case_id': case_id,
+                    'created_at': datetime.now().isoformat()
+                }
+
+            # Update live acquisition path
+            config['live_acquisition_path'] = path
+            config['modified_at'] = datetime.now().isoformat()
+
+            # Save configuration
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+
+            # Create change event
+            event = ConfigurationChangeEvent(
+                case_id=case_id,
+                change_type='updated',
+                component='live_acquisition_path',
+                timestamp=datetime.now().isoformat(),
+                details={
+                    'operation': 'set_live_acquisition_path',
+                    'path': path
+                }
+            )
+
+            self._notify_change_listeners(event)
+
+            logger.info(f"Set live acquisition path for {case_id}: {path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to set live acquisition path for {case_id}: {e}")
+            return False
+
+    def create_live_acquisition_directory(self, case_id: str) -> Optional[str]:
+        """
+        Create the default live_acquisition directory for a case.
+
+        Args:
+            case_id: Case identifier
+
+        Returns:
+            Path to created directory or None if failed
+        """
+        try:
+            case_dir = self.cases_dir / case_id
+
+            # Create case directory if it doesn't exist
+            if not case_dir.exists():
+                case_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created case directory: {case_dir}")
+
+            # Create live_acquisition directory
+            live_acq_dir = case_dir / "live_acquisition"
+            live_acq_dir.mkdir(parents=True, exist_ok=True)
+
+            live_acq_path = str(live_acq_dir)
+
+            # Update configuration with the path
+            self.set_live_acquisition_path(case_id, live_acq_path)
+
+            # Create change event
+            event = ConfigurationChangeEvent(
+                case_id=case_id,
+                change_type='created',
+                component='live_acquisition_directory',
+                timestamp=datetime.now().isoformat(),
+                details={
+                    'operation': 'create_live_acquisition_directory',
+                    'path': live_acq_path
+                }
+            )
+
+            self._notify_change_listeners(event)
+
+            logger.info(f"Created live acquisition directory for {case_id}: {live_acq_path}")
+            return live_acq_path
+
+        except Exception as e:
+            logger.error(f"Failed to create live acquisition directory for {case_id}: {e}")
+            return None
+
+    def _validate_directory_path(self, path: str) -> bool:
+        """
+        Validate a directory path for security and correctness.
+
+        Args:
+            path: Directory path to validate
+
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            # Convert to Path object
+            path_obj = Path(path)
+
+            # Check for path traversal attempts
+            resolved_path = path_obj.resolve()
+
+            # Check for invalid characters (basic check)
+            invalid_chars = ['<', '>', '|', '\0']
+            if any(char in str(path) for char in invalid_chars):
+                logger.warning(f"Path contains invalid characters: {path}")
+                return False
+
+            # Check if path is absolute or can be made absolute
+            if not path_obj.is_absolute():
+                # Allow relative paths within the cases directory
+                logger.debug(f"Path is relative: {path}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Path validation failed for {path}: {e}")
+            return False
+

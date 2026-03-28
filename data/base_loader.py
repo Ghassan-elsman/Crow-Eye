@@ -86,9 +86,7 @@ class BaseDataLoader:
 
         # Default PRAGMAs tuned for fast, read-heavy operations
         default_pragmas: Dict[str, Union[str, int]] = {
-            "journal_mode": "WAL",
-            "synchronous": "NORMAL",
-            "cache_size": 10000,  # Cache pages (negative values mean KB)
+            "cache_size": -10000,  # 10MB cache (negative values mean KB)
             "temp_store": "MEMORY",
             "busy_timeout": 30000,  # milliseconds
         }
@@ -98,10 +96,15 @@ class BaseDataLoader:
         try:
             # Apply each PRAGMA safely
             for key, value in settings.items():
-                if key == "busy_timeout":
-                    cursor.execute("PRAGMA busy_timeout = ?", (int(value),))
-                else:
-                    cursor.execute(f"PRAGMA {key} = {value}")
+                try:
+                    # Use string formatting for all PRAGMAs (parameterized queries don't work with PRAGMA)
+                    if isinstance(value, str):
+                        cursor.execute(f"PRAGMA {key} = {value}")
+                    else:
+                        cursor.execute(f"PRAGMA {key} = {int(value)}")
+                except sqlite3.Error as e:
+                    # Silently skip PRAGMAs that fail (e.g., on read-only databases)
+                    self.logger.debug(f"Skipped PRAGMA {key}: {e}")
         except sqlite3.Error as e:
             self.logger.warning(f"Failed to apply PRAGMA settings: {e}")
             

@@ -1,0 +1,16 @@
+# Crow-Claw Requirements
+# Windows Forensic Artifact Acquisition Tool
+
+# Core GUI framework
+PyQt5>=5.15.0,<6.0
+
+# Development tools
+setuptools>=45.0
+wheel>=0.36
+build>=0.7
+
+# Optional development dependencies
+# pytest>=6.0  # for testing
+# black>=21.0  # for code formatting
+# flake8>=3.9  # for linting
+# mypy>=0.910  # for type checking

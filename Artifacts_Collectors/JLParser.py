@@ -25,6 +25,7 @@ class JL:
         self.output_format     = 'json'
        
         self.output_file     = args.output_file if args.output_file is not None else None
+        self.silent = getattr(args, 'silent', False)  # Check if silent mode is enabled
        
         
         # set the AppIDs 
@@ -60,8 +61,9 @@ class JL:
 
  
     def print_msg(self, msg , results=False):
-
-            print(msg)
+            # Suppress output in silent mode (used by offline parser)
+            if not self.silent:
+                print(msg)
 
 
 
@@ -348,7 +350,7 @@ class JL:
         elif len(data)==6 and type=='mac':
             return "%02x:%02x:%02x:%02x:%02x:%02x" % struct.unpack("BBBBBB",data)
         elif type=='uni':
-            return data.decode('UTF-16-LE')
+            return data.decode('UTF-16-LE', errors='replace')
         elif type=='printable':
             for codec in self.codecs:
                 try:
@@ -725,7 +727,7 @@ class JL:
     
 
 
-def Claw(filename):
+def Claw(filename, silent=False):
     # ================== arguments
     a_parser = argparse.ArgumentParser()
 
@@ -737,10 +739,14 @@ def Claw(filename):
 
 
     args = a_parser.parse_args(['-f', filename,])
+    
+    # Add silent flag to args for suppressing verbose output
+    args.silent = silent
 
    
     jumplist = JL(args, appid_path)
-    print()
+    if not silent:
+        print()
 
     return jumplist
 

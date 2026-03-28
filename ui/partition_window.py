@@ -31,76 +31,76 @@ from Artifacts_Collectors.partition_analyzer import PartitionAnalyzer, Partition
 
 class PartitionLoadWorker(QThread):
     """Worker thread to load partition data without blocking the UI"""
-    finished = pyqtSignal(list)  # Emits list of DiskInfo objects
-    error = pyqtSignal(str)  # Emits error message
-    status = pyqtSignal(str)  # Emits status messages
-    
-    def __init__(self, db_path=None, force_refresh=False):
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+    status = pyqtSignal(str)
+
+    def __init__(self, db_paths=None, partitions_json=None, force_refresh=False):
         super().__init__()
-        self.db_path = db_path
+        self.db_paths = self._normalize_db_paths(db_paths)
+        self.partitions_json = partitions_json
         self.force_refresh = force_refresh
-    
+
+    def _normalize_db_paths(self, db_paths):
+        if db_paths is None:
+            return []
+        if isinstance(db_paths, str):
+            return [('Current System', db_paths)]
+        if isinstance(db_paths, list):
+            if len(db_paths) > 0 and isinstance(db_paths[0], tuple):
+                return db_paths
+            return [(f'Source {i+1}', path) for i, path in enumerate(db_paths)]
+        return []
+
     def run(self):
-        """Load partition data in background thread"""
         try:
             analyzer = PartitionAnalyzer()
-            disks = []
-            
-            # Debug: Print db_path
-            print(f"[PartitionLoadWorker] db_path: {self.db_path}")
-            print(f"[PartitionLoadWorker] force_refresh: {self.force_refresh}")
-            
-            # Check if database exists and load from it (unless force refresh)
-            if self.db_path and os.path.exists(self.db_path) and not self.force_refresh:
-                self.status.emit("Loading cached partition data...")
-                print(f"[PartitionLoadWorker] Loading from existing database: {self.db_path}")
-                disks = analyzer.load_from_database(self.db_path)
-                
-                if disks:
-                    self.status.emit(f"Loaded {len(disks)} disk(s) from cache")
-                    self.finished.emit(disks)
+            all_disks = []
+
+            if self.partitions_json and os.path.exists(self.partitions_json) and not self.force_refresh:
+                self.status.emit("Loading partition data from partitions.json...")
+                try:
+                    disks = analyzer.load_from_json(self.partitions_json)
+                    if disks:
+                        for disk in disks:
+                            disk.source = "Offline JSON"
+                        all_disks.extend(disks)
+                        self.status.emit(f"Loaded {len(all_disks)} disk(s) from JSON")
+                        self.finished.emit(all_disks)
+                        return
+                except Exception as e:
+                    self.status.emit(f"Could not load from partitions.json: {e}")
+
+            if self.db_paths and not self.force_refresh:
+                for source_name, db_path in self.db_paths:
+                    if os.path.exists(db_path):
+                        self.status.emit(f"Loading partition data from {source_name}...")
+                        disks = analyzer.load_from_database(db_path)
+                        if disks:
+                            for disk in disks:
+                                disk.source = source_name
+                            all_disks.extend(disks)
+                if all_disks:
+                    self.status.emit(f"Loaded {len(all_disks)} disk(s) from {len(self.db_paths)} source(s)")
+                    self.finished.emit(all_disks)
                     return
-                else:
-                    self.status.emit("Cache invalid, running fresh analysis...")
-                    print("[PartitionLoadWorker] Database exists but returned no data")
-            else:
-                if self.force_refresh:
-                    self.status.emit("Running fresh partition analysis...")
-                    print("[PartitionLoadWorker] Force refresh requested")
-                elif not self.db_path:
-                    self.status.emit("No database path provided, analyzing partitions...")
-                    print("[PartitionLoadWorker] No db_path provided")
-                else:
-                    self.status.emit("No cache found, analyzing partitions...")
-                    print(f"[PartitionLoadWorker] Database does not exist: {self.db_path}")
-            
-            # Run fresh analysis
+
+            self.status.emit("No cached data found, running fresh analysis...")
             disks = analyzer.get_disks_with_partitions()
+            for disk in disks:
+                disk.source = "Current System"
             
-            # Save to database if path provided
-            if self.db_path:
-                # Ensure directory exists
-                db_dir = os.path.dirname(self.db_path)
+            if self.db_paths:
+                source_name, db_path = self.db_paths[0]
+                db_dir = os.path.dirname(db_path)
                 if db_dir and not os.path.exists(db_dir):
-                    print(f"[PartitionLoadWorker] Creating directory: {db_dir}")
                     os.makedirs(db_dir, exist_ok=True)
-                
                 self.status.emit("Saving results to database...")
-                print(f"[PartitionLoadWorker] Saving to database: {self.db_path}")
-                success = analyzer.save_to_database(self.db_path, disks)
-                if success:
-                    print(f"[PartitionLoadWorker] Successfully saved to database")
-                else:
-                    print(f"[PartitionLoadWorker] Failed to save to database")
-            else:
-                print("[PartitionLoadWorker] No db_path, skipping database save")
-                
+                analyzer.save_to_database(db_path, disks)
+
             self.status.emit("Analysis complete")
             self.finished.emit(disks)
         except Exception as e:
-            print(f"[PartitionLoadWorker] Error: {e}")
-            import traceback
-            traceback.print_exc()
             self.error.emit(str(e))
 
 
@@ -352,11 +352,33 @@ class PartitionWindow(QDialog):
     Features a modern cyberpunk-themed UI with neon accents.
     """
     
-    def __init__(self, db_path=None, parent=None):
+    def __init__(self, db_paths=None, parent=None):
+        """
+        Initialize the PartitionWindow.
+        
+        Args:
+            db_paths: List of tuples (source_name, db_path) or single db_path string for backward compatibility
+            parent: Parent widget
+        """
         super().__init__(parent)
         self.analyzer = PartitionAnalyzer()
         self.disks = []
-        self.db_path = db_path
+        
+        # Normalize db_paths to list of tuples
+        if db_paths is None:
+            self.db_paths = []
+        elif isinstance(db_paths, str):
+            # Backward compatibility: single path string
+            self.db_paths = [('Current System', db_paths)]
+        elif isinstance(db_paths, list):
+            if len(db_paths) > 0 and isinstance(db_paths[0], tuple):
+                self.db_paths = db_paths
+            else:
+                # Convert list of paths to list of tuples
+                self.db_paths = [(f'Source {i+1}', path) for i, path in enumerate(db_paths)]
+        else:
+            self.db_paths = []
+        
         self.init_ui()
         self.load_partition_data()
     
@@ -516,7 +538,7 @@ class PartitionWindow(QDialog):
         header_layout.setSpacing(5)
         
         # Title
-        title = QLabel("⚡ PARTITION & VOLUME ANALYSIS")
+        title = QLabel("PARTITION & VOLUME ANALYSIS")
         title.setStyleSheet("""
             QLabel {
                 color: #00FFFF;
@@ -530,10 +552,10 @@ class PartitionWindow(QDialog):
         """)
         header_layout.addWidget(title)
         
-        # Subtitle with boot mode
+        # Subtitle with boot mode (will be updated after data loads)
         boot_mode_text = f"Boot Mode: {self.analyzer.boot_mode} | Comprehensive disk and partition information with BIOS/UEFI and MBR/GPT detection"
-        subtitle = QLabel(boot_mode_text)
-        subtitle.setStyleSheet("""
+        self.subtitle = QLabel(boot_mode_text)
+        self.subtitle.setStyleSheet("""
             QLabel {
                 color: #94A3B8;
                 font-size: 13px;
@@ -541,18 +563,18 @@ class PartitionWindow(QDialog):
                 padding: 0 0 5px 0;
             }
         """)
-        header_layout.addWidget(subtitle)
+        header_layout.addWidget(self.subtitle)
         
         return header_widget
     
     def create_partition_table(self):
         """Create the partition details table with enhanced forensic columns"""
         table = QTableWidget()
-        table.setColumnCount(15)
+        table.setColumnCount(16)  # Added Source column
         table.setHorizontalHeaderLabels([
             "Disk", "Volume", "Device", "Mount Point", "File System", 
             "Total Size", "Used", "% Used", "Partition Style", "Type", 
-            "Volume Serial", "GUID", "Flags", "Boot Mode", "Disk Sig"
+            "Volume Serial", "GUID", "Flags", "Boot Mode", "Disk Sig", "Source"
         ])
         
         # Set table style
@@ -673,7 +695,7 @@ class PartitionWindow(QDialog):
         self.loading_label.setStyleSheet("color: #00FFFF; font-size: 16px; padding: 20px;")
         self.disk_viz_layout.addWidget(self.loading_label)
         
-        self.worker = PartitionLoadWorker(self.db_path, force_refresh)
+        self.worker = PartitionLoadWorker(self.db_paths, force_refresh)
         self.worker.finished.connect(self.on_data_loaded)
         self.worker.error.connect(self.on_load_error)
         self.worker.status.connect(self.on_status_update)
@@ -690,13 +712,26 @@ class PartitionWindow(QDialog):
     
     def on_data_loaded(self, disks):
         """Handle loaded partition data"""
-        # Sort disks by disk_index to ensure Disk 0 appears first
-        self.disks = sorted(disks, key=lambda d: d.disk_index)
-        self.populate_disk_visualizations()
-        self.populate_partition_table()
-    
+        self.populate_disk_visualizations(disks)
+        self.populate_partition_table(disks)
+        
+        # Update subtitle with source information
+        sources = set(getattr(d, 'source', 'Unknown') for d in disks)
+        source_text = ", ".join(sorted(sources)) if sources else "N/A"
+        
+        # Try to get boot mode from the first disk if available
+        boot_mode = getattr(disks[0], 'boot_mode', 'Unknown') if disks else "Unknown"
+        
+        boot_mode_text = f"Boot Mode: {boot_mode} | Sources: {source_text} | {len(disks)} disk(s), {sum(len(d.partitions) for d in disks)} partition(s)"
+        self.subtitle.setText(boot_mode_text)
+
     def on_load_error(self, error_msg):
         """Handle data loading error"""
+        # Clear loading label safely before showing error
+        if hasattr(self, 'loading_label') and self.loading_label:
+            self.loading_label.deleteLater()
+            self.loading_label = None
+
         error_label = QLabel(f"❌ Error loading partition data: {error_msg}")
         error_label.setStyleSheet("""
             QLabel {
@@ -704,32 +739,52 @@ class PartitionWindow(QDialog):
                 font-size: 14px;
                 font-weight: bold;
                 padding: 20px;
+                background-color: rgba(239, 68, 68, 0.1);
+                border: 1px solid #EF4444;
+                border-radius: 8px;
             }
         """)
         self.disk_viz_layout.addWidget(error_label)
-    
-    def populate_disk_visualizations(self):
+
+    def populate_disk_visualizations(self, disks):
         """Populate the disk visualization area"""
-        # Clear existing widgets
-        while self.disk_viz_layout.count():
-            child = self.disk_viz_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-        
+        # Clear existing widgets, but keep the loading_label if it exists
+        for i in reversed(range(self.disk_viz_layout.count())):
+            widget = self.disk_viz_layout.itemAt(i).widget()
+            if widget and widget != self.loading_label:
+                widget.deleteLater()
+
+        # Safely remove the loading label now that we're about to populate
+        if hasattr(self, 'loading_label') and self.loading_label:
+            self.loading_label.deleteLater()
+            self.loading_label = None
+
         # Add visualization for each disk
-        for disk in self.disks:
-            viz_widget = PartitionVisualizationWidget(disk, self.analyzer)
-            self.disk_viz_layout.addWidget(viz_widget)
+        if not disks:
+            no_disks_label = QLabel("No disks found or loaded.")
+            no_disks_label.setAlignment(Qt.AlignCenter)
+            no_disks_label.setStyleSheet("color: #94A3B8; font-size: 16px; padding: 20px;")
+            self.disk_viz_layout.addWidget(no_disks_label)
+        else:
+            # Sort disks by disk_index to ensure Disk 0 appears first
+            sorted_disks = sorted(disks, key=lambda d: d.disk_index)
+            for disk in sorted_disks:
+                viz_widget = PartitionVisualizationWidget(disk, self.analyzer)
+                self.disk_viz_layout.addWidget(viz_widget)
         
         # Add stretch at the end
         self.disk_viz_layout.addStretch()
-    
-    def populate_partition_table(self):
+
+    def populate_partition_table(self, disks):
         """Populate the partition details table"""
         self.partition_table.setRowCount(0)
         
-        for disk in self.disks:
-            for partition in disk.partitions:
+        # Sort disks and partitions for consistent display
+        sorted_disks = sorted(disks, key=lambda d: d.disk_index)
+
+        for disk in sorted_disks:
+            sorted_partitions = sorted(disk.partitions, key=lambda p: p.partition_index)
+            for partition in sorted_partitions:
                 row = self.partition_table.rowCount()
                 self.partition_table.insertRow(row)
                 
@@ -745,7 +800,7 @@ class PartitionWindow(QDialog):
                 self.partition_table.setItem(row, 2, QTableWidgetItem(partition.device))
                 
                 # Mount point
-                self.partition_table.setItem(row, 3, QTableWidgetItem(partition.mountpoint))
+                self.partition_table.setItem(row, 3, QTableWidgetItem(partition.mountpoint or "-"))
                 
                 # File system
                 fs_item = QTableWidgetItem(partition.fstype)
@@ -827,9 +882,22 @@ class PartitionWindow(QDialog):
                 # Disk Signature
                 disk_sig = partition.disk_signature if partition.disk_signature else "-"
                 self.partition_table.setItem(row, 14, QTableWidgetItem(disk_sig))
+                
+                # Source (NEW - Column 15)
+                source = getattr(partition, 'source', getattr(disk, 'source', 'Unknown'))
+                source_item = QTableWidgetItem(source)
+                # Color code by source type
+                if 'Live' in source or 'Current' in source:
+                    source_item.setForeground(QColor("#10B981"))  # Green for live
+                elif 'Offline' in source or 'JSON' in source:
+                    source_item.setForeground(QColor("#F59E0B"))  # Orange for offline
+                else:
+                    source_item.setForeground(QColor("#94A3B8"))  # Gray for current/unknown
+                self.partition_table.setItem(row, 15, source_item)
         
         # Resize columns to content
         self.partition_table.resizeColumnsToContents()
+        self.partition_table.setSortingEnabled(True)
 
 
 def main():

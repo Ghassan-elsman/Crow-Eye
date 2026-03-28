@@ -1904,7 +1904,7 @@ class CrowEyeStyles:
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
                                       stop:0 #A855F7, stop:0.5 #9333EA, stop:1 #A855F7);
             border: 3px solid #7C3AED;
-            transform: scale(1.02);
+            /* Removed transform: scale(1.02) - not supported by Qt */
         }
         QPushButton:pressed {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
@@ -1973,12 +1973,14 @@ class CrowEyeStyles:
         }
     """
 
-    # Parser Button Style (Primary Blue - Standardized)
+    # Parser Button Style (Primary Blue - Standardized with Dark Gradients)
     PARSER_BUTTON = """
         QPushButton {
-            background-color: #3B82F6;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #2563EB, stop:1 #1E40AF);
             color: #FFFFFF;
             border: none;
+            border-right: 10px solid #1E3A8A;
             border-radius: 6px;
             padding: 8px 16px;
             font-weight: 600;
@@ -1988,19 +1990,22 @@ class CrowEyeStyles:
             padding-left: 15px;
         }
         QPushButton:hover {
-            background-color: #2563EB;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #1E40AF, stop:1 #1D4ED8);
             border-left: 3px solid #00FFFF;
+            border-right: 10px solid #0F172A;
         }
         QPushButton:pressed {
-            background-color: #1D4ED8;
-        }
-        QPushButton:checked {
-            background-color: #1E40AF;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #1D4ED8, stop:1 #1E3A8A);
             border-left: 3px solid #00FFFF;
+            border-right: 10px solid #0B1220;
         }
         QPushButton:disabled {
-            background-color: #64748B;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #64748B, stop:1 #475569);
             color: #94A3B8;
+            border-right: 10px solid #334155;
         }
     """
 

@@ -196,7 +196,7 @@ class DatabaseManager:
         "shimcache_data.db": ["shimcache.db", "Log_Claw.db"],
         "lnk_data.db": ["LnkDB.db", "Log_Claw.db"],
         "jumplist_data.db": ["Log_Claw.db"],
-        "mft_data.db": ["mft_claw_analysis.db"],
+        "mft_data.db": ["mft_claw_analysis.db", "MFT_data.db"],  # Support both naming conventions
         "usn_data.db": ["USN_journal.db"],
         "recyclebin_data.db": ["recyclebin_analysis.db"],
         "eventlog_data.db": ["Log_Claw.db"],

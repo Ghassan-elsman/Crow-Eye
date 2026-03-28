@@ -195,57 +195,82 @@ def parse_live_registry(case_root=None, db_path=None):
     # Call the main registry collection function with the database path
     return main_live_reg(db_filename)
 def main_live_reg(db_filename='registry_data.db'):
-    # Function to read registry values and their types from a live system
-    def reg_Claw_live(hive_key, key_path):
-        try:
-            values = {}
-            with winreg.OpenKey(hive_key, key_path) as key:
-                i = 0
-                while True:
-                    try:
-                        name, data, value_type = winreg.EnumValue(key, i)
-                        # Convert value_type to string representation
-                        value_type_str = {
-                            winreg.REG_SZ: "REG_SZ",
-                            winreg.REG_EXPAND_SZ: "REG_EXPAND_SZ",
-                            winreg.REG_BINARY: "REG_BINARY",
-                            winreg.REG_DWORD: "REG_DWORD",
-                            winreg.REG_QWORD: "REG_QWORD",
-                            winreg.REG_MULTI_SZ: "REG_MULTI_SZ",
-                            winreg.REG_NONE: "REG_NONE"
-                        }.get(value_type, "UNKNOWN")
-                        # Keep binary data as bytes for proper parsing later
-                        # Don't convert REG_BINARY to string here - let specialized parsers handle it
-                       
-                        values[name] = (data, value_type_str)
-                        i += 1
-                    except WindowsError:
-                        break
-            return values
-        except Exception as e:
-            logging.error(f"Error reading registry key {key_path}: {e}")
-            return {}
-    # Function to get subkeys and their values
-    def get_subkeys_live(hive_key, key_path):
-        try:
-            subkey_values = {}
-            with winreg.OpenKey(hive_key, key_path) as key:
-                # Get number of subkeys
-                subkey_count = winreg.QueryInfoKey(key)[0]
-                # Enumerate subkeys
-                for i in range(subkey_count):
-                    subkey_name = winreg.EnumKey(key, i)
-                    subkey_path = f"{key_path}\\{subkey_name}"
-                    # Get values for this subkey
-                    subkey_values[subkey_name] = {}
-                    try:
-                        with winreg.OpenKey(hive_key, subkey_path) as subkey:
-                            j = 0
-                            while True:
+    """Main function for live registry parsing with comprehensive error handling"""
+    try:
+        # Function to read registry values and their types from a live system
+        def reg_Claw_live(hive_key, key_path):
+            try:
+                values = {}
+                with winreg.OpenKey(hive_key, key_path) as key:
+                    i = 0
+                    while True:
+                        try:
+                            name, data, value_type = winreg.EnumValue(key, i)
+                            # Convert value_type to string representation
+                            value_type_str = {
+                                winreg.REG_SZ: "REG_SZ",
+                                winreg.REG_EXPAND_SZ: "REG_EXPAND_SZ",
+                                winreg.REG_BINARY: "REG_BINARY",
+                                winreg.REG_DWORD: "REG_DWORD",
+                                winreg.REG_QWORD: "REG_QWORD",
+                                winreg.REG_MULTI_SZ: "REG_MULTI_SZ",
+                                winreg.REG_NONE: "REG_NONE"
+                            }.get(value_type, "UNKNOWN")
+                            # Keep binary data as bytes for proper parsing later
+                            # Don't convert REG_BINARY to string here - let specialized parsers handle it
+                           
+                            values[name] = (data, value_type_str)
+                            i += 1
+                        except WindowsError:
+                            break
+                return values
+            except FileNotFoundError:
+                # Key doesn't exist - this is expected for some optional keys like DAM UserSettings
+                logging.debug(f"Registry key not found (expected for some systems): {key_path}")
+                return {}
+            except Exception as e:
+                logging.error(f"Error reading registry key {key_path}: {e}")
+                return {}
+        
+        # Function to get subkeys and their values
+        def get_subkeys_live(hive_key, key_path):
+            try:
+                subkey_values = {}
+                with winreg.OpenKey(hive_key, key_path) as key:
+                    # Get number of subkeys
+                    subkey_count = winreg.QueryInfoKey(key)[0]
+                    # Enumerate subkeys
+                    for i in range(subkey_count):
+                        subkey_name = winreg.EnumKey(key, i)
+                        subkey_path = f"{key_path}\\{subkey_name}"
+                        # Get values for this subkey
+                        subkey_values[subkey_name] = {}
+                        try:
+                            with winreg.OpenKey(hive_key, subkey_path) as subkey:
+                                j = 0
+                                while True:
+                                    try:
+                                        name, data, value_type = winreg.EnumValue(subkey, j)
+                                        # Convert value_type to string representation
+                                        value_type_str = {
+                                            winreg.REG_SZ: "REG_SZ",
+                                            winreg.REG_EXPAND_SZ: "REG_EXPAND_SZ",
+                                            winreg.REG_BINARY: "REG_BINARY",
+                                            winreg.REG_DWORD: "REG_DWORD",
+                                            winreg.REG_QWORD: "REG_QWORD",
+                                            winreg.REG_MULTI_SZ: "REG_MULTI_SZ",
+                                            winreg.REG_NONE: "REG_NONE"
+                                        }.get(value_type, "UNKNOWN")
+                                        # Keep binary data as bytes - don't convert here
+                                        # Let specialized parsers handle binary data conversion
+                                       
+                                        subkey_values[subkey_name][name] = (data, value_type_str)
+                                        j += 1
+                                    except WindowsError:
+                                        break
                                 try:
-                                    name, data, value_type = winreg.EnumValue(subkey, j)
-                                    # Convert value_type to string representation
-                                    value_type_str = {
+                                    default_data, default_type = winreg.QueryValueEx(subkey, "")
+                                    default_type_str = {
                                         winreg.REG_SZ: "REG_SZ",
                                         winreg.REG_EXPAND_SZ: "REG_EXPAND_SZ",
                                         winreg.REG_BINARY: "REG_BINARY",
@@ -253,99 +278,86 @@ def main_live_reg(db_filename='registry_data.db'):
                                         winreg.REG_QWORD: "REG_QWORD",
                                         winreg.REG_MULTI_SZ: "REG_MULTI_SZ",
                                         winreg.REG_NONE: "REG_NONE"
-                                    }.get(value_type, "UNKNOWN")
-                                    # Keep binary data as bytes - don't convert here
-                                    # Let specialized parsers handle binary data conversion
-                                   
-                                    subkey_values[subkey_name][name] = (data, value_type_str)
-                                    j += 1
-                                except WindowsError:
-                                    break
-                            try:
-                                default_data, default_type = winreg.QueryValueEx(subkey, "")
-                                default_type_str = {
-                                    winreg.REG_SZ: "REG_SZ",
-                                    winreg.REG_EXPAND_SZ: "REG_EXPAND_SZ",
-                                    winreg.REG_BINARY: "REG_BINARY",
-                                    winreg.REG_DWORD: "REG_DWORD",
-                                    winreg.REG_QWORD: "REG_QWORD",
-                                    winreg.REG_MULTI_SZ: "REG_MULTI_SZ",
-                                    winreg.REG_NONE: "REG_NONE"
-                                }.get(default_type, "UNKNOWN")
-                                subkey_values[subkey_name]["(Default)"] = (default_data, default_type_str)
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        logging.error(f"Error reading subkey {subkey_path}: {e}")
-            return subkey_values
-        except Exception as e:
-            logging.error(f"Error reading subkeys for {key_path}: {e}")
-            return {}
-    # Define registry hive constants
-    HKEY_CURRENT_USER = winreg.HKEY_CURRENT_USER
-    HKEY_LOCAL_MACHINE = winreg.HKEY_LOCAL_MACHINE
-    # Define paths for Run, RunOnce, DAM, and BAM keys
-    paths = {
-        "machine_run": (HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
-        "machine_run_once": (HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
-        "user_run": (HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
-        "user_run_once": (HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
-        "dam": (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\dam\\UserSettings"),
-        "bam": (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings")
-    }
-    # Define table name mapping
-    table_name_mapping = {
-        "machine_run": "machine_run",
-        "machine_run_once": "machine_run_once",
-        "user_run": "user_run",
-        "user_run_once": "user_run_once",
-        "dam": "DAM",
-        "bam": "BAM"
-    }
-    # Use the provided database filename
-    # No need to override the db_filename as it's passed as a parameter
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Connect to SQLite database (or create it if it doesn't exist)
-    with sqlite3.connect(db_filename) as conn:
-        cursor = conn.cursor()
-        # Create tables if they don't exist (original tables for backward compatibility)
-        tables = [
-            ("machine_run", "name TEXT, data TEXT, type TEXT"),
-            ("machine_run_once", "name TEXT, data TEXT, type TEXT"),
-            ("user_run", "name TEXT, data TEXT, type TEXT"),
-            ("user_run_once", "name TEXT, data TEXT, type TEXT"),
-            ("Windows_lastupdate", "name TEXT, data TEXT, type TEXT"),
-            ("Windows_lastupdate_subkeys", "subkey TEXT, name TEXT, data TEXT, type TEXT"),
-            ("computer_Name", "name TEXT, data TEXT, type TEXT"),
-            ("time_zone", "name TEXT, data TEXT, type TEXT"),
-            ("network_interfaces", "subkey TEXT, name TEXT, data TEXT, type TEXT"),
-            ("shutdown_information", "name TEXT, data TEXT, type TEXT")
-        ]
-        for table_name, schema in tables:
-            cursor.execute(f'CREATE TABLE IF NOT EXISTS {table_name} ({schema})')
-        # Create more detailed tables for specific registry sections
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ComputerNameInfo (
-            computer_name TEXT,
-            registered_owner TEXT,
-            registered_organization TEXT,
-            product_id TEXT,
-            installation_date TEXT,
-            timestamp TEXT
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS TimeZoneInfo (
-            time_zone_name TEXT,
-            standard_name TEXT,
-            daylight_name TEXT,
-            bias INTEGER,
-            active_time_bias INTEGER,
-            timestamp TEXT
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS NetworkInterfacesInfo (
-            interface_id TEXT,
-            ip_address TEXT,
+                                    }.get(default_type, "UNKNOWN")
+                                    subkey_values[subkey_name]["(Default)"] = (default_data, default_type_str)
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            logging.debug(f"Error reading subkey {subkey_path}: {e}")
+                return subkey_values
+            except FileNotFoundError:
+                # Key doesn't exist - this is expected for some optional keys like DAM UserSettings
+                logging.debug(f"Registry key not found (expected for some systems): {key_path}")
+                return {}
+            except Exception as e:
+                logging.error(f"Error reading subkeys for {key_path}: {e}")
+                return {}
+        
+        # Define registry hive constants
+        HKEY_CURRENT_USER = winreg.HKEY_CURRENT_USER
+        HKEY_LOCAL_MACHINE = winreg.HKEY_LOCAL_MACHINE
+        # Define paths for Run, RunOnce, DAM, and BAM keys
+        paths = {
+            "machine_run": (HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            "machine_run_once": (HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
+            "user_run": (HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            "user_run_once": (HKEY_CURRENT_USER, "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
+            "dam": (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\dam\\UserSettings"),
+            "bam": (HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings")
+        }
+        # Define table name mapping
+        table_name_mapping = {
+            "machine_run": "machine_run",
+            "machine_run_once": "machine_run_once",
+            "user_run": "user_run",
+            "user_run_once": "user_run_once",
+            "dam": "DAM",
+            "bam": "BAM"
+        }
+        # Use the provided database filename
+        # No need to override the db_filename as it's passed as a parameter
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Connect to SQLite database (or create it if it doesn't exist)
+        with sqlite3.connect(db_filename) as conn:
+            cursor = conn.cursor()
+            # Create tables if they don't exist (original tables for backward compatibility)
+            tables = [
+                ("machine_run", "name TEXT, data TEXT, type TEXT"),
+                ("machine_run_once", "name TEXT, data TEXT, type TEXT"),
+                ("user_run", "name TEXT, data TEXT, type TEXT"),
+                ("user_run_once", "name TEXT, data TEXT, type TEXT"),
+                ("Windows_lastupdate", "name TEXT, data TEXT, type TEXT"),
+                ("Windows_lastupdate_subkeys", "subkey TEXT, name TEXT, data TEXT, type TEXT"),
+                ("computer_Name", "name TEXT, data TEXT, type TEXT"),
+                ("time_zone", "name TEXT, data TEXT, type TEXT"),
+                ("network_interfaces", "subkey TEXT, name TEXT, data TEXT, type TEXT"),
+                ("shutdown_information", "name TEXT, data TEXT, type TEXT")
+            ]
+            for table_name, schema in tables:
+                cursor.execute(f'CREATE TABLE IF NOT EXISTS {table_name} ({schema})')
+            # Create more detailed tables for specific registry sections
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ComputerNameInfo (
+                computer_name TEXT,
+                registered_owner TEXT,
+                registered_organization TEXT,
+                product_id TEXT,
+                installation_date TEXT,
+                timestamp TEXT
+            )''')
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS TimeZoneInfo (
+                time_zone_name TEXT,
+                standard_name TEXT,
+                daylight_name TEXT,
+                bias INTEGER,
+                active_time_bias INTEGER,
+                timestamp TEXT
+            )''')
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS NetworkInterfacesInfo (
+                interface_id TEXT,
+                ip_address TEXT,
             subnet_mask TEXT,
             default_gateway TEXT,
             dhcp_enabled INTEGER,
@@ -353,61 +365,61 @@ def main_live_reg(db_filename='registry_data.db'):
             dns_servers TEXT,
             mac_address TEXT,
             timestamp TEXT
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Auto (
+            )''')
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS Auto (
             last_install_time TEXT,
             au_options INTEGER,
             scheduled_install_day INTEGER,
             scheduled_install_time INTEGER,
             timestamp TEXT
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS WindowsUpdateInfo (
+            )''')
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS WindowsUpdateInfo (
             last_check_time TEXT,
             last_install_time TEXT,
             au_options INTEGER,
             scheduled_install_day INTEGER,
             scheduled_install_time INTEGER,
             timestamp TEXT
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ShutdownInfo (
+            )''')
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ShutdownInfo (
             shutdown_time TEXT,
             shutdown_count INTEGER,
             shutdown_type TEXT,
             clean_shutdown INTEGER,
             timestamp TEXT
-        )''')
-        # Enhanced tables for USB devices
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS USBDevices (
+            )''')
+            # Enhanced tables for USB devices
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS USBDevices (
             device_id TEXT PRIMARY KEY,
             description TEXT,
             manufacturer TEXT,
             friendly_name TEXT,
             last_connected TEXT
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS USBProperties (
+            )''')
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS USBProperties (
             device_id TEXT,
             property_name TEXT,
             property_value TEXT,
             property_type TEXT,
             PRIMARY KEY (device_id, property_name)
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS USBInstances (
+            )''')
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS USBInstances (
             device_id TEXT,
             instance_id TEXT,
             parent_id TEXT,
             service TEXT,
             status TEXT,
             PRIMARY KEY (device_id, instance_id)
-        )''')
-        # Enhanced tables for USB storage devices
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS USBStorageDevices (
+            )''')
+            # Enhanced tables for USB storage devices
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS USBStorageDevices (
             device_id TEXT PRIMARY KEY,
             friendly_name TEXT,
             serial_number TEXT,
@@ -418,19 +430,19 @@ def main_live_reg(db_filename='registry_data.db'):
             last_connected TEXT,
             last_removed TEXT,
             timestamp TEXT
-        )''')
-        try:
-            cursor.execute('ALTER TABLE USBStorageDevices ADD COLUMN last_removed TEXT')
-        except Exception:
-            pass
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS USBStorageVolumes (
-            device_id TEXT,
-            volume_guid TEXT,
-            volume_name TEXT,
-            drive_letter TEXT,
-            timestamp TEXT,
-            PRIMARY KEY (device_id, volume_guid)
+            )''')
+            try:
+                cursor.execute('ALTER TABLE USBStorageDevices ADD COLUMN last_removed TEXT')
+            except Exception:
+                pass
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS USBStorageVolumes (
+                device_id TEXT,
+                volume_guid TEXT,
+                volume_name TEXT,
+                drive_letter TEXT,
+                timestamp TEXT,
+                PRIMARY KEY (device_id, volume_guid)
         )''')
         # Enhanced table for browser history
         cursor.execute('''
@@ -1257,60 +1269,89 @@ def main_live_reg(db_filename='registry_data.db'):
             logging.error(f"Error accessing WordWheelQuery registry key: {e}")
        
         print(f"WordWheelQuery data inserted into database successfully. Total entries: {wordwheelquery_count}")
+        
         # Network List Keys - Enhanced version
-        Netlist_reg_key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Signatures\\Unmanaged"
-        Networklosts_subkeys = get_subkeys_live(HKEY_LOCAL_MACHINE, Netlist_reg_key)
-        # Insert data into the enhanced 'Network_list' table
-        for subkey, values in Networklosts_subkeys.items():
-            network_name = ""
-            connection_date = ""
-            gateway_mac = ""
-            is_hidden = 0
-            # Extract network name
-            first_network_value = values.get('FirstNetwork', ('N/A', None))[0]
-            if first_network_value != 'N/A':
-                network_name = str(first_network_value)
-            # Extract other useful information
-            for name, (data, value_type) in values.items():
-                if name.lower() == 'profileguid':
-                    # Try to get more info from the profile
-                    try:
-                        profile_path = f"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Profiles\\{str(data)}"
-                        profile_data = reg_Claw_live(HKEY_LOCAL_MACHINE, profile_path)
-                        for profile_name, (profile_value, _) in profile_data.items():
-                            if profile_name.lower() == 'profilename' and not network_name:
-                                network_name = str(profile_value)
-                            elif profile_name.lower() == 'datelastaccesstime':
-                                try:
-                                    # Convert Windows FILETIME to datetime
-                                    filetime = int(profile_value)
-                                    dt = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
-                                    connection_date = dt.isoformat()
-                                except:
-                                    pass
-                            elif profile_name.lower() == 'nametype':
-                                try:
-                                    # NameType 6 typically means hidden network
-                                    is_hidden = 1 if int(profile_value) == 6 else 0
-                                except:
-                                    pass
-                    except Exception as e:
-                        logging.error(f"Error accessing profile {profile_path}: {e}")
-               
-                elif name.lower() == 'defaultgatewaymacc':
-                    # Format MAC address for readability
-                    try:
-                        if isinstance(data, bytes) and len(data) >= 6:
-                            mac_bytes = data[:6]
-                            gateway_mac = ':'.join(f'{b:02x}' for b in mac_bytes)
-                    except:
-                        gateway_mac = str(data)
-                # Check if entry exists
-                if check_exists(cursor, 'Network_list', ['subkey', 'name', 'data', 'type'], (str(subkey), name, str(data), value_type)):
-                    logging.info(f"Skipping duplicate Network_list entry: {subkey}/{name}")
-                    continue
-                cursor.execute('INSERT OR IGNORE INTO Network_list (subkey, name, data, type, network_name, connection_date, gateway_mac, is_hidden) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                              (str(subkey), name, str(data), value_type, network_name, connection_date, gateway_mac, is_hidden))
+        # Extract from ALL three paths: Profiles, Signatures\Unmanaged, Signatures\Managed
+        network_list_paths = [
+            "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Profiles",
+            "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Signatures\\Unmanaged",
+            "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Signatures\\Managed"
+        ]
+        
+        for Netlist_reg_key in network_list_paths:
+            try:
+                logging.debug(f"Checking Network Lists path: {Netlist_reg_key}")
+                Networklosts_subkeys = get_subkeys_live(HKEY_LOCAL_MACHINE, Netlist_reg_key)
+                
+                if Networklosts_subkeys:
+                    logging.debug(f"Successfully read Network Lists from: {Netlist_reg_key}")
+                
+                # Insert data into the enhanced 'Network_list' table
+                for subkey, values in Networklosts_subkeys.items():
+                    network_name = ""
+                    connection_date = ""
+                    gateway_mac = ""
+                    is_hidden = 0
+                    
+                    # Extract network name
+                    first_network_value = values.get('FirstNetwork', ('N/A', None))[0]
+                    if first_network_value != 'N/A':
+                        network_name = str(first_network_value)
+                    
+                    # Extract ProfileName if available (from Profiles path)
+                    profile_name_value = values.get('ProfileName', ('N/A', None))[0]
+                    if profile_name_value != 'N/A' and not network_name:
+                        network_name = str(profile_name_value)
+                    
+                    # Extract other useful information
+                    for name, (data, value_type) in values.items():
+                        if name.lower() == 'profileguid':
+                            # Try to get more info from the profile
+                            try:
+                                profile_path = f"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Profiles\\{str(data)}"
+                                profile_data = reg_Claw_live(HKEY_LOCAL_MACHINE, profile_path)
+                                for profile_name, (profile_value, _) in profile_data.items():
+                                    if profile_name.lower() == 'profilename' and not network_name:
+                                        network_name = str(profile_value)
+                                    elif profile_name.lower() == 'datelastaccesstime':
+                                        try:
+                                            # Convert Windows FILETIME to datetime
+                                            filetime = int(profile_value)
+                                            dt = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
+                                            connection_date = dt.isoformat()
+                                        except:
+                                            pass
+                                    elif profile_name.lower() == 'nametype':
+                                        try:
+                                            # NameType 6 typically means hidden network
+                                            is_hidden = 1 if int(profile_value) == 6 else 0
+                                        except:
+                                            pass
+                            except Exception as e:
+                                logging.debug(f"Error accessing profile {profile_path}: {e}")
+                       
+                        elif name.lower() == 'defaultgatewaymacc':
+                            # Format MAC address for readability
+                            try:
+                                if isinstance(data, bytes) and len(data) >= 6:
+                                    mac_bytes = data[:6]
+                                    gateway_mac = ':'.join(f'{b:02x}' for b in mac_bytes)
+                            except:
+                                gateway_mac = str(data)
+                        
+                        # Check if entry exists
+                        if check_exists(cursor, 'Network_list', ['subkey', 'name', 'data', 'type'], (str(subkey), name, str(data), value_type)):
+                            logging.debug(f"Skipping duplicate Network_list entry: {subkey}/{name}")
+                            continue
+                        
+                        cursor.execute('INSERT OR IGNORE INTO Network_list (subkey, name, data, type, network_name, connection_date, gateway_mac, is_hidden) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                                      (str(subkey), name, str(data), value_type, network_name, connection_date, gateway_mac, is_hidden))
+                
+                logging.debug(f"Network list data from {Netlist_reg_key} inserted successfully")
+            
+            except Exception as e:
+                logging.debug(f"Network Lists path unavailable: {Netlist_reg_key} - {e}")
+        
         print("Network list key data inserted into database successfully with enhanced information.")
         # Windows Last update - Enhanced version
         last_update_path = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate"
@@ -1380,11 +1421,13 @@ def main_live_reg(db_filename='registry_data.db'):
         computer_name = ""
         registered_owner = ""
         registered_org = ""
+        product_name = ""
         product_id = ""
         install_date = ""
         for name, (data, _) in ComputerName_reg_key.items():
             if name.lower() == "computername":
                 computer_name = str(data)
+                logging.debug(f"Extracted ComputerName: {computer_name}")
             if check_exists(cursor, 'computer_Name', ['name', 'data', 'type'], (name, str(data), _)):
                 logging.info(f"Skipping duplicate computer_Name entry: {name}")
                 continue
@@ -1394,16 +1437,24 @@ def main_live_reg(db_filename='registry_data.db'):
         for name, (data, _) in system_info.items():
             if name.lower() == "registeredowner":
                 registered_owner = str(data)
+                logging.debug(f"Extracted RegisteredOwner: {registered_owner}")
             elif name.lower() == "registeredorganization":
                 registered_org = str(data)
+                logging.debug(f"Extracted RegisteredOrganization: {registered_org}")
+            elif name.lower() == "productname":
+                product_name = str(data)
+                logging.debug(f"Extracted ProductName: {product_name}")
             elif name.lower() == "productid":
                 product_id = str(data)
+                logging.debug(f"Extracted ProductId: {product_id}")
             elif name.lower() == "installdate":
                 try:
                     # Convert Windows timestamp to readable date
                     install_date = datetime.datetime.fromtimestamp(int(data)).isoformat()
+                    logging.debug(f"Extracted InstallDate: {install_date}")
                 except:
                     install_date = str(data)
+                    logging.debug(f"Extracted InstallDate (raw): {install_date}")
         # Insert into the enhanced table
         if not check_exists(cursor, 'ComputerNameInfo', ['computer_name', 'registered_owner'], (computer_name, registered_owner)):
             cursor.execute('''
@@ -2395,6 +2446,13 @@ def main_live_reg(db_filename='registry_data.db'):
         # Commit the transaction
         conn.commit()
         print(f"Registry data collection complete. Data saved to {db_filename}")
-    return db_filename
+        return db_filename
+        
+    except Exception as e:
+        error_msg = f"Critical error in registry parsing: {str(e)}"
+        logging.error(error_msg)
+        print(f"[Registry Error] {error_msg}")
+        # Return the database path even on error - partial data may have been collected
+        return db_filename
 if __name__ == "__main__":
     main_live_reg()

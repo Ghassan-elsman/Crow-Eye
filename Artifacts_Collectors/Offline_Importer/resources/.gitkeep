@@ -1,0 +1,5 @@
+# This directory stores GUI resources for the Offline Importer
+# - Icons for artifact types (Registry, Prefetch, Jump Lists, MFT, USN, AmCache, Recycle Bin)
+# - Application icon
+# - Status icons (success, error, warning)
+# - Potentially CSS/QSS files for styling

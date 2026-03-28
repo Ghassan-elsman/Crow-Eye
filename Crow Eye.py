@@ -253,7 +253,10 @@ Crow_Eye_Requirements = [
     'colorama',
     'wmi',
     'pyyaml',
-    'matplotlib'  # Optional: Enhanced chart rendering (PyQt5 native charts work without it)
+    'matplotlib',  # Optional: Enhanced chart rendering (PyQt5 native charts work without it)
+    'python-evtx',  # Offline EVTX parser
+    'dissect.esedb',  # Offline SRUM/ESE database parser (recommended)
+
 ]
 
 def check_and_install_requirements():
@@ -499,7 +502,7 @@ except ImportError as e:
 
 # Import Artifacts_Collectors modules with fallback handling
 artifact_modules = [
-    ('offline_RegClaw', 'Artifacts_Collectors'),
+    ('offline_RegClaw', 'Artifacts_Collectors.offline_parsers'),
     ('Prefetch_claw', 'Artifacts_Collectors'),
     ('WinLog_Claw', 'Artifacts_Collectors'),
     ('A_CJL_LNK_Claw', 'Artifacts_Collectors'),
@@ -541,6 +544,13 @@ try:
 except ImportError as e:
     print(Fore.RED + f"✗ Failed to import CorrelationIntegration: {str(e)}" + Fore.RESET)
     CorrelationIntegration = None
+
+try:
+    from correlation_engine.config.case_configuration_manager import CaseConfigurationManager
+    print(Fore.GREEN + "✓ Successfully imported CaseConfigurationManager" + Fore.RESET)
+except ImportError as e:
+    print(Fore.RED + f"✗ Failed to import CaseConfigurationManager: {str(e)}" + Fore.RESET)
+    CaseConfigurationManager = None
 
 try:
     from utils import SearchUtils, SearchWorker
@@ -666,6 +676,88 @@ def format_file_size(size_bytes: int) -> str:
         return f"{size_bytes / 1099511627776:.2f} TB"
 
 
+class FunctionWorker(QtCore.QThread):
+    """
+    Generic worker thread that wraps any callable function.
+    
+    This worker allows any function to run in a background thread to prevent
+    GUI freezing during long-running operations. It includes a heartbeat signal
+    that emits every 250ms to keep the GUI event loop active and animations smooth.
+    
+    Signals:
+        heartbeat: Emitted every 250ms to keep GUI responsive
+        finished: Emitted when function completes successfully
+        error: Emitted if function raises an exception (error_message)
+        result: Emitted with the function's return value (result_value)
+    """
+    
+    heartbeat = QtCore.pyqtSignal()
+    finished = QtCore.pyqtSignal()
+    error = QtCore.pyqtSignal(str)
+    result = QtCore.pyqtSignal(object)
+    
+    def __init__(self, function_to_run, *args, **kwargs):
+        """
+        Initialize the function worker thread.
+        
+        Args:
+            function_to_run: The callable function to execute in the background
+            *args: Positional arguments to pass to the function
+            **kwargs: Keyword arguments to pass to the function
+        """
+        super().__init__()
+        self.function_to_run = function_to_run
+        self.args = args
+        self.kwargs = kwargs
+        self._cancelled = False
+        self._heartbeat_active = False
+    
+    def cancel(self):
+        """Request cancellation of the operation."""
+        self._cancelled = True
+        self._heartbeat_active = False
+    
+    def is_cancelled(self):
+        """Check if cancellation has been requested."""
+        return self._cancelled
+    
+    def _emit_heartbeat(self):
+        """Emit heartbeat signal periodically."""
+        if self._heartbeat_active:
+            self.heartbeat.emit()
+            # Schedule next heartbeat
+            import threading
+            timer = threading.Timer(0.25, self._emit_heartbeat)
+            timer.daemon = True
+            timer.start()
+    
+    def run(self):
+        """Execute the wrapped function in background thread."""
+        try:
+            # Start heartbeat emissions
+            self._heartbeat_active = True
+            self._emit_heartbeat()
+            
+            # Execute the wrapped function
+            result_value = self.function_to_run(*self.args, **self.kwargs)
+            
+            # Stop heartbeat
+            self._heartbeat_active = False
+            
+            # Emit result and finished signals
+            if not self._cancelled:
+                self.result.emit(result_value)
+                self.finished.emit()
+                
+        except Exception as e:
+            # Stop heartbeat
+            self._heartbeat_active = False
+            
+            # Emit error signal
+            error_msg = f"Function execution failed: {str(e)}"
+            self.error.emit(error_msg)
+
+
 class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain object
     # Add data loading methods to the class
 
@@ -699,34 +791,6 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 return os.path.join(artifacts_dir, 'registry_data.db')
         # Fallback to current directory
         return 'registry_data.db'
-    
-    def load_registry_data_from_db(self):
-        """Load all registry data from the database into the GUI tables"""
-        try:
-            print("[Registry] Loading registry data into GUI...")
-            # Load core registry data (Computer Name, Time Zone, Network, Run keys, etc.)
-            self.load_allReg_data()
-            # Load files activity data (UserAssist, Shellbags, RunMRU, MUICache, WordWheelQuery, etc.)
-            self.load_files_activity()
-            print("[Registry] Registry data loaded successfully")
-        except Exception as e:
-            print(f"[Registry] Error loading registry data: {str(e)}")
-            import traceback
-            traceback.print_exc()
-    
-    def load_registry_data_from_db(self):
-        """Load all registry data from the database into the GUI tables"""
-        try:
-            print("[Registry] Loading registry data into GUI...")
-            # Load core registry data (Computer Name, Time Zone, Network, Run keys, etc.)
-            self.load_allReg_data()
-            # Load files activity data (UserAssist, Shellbags, RunMRU, MUICache, WordWheelQuery, etc.)
-            self.load_files_activity()
-            print("[Registry] Registry data loaded successfully")
-        except Exception as e:
-            print(f"[Registry] Error loading registry data: {str(e)}")
-            import traceback
-            traceback.print_exc()
     
     def load_data_from_database_NetworkLists(self):
         """Load Network Lists data from registry database"""
@@ -1819,63 +1883,19 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.verticalLayout_correlated.addWidget(self.Correlated_table)
         self.MFT_USN_tab_widget.addTab(self.Correlated_tab, "Correlated Data")
     
-    def load_shimcache_data(self):
-        """Load ShimCache data from the shimcache database"""
-        try:
-            # Get the database path from case configuration
-            if not hasattr(self, 'case_paths') or not self.case_paths:
-                print("[ShimCache] No active case found")
-                return
-                
-            db_path = self.case_paths.get('databases', {}).get('shimcache')
-            if not db_path:
-                print("[ShimCache] Database path not found in case configuration")
-                return
-                
-            # Check if database exists
-            if not os.path.exists(db_path):
-                print(f"[ShimCache] Database not found at: {db_path}")
-                print(f"[ShimCache] Please run ShimCache analysis first to create the database")
-                return
-            
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Check if ShimCache table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ShimCache'")
-            if not cursor.fetchone():
-                print(f"[ShimCache] ShimCache table not found in database: {db_path}")
-                conn.close()
-                return
-                
-            cursor.execute("SELECT * FROM ShimCache")
-            rows = cursor.fetchall()
-            if hasattr(self, 'ShimCache_table'):
-                self.ShimCache_table.setRowCount(0)
-                for row in rows:
-                    row_index = self.ShimCache_table.rowCount()
-                    self.ShimCache_table.insertRow(row_index)
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value))
-                        self.ShimCache_table.setItem(row_index, col_index, item)
-                print(f"[ShimCache] Successfully loaded {len(rows)} records from {db_path}")
-            conn.close()
-        except Exception as e:
-            print(f"[ShimCache] Error loading data: {str(e)}")
+
     
-    def load_amcache_data(self):
-        """Load Amcache data from the amcache database"""
+    def _load_amcache_data_worker(self, progress_callback, cancellation_check):
+        """Worker-compatible method for loading Amcache data - ONLY loads data, does NOT touch widgets"""
         try:
             # Get the database path from case configuration
             if not hasattr(self, 'case_paths') or not self.case_paths:
-                print("[Amcache] No active case found")
-                return
+                raise Exception("No active case found")
                 
             # Get the current case name
             case_name = os.path.basename(self.case_paths.get('case_root', ''))
             if not case_name:
-                print("[Amcache] Invalid case name, cannot load Amcache data")
-                return
+                raise Exception("Invalid case name, cannot load Amcache data")
                 
             # Load the current case configuration
             config_dir, _ = self.get_app_config_dir()
@@ -1888,18 +1908,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 # Get the database path from the case configuration
                 db_path = case_config.get('databases', {}).get('amcache')
                 if not db_path:
-                    print("[Amcache] Database path not found in case configuration")
-                    return
+                    raise Exception("Database path not found in case configuration")
             except Exception as e:
-                print(f"[Amcache Error] Failed to load case configuration: {str(e)}")
-                return
+                raise Exception(f"Failed to load case configuration: {str(e)}")
                 
             # Check if database exists
             if not os.path.exists(db_path):
-                print(f"[Amcache] Database not found at: {db_path}")
-                print(f"[Amcache] Please run Amcache analysis first to create the database")
-                return
+                raise FileNotFoundError(f"Database not found at: {db_path}. Please run Amcache analysis first to create the database")
             
+            # Connect to database
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
@@ -1907,39 +1924,124 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = cursor.fetchall()
             
+            # Filter out sqlite_sequence
+            table_names = [table[0] for table in tables if table[0] != 'sqlite_sequence']
+            total_tables = len(table_names)
+            loaded_data = {}
+            
             # Load data for each table
-            for table in tables:
-                table_name = table[0]
-                # Skip sqlite_sequence table
-                if table_name == 'sqlite_sequence':
-                    continue
-                    
+            for idx, table_name in enumerate(table_names):
+                # Check for cancellation
+                if cancellation_check():
+                    conn.close()
+                    return None
+                
+                # Report progress
+                progress_callback(idx, total_tables)
+                
                 # Get the corresponding table widget attribute name
                 table_widget_name = f"Amcache_{table_name}_table"
                 
+                # Only load if corresponding widget exists
                 if hasattr(self, table_widget_name):
+                    # Fetch all rows
                     cursor.execute(f"SELECT * FROM {table_name}")
                     rows = cursor.fetchall()
                     
-                    table_widget = getattr(self, table_widget_name)
-                    table_widget.setRowCount(0)
+                    # Get column names
+                    cursor.execute(f"PRAGMA table_info({table_name})")
+                    columns_info = cursor.fetchall()
+                    columns = [column[1] for column in columns_info]
                     
-                    for row in rows:
-                        row_index = table_widget.rowCount()
-                        table_widget.insertRow(row_index)
-                        for col_index, value in enumerate(row):
-                            item = QtWidgets.QTableWidgetItem(str(value))
-                            table_widget.setItem(row_index, col_index, item)
+                    # Store data (NO widget manipulation!)
+                    loaded_data[table_name] = {
+                        'rows': rows,
+                        'columns': columns,
+                        'widget_name': table_widget_name
+                    }
                     
-                    print(f"[Amcache] Successfully loaded {len(rows)} records from {table_name} table")
-                    
-                    # Apply unified table style
-                    from styles import CrowEyeStyles
-                    self.apply_table_styles(table_widget)
+                    print(f"[Amcache] Loaded {len(rows)} records from {table_name} table")
             
             conn.close()
+            
+            # Final progress update
+            progress_callback(total_tables, total_tables)
+            return loaded_data
+            
+        except Exception as e:
+            print(f"[Amcache Error] Error loading data: {str(e)}")
+            raise
+    
+    def load_amcache_data(self):
+        """Load Amcache data from the amcache database using DataLoadingWorker"""
+        from ui.gui_workers import DataLoadingWorker
+        from PyQt5.QtCore import QEventLoop
+        
+        try:
+            # Create worker
+            worker = DataLoadingWorker(
+                data_type='amcache',
+                loading_function=self._load_amcache_data_worker
+            )
+            
+            # Connect signals - populate widgets on main thread
+            worker.loading_complete.connect(self._populate_amcache_tables)
+            worker.loading_error.connect(lambda dtype, err: print(f"[Amcache Error] {err}"))
+            
+            # Start worker
+            worker.start()
+            
+            # Use QEventLoop to wait without blocking GUI
+            loop = QEventLoop()
+            worker.finished.connect(loop.quit)
+            loop.exec_()
+            
+            # Clean up
+            worker.wait()
+            
         except Exception as e:
             print(f"[Amcache] Error loading data: {str(e)}")
+    
+    def _populate_amcache_tables(self, data_type, loaded_data):
+        """Populate Amcache tables with loaded data (runs on main thread)"""
+        if not loaded_data:
+            return
+        
+        # Populate each table
+        for table_name, data_dict in loaded_data.items():
+            table_widget_name = data_dict['widget_name']
+            rows = data_dict['rows']
+            columns = data_dict['columns']
+            
+            # Get the table widget
+            if not hasattr(self, table_widget_name):
+                continue
+            
+            table_widget = getattr(self, table_widget_name)
+            
+            # Disable updates during population
+            was_updates_enabled = table_widget.updatesEnabled()
+            table_widget.setUpdatesEnabled(False)
+            
+            # Clear existing rows
+            table_widget.setRowCount(0)
+            
+            # Populate cells
+            for row in rows:
+                row_index = table_widget.rowCount()
+                table_widget.insertRow(row_index)
+                for col_index, value in enumerate(row):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    table_widget.setItem(row_index, col_index, item)
+            
+            # Apply unified table style
+            from styles import CrowEyeStyles
+            self.apply_table_styles(table_widget)
+            
+            # Re-enable updates
+            table_widget.setUpdatesEnabled(was_updates_enabled)
+            
+            print(f"[Amcache] Successfully loaded {len(rows)} records from {table_name} table")
 
     def _optimize_memory_usage(self):
         """Optimize memory usage by clearing caches and forcing garbage collection"""
@@ -1962,7 +2064,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 
     def _batch_process_data(self, cursor, query, table_widget, total_records, progress_callback, table_name, batch_size=500, page_size=10000, handle_row_errors=False):
         """
-        Optimized batch processing for large datasets with memory management
+        Optimized batch processing for large datasets with memory management.
+        
+        Bug Fix Task 14.1: Refactored to use BatchProcessingWorker instead of QApplication.processEvents().
         
         Args:
             cursor: SQLite cursor object
@@ -1975,61 +2079,116 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             page_size: Size of database query pages
             handle_row_errors: Whether to handle individual row errors gracefully
         """
-        offset = 0
-        loaded_count = 0
+        from ui.gui_workers import BatchProcessingWorker
+        from PyQt5.QtCore import QEventLoop
         
-        # Pre-allocate table rows for better performance
-        table_widget.setRowCount(total_records)
-        
-        while loaded_count < total_records:
-            cursor.execute(f"{query} LIMIT {page_size} OFFSET {offset}")
-            rows = cursor.fetchall()
+        # Create worker-compatible processing function
+        def process_batch_data(progress_callback, cancellation_check):
+            """Worker-compatible batch processing function"""
+            offset = 0
+            loaded_count = 0
             
-            if not rows:
-                break
+            # Pre-allocate table rows for better performance
+            table_widget.setRowCount(total_records)
             
-            # Process rows in batches for better UI responsiveness
-            for batch_start in range(0, len(rows), batch_size):
-                batch_end = min(batch_start + batch_size, len(rows))
-                batch = rows[batch_start:batch_end]
+            while loaded_count < total_records:
+                # Check for cancellation
+                if cancellation_check and cancellation_check():
+                    print(f"[{table_name}] Batch processing cancelled")
+                    return loaded_count
                 
-                for i, row in enumerate(batch):
-                    row_index = offset + batch_start + i
+                cursor.execute(f"{query} LIMIT {page_size} OFFSET {offset}")
+                rows = cursor.fetchall()
+                
+                if not rows:
+                    break
+                
+                # Process rows in batches
+                for batch_start in range(0, len(rows), batch_size):
+                    # Check for cancellation
+                    if cancellation_check and cancellation_check():
+                        print(f"[{table_name}] Batch processing cancelled")
+                        return loaded_count
                     
-                    if handle_row_errors:
-                        # Handle individual row errors gracefully
-                        try:
+                    batch_end = min(batch_start + batch_size, len(rows))
+                    batch = rows[batch_start:batch_end]
+                    
+                    for i, row in enumerate(batch):
+                        row_index = offset + batch_start + i
+                        
+                        if handle_row_errors:
+                            # Handle individual row errors gracefully
+                            try:
+                                for col_index, value in enumerate(row):
+                                    item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                                    table_widget.setItem(row_index, col_index, item)
+                            except Exception as e:
+                                error_msg = f"[{table_name}] Error processing row: {str(e)}"
+                                print(error_msg)
+                                # Continue with next row instead of failing completely
+                                continue
+                        else:
+                            # Standard processing without error handling
                             for col_index, value in enumerate(row):
-                                item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                                item = QtWidgets.QTableWidgetItem(str(value))
                                 table_widget.setItem(row_index, col_index, item)
-                        except Exception as e:
-                            error_msg = f"[{table_name}] Error processing row: {str(e)}"
-                            print(error_msg)
-                            # Continue with next row instead of failing completely
-                            continue
-                    else:
-                        # Standard processing without error handling
-                        for col_index, value in enumerate(row):
-                            item = QtWidgets.QTableWidgetItem(str(value))
-                            table_widget.setItem(row_index, col_index, item)
+                    
+                    # Report progress
+                    if progress_callback:
+                        progress_callback(loaded_count + batch_end - batch_start, total_records)
                 
-                # Allow UI to process events more frequently
-                QtWidgets.QApplication.processEvents()
+                loaded_count += len(rows)
+                offset += page_size
+                
+                # Optimize memory usage after each page
+                self._optimize_memory_usage()
             
-            loaded_count += len(rows)
-            offset += page_size
-            
-            if progress_callback:
-                self._call_progress_callback(progress_callback, f"[{table_name}] Loaded {loaded_count:,} of {total_records:,} records")
-            
-            # Optimize memory usage after each page
-            self._optimize_memory_usage()
+            return loaded_count
         
-        return loaded_count
+        # Create and start worker thread
+        worker = BatchProcessingWorker(
+            table_name=table_name,
+            processing_function=process_batch_data
+        )
+        
+        # Connect signals for progress updates
+        if progress_callback:
+            worker.batch_progress.connect(
+                lambda current, total, name: self._call_progress_callback(
+                    progress_callback, 
+                    f"[{name}] Loaded {current:,} of {total:,} records"
+                )
+            )
+        
+        # Use QEventLoop to wait for completion (non-blocking)
+        loop = QEventLoop()
+        loaded_count = [0]  # Use list to capture value from signal
+        
+        def on_complete(name, count):
+            loaded_count[0] = count
+            loop.quit()
+        
+        def on_error(name, error_msg):
+            print(f"[{name}] Batch processing error: {error_msg}")
+            loop.quit()
+        
+        worker.batch_complete.connect(on_complete)
+        worker.batch_error.connect(on_error)
+        
+        # Start worker and wait for completion
+        worker.start()
+        loop.exec_()
+        
+        # Clean up
+        worker.wait()
+        
+        return loaded_count[0]
     
     def _batch_process_data_with_loader(self, data_loader, load_method, table_widget, progress_callback, table_name, batch_size=500, page_size=10000, handle_row_errors=False, **loader_kwargs):
         """
-        Optimized batch processing using data loader's pagination methods
+        Optimized batch processing using data loader's pagination methods.
+        
+        Bug Fix Task 14.2: Refactored to use BatchProcessingWorker instead of QApplication.processEvents().
         
         Args:
             data_loader: BaseDataLoader instance (MFTDataLoader, USNDataLoader, etc.)
@@ -2042,6 +2201,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             handle_row_errors: Whether to handle individual row errors gracefully
             **loader_kwargs: Additional keyword arguments to pass to the load method
         """
+        from ui.gui_workers import BatchProcessingWorker
+        from PyQt5.QtCore import QEventLoop
+        
         # Get first page to determine total count and columns
         result = load_method(page=1, page_size=page_size, **loader_kwargs)
         
@@ -2057,64 +2219,117 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             columns = list(result['data'][0].keys())
             table_widget.setColumnCount(len(columns))
             table_widget.setHorizontalHeaderLabels(columns)
+        else:
+            columns = []
         
         # Pre-allocate table rows for better performance
         table_widget.setRowCount(total_records)
         
-        loaded_count = 0
-        current_page = 1
-        
-        while current_page <= total_pages:
-            # Get data for current page (reuse first page result)
-            if current_page == 1:
-                page_data = result['data']
-            else:
-                result = load_method(page=current_page, page_size=page_size, **loader_kwargs)
-                page_data = result['data']
+        # Create worker-compatible processing function
+        def process_loader_data(progress_callback, cancellation_check):
+            """Worker-compatible batch processing function for data loaders"""
+            loaded_count = 0
+            current_page = 1
+            page_result = result  # Use first page result
             
-            if not page_data:
-                break
-            
-            # Process rows in batches for better UI responsiveness
-            for batch_start in range(0, len(page_data), batch_size):
-                batch_end = min(batch_start + batch_size, len(page_data))
-                batch = page_data[batch_start:batch_end]
+            while current_page <= total_pages:
+                # Check for cancellation
+                if cancellation_check and cancellation_check():
+                    print(f"[{table_name}] Batch processing cancelled")
+                    return loaded_count
                 
-                for i, record in enumerate(batch):
-                    row_index = loaded_count + i
+                # Get data for current page (reuse first page result)
+                if current_page == 1:
+                    page_data = page_result['data']
+                else:
+                    page_result = load_method(page=current_page, page_size=page_size, **loader_kwargs)
+                    page_data = page_result['data']
+                
+                if not page_data:
+                    break
+                
+                # Process rows in batches
+                for batch_start in range(0, len(page_data), batch_size):
+                    # Check for cancellation
+                    if cancellation_check and cancellation_check():
+                        print(f"[{table_name}] Batch processing cancelled")
+                        return loaded_count
                     
-                    if handle_row_errors:
-                        # Handle individual row errors gracefully
-                        try:
+                    batch_end = min(batch_start + batch_size, len(page_data))
+                    batch = page_data[batch_start:batch_end]
+                    
+                    for i, record in enumerate(batch):
+                        row_index = loaded_count + i
+                        
+                        if handle_row_errors:
+                            # Handle individual row errors gracefully
+                            try:
+                                for col_index, column_name in enumerate(columns):
+                                    value = record.get(column_name)
+                                    item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
+                                    table_widget.setItem(row_index, col_index, item)
+                            except Exception as e:
+                                error_msg = f"[{table_name}] Error processing row: {str(e)}"
+                                print(error_msg)
+                                # Continue with next row instead of failing completely
+                                continue
+                        else:
+                            # Standard processing without error handling
                             for col_index, column_name in enumerate(columns):
                                 value = record.get(column_name)
                                 item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
                                 table_widget.setItem(row_index, col_index, item)
-                        except Exception as e:
-                            error_msg = f"[{table_name}] Error processing row: {str(e)}"
-                            print(error_msg)
-                            # Continue with next row instead of failing completely
-                            continue
-                    else:
-                        # Standard processing without error handling
-                        for col_index, column_name in enumerate(columns):
-                            value = record.get(column_name)
-                            item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
-                            table_widget.setItem(row_index, col_index, item)
+                    
+                    # Report progress
+                    if progress_callback:
+                        progress_callback(loaded_count + batch_end - batch_start, total_records)
                 
-                # Allow UI to process events more frequently
-                QtWidgets.QApplication.processEvents()
+                loaded_count += len(page_data)
+                current_page += 1
+                
+                # Optimize memory usage after each page
+                self._optimize_memory_usage()
             
-            loaded_count += len(page_data)
-            current_page += 1
-            
-            if progress_callback:
-                self._call_progress_callback(progress_callback, f"[{table_name}] Loaded {loaded_count:,} of {total_records:,} records")
-            
-            # Optimize memory usage after each page
-            self._optimize_memory_usage()
+            return loaded_count
         
-        return loaded_count
+        # Create and start worker thread
+        worker = BatchProcessingWorker(
+            table_name=table_name,
+            processing_function=process_loader_data
+        )
+        
+        # Connect signals for progress updates
+        if progress_callback:
+            worker.batch_progress.connect(
+                lambda current, total, name: self._call_progress_callback(
+                    progress_callback, 
+                    f"[{name}] Loaded {current:,} of {total:,} records"
+                )
+            )
+        
+        # Use QEventLoop to wait for completion (non-blocking)
+        loop = QEventLoop()
+        loaded_count = [0]  # Use list to capture value from signal
+        
+        def on_complete(name, count):
+            loaded_count[0] = count
+            loop.quit()
+        
+        def on_error(name, error_msg):
+            print(f"[{name}] Batch processing error: {error_msg}")
+            loop.quit()
+        
+        worker.batch_complete.connect(on_complete)
+        worker.batch_error.connect(on_error)
+        
+        # Start worker and wait for completion
+        worker.start()
+        loop.exec_()
+        
+        # Clean up
+        worker.wait()
+        
+        return loaded_count[0]
 
     def _call_progress_callback(self, progress_callback, message):
         """Helper method to handle both signal objects and direct method calls"""
@@ -2126,6 +2341,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
     
     def load_mft_data(self, progress_callback=None):
         """Load MFT data from the MFT database into all subtabs using VirtualTableWidget for efficient memory usage"""
+        # CRITICAL: This function MUST be called from the main GUI thread
+        # Qt widgets can only be created in the main thread
+        from PyQt5.QtCore import QThread
+        if QThread.currentThread() != QtWidgets.QApplication.instance().thread():
+            error_msg = "[MFT] ERROR: load_mft_data() called from worker thread! Must be called from main thread."
+            print(error_msg)
+            self._call_progress_callback(progress_callback, error_msg)
+            return
+        
         # Import required modules at runtime to avoid circular imports
         try:
             from data.mft_loader import MFTDataLoader
@@ -2134,6 +2358,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         except ImportError as e:
             error_msg = f"[MFT] Failed to import required modules: {str(e)}"
             print(error_msg)
+            import traceback
+            traceback.print_exc()
             self._call_progress_callback(progress_callback, error_msg)
             return
         
@@ -2460,6 +2686,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 
     def load_usn_data(self, progress_callback=None):
         """Load USN Journal data from the USN database using VirtualTableWidget for efficient memory usage"""
+        # CRITICAL: This function MUST be called from the main GUI thread
+        # Qt widgets can only be created in the main thread
+        from PyQt5.QtCore import QThread
+        if QThread.currentThread() != QtWidgets.QApplication.instance().thread():
+            error_msg = "[USN] ERROR: load_usn_data() called from worker thread! Must be called from main thread."
+            print(error_msg)
+            self._call_progress_callback(progress_callback, error_msg)
+            return
+        
         # Import required modules
         try:
             from data.usn_loader import USNDataLoader
@@ -2592,6 +2827,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 
     def load_correlated_data(self, progress_callback=None):
         """Load correlated MFT-USN data from the correlated database using VirtualTableWidget for efficient memory usage"""
+        # CRITICAL: This function MUST be called from the main GUI thread
+        # Qt widgets can only be created in the main thread
+        from PyQt5.QtCore import QThread
+        if QThread.currentThread() != QtWidgets.QApplication.instance().thread():
+            error_msg = "[Correlated] ERROR: load_correlated_data() called from worker thread! Must be called from main thread."
+            print(error_msg)
+            self._call_progress_callback(progress_callback, error_msg)
+            return
+        
         # Import required modules
         try:
             from data.correlated_loader import CorrelatedDataLoader
@@ -2725,12 +2969,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self._call_progress_callback(progress_callback, error_msg)
     
     # ============================================================================
-# ENHANCED GROUPED DATA LOADING METHODS
-# ============================================================================
+    # ENHANCED GROUPED DATA LOADING METHODS
+    # ============================================================================
 
-# ============================================================================
-# ROW DETAIL DIALOG FUNCTIONALITY
-# ============================================================================
+    # ============================================================================
+    # ROW DETAIL DIALOG FUNCTIONALITY
+    # ============================================================================
     
     def handle_table_double_click(self, item):
         """
@@ -2959,17 +3203,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         item = QtWidgets.QTableWidgetItem(str(cell_data) if cell_data is not None else "")
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # Make cells read-only
                         table_widget.setItem(row_index, col_index, item)
-                
-                # Process events periodically to keep UI responsive
-                if i % batch_size == 0:
-                    QtWidgets.QApplication.processEvents()
             
             # Resize columns to fit content
             table_widget.resizeColumnsToContents()
             
             # Apply styles after data is loaded
+            # Note: Only apply to the table widget itself, not the header separately
+            # The header styling is already included in UNIFIED_TABLE_STYLE
             table_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE)
-            table_widget.horizontalHeader().setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE)
             
             # Force style update
             table_widget.style().unpolish(table_widget)
@@ -3063,32 +3304,81 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         return db_path
         
     def load_shimcache_data(self):
-        """Load ShimCache data from database to table"""
-        try:
-            # Get the database path based on current case
-            db_path = self.get_shimcache_db_path()
-            
-            # Check if database exists
-            if not os.path.exists(db_path):
-                print(f"[ShimCache] Database not found at: {db_path}")
-                print(f"[ShimCache] Please run ShimCache analysis first to create the database")
-                return
-            
-            # Connect to database
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Check if shimcache_entries table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='shimcache_entries'")
-            if not cursor.fetchone():
-                print(f"[ShimCache] shimcache_entries table not found in database: {db_path}")
-                conn.close()
-                return
+        """
+        Load ShimCache data from database to table.
+        
+        Bug Fix: Refactored to use DataLoadingWorker instead of QApplication.processEvents().
+        """
+        from ui.gui_workers import DataLoadingWorker
+        from PyQt5.QtCore import QEventLoop
+        
+        # Create worker-compatible loading function
+        def _load_shimcache_worker(progress_callback, cancellation_check):
+            """Worker function to load ShimCache data from database"""
+            try:
+                # Get the database path based on current case
+                db_path = self.get_shimcache_db_path()
                 
-            # Query to get all ShimCache entries
-            cursor.execute("""SELECT filename, path, last_modified, last_modified_readable, parsed_timestamp 
-                          FROM shimcache_entries ORDER BY last_modified DESC""")
-            rows = cursor.fetchall()
+                # Check if database exists
+                if not os.path.exists(db_path):
+                    print(f"[ShimCache] Database not found at: {db_path}")
+                    print(f"[ShimCache] Please run ShimCache analysis first to create the database")
+                    return None
+                
+                # Connect to database
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                
+                # Check if shimcache_entries table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='shimcache_entries'")
+                if not cursor.fetchone():
+                    print(f"[ShimCache] shimcache_entries table not found in database: {db_path}")
+                    conn.close()
+                    return None
+                    
+                # Query to get all ShimCache entries
+                cursor.execute("""SELECT filename, path, last_modified, last_modified_readable, parsed_timestamp 
+                              FROM shimcache_entries ORDER BY last_modified DESC""")
+                rows = cursor.fetchall()
+                conn.close()
+                
+                # Report progress
+                if progress_callback:
+                    progress_callback(len(rows), len(rows))
+                
+                return rows
+                
+            except Exception as e:
+                print(f"[ShimCache] Error loading data: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return None
+        
+        # Create and start worker thread
+        worker = DataLoadingWorker(
+            data_type="shimcache",
+            loading_function=_load_shimcache_worker
+        )
+        
+        # Connect signals
+        worker.loading_complete.connect(self._populate_shimcache_table)
+        worker.loading_error.connect(lambda data_type, error: print(f"[{data_type}] Loading error: {error}"))
+        
+        # Use QEventLoop for non-blocking wait
+        loop = QEventLoop()
+        worker.loading_complete.connect(loop.quit)
+        worker.loading_error.connect(loop.quit)
+        worker.start()
+        loop.exec_()
+        
+        # Clean up
+        worker.wait()
+    
+    def _populate_shimcache_table(self, data_type, rows):
+        """Populate ShimCache table with loaded data (runs on main thread)"""
+        try:
+            if rows is None:
+                return
             
             # Load data into the main ShimCache table
             if hasattr(self, 'ShimCache_main_table'):
@@ -3105,8 +3395,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 # Clear existing rows
                 self.ShimCache_main_table.setRowCount(0)
                 
-                # Add data in batches for better performance
-                batch_size = 100
+                # Add all data at once (much faster than row-by-row)
                 for i, row in enumerate(rows):
                     row_index = self.ShimCache_main_table.rowCount()
                     self.ShimCache_main_table.insertRow(row_index)
@@ -3114,20 +3403,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # Make cells read-only
                         self.ShimCache_main_table.setItem(row_index, col_index, item)
-                    
-                    # Process events periodically to keep UI responsive
-                    if (i + 1) % batch_size == 0:
-                        QtWidgets.QApplication.processEvents()
                 
                 # Re-enable updates and resize columns to content
                 self.ShimCache_main_table.setUpdatesEnabled(was_updates_enabled)
                 self.ShimCache_main_table.resizeColumnsToContents()
                 
                 print(f"[ShimCache] Loaded {len(rows)} records into main ShimCache table")
-            
-            conn.close()
+                
         except Exception as e:
-            print(f"[ShimCache] Error loading data: {str(e)}")
+            print(f"[ShimCache] Error populating table: {str(e)}")
             import traceback
             traceback.print_exc()
     
@@ -3256,47 +3540,49 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 )
                 return
             
-            # Determine database path - save in Target_Artifacts folder
-            db_path = None
+            # Collect all partition database paths from live and offline sources
+            db_paths = []
+            
             print(f"[open_partition_window] hasattr case_paths: {hasattr(self, 'case_paths')}")
             if hasattr(self, 'case_paths'):
                 print(f"[open_partition_window] case_paths: {self.case_paths}")
                 
             if hasattr(self, 'case_paths') and self.case_paths:
-                # First try: Use artifacts_dir directly (this is Target_Artifacts)
-                target_artifacts = self.case_paths.get('artifacts_dir')
-                print(f"[open_partition_window] artifacts_dir from case_paths: {target_artifacts}")
+                # Get case root directory
+                case_dir = self.case_paths.get('case_dir') or self.case_paths.get('case_root')
+                print(f"[open_partition_window] case_dir/case_root: {case_dir}")
                 
-                # Second try: Get target_artifacts_dir
-                if not target_artifacts:
-                    target_artifacts = self.case_paths.get('target_artifacts_dir')
-                    print(f"[open_partition_window] target_artifacts_dir from case_paths: {target_artifacts}")
-                
-                # Third try: Construct from case_dir or case_root
-                if not target_artifacts:
-                    case_dir = self.case_paths.get('case_dir') or self.case_paths.get('case_root')
-                    print(f"[open_partition_window] case_dir/case_root: {case_dir}")
-                    if case_dir:
-                        target_artifacts = os.path.join(case_dir, 'Target_Artifacts')
-                        print(f"[open_partition_window] Constructed target_artifacts: {target_artifacts}")
-                        # Create directory if it doesn't exist
-                        if not os.path.exists(target_artifacts):
-                            print(f"[open_partition_window] Creating directory: {target_artifacts}")
-                            os.makedirs(target_artifacts, exist_ok=True)
-                        else:
-                            print(f"[open_partition_window] Directory already exists: {target_artifacts}")
-                
-                if target_artifacts:
-                    db_path = os.path.join(target_artifacts, 'partition_data.db')
-                    print(f"[open_partition_window] Final db_path: {db_path}")
-                else:
-                    print("[open_partition_window] Could not determine target_artifacts directory")
-            else:
-                print("[open_partition_window] No case_paths available")
+                if case_dir:
+                    # 1. Check for live acquisition partition data
+                    live_acquisition_dir = os.path.join(case_dir, 'live_acquisition', 'partition_info')
+                    live_db = os.path.join(live_acquisition_dir, 'partition_analysis.db')
+                    print(f"[open_partition_window] Checking live acquisition path: {live_db}")
+                    print(f"[open_partition_window] Path exists: {os.path.exists(live_db)}")
+                    if os.path.exists(live_db):
+                        db_paths.append(('Live Acquisition', live_db))
+                        print(f"[open_partition_window] Found live acquisition partition data: {live_db}")
+                    else:
+                        print(f"[open_partition_window] Live acquisition partition data not found at: {live_db}")
+                    
+                    # Note: We only check the main partition_info directory, not subdirectories
+                    # This avoids loading duplicate databases from artifact subdirectories
+                    
+                    # 3. Fallback: Use default partition_data.db path for saving new analysis
+                    if not db_paths:
+                        live_acquisition = self.case_paths.get('artifacts_dir') or live_acquisition
+                        if not os.path.exists(live_acquisition):
+                            os.makedirs(live_acquisition, exist_ok=True)
+                        default_db = os.path.join(live_acquisition, 'partition_data.db')
+                        db_paths.append(('Current System', default_db))
+                        print(f"[open_partition_window] No existing data, will use default: {default_db}")
+                    else:
+                        print(f"[open_partition_window] Found {len(db_paths)} existing database(s), will load from them")
             
-            # Create and show the partition window
-            print(f"[open_partition_window] Creating PartitionWindow with db_path: {db_path}")
-            partition_window = PartitionWindow(db_path, self.main_window if hasattr(self, 'main_window') else None)
+            # Create and show the partition window with all database paths
+            print(f"[open_partition_window] Creating PartitionWindow with {len(db_paths)} database(s)")
+            for source_name, db_path in db_paths:
+                print(f"  - {source_name}: {db_path}")
+            partition_window = PartitionWindow(db_paths, self.main_window if hasattr(self, 'main_window') else None)
             partition_window.exec_()
             
         except Exception as e:
@@ -3326,7 +3612,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
     
     def _refresh_table(self, table):
         """Internal method to refresh a single table's styles"""
-        if not table or not table.isVisible():
+        # Check if the C++ object still exists before accessing it
+        try:
+            if not table or not table.isVisible():
+                return
+        except RuntimeError:
+            # C++ object has been deleted, skip refresh
             return
             
         # Store current state
@@ -3340,7 +3631,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Define restore_scroll function before try block
         def restore_scroll():
             try:
+                # Check if C++ object still exists
                 if not table:
+                    return
+                
+                # Verify object is still valid before accessing
+                try:
+                    table.isVisible()
+                except RuntimeError:
+                    # C++ object has been deleted
                     return
                     
                 # Update geometry first
@@ -3363,10 +3662,17 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     
                 # Force a complete repaint
                 table.update()
+            except RuntimeError:
+                # C++ object was deleted during execution
+                pass
             except Exception as e:
                 print(f"Error in restore_scroll: {str(e)}")
             finally:
-                table.setUpdatesEnabled(was_updates_enabled)
+                try:
+                    table.setUpdatesEnabled(was_updates_enabled)
+                except RuntimeError:
+                    # Object deleted, can't restore updates
+                    pass
         
         try:
             # Clear and reapply styles
@@ -3407,9 +3713,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # Schedule the scroll restoration
             QtCore.QTimer.singleShot(50, restore_scroll)
             
+        except RuntimeError:
+            # C++ object was deleted during refresh
+            pass
         except Exception as e:
             print(f"Error refreshing table: {str(e)}")
-            table.setUpdatesEnabled(was_updates_enabled)
+            try:
+                table.setUpdatesEnabled(was_updates_enabled)
+            except RuntimeError:
+                pass
     
     def apply_table_styles(self, table):
         """Apply styles to the table after it has been populated"""
@@ -3870,118 +4182,244 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.load_data_from_database_CJL()
         print("[File Activity] All file activity data loaded")
         
-    def load_all_logs(self):
-        """Load all Windows event logs into their tables"""
-        db_path = self.get_log_db_path()
-        self.load_data_with_error_handling(db_path, "SystemLogs", self.SystemLogs_table, "System Logs")
-        self.load_data_with_error_handling(db_path, "ApplicationLogs", self.AppLogs_table, "Application Logs")
-        self.load_data_with_error_handling(db_path, "SecurityLogs", self.SecurityLogs_table, "Security Logs")
-        
-    def load_data_from_Prefetch(self):
-        """Load Prefetch database into the Prefetch table"""
+    def _load_event_logs_worker(self, progress_callback, cancellation_check, db_path):
+        """Worker-compatible method for loading event logs - ONLY loads data, does NOT touch widgets"""
         try:
-            # Get proper database path based on case configuration
+            if not os.path.exists(db_path):
+                raise FileNotFoundError(f"Database file not found: {db_path}")
+            
+            # Define the tables to load
+            tables_to_load = [
+                ("SystemLogs", "System Logs"),
+                ("ApplicationLogs", "Application Logs"),
+                ("SecurityLogs", "Security Logs")
+            ]
+            
+            total_tables = len(tables_to_load)
+            loaded_data = {}
+            
+            # Connect to database
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            for idx, (table_name, title) in enumerate(tables_to_load):
+                # Check for cancellation
+                if cancellation_check():
+                    conn.close()
+                    return None
+                
+                # Report progress
+                progress_callback(idx, total_tables)
+                
+                # Load the table data (NO widget manipulation!)
+                print(f"[{title}] Loading from database: {db_path}")
+                
+                # Check if table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table_name,))
+                if not cursor.fetchone():
+                    print(f"[{title}] Table not found in database")
+                    loaded_data[table_name] = None
+                    continue
+                
+                # Fetch all data
+                cursor.execute(f"SELECT * FROM {table_name}")
+                rows = cursor.fetchall()
+                
+                # Get column names
+                cursor.execute(f"PRAGMA table_info({table_name});")
+                columns_info = cursor.fetchall()
+                columns = [column[1] for column in columns_info]
+                
+                loaded_data[table_name] = {
+                    'rows': rows,
+                    'columns': columns,
+                    'title': title
+                }
+                
+                print(f"[{title}] Loaded {len(rows)} records")
+            
+            conn.close()
+            
+            # Final progress update
+            progress_callback(total_tables, total_tables)
+            return loaded_data
+            
+        except Exception as e:
+            print(f"[Event Logs Error] Error loading event logs: {str(e)}")
+            raise
+    
+    def load_all_logs(self):
+        """Load all Windows event logs into their tables using DataLoadingWorker"""
+        from ui.gui_workers import DataLoadingWorker
+        from PyQt5.QtCore import QEventLoop
+        
+        db_path = self.get_log_db_path()
+        
+        # Create worker
+        worker = DataLoadingWorker(
+            data_type='event_logs',
+            loading_function=self._load_event_logs_worker,
+            db_path=db_path
+        )
+        
+        # Connect signals to populate widgets on main thread
+        worker.loading_complete.connect(self._populate_event_logs_tables)
+        worker.loading_error.connect(lambda dtype, err: print(f"[{dtype}] Loading error: {err}"))
+        
+        # Start worker
+        worker.start()
+        
+        # Use QEventLoop to wait - this processes GUI events while waiting
+        loop = QEventLoop()
+        worker.finished.connect(loop.quit)
+        loop.exec_()
+        
+        # Clean up
+        worker.wait()
+    
+    def _populate_event_logs_tables(self, data_type, loaded_data):
+        """Populate event log tables with loaded data (runs on main thread)"""
+        if not loaded_data:
+            return
+        
+        # Define table widgets
+        table_mapping = {
+            "SystemLogs": self.SystemLogs_table,
+            "ApplicationLogs": self.AppLogs_table,
+            "SecurityLogs": self.SecurityLogs_table
+        }
+        
+        for table_name, data_dict in loaded_data.items():
+            if data_dict is None:
+                continue
+            
+            table_widget = table_mapping.get(table_name)
+            if not table_widget:
+                continue
+            
+            rows = data_dict['rows']
+            columns = data_dict['columns']
+            title = data_dict['title']
+            
+            # Disable updates during population
+            was_updates_enabled = table_widget.updatesEnabled()
+            table_widget.setUpdatesEnabled(False)
+            
+            # Set columns
+            table_widget.setColumnCount(len(columns))
+            table_widget.setHorizontalHeaderLabels(columns)
+            
+            # Set row count
+            table_widget.setRowCount(len(rows))
+            
+            # Populate cells
+            for row_index, row_data in enumerate(rows):
+                for col_index, cell_data in enumerate(row_data):
+                    item = QtWidgets.QTableWidgetItem(str(cell_data) if cell_data is not None else "")
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    table_widget.setItem(row_index, col_index, item)
+            
+            # Resize and restore updates
+            table_widget.resizeColumnsToContents()
+            table_widget.setUpdatesEnabled(was_updates_enabled)
+            
+            print(f"[{title}] Populated {len(rows)} records into table")
+    
+    def _load_prefetch_data_worker(self, progress_callback, cancellation_check):
+        """Worker-compatible method for loading prefetch data - ONLY loads data, does NOT touch widgets"""
+        try:
+            # Determine database path
             if hasattr(self, 'case_paths') and self.case_paths:
-                case_root = self.case_paths.get('case_root')
                 artifacts_dir = self.case_paths.get('artifacts_dir')
                 if artifacts_dir and os.path.exists(artifacts_dir):
                     db_path = os.path.join(artifacts_dir, 'prefetch_data.db')
-                elif case_root:
-                    db_path = os.path.join(case_root, 'Target_Artifacts', 'prefetch_data.db')
                 else:
-                    db_path = 'prefetch_data.db'
+                    case_root = self.case_paths.get('case_root')
+                    if case_root:
+                        db_path = os.path.join(case_root, 'Target_Artifacts', 'prefetch_data.db')
+                    else:
+                        db_path = 'prefetch_data.db'
             else:
                 db_path = 'prefetch_data.db'
             
             if not os.path.exists(db_path):
-                print(f"[Prefetch Error] Database file not found: {db_path}")
-                self.show_error_message(
-                    "Prefetch Data",
-                    f"Prefetch database not found at: {db_path}\nPlease collect prefetch data first.",
-                    "warning"
-                )
-                return False
+                raise FileNotFoundError(f"Prefetch database not found at: {db_path}")
             
-            success = self.load_registry_data_to_table("prefetch_data", self.Prefetch_table, db_path)
-            if success:
-                print(f"[Prefetch] Successfully loaded records from prefetch_data")
-                
-                # Format JSON columns for better display
-                for row in range(self.Prefetch_table.rowCount()):
-                    # Format Run Times column (index 5)
-                    run_times_item = self.Prefetch_table.item(row, 5)
-                    if run_times_item and run_times_item.text():
-                        try:
-                            run_times = json.loads(run_times_item.text())
-                            formatted_times = " | ".join(run_times)
-                            run_times_item.setText(formatted_times)
-                        except json.JSONDecodeError:
-                            pass
-                    
-                    # Format Volumes column (index 6)
-                    volumes_item = self.Prefetch_table.item(row, 6)
-                    if volumes_item and volumes_item.text():
-                        try:
-                            volumes = json.loads(volumes_item.text())
-                            volume_details = []
-                            for v in volumes:
-                                vol_id = v.get('volume_id', 'Unknown')
-                                device_name = v.get('device_name', '')
-                                creation_time = v.get('creation_time', '')
-                                serial_num = v.get('serial_number', '')
-                                
-                                # Format creation time if available
-                                creation_str = ''
-                                if creation_time and creation_time.lower() != 'none':
-                                    try:
-                                        # Try to parse and format the datetime
-                                        creation_dt = datetime.datetime.fromisoformat(creation_time)
-                                        creation_str = f", Created: {creation_dt.strftime('%Y-%m-%d')}"
-                                    except:
-                                        creation_str = f", Created: {creation_time}"
-                                
-                                # Format volume info with all available details in a more compact way
-                                vol_info = f"{vol_id}"
-                                if device_name:
-                                    # Extract just the volume name without the full path
-                                    device_short = device_name.split('\\')[-1] if '\\' in device_name else device_name
-                                    vol_info += f" ({device_short})"
-                                if serial_num:
-                                    vol_info += f", SN:{serial_num}"
-                                vol_info += creation_str
-                                
-                                volume_details.append(vol_info)
-                            formatted_volumes = " | ".join(volume_details)
-                            volumes_item.setText(formatted_volumes)
-                        except json.JSONDecodeError:
-                            pass
-                    
-                    # Format Directories column (index 7)
-                    dirs_item = self.Prefetch_table.item(row, 7)
-                    if dirs_item and dirs_item.text():
-                        try:
-                            dirs = json.loads(dirs_item.text())
-                            formatted_dirs = " | ".join(dirs)
-                            dirs_item.setText(formatted_dirs)
-                        except json.JSONDecodeError:
-                            pass
-                    
-                    # Format Resources column (index 8)
-                    resources_item = self.Prefetch_table.item(row, 8)
-                    if resources_item and resources_item.text():
-                        try:
-                            resources = json.loads(resources_item.text())
-                            formatted_resources = " | ".join(resources)
-                            resources_item.setText(formatted_resources)
-                        except json.JSONDecodeError:
-                            pass
-            else:
-                self.show_error_message(
-                    "Prefetch Data",
-                    "Failed to load prefetch data from database.",
-                    "warning"
-                )
-            return success
+            # Connect to database
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Check if table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='prefetch_data';")
+            if not cursor.fetchone():
+                conn.close()
+                raise Exception("prefetch_data table not found in database")
+            
+            # Report progress
+            progress_callback(0, 1)
+            
+            # Check for cancellation
+            if cancellation_check():
+                conn.close()
+                return None
+            
+            # Fetch all data
+            cursor.execute("SELECT * FROM prefetch_data")
+            rows = cursor.fetchall()
+            
+            # Get column names
+            cursor.execute("PRAGMA table_info(prefetch_data);")
+            columns_info = cursor.fetchall()
+            columns = [column[1] for column in columns_info]
+            
+            conn.close()
+            
+            # Report completion
+            progress_callback(1, 1)
+            
+            print(f"[Prefetch] Loaded {len(rows)} records from database")
+            
+            # Return data structure (NO widget manipulation!)
+            return {
+                'rows': rows,
+                'columns': columns
+            }
+            
+        except Exception as e:
+            print(f"[Prefetch Error] Error loading prefetch data: {str(e)}")
+            raise
+        
+    def load_data_from_Prefetch(self):
+        """Load Prefetch database into the Prefetch table using DataLoadingWorker"""
+        from ui.gui_workers import DataLoadingWorker
+        from PyQt5.QtCore import QEventLoop
+        
+        try:
+            # Create worker
+            worker = DataLoadingWorker(
+                data_type='prefetch',
+                loading_function=self._load_prefetch_data_worker
+            )
+            
+            # Connect signals - populate widgets on main thread
+            worker.loading_complete.connect(self._populate_prefetch_table)
+            worker.loading_error.connect(lambda dtype, err: self.show_error_message(
+                "Prefetch Data",
+                f"Error loading prefetch data: {err}",
+                "critical"
+            ))
+            
+            # Start worker
+            worker.start()
+            
+            # Use QEventLoop to wait without blocking GUI
+            loop = QEventLoop()
+            worker.finished.connect(loop.quit)
+            loop.exec_()
+            
+            # Clean up
+            worker.wait()
+            return True
             
         except Exception as e:
             print(f"[Prefetch Error] Error loading prefetch data: {str(e)}")
@@ -3991,109 +4429,303 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "critical"
             )
             return False
+    
+    def _populate_prefetch_table(self, data_type, data):
+        """Populate Prefetch table with loaded data (runs on main thread)"""
+        if not data or not data.get('rows'):
+            return
         
-    def load_registry_data_from_db(self):
-        """Load all registry data from the registry DB into GUI tables"""
+        rows = data['rows']
+        columns = data['columns']
+        
+        # Disable updates during population
+        was_updates_enabled = self.Prefetch_table.updatesEnabled()
+        self.Prefetch_table.setUpdatesEnabled(False)
+        
+        # Set columns
+        self.Prefetch_table.setColumnCount(len(columns))
+        self.Prefetch_table.setHorizontalHeaderLabels(columns)
+        
+        # Set row count
+        self.Prefetch_table.setRowCount(len(rows))
+        
+        # Populate cells and format JSON columns
+        for row_index, row_data in enumerate(rows):
+            for col_index, cell_data in enumerate(row_data):
+                # Convert cell data to string
+                cell_str = str(cell_data) if cell_data is not None else ""
+                
+                # Format JSON columns for better display
+                if col_index == 5 and cell_str:  # Run Times column
+                    try:
+                        run_times = json.loads(cell_str)
+                        cell_str = " | ".join(run_times)
+                    except json.JSONDecodeError:
+                        pass
+                
+                elif col_index == 6 and cell_str:  # Volumes column
+                    try:
+                        volumes = json.loads(cell_str)
+                        volume_details = []
+                        for v in volumes:
+                            vol_id = v.get('volume_id', 'Unknown')
+                            device_name = v.get('device_name', '')
+                            creation_time = v.get('creation_time', '')
+                            serial_num = v.get('serial_number', '')
+                            
+                            # Format creation time if available
+                            creation_str = ''
+                            if creation_time and creation_time.lower() != 'none':
+                                try:
+                                    creation_dt = datetime.datetime.fromisoformat(creation_time)
+                                    creation_str = f", Created: {creation_dt.strftime('%Y-%m-%d')}"
+                                except:
+                                    creation_str = f", Created: {creation_time}"
+                            
+                            # Format volume info
+                            vol_info = f"{vol_id}"
+                            if device_name:
+                                device_short = device_name.split('\\')[-1] if '\\' in device_name else device_name
+                                vol_info += f" ({device_short})"
+                            if serial_num:
+                                vol_info += f", SN:{serial_num}"
+                            vol_info += creation_str
+                            
+                            volume_details.append(vol_info)
+                        cell_str = " | ".join(volume_details)
+                    except json.JSONDecodeError:
+                        pass
+                
+                elif col_index == 7 and cell_str:  # Directories column
+                    try:
+                        dirs = json.loads(cell_str)
+                        cell_str = " | ".join(dirs)
+                    except json.JSONDecodeError:
+                        pass
+                
+                elif col_index == 8 and cell_str:  # Resources column
+                    try:
+                        resources = json.loads(cell_str)
+                        cell_str = " | ".join(resources)
+                    except json.JSONDecodeError:
+                        pass
+                
+                # Create and set item
+                item = QtWidgets.QTableWidgetItem(cell_str)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self.Prefetch_table.setItem(row_index, col_index, item)
+        
+        # Resize and restore updates
+        self.Prefetch_table.resizeColumnsToContents()
+        self.Prefetch_table.setUpdatesEnabled(was_updates_enabled)
+        
+        print(f"[Prefetch] Populated {len(rows)} records into table")
+    
+    def _load_registry_data_worker(self, progress_callback, cancellation_check):
+        """Worker-compatible method for loading registry data - ONLY loads data, does NOT touch widgets"""
         try:
-            print("[Registry] Starting to load all registry data...")
             db_path = self.get_registry_db_path() if hasattr(self, 'get_registry_db_path') else 'registry_data_live.db'
             if not os.path.exists(db_path):
-                print(f"[Registry Error] Database file not found: {db_path}")
-                self.show_error_message(
-                    "Registry Data",
-                    f"Registry database not found at: {db_path}\nPlease collect registry data first.",
-                    "warning"
-                )
-                return False
-            table_mapping = {
-                "computer_Name": self.computerName_table,
-                "time_zone": self.TimeZone_table,
-                "TimeZoneInfo": self.TimeZone_table,
-                "network_interfaces": self.NetworkInterface_table,
-                "NetworkInterfacesInfo": self.NetworkInterface_table,
-                "Network_list": self.NetworkLists_table,
-                "SystemServices": self.SystemServices_table,
-                "machine_run": self.MachineRun_table,
-                "machine_run_once": self.MachineRunOnce_tabel,
-                "user_run": self.UserRun_table,
-                "user_run_once": self.UserRunOnce_table,
-                "RunMRU": self.RunMRU_table,
-                "Windows_lastupdate": self.LastUpdate_table,
-                "WindowsUpdateInfo": self.LastUpdateInfo_table,
-                "ShutdownInfo": self.ShutDown_table,
-                "BrowserHistory": self.Browser_history_table,
-                "USBDevices": self.USBDevices_table,
-                "USBInstances": self.USBInstances_table,
-                "USBProperties": self.USBProperties_table,
-                "USBStorageDevices": self.USBStorageDevices_table,
-                "USBStorageVolumes": self.USBStorageVolumes_table,
-                "RecentDocs": self.RecentDocs_table,
-                "OpenSaveMRU": self.OpenSaveMRU_table,
-                "LastSaveMRU": self.LastSaveMRU_table,
-                "TypedPaths": self.TypedPath_table,
-                "BAM": self.Bam_table,
-                "DAM": self.Dam_table,
-                "InstalledSoftware": self.tableWidget,
-                "Shellbags": self.Shellbags_table,
-                "UserAssist": self.UserAssist_table,
-                "MUICache": self.MUICache_table,
-                "WordWheelQuery": self.WordWheelQuery_table,
-                "UserProfiles": self.UserProfiles_table,
-            }
+                raise FileNotFoundError(f"Registry database not found at: {db_path}")
+            
+            # Define table names (without widget references)
+            table_names = [
+                "computer_Name", "time_zone", "TimeZoneInfo", "network_interfaces",
+                "NetworkInterfacesInfo", "Network_list", "SystemServices", "machine_run",
+                "machine_run_once", "user_run", "user_run_once", "RunMRU",
+                "Windows_lastupdate", "WindowsUpdateInfo", "ShutdownInfo", "BrowserHistory",
+                "USBDevices", "USBInstances", "USBProperties", "USBStorageDevices",
+                "USBStorageVolumes", "RecentDocs", "OpenSaveMRU", "LastSaveMRU",
+                "TypedPaths", "BAM", "DAM", "InstalledSoftware", "Shellbags",
+                "UserAssist", "MUICache", "WordWheelQuery", "UserProfiles"
+            ]
+            
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
             available_tables = [table[0] for table in cursor.fetchall()]
-            for db_table, gui_table in table_mapping.items():
+            
+            total_tables = len([t for t in table_names if t in available_tables])
+            processed_tables = 0
+            loaded_data = {}
+            
+            for db_table in table_names:
+                # Check for cancellation
+                if cancellation_check():
+                    conn.close()
+                    return None
+                
                 if db_table in available_tables:
                     try:
+                        # Report progress
+                        progress_callback(processed_tables, total_tables)
+                        
+                        # Get column info
+                        cursor.execute(f"PRAGMA table_info({db_table})")
+                        columns_info = cursor.fetchall()
+                        columns = [col[1] for col in columns_info]
+                        
+                        # Reorder columns to move UID/GUID to end
+                        uid_cols = [col for col in columns if col.lower() in ['uid', 'guid', 'id', 'uuid']]
+                        other_cols = [col for col in columns if col.lower() not in ['uid', 'guid', 'id', 'uuid']]
+                        reordered_columns = other_cols + uid_cols
+                        col_mapping = [columns.index(col) for col in reordered_columns]
+                        
+                        # Fetch data
                         cursor.execute(f"SELECT * FROM {db_table}")
                         rows = cursor.fetchall()
+                        
                         if rows:
-                            # Ensure headers match table structure
-                            cursor.execute(f"PRAGMA table_info({db_table})")
-                            columns_info = cursor.fetchall()
-                            columns = [col[1] for col in columns_info]
-                            
-                            # Reorder columns to move UID and GUID to the end
-                            uid_cols = [col for col in columns if col.lower() in ['uid', 'guid', 'id', 'uuid']]
-                            other_cols = [col for col in columns if col.lower() not in ['uid', 'guid', 'id', 'uuid']]
-                            reordered_columns = other_cols + uid_cols
-                            
-                            # Create a mapping from old column index to new column index
-                            col_mapping = [columns.index(col) for col in reordered_columns]
-                            
-                            if gui_table.columnCount() != len(reordered_columns):
-                                gui_table.setColumnCount(len(reordered_columns))
-                                gui_table.setHorizontalHeaderLabels(reordered_columns)
-                            
-                            gui_table.setRowCount(len(rows))
-                            for r_idx, row in enumerate(rows):
-                                # Reorder the row data according to the new column order
+                            # Reorder row data
+                            reordered_rows = []
+                            for row in rows:
                                 reordered_row = [row[i] for i in col_mapping]
-                                for c_idx, value in enumerate(reordered_row):
-                                    # Special handling for Shellbags file_size column
-                                    if db_table == "Shellbags" and reordered_columns[c_idx] == "file_size" and value is not None:
-                                        try:
-                                            display_value = format_file_size(int(value))
-                                        except (ValueError, TypeError):
-                                            display_value = str(value)
-                                    else:
-                                        display_value = str(value) if value is not None else ""
-                                    
-                                    item = QtWidgets.QTableWidgetItem(display_value)
-                                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                                    gui_table.setItem(r_idx, c_idx, item)
+                                reordered_rows.append(reordered_row)
                             
-                            gui_table.resizeColumnsToContents()
+                            loaded_data[db_table] = {
+                                'rows': reordered_rows,
+                                'columns': reordered_columns
+                            }
                             print(f"[Registry] Loaded {len(rows)} records from {db_table}")
+                        
+                        processed_tables += 1
                     except Exception as e:
                         print(f"[Registry Error] Failed to load {db_table}: {str(e)}")
+                        processed_tables += 1
+            
             conn.close()
+            
+            # Final progress update
+            progress_callback(total_tables, total_tables)
+            return loaded_data
+            
+        except Exception as e:
+            print(f"[Registry Error] Couldn't load registry data: {str(e)}")
+            raise
+    
+    def load_registry_data_from_db(self):
+        """Load all registry data from the registry DB into GUI tables using DataLoadingWorker"""
+        from ui.gui_workers import DataLoadingWorker
+        from PyQt5.QtCore import QEventLoop
+        
+        try:
+            print("[Registry] Starting to load all registry data...")
+            
+            # Create worker
+            worker = DataLoadingWorker(
+                data_type='registry',
+                loading_function=self._load_registry_data_worker
+            )
+            
+            # Connect signals - populate widgets on main thread
+            worker.loading_complete.connect(self._populate_registry_tables)
+            worker.loading_error.connect(lambda dtype, err: self.show_error_message(
+                "Registry Data",
+                f"Error loading registry data: {err}",
+                "warning"
+            ))
+            
+            # Start worker
+            worker.start()
+            
+            # Use QEventLoop to wait without blocking GUI
+            loop = QEventLoop()
+            worker.finished.connect(loop.quit)
+            loop.exec_()
+            
+            # Clean up
+            worker.wait()
             return True
+            
         except Exception as e:
             print(f"[Registry Error] Couldn't load registry data: {str(e)}")
             return False
+
+    def _populate_registry_tables(self, data_type, loaded_data):
+        """Populate registry tables with loaded data (runs on main thread)"""
+        if not loaded_data:
+            return
+
+        # Map database table names to GUI table widgets
+        table_mapping = {
+            "computer_Name": self.computerName_table,
+            "time_zone": self.TimeZone_table,
+            "TimeZoneInfo": self.TimeZone_table,
+            "network_interfaces": self.NetworkInterface_table,
+            "NetworkInterfacesInfo": self.NetworkInterface_table,
+            "Network_list": self.NetworkLists_table,
+            "SystemServices": self.SystemServices_table,
+            "machine_run": self.MachineRun_table,
+            "machine_run_once": self.MachineRunOnce_tabel,
+            "user_run": self.UserRun_table,
+            "user_run_once": self.UserRunOnce_table,
+            "RunMRU": self.RunMRU_table,
+            "Windows_lastupdate": self.LastUpdate_table,
+            "WindowsUpdateInfo": self.LastUpdateInfo_table,
+            "ShutdownInfo": self.ShutDown_table,
+            "BrowserHistory": self.Browser_history_table,
+            "USBDevices": self.USBDevices_table,
+            "USBInstances": self.USBInstances_table,
+            "USBProperties": self.USBProperties_table,
+            "USBStorageDevices": self.USBStorageDevices_table,
+            "USBStorageVolumes": self.USBStorageVolumes_table,
+            "RecentDocs": self.RecentDocs_table,
+            "OpenSaveMRU": self.OpenSaveMRU_table,
+            "LastSaveMRU": self.LastSaveMRU_table,
+            "TypedPaths": self.TypedPath_table,
+            "BAM": self.Bam_table,
+            "DAM": self.Dam_table,
+            "InstalledSoftware": self.tableWidget,
+            "Shellbags": self.Shellbags_table,
+            "UserAssist": self.UserAssist_table,
+            "MUICache": self.MUICache_table,
+            "WordWheelQuery": self.WordWheelQuery_table,
+            "UserProfiles": self.UserProfiles_table,
+        }
+
+        # Populate each table
+        for db_table, data_dict in loaded_data.items():
+            gui_table = table_mapping.get(db_table)
+            if not gui_table or not data_dict:
+                continue
+
+            rows = data_dict['rows']
+            columns = data_dict['columns']
+
+            # Disable updates during population
+            was_updates_enabled = gui_table.updatesEnabled()
+            gui_table.setUpdatesEnabled(False)
+
+            # Set columns
+            if gui_table.columnCount() != len(columns):
+                gui_table.setColumnCount(len(columns))
+                gui_table.setHorizontalHeaderLabels(columns)
+
+            # Set row count
+            gui_table.setRowCount(len(rows))
+
+            # Populate cells
+            for r_idx, row in enumerate(rows):
+                for c_idx, value in enumerate(row):
+                    # Special handling for Shellbags file_size column
+                    if db_table == "Shellbags" and columns[c_idx] == "file_size" and value is not None:
+                        try:
+                            display_value = format_file_size(int(value))
+                        except (ValueError, TypeError):
+                            display_value = str(value)
+                    else:
+                        display_value = str(value) if value is not None else ""
+
+                    item = QtWidgets.QTableWidgetItem(display_value)
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    gui_table.setItem(r_idx, c_idx, item)
+
+            # Resize and restore updates
+            gui_table.resizeColumnsToContents()
+            gui_table.setUpdatesEnabled(was_updates_enabled)
+
+            print(f"[Registry] Populated {len(rows)} records into {db_table} table")
+
         
     def setupUi(self, Crow_Eye):
         # Import styles at the beginning of setupUi
@@ -4348,7 +4980,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.correlation_button.setStyleSheet(CrowEyeStyles.CORRELATION_BUTTON)
         # Add descriptive correlation icon showing connected data points
         icon_correlation = QtGui.QIcon()
-        icon_correlation.addPixmap(QtGui.QPixmap("GUI Resources/icons/correlation-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        icon_correlation.addPixmap(QtGui.QPixmap("GUI Resources/icons/correlation_icon_v4.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.correlation_button.setIcon(icon_correlation)
         self.correlation_button.setIconSize(QtCore.QSize(24, 24))  # Larger icon for better visibility
         self.correlation_button.setText("RUN CORRELATION")
@@ -4439,18 +5071,28 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Small spacer after section label
         spacerItem_offline = QtWidgets.QSpacerItem(20, 8, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
         self.verticalLayout_3.addItem(spacerItem_offline)
-        self.registry_offline = QtWidgets.QPushButton(self.side_fram)
-        self.setup_parse_button(self.registry_offline, True, True, False)
-        self.registry_offline.setObjectName("registry_offline")
-        self.verticalLayout_3.addWidget(self.registry_offline)
-        self.offline_LNK_JL = QtWidgets.QPushButton(self.side_fram)
-        self.setup_parse_button(self.offline_LNK_JL, True, True, False)
-        self.offline_LNK_JL.setObjectName("offline_LNK_JL")
-        self.verticalLayout_3.addWidget(self.offline_LNK_JL)
-        self.offline_prefetch = QtWidgets.QPushButton(self.side_fram)
-        self.setup_parse_button(self.offline_prefetch, True, True, False)
-        self.offline_prefetch.setObjectName("offline_prefetch")
-        self.verticalLayout_3.addWidget(self.offline_prefetch)
+        
+        self.CrowClawButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.CrowClawButton, True, True, False)
+        self.CrowClawButton.setObjectName("CrowClawButton")
+        self.verticalLayout_3.addWidget(self.CrowClawButton)
+        
+        self.OfflineImporterButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.OfflineImporterButton, True, True, False)  # Checkable and checked by default like other buttons
+        self.OfflineImporterButton.setObjectName("OfflineImporterButton")
+        self.verticalLayout_3.addWidget(self.OfflineImporterButton)
+        
+        self.ImageParsingButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.ImageParsingButton, True, True, False)
+        self.ImageParsingButton.setObjectName("ImageParsingButton")
+        self.verticalLayout_3.addWidget(self.ImageParsingButton)
+        
+        self.ParseOfflineArtifactsButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.ParseOfflineArtifactsButton, True, True, False)
+        self.ParseOfflineArtifactsButton.setObjectName("ParseOfflineArtifactsButton")
+        self.ParseOfflineArtifactsButton.setEnabled(False)  # Initially disabled until case is opened
+        self.verticalLayout_3.addWidget(self.ParseOfflineArtifactsButton)
+
         spacerItem4 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
         self.verticalLayout_3.addItem(spacerItem4)
         self.horizontalLayout_2.addWidget(self.side_fram)
@@ -5148,9 +5790,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.RecycleBinButton.setText(_translate("Crow_Eye", "Recycle Bin"))
         self.SRUMButton.setText(_translate("Crow_Eye", "SRUM"))
         self.Offline_analysis.setText(_translate("Crow_Eye", "Offline analysis"))
-        self.registry_offline.setText(_translate("Crow_Eye", "Registry offline"))
-        self.offline_LNK_JL.setText(_translate("Crow_Eye", "Lnk and JL offline"))
-        self.offline_prefetch.setText(_translate("Crow_Eye", "Offline_Prefetch"))
+        self.CrowClawButton.setText(_translate("Crow_Eye", "Crow-Claw Collector"))
+        self.OfflineImporterButton.setText(_translate("Crow_Eye", "Offline Importer"))
+        self.ImageParsingButton.setText(_translate("Crow_Eye", "Forensics Images"))
+        self.ParseOfflineArtifactsButton.setText(_translate("Crow_Eye", "Parse Offline Artifacts"))
 
         # Initialize computerName_table headers
         if hasattr(self, 'computerName_table'):
@@ -6051,9 +6694,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.parse_all.clicked.connect(lambda: self.run_analysis_with_loading(
             "Running All Live Artifacts Analysis...", self.parse_all_live_artifacts))
 
-        self.offline_prefetch.clicked.connect(self.run_offline_prefetch_analysis)
-        self.offline_LNK_JL.clicked.connect(self.run_offline_lnk_analysis)
-        self.registry_offline.clicked.connect(self.run_offline_registry_analysis)
+        self.CrowClawButton.clicked.connect(self.run_crow_claw)
+        self.OfflineImporterButton.clicked.connect(self.open_offline_importer)
+        self.ImageParsingButton.clicked.connect(self.open_image_parsing)
+        self.ParseOfflineArtifactsButton.clicked.connect(self.on_parse_offline_artifacts)
         
         # Initialize database search integration
         self._init_database_search()
@@ -6206,10 +6850,19 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # Ensure artifacts directory exists
             artifacts_dir = os.path.join(directory_path, "Target_Artifacts")
             os.makedirs(artifacts_dir, exist_ok=True)
+            
+            # Create live_acquisition directory for raw collected artifacts
+            live_acquisition_path = os.path.join(directory_path, "live_acquisition")
+            os.makedirs(live_acquisition_path, exist_ok=True)
+            print(f"[Open Case] Using live_acquisition for raw artifacts: {live_acquisition_path}")
+            print(f"[Open Case] Using Target_Artifacts for parsed databases: {artifacts_dir}")
+            print(f"[Open Case] Created default live_acquisition directory: {live_acquisition_path}")
+            
             # Store paths
             self.case_paths = {
                 'case_root': directory_path,
                 'artifacts_dir': artifacts_dir,
+                'live_acquisition_dir': live_acquisition_path,
                 'c_ajl_lnk_dir': os.path.join(artifacts_dir, "C_AJL_Lnk"),
                 'registry_dir': os.path.join(artifacts_dir, "Registry_Hives"),
                 'prefetch_dir': os.path.join(artifacts_dir, "Prefetch"),
@@ -6223,6 +6876,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'shimcache': os.path.join(artifacts_dir, 'shimcache.db'),
                     'amcache': os.path.join(artifacts_dir, 'amcache.db'),
                     'recyclebin': os.path.join(artifacts_dir, 'recyclebin_analysis.db'),
+                    'srum': os.path.join(artifacts_dir, 'srum_data.db'),
                     'mft': os.path.join(artifacts_dir, 'mft_claw_analysis.db'),
                     'usn': os.path.join(artifacts_dir, 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(artifacts_dir, 'mft_usn_correlated_analysis.db')
@@ -6235,6 +6889,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # Update UI
             case_name = os.path.basename(directory_path)
             self.label.setText(f"Case: {case_name}")
+            
+            # Enable Parse Offline Artifacts button when case is opened
+            if hasattr(self, 'ParseOfflineArtifactsButton'):
+                self.ParseOfflineArtifactsButton.setEnabled(True)
             
             # Add/update case in history
             if hasattr(self, 'case_history_manager') and self.case_history_manager:
@@ -6270,6 +6928,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db'),
                     'amcache': os.path.join(self.case_paths['artifacts_dir'], 'amcache.db'),
                     'recyclebin': os.path.join(self.case_paths['artifacts_dir'], 'recyclebin_analysis.db'),
+                    'srum': os.path.join(self.case_paths['artifacts_dir'], 'srum_data.db'),
                     'mft': os.path.join(self.case_paths['artifacts_dir'], 'mft_claw_analysis.db'),
                     'usn': os.path.join(self.case_paths['artifacts_dir'], 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(self.case_paths['artifacts_dir'], 'mft_usn_correlated_analysis.db')
@@ -6301,11 +6960,20 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             db_files_exist = any(os.path.exists(db_path) for db_path in case_config['databases'].values())
         
             if not db_files_exist:
-                # Only run full analysis for new cases
-                print(f"[Open Case] New case detected, running full analysis for case: {case_name}")
-                self.run_analysis_with_loading("Running All Analyses...", self.parse_all_live_artifacts)
+                # For new cases, just load data (which will be empty)
+                # User should explicitly run Crow_claw or parsers to collect artifacts
+                print(f"[Open Case] New case detected, loading empty case: {case_name}")
+                self.run_analysis_with_loading("Loading Case Data...", self.load_all_data)
+                
+                # Show informational message about empty case
+                QMessageBox.information(
+                    self.main_window,
+                    "Empty Case",
+                    f"Case '{case_name}' has been opened successfully.\n\n"
+                    "This case doesn't have any collected data yet.\n\n"
+                )
             else:
-                # For existing cases, just load the existing data
+                # For existing cases, load the existing data
                 print(f"[Open Case] Loading existing case data for: {case_name}")
                 self.run_analysis_with_loading("Loading Case Data...", self.load_all_data)
         
@@ -6569,6 +7237,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             if hasattr(self, 'label'):
                 self.label.setText("Case: None")
             
+            # 5. Disable Parse Offline Artifacts button when case is closed
+            if hasattr(self, 'ParseOfflineArtifactsButton'):
+                self.ParseOfflineArtifactsButton.setEnabled(False)
+            
             print("[System] All tables cleared and state reset")
             
         except Exception as e:
@@ -6665,9 +7337,18 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 
             # Store paths as class variables
             artifacts_dir = os.path.join(os.path.join(directory_path, dir_name), "Target_Artifacts")
+            case_root = os.path.join(directory_path, dir_name)
+            
+            # Create live_acquisition directory directly (not using CaseConfigurationManager)
+            # CaseConfigurationManager uses relative "cases" directory, but user can create cases anywhere
+            live_acquisition_path = os.path.join(case_root, "live_acquisition")
+            os.makedirs(live_acquisition_path, exist_ok=True)
+            print(f"[Create Case] Created live_acquisition directory: {live_acquisition_path}")
+            
             self.case_paths = {
-                'case_root': os.path.join(directory_path, dir_name),
+                'case_root': case_root,
                 'artifacts_dir': artifacts_dir,
+                'live_acquisition_dir': live_acquisition_path,
                 'c_ajl_lnk_dir': os.path.join(artifacts_dir, "C_AJL_Lnk"),
                 'registry_dir': os.path.join(artifacts_dir, "Registry_Hives"),
                 'prefetch_dir': os.path.join(artifacts_dir, "Prefetch"),
@@ -6680,6 +7361,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'prefetch': os.path.join(artifacts_dir, 'prefetch_data.db'),
                     'shimcache': os.path.join(artifacts_dir, 'shimcache.db'),
                     'amcache': os.path.join(artifacts_dir, 'amcache.db'),
+                    'srum': os.path.join(artifacts_dir, 'srum_data.db'),
                     'mft': os.path.join(artifacts_dir, 'mft_claw_analysis.db'),
                     'usn': os.path.join(artifacts_dir, 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(artifacts_dir, 'mft_usn_correlated_analysis.db')
@@ -6698,6 +7380,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     'prefetch': os.path.join(self.case_paths['artifacts_dir'], 'prefetch_data.db'),
                     'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db'),
                     'amcache': os.path.join(self.case_paths['artifacts_dir'], 'amcache.db'),
+                    'srum': os.path.join(self.case_paths['artifacts_dir'], 'srum_data.db'),
                     'mft': os.path.join(self.case_paths['artifacts_dir'], 'mft_claw_analysis.db'),
                     'usn': os.path.join(self.case_paths['artifacts_dir'], 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(self.case_paths['artifacts_dir'], 'mft_usn_correlated_analysis.db')
@@ -6894,15 +7577,60 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             # Show the dialog
             loading_dialog.show()
+            
+            loading_dialog.raise_()
+            loading_dialog.activateWindow()
+            loading_dialog.repaint()
             QtWidgets.QApplication.processEvents()
             
             # Start log capture
             loading_dialog.start_log_capture()
+            QtWidgets.QApplication.processEvents()
             
             try:
-                # Run the function directly on the main thread
-                # This is safer and simpler for GUI operations
-                result = function_to_run(*args, **kwargs)
+                if run_in_thread:
+                    # Run function in background thread to keep GUI responsive
+                    worker = FunctionWorker(function_to_run, *args, **kwargs)
+                    
+                    # Store result and error from worker
+                    result_container = {'result': None, 'error': None}
+                    
+                    def on_result(result_value):
+                        result_container['result'] = result_value
+                    
+                    def on_error(error_msg):
+                        result_container['error'] = error_msg
+                    
+                    def on_heartbeat():
+                        # Process events to keep animation smooth
+                        QtWidgets.QApplication.processEvents()
+                    
+                    # Connect worker signals
+                    worker.result.connect(on_result)
+                    worker.error.connect(on_error)
+                    worker.heartbeat.connect(on_heartbeat)
+                    
+                    # Start worker thread
+                    worker.start()
+                    
+                    # Use QEventLoop to wait for completion while keeping GUI responsive
+                    loop = QtCore.QEventLoop()
+                    worker.finished.connect(loop.quit)
+                    worker.error.connect(loop.quit)
+                    loop.exec_()
+                    
+                    # Wait for thread to fully terminate
+                    worker.wait()
+                    
+                    # Check for errors
+                    if result_container['error']:
+                        raise Exception(result_container['error'])
+                    
+                    result = result_container['result']
+                else:
+                    # Run the function directly on the main thread
+                    # This is safer and simpler for GUI operations
+                    result = function_to_run(*args, **kwargs)
                 
                 # Show completion with success style
                 loading_dialog.show_completion("OPERATION COMPLETED SUCCESSFULLY")
@@ -7043,17 +7771,548 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Run offline prefetch analysis with loading screen"""
         self.run_analysis_with_loading("Running Offline Prefetch Analysis...", self.parse_offline_prefetch)
 
+    def run_crow_claw(self):
+        """Run Crow-Claw Collector GUI"""
+        try:
+            print("[Info] Opening Crow-Claw Collector...")
+            import sys
+            import os
+            # Add crow_claw path to sys.path
+            crow_claw_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'crow_claw')
+            if crow_claw_path not in sys.path:
+                sys.path.insert(0, crow_claw_path)
+            
+            # Use the dedicated GUI window
+            from Artifacts_Collectors.crow_claw.gui.main_window import CrowClawMainWindow
+            
+            # Get case directory if a case is open
+            case_directory = None
+            if hasattr(self, 'case_paths') and self.case_paths:
+                # Pass the live_acquisition directory as the case directory
+                case_directory = self.case_paths.get('live_acquisition_dir')
+                if case_directory:
+                    print(f"[Info] Crow-Claw will use live_acquisition directory: {case_directory}")
+                else:
+                    print("[Warning] No live_acquisition directory found, Crow-Claw will run in standalone mode")
+            
+            # Create and show the window
+            # We need to keep a reference to it so it doesn't get garbage collected
+            if not hasattr(self, 'crow_claw_window') or self.crow_claw_window is None:
+                self.crow_claw_window = CrowClawMainWindow(case_directory=case_directory)
+            else:
+                # Update case directory if window already exists
+                self.crow_claw_window.case_directory = case_directory
+                if case_directory:
+                    self.crow_claw_window.integrated_mode = True
+                    self.crow_claw_window.full_output_path = case_directory
+                    # Update header panel to show the live_acquisition directory
+                    if hasattr(self.crow_claw_window, 'header'):
+                        if hasattr(self.crow_claw_window.header, 'case_path'):
+                            self.crow_claw_window.header.case_path.setText(case_directory)
+                            self.crow_claw_window.header.case_path.setToolTip(case_directory)
+                        if hasattr(self.crow_claw_window.header, 'target_artifact_path'):
+                            self.crow_claw_window.header.target_artifact_path.setText(case_directory)
+                            self.crow_claw_window.header.target_artifact_path.setToolTip(case_directory)
+                    print(f"[Info] Updated Crow-Claw output path: {self.crow_claw_window.full_output_path}")
+                else:
+                    self.crow_claw_window.integrated_mode = False
+                    self.crow_claw_window.full_output_path = None
+            
+            self.crow_claw_window.show()
+            self.crow_claw_window.raise_()
+            self.crow_claw_window.activateWindow()
+            print("[Info] Crow-Claw Collector opened successfully")
+        except Exception as e:
+            print(f"[Error] Failed to open Crow-Claw Collector: {str(e)}")
+            QtWidgets.QMessageBox.critical(self.main_window, "Crow-Claw Error", f"Failed to launch Crow-Claw: {str(e)}")
+
+    def open_offline_importer(self):
+        """Open the Offline Artifact Importer GUI"""
+        try:
+            print("[Info] Opening Offline Artifact Importer...")
+            import sys
+            import os
+            
+            # Add Offline_Importer path to sys.path
+            importer_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'Offline_Importer')
+            if importer_path not in sys.path:
+                sys.path.insert(0, importer_path)
+            
+            # Import the GUI class
+            from Artifacts_Collectors.Offline_Importer.offline_importer_gui import OfflineImporterGUI
+            
+            # Get live_acquisition directory if a case is open
+            default_scan_path = None
+            if hasattr(self, 'case_paths') and self.case_paths:
+                default_scan_path = self.case_paths.get('live_acquisition_dir')
+                if default_scan_path:
+                    print(f"[Info] Offline Importer will default to: {default_scan_path}")
+            
+            # Create and show the window
+            if not hasattr(self, 'offline_importer_window') or self.offline_importer_window is None:
+                self.offline_importer_window = OfflineImporterGUI(default_scan_path=default_scan_path)
+                
+                # CRITICAL: Pass reference to main Crow Eye window for GUI refresh coordination
+                # When ParseArtifactsDialog is opened from Offline Importer (not directly from Crow Eye),
+                # the signal connects to offline_importer_gui._on_artifacts_parsed() instead of
+                # Crow Eye.refresh_gui_tabs_after_parsing(). This reference allows the Offline Importer
+                # to trigger the main GUI refresh after parsing completes.
+                self.offline_importer_window.crow_eye_main_window = self
+            else:
+                # Update default scan path if window already exists
+                if default_scan_path:
+                    self.offline_importer_window.default_scan_path = default_scan_path
+                    self.offline_importer_window.state.source_directory = default_scan_path
+                    # Update the display
+                    if hasattr(self.offline_importer_window, 'source_path_display'):
+                        self.offline_importer_window.source_path_display.setText(default_scan_path)
+                        self.offline_importer_window.source_path_display.setToolTip(default_scan_path)
+                    print(f"[Info] Updated Offline Importer default path: {default_scan_path}")
+            
+            self.offline_importer_window.show()
+            self.offline_importer_window.raise_()
+            self.offline_importer_window.activateWindow()
+            print("[Info] Offline Artifact Importer opened successfully")
+        except Exception as e:
+            print(f"[Error] Failed to open Offline Artifact Importer: {str(e)}")
+            QtWidgets.QMessageBox.critical(self.main_window, "Importer Error", f"Failed to launch Offline Importer: {str(e)}")
+
+    def open_image_parsing(self):
+        """Show the Forensics Image Parsing Under Development dialog"""
+        try:
+            print("[Info] Opening Forensics Image Parsing Dialog...")
+            import sys
+            import os
+            
+            # Add Forensics Image parsing path to sys.path
+            img_parsing_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'Forensics Image parsing')
+            if img_parsing_path not in sys.path:
+                sys.path.insert(0, img_parsing_path)
+            
+            # Import the dialog class
+            from image_parsing_dialog import ImageParsingDialog
+            
+            # Create and show the dialog
+            dialog = ImageParsingDialog(self.main_window)
+            dialog.exec_()
+            print("[Info] Forensics Image Parsing dialog closed")
+        except Exception as e:
+            print(f"[Error] Failed to open Image Parsing Dialog: {str(e)}")
+
+    def on_parse_offline_artifacts(self):
+        """
+        Handle Parse Offline Artifacts button click.
+        
+        Opens the ParseArtifactsDialog to allow user to select and parse artifacts.
+        If no artifacts are indexed, automatically scans the default acquisition directory.
+        
+        Signal Flow Architecture:
+        -------------------------
+        This method represents SCENARIO 2 (direct parsing from main Crow Eye):
+          User clicks "Parse Offline Artifacts" in main Crow Eye menu
+          → ParseArtifactsDialog opens with parent=Crow Eye main_window
+          → Signal connects to: self.refresh_gui_tabs_after_parsing() [DIRECT]
+          → Result: Main Crow Eye GUI is refreshed directly
+        
+        For SCENARIO 1 (parsing from Offline Importer window):
+          See offline_importer_gui._on_artifacts_parsed() which bridges to this class
+        """
+        try:
+            print("[Info] Opening Parse Offline Artifacts dialog...")
+            
+            # Check if a case is open
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QtWidgets.QMessageBox.warning(
+                    self.main_window,
+                    "No Case Open",
+                    "Please open a case before parsing offline artifacts."
+                )
+                return
+            
+            case_root = self.case_paths.get('case_root')
+            case_id = self.case_paths.get('case_id')
+            if not case_root:
+                QtWidgets.QMessageBox.warning(
+                    self.main_window,
+                    "Invalid Case",
+                    "Current case does not have a valid root directory."
+                )
+                return
+            
+            # Import necessary components
+            from Artifacts_Collectors.Offline_Importer.parse_artifacts_dialog import ParseArtifactsDialog
+            from Artifacts_Collectors.Offline_Importer.artifact_scan_index import ArtifactScanIndex, ScannedArtifact
+            from Artifacts_Collectors.Offline_Importer.collection_coordinator import CollectionCoordinator
+            from Artifacts_Collectors.Offline_Importer.parser_invoker import ParserInvoker
+            from ui.Loading_dialog import LoadingDialog
+            from correlation_engine.config.case_configuration_manager import CaseConfigurationManager
+            import hashlib
+            
+            # Check if artifacts are already available in index
+            artifact_index = ArtifactScanIndex(case_root)
+            all_artifacts = artifact_index.get_all_artifacts()
+            
+            # If no artifacts in index, try to auto-scan default directory
+            if not all_artifacts:
+                # Get default acquisition path from case config
+                config_manager = CaseConfigurationManager()
+                live_acq_path = config_manager.get_live_acquisition_path(case_id)
+                
+                # Check if path exists and has content
+                if live_acq_path and os.path.exists(live_acq_path) and os.listdir(live_acq_path):
+                    # Ask user if they want to auto-scan and parse
+                    reply = QtWidgets.QMessageBox.question(
+                        self.main_window,
+                        "No Scanned Artifacts",
+                        f"No artifacts have been scanned yet, but artifacts were found in the acquisition directory:\n{live_acq_path}\n\n"
+                        "Would you like to scan and parse them now?",
+                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                        QtWidgets.QMessageBox.Yes
+                    )
+                    
+                    if reply == QtWidgets.QMessageBox.Yes:
+                        # 1. Scan the directory with detailed LoadingDialog
+                        steps = ["Scanning for artifacts", "Analyzing file types", "Preparing for parsing"]
+                        loading_dialog = LoadingDialog("SCANNING ARTIFACTS", self.main_window)
+                        loading_dialog.set_steps(steps)
+                        
+                        # Apply EXACT cyberpunk styling used by live parsers (same as parse_artifacts_dialog.py line 535-560)
+                        try:
+                            loading_dialog.setStyleSheet(CrowEyeStyles.LOADING_DIALOG)
+                            
+                            # Apply title style
+                            title_label = loading_dialog.findChild(QtWidgets.QLabel, "titleLabel")
+                            if title_label:
+                                title_label.setStyleSheet(CrowEyeStyles.OVERLAY_TITLE)
+                            
+                            # Apply status style
+                            status_label = loading_dialog.findChild(QtWidgets.QLabel, "statusLabel")
+                            if status_label:
+                                status_label.setStyleSheet(CrowEyeStyles.OVERLAY_STATUS)
+                            
+                            # Apply progress bar style
+                            progress_bar = loading_dialog.findChild(QtWidgets.QProgressBar)
+                            if progress_bar:
+                                progress_bar.setStyleSheet(CrowEyeStyles.OVERLAY_PROGRESS)
+                            
+                            # Apply log text style
+                            log_text = loading_dialog.findChild(QtWidgets.QTextEdit)
+                            if log_text:
+                                log_text.setStyleSheet(CrowEyeStyles.OVERLAY_LOG)
+                        except Exception as e:
+                            print(f"[DEBUG] Failed to apply cyberpunk style to LoadingDialog: {e}")
+                        
+                        loading_dialog.show()
+                        
+                        loading_dialog.update_step(0, f"Scanning: {os.path.basename(live_acq_path)}")
+                        loading_dialog.add_log_message(f"Starting scan of {live_acq_path}...")
+                        QtWidgets.QApplication.processEvents()
+                        
+                        # Use coordinator to scan
+                        coordinator = CollectionCoordinator(case_root=case_root, scan_only=True)
+                        summary = coordinator.collect_artifacts(source_dir=live_acq_path, include_subdirs=True)
+                        
+                        # Process scan results
+                        scanned_artifacts_for_config = []
+                        valid_artifacts = []
+                        
+                        loading_dialog.update_step(1, "Processing identified artifacts")
+                        for artifact_info in summary.artifacts:
+                            if artifact_info.collection_status == "success" and artifact_info.artifact_type != "Unknown":
+                                # Create index entry
+                                artifact_id = hashlib.md5(artifact_info.source_path.encode()).hexdigest()[:16]
+                                scanned_artifact = ScannedArtifact(
+                                    artifact_id=artifact_id,
+                                    artifact_type=artifact_info.artifact_type,
+                                    original_path=artifact_info.source_path,
+                                    current_path=artifact_info.source_path,
+                                    file_size=artifact_info.file_size,
+                                    file_hash=artifact_info.file_hash,
+                                    scan_timestamp=datetime.datetime.now().isoformat(),
+                                    collected=False,
+                                    parsed=False
+                                )
+                                artifact_index.add_artifact(scanned_artifact)
+                                valid_artifacts.append(scanned_artifact)
+                                
+                                # Add to case_config list
+                                scanned_artifacts_for_config.append({
+                                    'type': artifact_info.artifact_type,
+                                    'name': os.path.basename(artifact_info.source_path),
+                                    'path': artifact_info.source_path
+                                })
+                                
+                                loading_dialog.add_log_message(f"Identified {artifact_info.artifact_type}: {os.path.basename(artifact_info.source_path)}")
+                                QtWidgets.QApplication.processEvents()
+                        
+                        artifact_index.save()
+                        config_manager.set_scanned_artifacts(case_id, scanned_artifacts_for_config)
+                        
+                        if not valid_artifacts:
+                            loading_dialog.close()
+                            QtWidgets.QMessageBox.warning(self.main_window, "No Artifacts Identified", "Scan completed but no recognizable artifacts were found.")
+                            return
+                            
+                        # 2. Parse all identified artifacts
+                        loading_dialog.set_title("PARSING ARTIFACTS")
+                        parse_steps = [f"Parsing {a.artifact_type}" for a in valid_artifacts]
+                        loading_dialog.set_steps(parse_steps)
+                        
+                        # Start log capture to show parser output (same as parse_artifacts_dialog.py line 574)
+                        loading_dialog.start_log_capture()
+                        
+                        parser = ParserInvoker(case_root)
+                        
+                        def parse_progress(current, total, name, type):
+                            loading_dialog.update_step(current, f"Parsing {type}: {os.path.basename(name)}")
+                            loading_dialog.add_log_message(f"Processing {type}...")
+                            QtWidgets.QApplication.processEvents()
+                        
+                        try:
+                            parse_results = parser.parse_artifacts_batch(valid_artifacts, progress_callback=parse_progress)
+                            
+                            # Update index with results
+                            success_types = set()
+                            for artifact, result in zip(valid_artifacts, parse_results):
+                                if result.success:
+                                    artifact_index.mark_as_parsed(artifact.artifact_id)
+                                    success_types.add(artifact.artifact_type)
+                                    loading_dialog.add_log_message(f"✓ {artifact.artifact_type} parsed successfully")
+                                else:
+                                    loading_dialog.add_log_message(f"✗ Failed to parse {artifact.artifact_type}: {', '.join(result.errors)}")
+                            
+                            artifact_index.save()
+                            loading_dialog.show_completion("OFFLINE ARTIFACT PROCESSING COMPLETE")
+                            
+                            # Keep dialog open for a moment to show completion (same as parse_artifacts_dialog.py line 643)
+                            from PyQt5.QtCore import QTimer
+                            QtWidgets.QApplication.processEvents()
+                            QTimer.singleShot(1500, loading_dialog.close)
+                            
+                        finally:
+                            # Always stop log capture (same as parse_artifacts_dialog.py line 697)
+                            try:
+                                loading_dialog.stop_log_capture()
+                            except:
+                                pass
+                        
+                        # Refresh GUI with parsed types
+                        if success_types:
+                            self.refresh_gui_tabs_after_parsing(list(success_types))
+                            
+                        QtWidgets.QMessageBox.information(self.main_window, "Processing Complete", f"Successfully processed and parsed {len(success_types)} artifact types.")
+                        return
+                    else:
+                        return
+                else:
+                    QtWidgets.QMessageBox.information(
+                        self.main_window,
+                        "No Artifacts Available",
+                        "No artifacts have been scanned yet and the default acquisition directory is empty.\n\n"
+                        "Please use the Offline Importer to collect or scan artifacts first."
+                    )
+                    return
+            
+            # If artifacts are already in index, just show the dialog as before
+            dialog = ParseArtifactsDialog(case_root, self.main_window)
+            
+            # Connect signal with error handling
+            try:
+                print(f"[DEBUG] Connecting artifacts_selected signal to refresh_gui_tabs_after_parsing")
+                print(f"[DEBUG] Dialog object: {dialog}")
+                print(f"[DEBUG] Signal: {dialog.artifacts_selected}")
+                print(f"[DEBUG] Slot: {self.refresh_gui_tabs_after_parsing}")
+                dialog.artifacts_selected.connect(self.refresh_gui_tabs_after_parsing)
+                print(f"[DEBUG] Signal connected successfully")
+            except Exception as conn_error:
+                print(f"[ERROR] Failed to connect signal: {conn_error}")
+                import traceback
+                traceback.print_exc()
+            
+            result = dialog.exec_()
+            
+            if result == QtWidgets.QDialog.Accepted:
+                print("[Info] Artifacts parsed successfully")
+                # GUI refresh is handled by artifacts_selected signal - no need to call again
+            else:
+                print("[Info] Parse Offline Artifacts dialog cancelled")
+                
+        except Exception as e:
+            print(f"[Error] Failed to open Parse Offline Artifacts dialog: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QtWidgets.QMessageBox.critical(
+                self.main_window,
+                "Error",
+                f"Failed to open Parse Offline Artifacts dialog:\n{str(e)}"
+            )
+    
+    def refresh_gui_tabs_after_parsing(self, artifact_types=None):
+        """
+        Refresh GUI tabs after parsing offline artifacts.
+        
+        This method identifies which tabs need refreshing based on parsed artifacts
+        and calls the appropriate data loading methods.
+        
+        Signal Flow Architecture:
+        -------------------------
+        This method can be called via two paths:
+        
+        PATH 1 (Direct from Crow Eye):
+          User clicks "Parse Offline Artifacts" in main Crow Eye menu
+          → on_parse_offline_artifacts() opens ParseArtifactsDialog
+          → Signal connects directly to this method
+          → This method is called when parsing completes
+        
+        PATH 2 (From Offline Importer):
+          User clicks "Parse Artifacts" in Offline Importer window
+          → offline_importer_gui._on_parse_artifacts_clicked() opens ParseArtifactsDialog
+          → Signal connects to offline_importer_gui._on_artifacts_parsed()
+          → That method calls this method via crow_eye_main_window reference
+          → This method is called when parsing completes
+        
+        Args:
+            artifact_types: Optional list of artifact types that were parsed.
+                          If None, refreshes all tabs.
+        """
+        try:
+            print(f"[DEBUG] ========================================")
+            print(f"[DEBUG] refresh_gui_tabs_after_parsing CALLED")
+            print(f"[DEBUG] artifact_types parameter: {artifact_types}")
+            print(f"[DEBUG] artifact_types type: {type(artifact_types)}")
+            print(f"[DEBUG] ========================================")
+            print("[Info] Refreshing GUI tabs after parsing...")
+            
+            # If no specific artifact types provided, check the artifact scan index
+            if artifact_types is None:
+                try:
+                    from Artifacts_Collectors.Offline_Importer.artifact_scan_index import ArtifactScanIndex
+                    
+                    # Get case root directory
+                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                    
+                    if case_root:
+                        # Load artifact scan index
+                        index = ArtifactScanIndex(case_root)
+                        
+                        # Get all parsed artifacts
+                        all_artifacts = index.get_all_artifacts()
+                        parsed_artifacts = [a for a in all_artifacts if a.parsed]
+                        
+                        # Extract unique artifact types
+                        artifact_types = list(set(a.artifact_type for a in parsed_artifacts))
+                        
+                        if artifact_types:
+                            print(f"[Info] Found {len(artifact_types)} artifact types to refresh: {', '.join(artifact_types)}")
+                        else:
+                            print("[Info] No parsed artifacts found, refreshing all tabs")
+                            artifact_types = None
+                    else:
+                        print("[Info] No case root found, refreshing all tabs")
+                        artifact_types = None
+                        
+                except Exception as e:
+                    print(f"[Warning] Could not load artifact scan index: {e}")
+                    print("[Info] Falling back to refreshing all tabs")
+                    artifact_types = None
+            
+            # If we have specific artifact types, load only those
+            if artifact_types:
+                print(f"[Info] Selectively refreshing tabs for: {', '.join(artifact_types)}")
+                
+                # Map artifact types to their loading methods
+                artifact_loaders = {
+                    'Registry': [
+                        ('Registry Data', self.load_allReg_data),
+                        ('Registry Database', self.load_registry_data_from_db),
+                        ('File Activity', self.load_files_activity)
+                    ],
+                    'Prefetch': [
+                        ('Prefetch Data', self.load_data_from_Prefetch)
+                    ],
+                    'JumpLists': [
+                        ('LNK and Jump Lists', self.load_data_from_database_lnkAJL),
+                        ('Custom Jump Lists', self.load_data_from_database_CJL)
+                    ],
+                    'AmCache': [
+                        ('AmCache Data', self.load_amcache_data)
+                    ],
+                    'ShimCache': [
+                        ('ShimCache Data', self.load_shimcache_data)
+                    ],
+                    'RecycleBin': [
+                        ('RecycleBin Data', self.load_recyclebin_data)
+                    ],
+                    'MFT': [
+                        ('MFT Data', self.load_mft_data)
+                    ],
+                    'USN': [
+                        ('USN Journal Data', self.load_usn_data)
+                    ],
+                    'EVTX': [
+                        ('Event Logs', self.load_all_logs)
+                    ],
+                    'EventLogs': [
+                        ('Event Logs', self.load_all_logs)
+                    ],
+                    'SRUM': [
+                        ('SRUM Data', self.load_srum_data)
+                    ]
+                }
+                
+                # Load data for each artifact type
+                for artifact_type in artifact_types:
+                    loaders = artifact_loaders.get(artifact_type, [])
+                    
+                    if loaders:
+                        for loader_name, loader_func in loaders:
+                            try:
+                                print(f"[Info] Loading {loader_name}...")
+                                loader_func()
+                                print(f"[Info] {loader_name} loaded successfully")
+                            except Exception as e:
+                                print(f"[Warning] Failed to load {loader_name}: {e}")
+                    else:
+                        print(f"[Warning] No loader found for artifact type: {artifact_type}")
+                
+                # Also load correlated data if MFT or USN were parsed
+                if 'MFT' in artifact_types or 'USN' in artifact_types:
+                    try:
+                        print("[Info] Loading Correlated MFT-USN Data...")
+                        self.load_correlated_data()
+                        print("[Info] Correlated data loaded successfully")
+                    except Exception as e:
+                        print(f"[Warning] Failed to load correlated data: {e}")
+                
+                print("[Info] Selective GUI refresh completed")
+            else:
+                # No specific types, refresh all tabs
+                print("[Info] Refreshing all GUI tabs...")
+                self.run_analysis_with_loading("Loading Parsed Data...", self.load_all_data)
+                print("[Info] All GUI tabs refreshed successfully")
+            
+        except Exception as e:
+            print(f"[Error] Failed to refresh GUI tabs: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            QtWidgets.QMessageBox.warning(
+                self.main_window, 
+                "Refresh Error", 
+                f"Failed to refresh GUI tabs after parsing:\n\n{str(e)}"
+            )
+
     def run_mft_usn_correlation(self):
         """Run MFT and USN correlation analysis with loading screen and switch to MFT/USN tab"""
         
         def _run_correlation_internal():
             """Internal function to run correlation with proper error handling"""
             try:
-                # Run only the correlation part (no GUI updates)
-                print("[MFT-USN] Starting MFT and USN Journal correlation...")
-                
                 # Get case directory information
                 case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                
+                # Run only the correlation part (no GUI updates)
+                print("[MFT-USN] Starting MFT and USN Journal correlation...")
                 
                 # Import and run the MFT-USN correlator
                 import sys
@@ -7067,20 +8326,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 # Initialize the correlator with case directory
                 correlator = MFTUSNCorrelator(case_directory=case_root)
                 
-                # Run the complete correlation analysis
+                # Run the complete correlation analysis (correlator will check for empty databases and run parsers if needed)
                 correlator.run_correlation_for_case()
                 
                 print("[MFT-USN] MFT and USN Journal correlation completed successfully")
                 
-                # Load the correlated data into the UI
-                print("[MFT-USN] Loading data into GUI...")
-                self.load_mft_data()
-                self.load_usn_data()
-                self.load_correlated_data()
-                
-                # Switch to the MFT/USN main tab
-                self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.MFT_USN_main_tab))
-                print("[MFT-USN] Data loaded successfully")
+                # Return success - GUI updates will happen on main thread
+                return True
                 
             except Exception as e:
                 print(f"[MFT-USN Error] {str(e)}")
@@ -7088,11 +8340,23 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 traceback.print_exc()
                 raise
         
-        # Use the loading dialog system
-        self.show_loading_screen_with_function(
+        # Use the loading dialog system with threading enabled
+        result = self.show_loading_screen_with_function(
             "RUNNING MFT & USN CORRELATION",
-            _run_correlation_internal
+            _run_correlation_internal,
+            run_in_thread=True
         )
+        
+        # Load the correlated data into the UI on main thread after worker completes
+        if result:
+            print("[MFT-USN] Loading data into GUI...")
+            self.load_mft_data()
+            self.load_usn_data()
+            self.load_correlated_data()
+            
+            # Switch to the MFT/USN main tab
+            self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.MFT_USN_main_tab))
+            print("[MFT-USN] Data loaded successfully")
     
     def run_recyclebin_analysis(self):
         """Run RecycleBin analysis with loading screen and switch to RecycleBin tab"""
@@ -7405,19 +8669,24 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     
                 print(f"[RecycleBin] RecycleBin data collected successfully, database: {db_path}")
                 
-                # Load the data into the UI
-                self.load_recyclebin_data()
+                # Return db_path - GUI updates will happen on main thread
+                return db_path
             except Exception as e:
                 print(f"[RecycleBin Error] {str(e)}")
                 import traceback
                 traceback.print_exc()
                 raise
         
-        # Use the loading dialog system
-        self.show_loading_screen_with_function(
+        # Use the loading dialog system with threading enabled
+        result = self.show_loading_screen_with_function(
             "Collecting RecycleBin Data",
-            _parse_recyclebin_internal
+            _parse_recyclebin_internal,
+            run_in_thread=True
         )
+        
+        # Load the data into the UI on main thread after worker completes
+        if result:
+            self.load_recyclebin_data()
     
     def parse_srum(self):
         """Parse SRUM data with loading dialog"""
@@ -7439,19 +8708,24 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     print("[SRUM] No artifacts directory available, skipping SRUM collection")
                     raise Exception("No artifacts directory available for SRUM parsing")
                 
-                # Load the data into the UI
-                self.load_srum_data()
+                # Return result - GUI updates will happen on main thread
+                return result
             except Exception as e:
                 print(f"[SRUM Error] {str(e)}")
                 import traceback
                 traceback.print_exc()
                 raise
         
-        # Use the loading dialog system
-        self.show_loading_screen_with_function(
+        # Use the loading dialog system with threading enabled
+        result = self.show_loading_screen_with_function(
             "Collecting SRUM Data",
-            _parse_srum_internal
+            _parse_srum_internal,
+            run_in_thread=True
         )
+        
+        # Load the data into the UI on main thread after worker completes
+        if result:
+            self.load_srum_data()
     
     def load_recyclebin_data(self):
         """Load RecycleBin data from the recyclebin database"""
@@ -7544,6 +8818,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
     def load_srum_application_usage(self, db_path):
         """Load SRUM Application Usage data"""
         try:
+            print("[SRUM] Starting application usage loading...")
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
@@ -7556,8 +8831,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             cursor.execute("SELECT * FROM srum_application_usage")
             rows = cursor.fetchall()
+            print(f"[SRUM] Fetched {len(rows)} application usage rows from database")
             
             if hasattr(self, 'SRUM_application_usage_table'):
+                print("[SRUM] Populating application usage table widget...")
                 # Disable updates during bulk loading for performance
                 self.SRUM_application_usage_table.setUpdatesEnabled(False)
                 self.SRUM_application_usage_table.setSortingEnabled(False)
@@ -7567,6 +8844,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 
                 # Populate all cells
                 for row_index, row in enumerate(rows):
+                    if row_index % 10000 == 0:
+                        print(f"[SRUM] Processing row {row_index}/{len(rows)}")
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
                         self.SRUM_application_usage_table.setItem(row_index, col_index, item)
@@ -7577,13 +8856,19 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 
                 print(f"[SRUM] Loaded {len(rows)} application usage records")
                 self.apply_table_styles(self.SRUM_application_usage_table)
+            else:
+                print("[SRUM] SRUM_application_usage_table widget not found")
             conn.close()
+            print("[SRUM] Application usage loading completed")
         except Exception as e:
             print(f"[SRUM] Error loading application usage: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def load_srum_network_connectivity(self, db_path):
         """Load SRUM Network Connectivity data"""
         try:
+            print("[SRUM] Starting network connectivity loading...")
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
@@ -7596,8 +8881,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             cursor.execute("SELECT * FROM srum_network_connectivity")
             rows = cursor.fetchall()
+            print(f"[SRUM] Fetched {len(rows)} network connectivity rows from database")
             
             if hasattr(self, 'SRUM_network_connectivity_table'):
+                print("[SRUM] Populating network connectivity table widget...")
                 # Disable updates during bulk loading for performance
                 self.SRUM_network_connectivity_table.setUpdatesEnabled(False)
                 self.SRUM_network_connectivity_table.setSortingEnabled(False)
@@ -7607,6 +8894,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 
                 # Populate all cells
                 for row_index, row in enumerate(rows):
+                    if row_index % 1000 == 0:
+                        print(f"[SRUM] Processing row {row_index}/{len(rows)}")
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
                         self.SRUM_network_connectivity_table.setItem(row_index, col_index, item)
@@ -7617,9 +8906,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 
                 print(f"[SRUM] Loaded {len(rows)} network connectivity records")
                 self.apply_table_styles(self.SRUM_network_connectivity_table)
+            else:
+                print("[SRUM] SRUM_network_connectivity_table widget not found")
             conn.close()
+            print("[SRUM] Network connectivity loading completed")
         except Exception as e:
             print(f"[SRUM] Error loading network connectivity: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def load_srum_network_data_usage(self, db_path):
         """Load SRUM Network Data Usage data"""
@@ -7738,7 +9032,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Parse offline registry files using the offline registry module"""
         try:
             print("[Offline Registry] Starting offline registry analysis...")
-            from Artifacts_Collectors.offline_RegClaw import reg_Claw
+            from Artifacts_Collectors.offline_parsers.offline_RegClaw import reg_Claw
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
             windows_partition = self.get_windows_partition()
             
@@ -7752,11 +9046,251 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print(f"[Offline Registry Error] {str(e)}")
             raise
 
-    def parse_all_live_artifacts(self):
-        """Enhanced live artifact collection with loading dialog"""
+    def _collect_all_live_artifacts(self, case_paths, windows_partition, step_callback, log_callback, cancellation_check):
+        """
+        Collect all live artifacts (called by LiveAcquisitionWorker).
+        
+        Bug Fix Task 12.1: Refactored to run in worker thread without blocking GUI.
+        
+        Args:
+            case_paths: Dictionary containing case_root, artifacts_dir, etc.
+            windows_partition: Windows partition path (e.g., "C:")
+            step_callback: Callback function(step_index, step_message) for progress updates
+            log_callback: Callback function(message) for log messages
+            cancellation_check: Function that returns True if user cancelled
+        """
         try:
-            # Import the loading dialog
+            log_callback("[Open Case] Starting full live analysis...")
+            
+            # Step 0: Initialize
+            step_callback(0, "⚙️ INITIALIZING ARTIFACT COLLECTION")
+            log_callback("[Init] Initializing artifact collection system...")
+            log_callback("[Init] Case paths configured")
+            log_callback("[Init] Ready to collect artifacts")
+            
+            if cancellation_check():
+                return
+            
+            # Step 1: Registry data (FIRST - most comprehensive)
+            step_callback(1, "🔧 COLLECTING REGISTRY DATA")
+            try:
+                log_callback("[Registry] Collecting live registry data...")
+                from Artifacts_Collectors.Regclaw import parse_live_registry
+                case_root = case_paths.get('case_root') if case_paths else None
+                artifacts_dir = case_paths.get('artifacts_dir') if case_paths else None
+                if artifacts_dir:
+                    db_path = os.path.join(artifacts_dir, 'registry_data.db')
+                else:
+                    db_path = None
+                parse_live_registry(case_root=case_root, db_path=db_path)
+                log_callback("[Registry] Registry data collected successfully")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[Registry Error] {str(e)}")
+                log_callback(f"[Registry Error Details] {error_details}")
+                print(f"[Registry Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            # Step 2: LNK and Jump Lists
+            step_callback(2, "🔗 COLLECTING LNK FILES AND JUMP LISTS")
+            log_callback("[LNK] Starting LNK and Jump Lists collection...")
+            try:
+                from Artifacts_Collectors.A_CJL_LNK_Claw import A_CJL_LNK_Claw
+                case_root = case_paths.get('case_root') if case_paths else None
+                A_CJL_LNK_Claw(case_path=case_root, offline_mode=False, direct_parse=True)
+                log_callback("[LNK] LNK and Jump Lists collected successfully")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[LNK Error] {str(e)}")
+                log_callback(f"[LNK Error Details] {error_details}")
+                print(f"[LNK Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            # Step 3: Prefetch files
+            step_callback(3, "⚡ COLLECTING PREFETCH FILES")
+            try:
+                log_callback("[Prefetch] Collecting prefetch data...")
+                from Artifacts_Collectors.Prefetch_claw import prefetch_claw
+                case_root = case_paths.get('case_root') if case_paths else None
+                prefetch_claw(case_path=case_root, offline_mode=False, windows_partition=windows_partition)
+                log_callback("[Prefetch] Prefetch data collected successfully")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[Prefetch Error] {str(e)}")
+                log_callback(f"[Prefetch Error Details] {error_details}")
+                print(f"[Prefetch Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            # Step 4: Event logs
+            step_callback(4, "📊 COLLECTING EVENT LOGS")
+            try:
+                log_callback("[Logs] Collecting Windows event logs...")
+                from Artifacts_Collectors.WinLog_Claw import main as collect_logs
+                case_root = case_paths.get('case_root') if case_paths else None
+                collect_logs(case_path=case_root)
+                log_callback("[Logs] Event Logs collected successfully")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[Logs Error] {str(e)}")
+                log_callback(f"[Logs Error Details] {error_details}")
+                print(f"[Logs Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            # Step 5: ShimCache data
+            step_callback(5, "🔍 COLLECTING SHIMCACHE DATA")
+            try:
+                log_callback("[ShimCache] Collecting ShimCache data...")
+                from Artifacts_Collectors.shimcash_claw import ShimCacheParser
+                case_root = case_paths.get('case_root') if case_paths else None
+                artifacts_dir = case_paths.get('artifacts_dir') if case_paths else None
+                if artifacts_dir:
+                    db_path = os.path.join(artifacts_dir, 'shimcache.db')
+                else:
+                    db_path = 'shimcache.db'
+                parser = ShimCacheParser(db_path)
+                parser.run()
+                log_callback("[ShimCache] ShimCache data collected successfully")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[ShimCache Error] {str(e)}")
+                log_callback(f"[ShimCache Error Details] {error_details}")
+                print(f"[ShimCache Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            # Step 6: Amcache data
+            step_callback(6, "🔍 COLLECTING AMCACHE DATA")
+            try:
+                log_callback("[Amcache] Collecting Amcache data...")
+                from Artifacts_Collectors.amcacheparser import parse_amcache_hive
+                case_root = case_paths.get('case_root') if case_paths else None
+                artifacts_dir = case_paths.get('artifacts_dir') if case_paths else None
+                if artifacts_dir:
+                    db_path = os.path.join(artifacts_dir, 'amcache.db')
+                else:
+                    db_path = 'amcache.db'
+                offline_mode = False
+                parse_amcache_hive(case_path=case_root, offline_mode=offline_mode, 
+                                  db_path=db_path, windows_partition=windows_partition)
+                log_callback("[Amcache] Amcache data collected successfully")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[Amcache Error] {str(e)}")
+                log_callback(f"[Amcache Error Details] {error_details}")
+                print(f"[Amcache Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            # Step 7: RecycleBin data
+            step_callback(7, "🗑️ COLLECTING RECYCLEBIN DATA")
+            try:
+                log_callback("[RecycleBin] Collecting RecycleBin data...")
+                from Artifacts_Collectors.recyclebin_claw import parse_recycle_bin
+                case_root = case_paths.get('case_root') if case_paths else None
+                
+                if case_root:
+                    db_path = parse_recycle_bin(case_path=case_root)
+                else:
+                    db_path = parse_recycle_bin()
+                    
+                log_callback(f"[RecycleBin] RecycleBin data collected successfully, database: {db_path}")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[RecycleBin Error] {str(e)}")
+                log_callback(f"[RecycleBin Error Details] {error_details}")
+                print(f"[RecycleBin Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            # Step 8: SRUM data
+            step_callback(8, "📊 COLLECTING SRUM DATA")
+            try:
+                log_callback("[SRUM] Collecting SRUM data...")
+                from Artifacts_Collectors.SRUM_Claw import parse_srum_data
+                artifacts_dir = case_paths.get('artifacts_dir') if case_paths else None
+                
+                if artifacts_dir:
+                    result = parse_srum_data(case_artifacts_dir=artifacts_dir, windows_partition=windows_partition)
+                    if result.get('success'):
+                        log_callback(f"[SRUM] SRUM data collected successfully: {result.get('statistics', {})}")
+                    else:
+                        log_callback(f"[SRUM] SRUM parsing completed with warnings: {result.get('errors', [])}")
+                else:
+                    log_callback("[SRUM] No artifacts directory available, skipping SRUM collection")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[SRUM Error] {str(e)}")
+                log_callback(f"[SRUM Error Details] {error_details}")
+                print(f"[SRUM Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            # Step 9: MFT and USN Journal data
+            step_callback(9, "🗂️ COLLECTING MFT & USN JOURNAL DATA")
+            try:
+                log_callback("[MFT-USN] Collecting MFT and USN Journal data...")
+                self.parse_mft_usn_correlation()
+                log_callback("[MFT-USN] MFT and USN Journal data collected successfully")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[MFT-USN Error] {str(e)}")
+                log_callback(f"[MFT-USN Error Details] {error_details}")
+                print(f"[MFT-USN Error] {str(e)}\n{error_details}")
+            
+            if cancellation_check():
+                return
+            
+            log_callback("[Open Case] Artifact collection finished.")
+            log_callback("[Open Case] Data will be loaded into UI after worker completes...")
+            
+            # DO NOT load data here - we're in a worker thread!
+            # Data loading will happen in the main thread after worker completes
+            
+            log_callback("[Open Case] Full live artifact collection completed.")
+            log_callback("\033[92m[Live Artifacts] All live artifacts have been collected successfully\033[0m")
+            
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            error_msg = f"Artifact collection failed: {str(e)}"
+            log_callback(f"[Error] {error_msg}")
+            log_callback(f"[Error Details] {error_details}")
+            print(f"[Critical Error] {error_msg}\n{error_details}")
+            # Don't raise - allow partial data collection
+            # raise
+
+    def parse_all_live_artifacts(self):
+        """
+        Enhanced live artifact collection with loading dialog.
+        
+        Bug Fix Task 12.1: Refactored to use LiveAcquisitionWorker instead of QApplication.processEvents().
+        """
+        try:
+            # Import the loading dialog and worker
             from ui.Loading_dialog import LoadingDialog
+            from ui.gui_workers import LiveAcquisitionWorker
+            from PyQt5.QtCore import QEventLoop
             
             # Create enhanced loading dialog
             dialog = LoadingDialog(
@@ -7781,189 +9315,65 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             dialog.set_steps(steps)
             dialog.show()
+            
             dialog.start_log_capture()
             
             try:
                 print("[Open Case] Starting full live analysis...")
                 
-                # Step 1: Initialize
-                dialog.update_step(0, "⚙️ INITIALIZING ARTIFACT COLLECTION")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                print("[LNK] Collecting LNK and Jump Lists...")
+                # Bug Fix Task 12.1: Create LiveAcquisitionWorker
+                worker = LiveAcquisitionWorker(
+                    collection_function=self._collect_all_live_artifacts,
+                    case_paths=self.case_paths if hasattr(self, 'case_paths') else {},
+                    windows_partition=self.get_windows_partition()
+                )
                 
-                # Step 2: LNK and Jump Lists
-                dialog.update_step(1, "🔗 COLLECTING LNK FILES AND JUMP LISTS")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    # Import and call the LNK collection function with direct parsing
-                    from Artifacts_Collectors.A_CJL_LNK_Claw import A_CJL_LNK_Claw
-                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                    A_CJL_LNK_Claw(case_path=case_root, offline_mode=False, direct_parse=True)
-                    print("[LNK] LNK and Jump Lists collected successfully")
-                except Exception as e:
-                    print(f"[LNK Error] {str(e)}")
+                # Connect worker signals to LoadingDialog
+                worker.step_update.connect(lambda idx, msg: dialog.update_step(idx, msg))
+                worker.log_message.connect(lambda msg: dialog.add_log_message(msg))
                 
-                # Step 3: Registry data
-                dialog.update_step(2, "🔧 COLLECTING REGISTRY DATA")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    print("[Registry] Collecting live registry data...")
-                    # Import and call the registry collection function
-                    from Artifacts_Collectors.Regclaw import parse_live_registry
-                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                    artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
-                    if artifacts_dir:
-                        db_path = os.path.join(artifacts_dir, 'registry_data.db')
-                    else:
-                        db_path = None
-                    parse_live_registry(case_root=case_root, db_path=db_path)
-                    print("[Registry] Registry data collected successfully")
-                except Exception as e:
-                    print(f"[Registry Error] {str(e)}")
-                
-                # Step 4: Prefetch files
-                dialog.update_step(3, "⚡ COLLECTING PREFETCH FILES")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    print("[Prefetch] Collecting prefetch data...")
-                    # Import and call the prefetch collection function
-                    from Artifacts_Collectors.Prefetch_claw import prefetch_claw
-                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                    windows_partition = self.get_windows_partition()
-                    prefetch_claw(case_path=case_root, offline_mode=False, windows_partition=windows_partition)
-                    print("[Prefetch] Prefetch data collected successfully")
-                except Exception as e:
-                    print(f"[Prefetch Error] {str(e)}")
-                
-                # Step 5: Event logs
-                dialog.update_step(4, "📊 COLLECTING EVENT LOGS")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    print("[Logs] Collecting Windows event logs...")
-                    # Import and call the logs collection function
-                    from Artifacts_Collectors.WinLog_Claw import main as collect_logs
-                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                    collect_logs(case_path=case_root)
-                    print("[Logs] Event Logs collected successfully")
-                except Exception as e:
-                    print(f"[Logs Error] {str(e)}")
-                
-                # Step 6: ShimCache data
-                dialog.update_step(5, "🔍 COLLECTING SHIMCACHE DATA")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    print("[ShimCache] Collecting ShimCache data...")
-                    # Import and call the ShimCache collection function
-                    from Artifacts_Collectors.shimcash_claw import ShimCacheParser
-                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                    artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
-                    if artifacts_dir:
-                        db_path = os.path.join(artifacts_dir, 'shimcache.db')
-                    else:
-                        db_path = 'shimcache.db'
-                    parser = ShimCacheParser(db_path)
-                    parser.run()
-                    print("[ShimCache] ShimCache data collected successfully")
-                except Exception as e:
-                    print(f"[ShimCache Error] {str(e)}")
-                
-                # Step 7: Amcache data
-                dialog.update_step(6, "🔍 COLLECTING AMCACHE DATA")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    print("[Amcache] Collecting Amcache data...")
-                    # Import and call the Amcache collection function
-                    from Artifacts_Collectors.amcacheparser import parse_amcache_hive
-                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-                    artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
-                    if artifacts_dir:
-                        db_path = os.path.join(artifacts_dir, 'amcache.db')
-                    else:
-                        db_path = 'amcache.db'
-                    # Run the Amcache parser with detected Windows partition
-                    offline_mode = False
-                    windows_partition = self.get_windows_partition()
-                    parse_amcache_hive(case_path=case_root, offline_mode=offline_mode, 
-                                      db_path=db_path, windows_partition=windows_partition)
-                    print("[Amcache] Amcache data collected successfully")
-                except Exception as e:
-                    print(f"[Amcache Error] {str(e)}")
-                
-                # Step 8: RecycleBin data
-                dialog.update_step(7, "🗑️ COLLECTING RECYCLEBIN DATA")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    print("[RecycleBin] Collecting RecycleBin data...")
-                    # Import and call the RecycleBin collection function
-                    from Artifacts_Collectors.recyclebin_claw import parse_recycle_bin
-                    case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+                # Handle completion
+                def on_acquisition_complete(msg):
+                    dialog.show_completion("ALL ARTIFACTS COLLECTED SUCCESSFULLY")
+                    print("[Open Case] Artifact collection completed.")
+                    print("[Open Case] Loading data into GUI...")
                     
-                    # Run the RecycleBin parser with case path
-                    if case_root:
-                        # For case-based analysis, pass the case root path
-                        db_path = parse_recycle_bin(case_path=case_root)
-                    else:
-                        # For live system analysis
-                        db_path = parse_recycle_bin()
-                        
-                    print(f"[RecycleBin] RecycleBin data collected successfully, database: {db_path}")
-                except Exception as e:
-                    print(f"[RecycleBin Error] {str(e)}")
+                    # CRITICAL: Load data in main thread after worker completes
+                    try:
+                        self.load_all_data_internal()
+                        print("[Open Case] Data loaded successfully into GUI")
+                        print("\033[92m[Live Artifacts] All live artifacts have been collected and loaded successfully\033[0m")
+                    except Exception as e:
+                        import traceback
+                        error_details = traceback.format_exc()
+                        print(f"[GUI Error] Failed to load data into UI: {str(e)}")
+                        print(f"[GUI Error Details] {error_details}")
+                        dialog.add_log_message(f"[GUI Error] {str(e)}")
                 
-                # Step 9: SRUM data
-                dialog.update_step(8, "� COLLECTINNG SRUM DATA")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    print("[SRUM] Collecting SRUM data...")
-                    # Import and call the SRUM collection function
-                    from Artifacts_Collectors.SRUM_Claw import parse_srum_data
-                    artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
-                    
-                    # Run the SRUM parser with artifacts directory and detected Windows partition
-                    if artifacts_dir:
-                        windows_partition = self.get_windows_partition()
-                        result = parse_srum_data(case_artifacts_dir=artifacts_dir, windows_partition=windows_partition)
-                        if result.get('success'):
-                            print(f"[SRUM] SRUM data collected successfully: {result.get('statistics', {})}")
-                        else:
-                            print(f"[SRUM] SRUM parsing completed with warnings: {result.get('errors', [])}")
-                    else:
-                        print("[SRUM] No artifacts directory available, skipping SRUM collection")
-                except Exception as e:
-                    print(f"[SRUM Error] {str(e)}")
+                def on_acquisition_error(error_msg):
+                    dialog.add_log_message(f"[Error] {error_msg}")
+                    print(f"[Error] {error_msg}")
                 
-                # Step 10: MFT and USN Journal data
-                dialog.update_step(9, "🗂️ COLLECTING MFT & USN JOURNAL DATA")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    print("[MFT-USN] Collecting MFT and USN Journal data...")
-                    # Import and call the MFT-USN correlation function
-                    self.parse_mft_usn_correlation()
-                    print("[MFT-USN] MFT and USN Journal data collected successfully")
-                except Exception as e:
-                    print(f"[MFT-USN Error] {str(e)}")
+                worker.acquisition_complete.connect(on_acquisition_complete)
+                worker.acquisition_error.connect(on_acquisition_error)
                 
-                print("[Open Case] Artifact collection finished. Loading data into UI...")
+                # Connect cancellation
+                dialog.cancelled.connect(worker.cancel)
                 
-                # Step 11: Load data into GUI
-                dialog.update_step(10, "📊 LOADING DATA INTO GUI")
-                QtWidgets.QApplication.processEvents()  # Force GUI update
-                try:
-                    # Load all data including SRUM
-                    self.load_all_data_internal()
-                    print("[GUI] All data loaded successfully")
-                except Exception as e:
-                    print(f"[GUI Error] Failed to load data into UI: {str(e)}")
+                # Start worker (non-blocking)
+                worker.start()
                 
-                # Show completion
-                dialog.show_completion("ALL ARTIFACTS COLLECTED SUCCESSFULLY")
-                print("[Open Case] Full live analysis and data loading completed.")
-                print("\033[92m[Live Artifacts] All live artifacts have been collected and loaded successfully\033[0m")
+                # Use QEventLoop to wait without blocking GUI
+                loop = QEventLoop()
+                worker.finished.connect(loop.quit)
+                loop.exec_()
                 
-                # Keep dialog open briefly
+                # Clean up worker thread
+                worker.wait()
+                
+                # Show completion and success message
                 QtCore.QTimer.singleShot(2500, dialog.close)
                 
-                # Show success message
                 def show_success():
                     QtWidgets.QMessageBox.information(
                         self.main_window,
@@ -8114,6 +9524,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             dialog.set_steps(steps)
             dialog.show()
+            
             dialog.start_log_capture()
             
             try:
@@ -8229,70 +9640,105 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.load_data_from_database_lnkAJL()
         except Exception as e:
             print(f"[LNK Error] Couldn't load JumpLists: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         try:
             self.load_data_from_database_CJL()
         except Exception as e:
             print(f"[CustomJL Error] Couldn't load Custom JumpLists: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         try:
             self.load_allReg_data()
         except Exception as e:
             print(f"[Registry Error] Couldn't load registry data: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         try:
             self.load_files_activity()
         except Exception as e:
             print(f"[File Activity Error] Couldn't load file history: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         try:
             self.load_all_logs()
         except Exception as e:
             print(f"[Logs Error] Couldn't load event logs: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         try:
             self.load_data_from_Prefetch()
         except Exception as e:
             print(f"[Prefetch Error] Couldn't load prefetch data: {str(e)}")
+            import traceback
+            traceback.print_exc()
             
         try:
             self.load_shimcache_data()
         except Exception as e:
             print(f"[ShimCache Error] Couldn't load ShimCache data: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
         try:
             self.load_amcache_data()
         except Exception as e:
             print(f"[Amcache Error] Couldn't load Amcache data: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         try:
             self.load_recyclebin_data()
         except Exception as e:
             print(f"[RecycleBin Error] Couldn't load RecycleBin data: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         try:
             self.load_srum_data()
         except Exception as e:
             print(f"[SRUM Error] Couldn't load SRUM data: {str(e)}")
+            import traceback
+            traceback.print_exc()
             
         try:
             self.load_registry_data_from_db()
         except Exception as e:
             print(f"[Registry Error] Couldn't load registry data: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         try:
+            print("[MFT] Starting MFT data loading...")
             self.load_mft_data()
+            print("[MFT] MFT data loading completed")
         except Exception as e:
             print(f"[MFT Error] Couldn't load MFT data: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         try:
+            print("[USN] Starting USN data loading...")
             self.load_usn_data()
+            print("[USN] USN data loading completed")
         except Exception as e:
             print(f"[USN Error] Couldn't load USN data: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         try:
+            print("[Correlated] Starting correlated data loading...")
             self.load_correlated_data()
+            print("[Correlated] Correlated data loading completed")
         except Exception as e:
             print(f"[Correlated Error] Couldn't load correlated MFT-USN data: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         print("\033[92m\nData has been loaded into the GUI Successfully\033[0m")
 
@@ -9235,6 +10681,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
+    
+    # Note: Qt message handler removed - all threading issues have been fixed at the source
+    # - load_all_data_internal() now runs in main thread after worker completes
+    # - Stylesheet parsing fixed by not applying table styles to headers separately
+    # - All Qt widgets are created in the main GUI thread
+    
     Crow_Eye = QtWidgets.QMainWindow()
     ui = Ui_Crow_Eye()
     ui.setupUi(Crow_Eye)
@@ -9249,8 +10701,6 @@ if __name__ == "__main__":
     
     # Set window state to maximized before showing
     Crow_Eye.show()
-    screen = QtWidgets.QApplication.primaryScreen().availableGeometry()
-    Crow_Eye.setGeometry(screen)
     Crow_Eye.setWindowState(QtCore.Qt.WindowMaximized)
     
     # Connect double-click events to all table widgets
@@ -9265,6 +10715,19 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[Warning] Could not initialize case history manager: {e}")
         case_history_manager = None
+    
+    # Initialize case configuration manager
+    try:
+        if CaseConfigurationManager:
+            case_config_manager = CaseConfigurationManager()
+            ui.case_config_manager = case_config_manager
+            print(Fore.GREEN + "✓ Initialized CaseConfigurationManager" + Fore.RESET)
+        else:
+            ui.case_config_manager = None
+            print(Fore.YELLOW + "⚠ CaseConfigurationManager not available" + Fore.RESET)
+    except Exception as e:
+        print(f"[Warning] Could not initialize case configuration manager: {e}")
+        ui.case_config_manager = None
     
     # Check if we have case history
     has_case_history = case_history_manager and len(case_history_manager.case_history) > 0

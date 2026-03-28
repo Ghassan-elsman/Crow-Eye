@@ -130,6 +130,11 @@ class TimelineDataManager:
         'MFT': 'mft_claw_analysis.db',  # Actual filename in case directory
     }
     
+    # Alternative database names to check if primary name not found
+    ARTIFACT_DB_ALTERNATIVES = {
+        'MFT': ['MFT_data.db'],  # Support old naming convention
+    }
+    
     # Timestamp column mappings for each artifact type
     # Format: artifact_type -> [(table_name, timestamp_column, timestamp_type)]
     # Updated to match actual database schemas in case directory
@@ -261,24 +266,48 @@ class TimelineDataManager:
         Detect which artifact databases are available in the case directory.
         
         Populates the _available_artifacts list with artifact types that have
-        existing database files.
+        existing database files. Checks alternative database names if primary not found.
         """
         self._available_artifacts = []
         self._unavailable_artifacts = []
         
         for artifact_type, db_filename in self.ARTIFACT_DB_MAPPING.items():
             db_path = os.path.join(self.artifacts_dir, db_filename)
+            found = False
             
+            # Check primary database name
             if os.path.exists(db_path) and os.path.isfile(db_path):
                 # Check if database is not empty
                 file_size = os.path.getsize(db_path)
                 if file_size > 0:
                     self._available_artifacts.append(artifact_type)
                     logger.debug(f"Found database for {artifact_type}: {db_path} ({file_size:,} bytes)")
+                    found = True
                 else:
                     self._unavailable_artifacts.append((artifact_type, 'empty'))
                     logger.warning(f"Database for {artifact_type} is empty: {db_path}")
-            else:
+                    found = True
+            
+            # If primary not found, check alternatives
+            if not found and artifact_type in self.ARTIFACT_DB_ALTERNATIVES:
+                for alt_filename in self.ARTIFACT_DB_ALTERNATIVES[artifact_type]:
+                    alt_path = os.path.join(self.artifacts_dir, alt_filename)
+                    if os.path.exists(alt_path) and os.path.isfile(alt_path):
+                        file_size = os.path.getsize(alt_path)
+                        if file_size > 0:
+                            # Update mapping to use alternative name
+                            self.ARTIFACT_DB_MAPPING[artifact_type] = alt_filename
+                            self._available_artifacts.append(artifact_type)
+                            logger.debug(f"Found alternative database for {artifact_type}: {alt_path} ({file_size:,} bytes)")
+                            found = True
+                            break
+                        else:
+                            self._unavailable_artifacts.append((artifact_type, 'empty'))
+                            logger.warning(f"Alternative database for {artifact_type} is empty: {alt_path}")
+                            found = True
+                            break
+            
+            if not found:
                 self._unavailable_artifacts.append((artifact_type, 'missing'))
                 logger.warning(f"Database not found for {artifact_type}: {db_path}")
     

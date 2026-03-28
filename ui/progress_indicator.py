@@ -398,18 +398,33 @@ class TableLoadingOverlay(QtWidgets.QWidget):
         Args:
             message: Loading message to display
         """
-        # Resize to match parent
-        self.resize(self._parent_table.size())
-        
-        # Show overlay
-        self.show()
-        self.raise_()
-        
-        # Update progress indicator
-        self.progress_indicator.show_progress(message)
-        
-        # Process events to ensure UI updates
-        QtWidgets.QApplication.processEvents()
+        try:
+            # Check if parent table still exists before accessing
+            if not self._parent_table:
+                return
+            
+            # Verify C++ object is still valid
+            try:
+                parent_size = self._parent_table.size()
+            except RuntimeError:
+                # Parent table has been deleted
+                return
+            
+            # Resize to match parent
+            self.resize(parent_size)
+            
+            # Show overlay
+            self.show()
+            self.raise_()
+            
+            # Update progress indicator
+            self.progress_indicator.show_progress(message)
+            
+            # Process events to ensure UI updates
+            QtWidgets.QApplication.processEvents()
+        except RuntimeError:
+            # C++ object was deleted during execution
+            pass
         
     def hide_loading(self) -> None:
         """Hide the loading overlay."""

@@ -1,0 +1,179 @@
+
+<style>
+  body { margin:0; background:#111827; display:flex; align-items:center; justify-content:center; min-height:100vh; font-family: monospace; }
+  .wrap { display:flex; flex-direction:column; align-items:center; gap:44px; padding:52px; }
+  .row { display:flex; align-items:center; gap:36px; }
+  .chip { display:flex; flex-direction:column; align-items:center; gap:10px; }
+  .lbl { color:rgba(255,255,255,0.25); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; }
+  .pad { display:flex; align-items:center; justify-content:center; background:#1c2333; border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:16px; }
+  .sec { color:rgba(255,255,255,0.2); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; }
+  .btn { display:inline-flex; align-items:center; gap:8px; border:none; border-radius:7px; padding:9px 18px; font-size:13px; cursor:pointer; font-family:monospace; color:white; letter-spacing:0.03em; }
+</style>
+
+<div class="wrap">
+  <div class="sec">Correlation — convert messy data to meaning</div>
+
+  <div class="row">
+
+    <!-- 20px -->
+    <div class="chip">
+      <div class="lbl">20px</div>
+      <div class="pad">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Center: large bold dot -->
+          <circle cx="12" cy="12" r="3" fill="white"/>
+          <!-- Thin, varied-length lines from messy scattered origins -->
+          <line x1="2.5"  y1="3.0"  x2="9.8"  y2="10.2" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="6.0"  y1="1.5"  x2="10.4" y2="9.6"  stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+          <line x1="12.0" y1="1.0"  x2="12.0" y2="9.0"  stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="17.5" y1="2.0"  x2="13.5" y2="9.5"  stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/>
+          <line x1="21.5" y1="5.5"  x2="14.6" y2="10.8" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="22.5" y1="10.0" x2="15.0" y2="11.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+          <line x1="21.0" y1="16.5" x2="14.5" y2="13.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="17.0" y1="22.0" x2="13.2" y2="14.6" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/>
+          <line x1="12.5" y1="23.0" x2="12.2" y2="15.0" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="7.0"  y1="22.5" x2="10.8" y2="14.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/>
+          <line x1="2.5"  y1="18.5" x2="9.5"  y2="13.5" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="1.0"  y1="12.5" x2="9.0"  y2="12.1" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/>
+          <!-- Small scattered origin dots — uneven, messy feel -->
+          <circle cx="2.5"  cy="3.0"  r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="6.0"  cy="1.5"  r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="12.0" cy="1.0"  r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="17.5" cy="2.0"  r="0.65" fill="white" opacity="0.28"/>
+          <circle cx="21.5" cy="5.5"  r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="22.5" cy="10.0" r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="21.0" cy="16.5" r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="17.0" cy="22.0" r="0.6"  fill="white" opacity="0.28"/>
+          <circle cx="12.5" cy="23.0" r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="7.0"  cy="22.5" r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="2.5"  cy="18.5" r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="1.0"  cy="12.5" r="0.65" fill="white" opacity="0.28"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- 32px -->
+    <div class="chip">
+      <div class="lbl">32px</div>
+      <div class="pad">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="12" cy="12" r="3" fill="white"/>
+          <line x1="2.5"  y1="3.0"  x2="9.8"  y2="10.2" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="6.0"  y1="1.5"  x2="10.4" y2="9.6"  stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+          <line x1="12.0" y1="1.0"  x2="12.0" y2="9.0"  stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="17.5" y1="2.0"  x2="13.5" y2="9.5"  stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/>
+          <line x1="21.5" y1="5.5"  x2="14.6" y2="10.8" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="22.5" y1="10.0" x2="15.0" y2="11.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+          <line x1="21.0" y1="16.5" x2="14.5" y2="13.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="17.0" y1="22.0" x2="13.2" y2="14.6" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/>
+          <line x1="12.5" y1="23.0" x2="12.2" y2="15.0" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="7.0"  y1="22.5" x2="10.8" y2="14.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/>
+          <line x1="2.5"  y1="18.5" x2="9.5"  y2="13.5" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="1.0"  y1="12.5" x2="9.0"  y2="12.1" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/>
+          <circle cx="2.5"  cy="3.0"  r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="6.0"  cy="1.5"  r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="12.0" cy="1.0"  r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="17.5" cy="2.0"  r="0.65" fill="white" opacity="0.28"/>
+          <circle cx="21.5" cy="5.5"  r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="22.5" cy="10.0" r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="21.0" cy="16.5" r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="17.0" cy="22.0" r="0.6"  fill="white" opacity="0.28"/>
+          <circle cx="12.5" cy="23.0" r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="7.0"  cy="22.5" r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="2.5"  cy="18.5" r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="1.0"  cy="12.5" r="0.65" fill="white" opacity="0.28"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- 48px -->
+    <div class="chip">
+      <div class="lbl">48px</div>
+      <div class="pad">
+        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="12" cy="12" r="3" fill="white"/>
+          <line x1="2.5"  y1="3.0"  x2="9.8"  y2="10.2" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="6.0"  y1="1.5"  x2="10.4" y2="9.6"  stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+          <line x1="12.0" y1="1.0"  x2="12.0" y2="9.0"  stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="17.5" y1="2.0"  x2="13.5" y2="9.5"  stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/>
+          <line x1="21.5" y1="5.5"  x2="14.6" y2="10.8" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="22.5" y1="10.0" x2="15.0" y2="11.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+          <line x1="21.0" y1="16.5" x2="14.5" y2="13.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="17.0" y1="22.0" x2="13.2" y2="14.6" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/>
+          <line x1="12.5" y1="23.0" x2="12.2" y2="15.0" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="7.0"  y1="22.5" x2="10.8" y2="14.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/>
+          <line x1="2.5"  y1="18.5" x2="9.5"  y2="13.5" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="1.0"  y1="12.5" x2="9.0"  y2="12.1" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/>
+          <circle cx="2.5"  cy="3.0"  r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="6.0"  cy="1.5"  r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="12.0" cy="1.0"  r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="17.5" cy="2.0"  r="0.65" fill="white" opacity="0.28"/>
+          <circle cx="21.5" cy="5.5"  r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="22.5" cy="10.0" r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="21.0" cy="16.5" r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="17.0" cy="22.0" r="0.6"  fill="white" opacity="0.28"/>
+          <circle cx="12.5" cy="23.0" r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="7.0"  cy="22.5" r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="2.5"  cy="18.5" r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="1.0"  cy="12.5" r="0.65" fill="white" opacity="0.28"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- 80px showcase -->
+    <div class="chip">
+      <div class="lbl">80px</div>
+      <div class="pad" style="background:#212d42; border-color:rgba(255,255,255,0.09); padding:22px;">
+        <svg viewBox="0 0 24 24" width="80" height="80" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Lines drawn first (behind center dot) -->
+          <line x1="2.5"  y1="3.0"  x2="9.8"  y2="10.2" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="6.0"  y1="1.5"  x2="10.4" y2="9.6"  stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+          <line x1="12.0" y1="1.0"  x2="12.0" y2="9.0"  stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="17.5" y1="2.0"  x2="13.5" y2="9.5"  stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/>
+          <line x1="21.5" y1="5.5"  x2="14.6" y2="10.8" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="22.5" y1="10.0" x2="15.0" y2="11.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+          <line x1="21.0" y1="16.5" x2="14.5" y2="13.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="17.0" y1="22.0" x2="13.2" y2="14.6" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/>
+          <line x1="12.5" y1="23.0" x2="12.2" y2="15.0" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
+          <line x1="7.0"  y1="22.5" x2="10.8" y2="14.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/>
+          <line x1="2.5"  y1="18.5" x2="9.5"  y2="13.5" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/>
+          <line x1="1.0"  y1="12.5" x2="9.0"  y2="12.1" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/>
+          <!-- Origin dots (messy, uneven) -->
+          <circle cx="2.5"  cy="3.0"  r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="6.0"  cy="1.5"  r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="12.0" cy="1.0"  r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="17.5" cy="2.0"  r="0.65" fill="white" opacity="0.28"/>
+          <circle cx="21.5" cy="5.5"  r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="22.5" cy="10.0" r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="21.0" cy="16.5" r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="17.0" cy="22.0" r="0.6"  fill="white" opacity="0.28"/>
+          <circle cx="12.5" cy="23.0" r="0.85" fill="white" opacity="0.45"/>
+          <circle cx="7.0"  cy="22.5" r="0.7"  fill="white" opacity="0.32"/>
+          <circle cx="2.5"  cy="18.5" r="0.75" fill="white" opacity="0.38"/>
+          <circle cx="1.0"  cy="12.5" r="0.65" fill="white" opacity="0.28"/>
+          <!-- Center: dominant bold dot on top -->
+          <circle cx="12" cy="12" r="3.2" fill="white"/>
+          <circle cx="12" cy="12" r="1.6" fill="white" opacity="0.25"/>
+        </svg>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Button previews -->
+  <div class="sec">In-button</div>
+  <div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center;">
+    <button class="btn" style="background:#1d4ed8;">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none"><line x1="2.5" y1="3.0" x2="9.8" y2="10.2" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="6.0" y1="1.5" x2="10.4" y2="9.6" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/><line x1="12.0" y1="1.0" x2="12.0" y2="9.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="17.5" y1="2.0" x2="13.5" y2="9.5" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/><line x1="21.5" y1="5.5" x2="14.6" y2="10.8" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="22.5" y1="10.0" x2="15.0" y2="11.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/><line x1="21.0" y1="16.5" x2="14.5" y2="13.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="17.0" y1="22.0" x2="13.2" y2="14.6" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/><line x1="12.5" y1="23.0" x2="12.2" y2="15.0" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="7.0" y1="22.5" x2="10.8" y2="14.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/><line x1="2.5" y1="18.5" x2="9.5" y2="13.5" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="1.0" y1="12.5" x2="9.0" y2="12.1" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/><circle cx="2.5" cy="3.0" r="0.85" fill="white" opacity="0.4"/><circle cx="6.0" cy="1.5" r="0.7" fill="white" opacity="0.3"/><circle cx="12.0" cy="1.0" r="0.75" fill="white" opacity="0.35"/><circle cx="17.5" cy="2.0" r="0.65" fill="white" opacity="0.28"/><circle cx="21.5" cy="5.5" r="0.85" fill="white" opacity="0.4"/><circle cx="22.5" cy="10.0" r="0.7" fill="white" opacity="0.3"/><circle cx="21.0" cy="16.5" r="0.75" fill="white" opacity="0.35"/><circle cx="17.0" cy="22.0" r="0.6" fill="white" opacity="0.28"/><circle cx="12.5" cy="23.0" r="0.85" fill="white" opacity="0.4"/><circle cx="7.0" cy="22.5" r="0.7" fill="white" opacity="0.3"/><circle cx="2.5" cy="18.5" r="0.75" fill="white" opacity="0.35"/><circle cx="1.0" cy="12.5" r="0.65" fill="white" opacity="0.28"/><circle cx="12" cy="12" r="3.2" fill="white"/></svg>
+      Correlation
+    </button>
+    <button class="btn" style="background:#6d28d9;">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none"><line x1="2.5" y1="3.0" x2="9.8" y2="10.2" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="6.0" y1="1.5" x2="10.4" y2="9.6" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/><line x1="12.0" y1="1.0" x2="12.0" y2="9.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="17.5" y1="2.0" x2="13.5" y2="9.5" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/><line x1="21.5" y1="5.5" x2="14.6" y2="10.8" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="22.5" y1="10.0" x2="15.0" y2="11.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/><line x1="21.0" y1="16.5" x2="14.5" y2="13.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="17.0" y1="22.0" x2="13.2" y2="14.6" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/><line x1="12.5" y1="23.0" x2="12.2" y2="15.0" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="7.0" y1="22.5" x2="10.8" y2="14.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/><line x1="2.5" y1="18.5" x2="9.5" y2="13.5" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="1.0" y1="12.5" x2="9.0" y2="12.1" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/><circle cx="2.5" cy="3.0" r="0.85" fill="white" opacity="0.4"/><circle cx="6.0" cy="1.5" r="0.7" fill="white" opacity="0.3"/><circle cx="12.0" cy="1.0" r="0.75" fill="white" opacity="0.35"/><circle cx="17.5" cy="2.0" r="0.65" fill="white" opacity="0.28"/><circle cx="21.5" cy="5.5" r="0.85" fill="white" opacity="0.4"/><circle cx="22.5" cy="10.0" r="0.7" fill="white" opacity="0.3"/><circle cx="21.0" cy="16.5" r="0.75" fill="white" opacity="0.35"/><circle cx="17.0" cy="22.0" r="0.6" fill="white" opacity="0.28"/><circle cx="12.5" cy="23.0" r="0.85" fill="white" opacity="0.4"/><circle cx="7.0" cy="22.5" r="0.7" fill="white" opacity="0.3"/><circle cx="2.5" cy="18.5" r="0.75" fill="white" opacity="0.35"/><circle cx="1.0" cy="12.5" r="0.65" fill="white" opacity="0.28"/><circle cx="12" cy="12" r="3.2" fill="white"/></svg>
+      Correlation
+    </button>
+    <button class="btn" style="background:#065f46;">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none"><line x1="2.5" y1="3.0" x2="9.8" y2="10.2" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="6.0" y1="1.5" x2="10.4" y2="9.6" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/><line x1="12.0" y1="1.0" x2="12.0" y2="9.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="17.5" y1="2.0" x2="13.5" y2="9.5" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/><line x1="21.5" y1="5.5" x2="14.6" y2="10.8" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="22.5" y1="10.0" x2="15.0" y2="11.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/><line x1="21.0" y1="16.5" x2="14.5" y2="13.0" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="17.0" y1="22.0" x2="13.2" y2="14.6" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/><line x1="12.5" y1="23.0" x2="12.2" y2="15.0" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/><line x1="7.0" y1="22.5" x2="10.8" y2="14.8" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.38"/><line x1="2.5" y1="18.5" x2="9.5" y2="13.5" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.5"/><line x1="1.0" y1="12.5" x2="9.0" y2="12.1" stroke="white" stroke-width="0.6" stroke-linecap="round" opacity="0.35"/><circle cx="2.5" cy="3.0" r="0.85" fill="white" opacity="0.4"/><circle cx="6.0" cy="1.5" r="0.7" fill="white" opacity="0.3"/><circle cx="12.0" cy="1.0" r="0.75" fill="white" opacity="0.35"/><circle cx="17.5" cy="2.0" r="0.65" fill="white" opacity="0.28"/><circle cx="21.5" cy="5.5" r="0.85" fill="white" opacity="0.4"/><circle cx="22.5" cy="10.0" r="0.7" fill="white" opacity="0.3"/><circle cx="21.0" cy="16.5" r="0.75" fill="white" opacity="0.35"/><circle cx="17.0" cy="22.0" r="0.6" fill="white" opacity="0.28"/><circle cx="12.5" cy="23.0" r="0.85" fill="white" opacity="0.4"/><circle cx="7.0" cy="22.5" r="0.7" fill="white" opacity="0.3"/><circle cx="2.5" cy="18.5" r="0.75" fill="white" opacity="0.35"/><circle cx="1.0" cy="12.5" r="0.65" fill="white" opacity="0.28"/><circle cx="12" cy="12" r="3.2" fill="white"/></svg>
+      Correlation
+    </button>
+  </div>
+</div>

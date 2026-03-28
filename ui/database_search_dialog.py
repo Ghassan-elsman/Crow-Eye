@@ -807,7 +807,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         
         Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 11.6, 11.7, 11.8, 13.1, 13.2, 13.3, 13.5, 13.6, 13.8, 13.9
         """
-        self.setWindowTitle("⚡ CROW EYE - DATABASE SEARCH ⚡")
+        self.setWindowTitle("CROW EYE - DATABASE SEARCH")
         self.setMinimumSize(1000, 600)
         self.resize(1200, 800)  # More compact default size
         
@@ -3940,7 +3940,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         }}
         
         .result-card:hover {{
-            transform: translateY(-2px);
+            /* Removed transform: translateY(-2px) - not supported by Qt */
             box-shadow: 0 4px 12px rgba(0, 212, 255, 0.2);
             border-color: #00d4ff;
         }}

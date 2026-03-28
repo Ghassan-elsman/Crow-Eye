@@ -43,7 +43,9 @@ class AutoFeatherGenerator:
             case_directory: Path to the case directory
         """
         self.case_directory = Path(case_directory)
+        # Support both Target_Artifacts (live parsers) and live_acquisition (offline parsers)
         self.target_artifacts_dir = self.case_directory / "Target_Artifacts"
+        self.live_acquisition_dir = self.case_directory / "live_acquisition"
         self.feather_output_dir = self.case_directory / "Correlation" / "feathers"
         self.config_manager = ConfigurationManager.get_instance()
         
@@ -147,6 +149,9 @@ class AutoFeatherGenerator:
         """
         Generate a single Feather from mapping configuration.
         
+        Searches for source database in both Target_Artifacts (live parsers)
+        and live_acquisition (offline parsers) directories.
+        
         Args:
             mapping: Feather generation mapping
             
@@ -154,16 +159,37 @@ class AutoFeatherGenerator:
             Path to generated Feather
             
         Raises:
-            FileNotFoundError: If source database not found
+            FileNotFoundError: If source database not found in either location
             Exception: If Feather generation fails
         """
-        source_db_path = self.target_artifacts_dir / mapping['source_db']
+        # Try both Target_Artifacts (live parsers) and live_acquisition (offline parsers)
+        source_db_path = None
+        source_location = None
         
-        # Check if source database exists
-        if not source_db_path.exists():
-            raise FileNotFoundError(f"Source database not found: {source_db_path}")
+        # Check Target_Artifacts first (live parsers)
+        target_artifacts_path = self.target_artifacts_dir / mapping['source_db']
+        if target_artifacts_path.exists():
+            source_db_path = target_artifacts_path
+            source_location = "Target_Artifacts (live parser)"
+            logger.debug(f"Found source database in Target_Artifacts: {source_db_path}")
         
-        logger.debug(f"Generating {mapping['name']} from {source_db_path}")
+        # Check live_acquisition (offline parsers)
+        if not source_db_path:
+            live_acquisition_path = self.live_acquisition_dir / mapping['source_db']
+            if live_acquisition_path.exists():
+                source_db_path = live_acquisition_path
+                source_location = "live_acquisition (offline parser)"
+                logger.debug(f"Found source database in live_acquisition: {source_db_path}")
+        
+        # If not found in either location, raise error
+        if not source_db_path:
+            raise FileNotFoundError(
+                f"Source database '{mapping['source_db']}' not found in either:\n"
+                f"  - {self.target_artifacts_dir}\n"
+                f"  - {self.live_acquisition_dir}"
+            )
+        
+        logger.debug(f"Generating {mapping['name']} from {source_location}: {source_db_path}")
         
         # Connect to source database
         source_conn = sqlite3.connect(str(source_db_path))

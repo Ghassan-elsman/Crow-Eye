@@ -87,7 +87,7 @@ class Header:
         
         # Executable name is stored as UTF-16LE string (60 bytes, null-terminated)
         exe_filename_bytes = data[16:76]
-        exe_filename = exe_filename_bytes.decode('utf-16le').split('\x00')[0].strip()
+        exe_filename = exe_filename_bytes.decode('utf-16le', errors='replace').split('\x00')[0].strip()
         
         # Hash is a 32-bit value derived from the executable path
         hash_val = hex(struct.unpack_from("<I", data, 76)[0])[2:].upper()
@@ -1197,7 +1197,7 @@ class PrefetchFile:
         
         return None
 
-def process_prefetch_files(case_path: str = None, offline_mode: bool = False, windows_partition: str = "C:"):
+def process_prefetch_files(case_path: str = None, offline_mode: bool = False, windows_partition: str = "C:", prefetch_dir: str = None):
     """
     Process prefetch files and store results in a SQLite database with case management.
     
@@ -1205,6 +1205,7 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False, wi
         case_path (str, optional): Path to the case directory for offline analysis.
         offline_mode (bool): If True, process files from case_path/Target_Artifacts/Prefetch.
         windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
+        prefetch_dir (str, optional): Explicit prefetch directory to parse. Overrides default location.
     """
     # Set the database path and prefetch directory
     default_db_path = "prefetch_data.db"
@@ -1215,8 +1216,14 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False, wi
         artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
         os.makedirs(artifacts_dir, exist_ok=True)
         db_path = os.path.join(artifacts_dir, 'prefetch_data.db')
-        prefetch_dir = os.path.join(artifacts_dir, 'Prefetch')
-        print(f"Offline mode: Using prefetch files from {prefetch_dir}")
+        
+        # Use explicit prefetch_dir if provided, otherwise use default
+        if prefetch_dir:
+            print(f"Offline mode: Using explicit prefetch directory: {prefetch_dir}")
+        else:
+            prefetch_dir = os.path.join(artifacts_dir, 'Prefetch')
+            print(f"Offline mode: Using prefetch files from {prefetch_dir}")
+        
         print(f"Database will be saved to: {db_path}")
     else:
         # For live mode, check if we're running within Crow Eye with a case directory
@@ -1244,23 +1251,43 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False, wi
         files = [f for f in os.listdir(prefetch_dir) if f.lower().endswith('.pf')]
         total_pf_files = len(files)
         
+        # Initialize milestone tracking
+        processed_count = 0
+        last_logged_milestone = 0
+        import time
+        start_time = time.time()
+        
+        print(f"Found {total_pf_files} prefetch files to process")
+        
         for idx, filename in enumerate(files, 1):
             file_path = os.path.join(prefetch_dir, filename)
             try:
                 prefetch = PrefetchFile.open(file_path)
                 prefetch.save_to_sqlite(db_path)
                 parsed_files.append(filename)
-                print(f"Processed {filename} ({idx}/{total_pf_files})")
             except Exception as e:
-                print(f"Error processing {filename}: {e}")
                 failed_files.append(filename)
             
-            # Progress update every 10 files or at the end
-            if idx % 10 == 0 or idx == total_pf_files:
-                progress = (idx / total_pf_files) * 100
-                print(f"\rProgress: {idx}/{total_pf_files} ({progress:.1f}%)", end='')
+            processed_count += 1
+            
+            # Milestone logging every 20%
+            if total_pf_files > 0:
+                progress_percent = int((processed_count / total_pf_files) * 100)
+                milestone = (progress_percent // 20) * 20  # 20% increments
+                if milestone > last_logged_milestone and milestone > 0:
+                    elapsed = int(time.time() - start_time)
+                    minutes = elapsed // 60
+                    seconds = elapsed % 60
+                    print(f"[Prefetch] Progress: {milestone}% - {processed_count:,}/{total_pf_files:,} files - {minutes:02d}:{seconds:02d}")
+                    last_logged_milestone = milestone
         
-        print("\n")
+        # Print completion message
+        if total_pf_files > 0:
+            elapsed = int(time.time() - start_time)
+            minutes = elapsed // 60
+            seconds = elapsed % 60
+            print(f"[Prefetch] Completed: {processed_count:,}/{total_pf_files:,} files processed - {minutes:02d}:{seconds:02d}")
+        
         percentage = (len(parsed_files) / total_pf_files * 100) if total_pf_files > 0 else 0
         print(f"Successfully processed {len(parsed_files)}/{total_pf_files} prefetch files ({percentage:.2f}%)")
         
@@ -1273,20 +1300,25 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False, wi
         
         print(f"\033[92mPrefetch forensic analysis completed! Database saved to: {db_path}\033[0m")
         
+        # Return success result
+        return {"success": True, "records": len(parsed_files), "error": None}
+        
     except Exception as e:
         print(f"Error accessing prefetch directory: {e}")
         if total_pf_files == 0:
             print("No .pf files found in the prefetch directory.")
+        return {"success": False, "records": 0, "error": str(e)}
 
-def prefetch_claw(case_path=None, offline_mode=False, windows_partition="C:"):
+def prefetch_claw(case_path=None, offline_mode=False, windows_partition="C:", prefetch_dir=None):
     """Wrapper function for process_prefetch_files to maintain compatibility with Crow Eye.
     
     Args:
         case_path (str, optional): Path to the case directory.
         offline_mode (bool): If True, process files from case_path/Target_Artifacts/Prefetch.
         windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
+        prefetch_dir (str, optional): Explicit prefetch directory to parse. Overrides default location.
     """
-    return process_prefetch_files(case_path=case_path, offline_mode=offline_mode, windows_partition=windows_partition)
+    return process_prefetch_files(case_path=case_path, offline_mode=offline_mode, windows_partition=windows_partition, prefetch_dir=prefetch_dir)
 
 if __name__ == "__main__":
     # Example usage: Live mode

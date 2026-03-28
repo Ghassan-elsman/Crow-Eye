@@ -5,18 +5,20 @@
 </p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
 [![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
-
+[![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
 
 
 ## Table of Contents
 - [Overview](#overview)
 - [Created by](#created-by)
-- [Supported Artifacts (Live Analysis)](#supported-artifacts-live-analysis)
+- [💖 Support the Project](#-support-the-project)
+- [💬 Community & Support](#-community--support)
+- [Supported Artifacts](#supported-artifacts)
 - [Installation](#installation)
 - [How to Use Crow Eye](#how-to-use-crow-eye)
 - [Analysis Types](#analysis-types)
-- [Custom Artifact Analysis](#custom-artifact-analysis)
 - [Search and Export Features](#search-and-export-features)
 - [Supported Artifacts and Functionality](#supported-artifacts-and-functionality)
 - [Documentation & Contribution](#documentation--contribution)
@@ -34,7 +36,37 @@ Crow Eye is a comprehensive Windows forensics tool designed to collect, parse, a
 ## Created by
 Ghassan Elsman
 
+## 💖 Support the Project
 
+Crow-Eye is a free, open-source Windows Forensics Engine built and maintained solely by one person. Every parser, every correlation rule, every new artifact supported represents hours of deep research, reverse engineering raw hexadecimal binary structures, and intensive engineering work done independently.
+
+By supporting Crow-Eye, you are not just donating to a tool. You are directly funding the future of open and accessible digital forensics. Your contribution keeps the research going, accelerates the development of new artifact parsers, and ensures that professional-grade forensics remains free for every investigator, student, and curious person in the world regardless of their budget or background.
+
+Every contribution, no matter the size, makes a real difference to an independent developer who chose to build something meaningful over something profitable.
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
+[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
+
+### 🚀 Sponsorship Tiers
+
+Support Crow-Eye by choosing a sponsorship tier that fits your needs:
+
+*   **💾 Bit Tracer ($10/mo)**: Official GitHub Sponsor badge and your name in `SPONSORS.md`.
+*   **🧩 Byte Parser ($25/mo)**: Your name/logo in `README.md` and "Verified Supporter" role.
+*   **🐝 Hive Master ($50/mo)**: Engineering deep-dives, strategy discussions, and early access.
+*   **⚔️ Kernel Commander ($250/mo)**: Case-specific support and strategic roadmap influence.
+
+See [SPONSORS.md](SPONSORS.md) for full details on each tier.
+
+## 💬 Community & Support
+
+Join our growing community to get faster support, share your investigation techniques, and discuss the future of Crow-eye!
+
+[![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
+
+- **Faster Support**: Get direct help from the developer and experienced users.
+- **Discussions**: Share your forensic findings and discuss new artifact research.
+- **Announcements**: Stay updated on the latest releases and experimental features.
 
 ## Vision: Forensics for Everyone
 
@@ -95,25 +127,23 @@ The project focuses on:
 
 
 
-## Supported Artifacts (Live Analysis)
+## Supported Artifacts
 
-| Artifact                  | Live | Data Extracted                                                                 |
-|---------------------------|------|--------------------------------------------------------------------------------|
-| Prefetch                  | Yes  | Execution history, run count, timestamps                                       |
-| Registry                  | Yes  | Auto-run, UserAssist, ShimCache, BAM, networks, time zone                     |
-| Jump Lists & LNK          | Yes  | File access, paths, timestamps, metadata                                       |
-| Event Logs                | Yes  | System, Security, Application events                                           |
-| Amcache                   | Yes  | App execution, install time, SHA1, file paths                                  |
-| ShimCache                 | Yes  | Executed apps, last modified, size                                             |
-| ShellBags                 | Yes  | Folder views, access history, timestamps                                       |
-| MRU & RecentDocs          | Yes  | Typed paths, Open/Save history, recent files                                   |
-| MFT Parser | Yes | File system metadata, deleted files, timestamps, attribute analysis                                       |
-| USN Journal | Yes | Detailed file system changes (create/modify/delete/rename) with timestamps and correlation to MFT                                            |
-| Recycle Bin               | Yes  | Deleted file names, paths, deletion time                                       |
-| SRUM                      | Yes  | App resource usage, network, energy, execution                                 |
-| Disks & Partitions    | Yes | Complete tree view of physical disks, partition layout, color-coded types, hidden/unmounted partition detection, EFI/Recovery/MSR analysis, raw sector scanning     |
-
-**Note:** Not all artifacts support offline analysis; it is still under development.
+| Artifact                  | Live | Offline | Data Extracted                                                                 |
+|---------------------------|------|---------|--------------------------------------------------------------------------------|
+| Prefetch                  | Yes  | Yes     | Execution history, run count, timestamps                                       |
+| Registry                  | Yes  | Yes     | Auto-run, UserAssist, ShimCache, BAM, networks, time zone                     |
+| Jump Lists & LNK          | Yes  | Yes     | File access, paths, timestamps, metadata                                       |
+| Event Logs                | Yes  | Yes     | System, Security, Application events                                           |
+| Amcache                   | Yes  | Yes     | App execution, install time, SHA1, file paths                                  |
+| ShimCache                 | Yes  | Yes     | Executed apps, last modified, size                                             |
+| ShellBags                 | Yes  | Yes     | Folder views, access history, timestamps                                       |
+| MRU & RecentDocs          | Yes  | Yes     | Typed paths, Open/Save history, recent files                                   |
+| MFT Parser                | Yes  | Yes     | File system metadata, deleted files, timestamps, attribute analysis           |
+| USN Journal               | Yes  | Yes     | Detailed file system changes (create/modify/delete/rename) with timestamps     |
+| Recycle Bin               | Yes  | Yes     | Deleted file names, paths, deletion time                                       |
+| SRUM                      | Yes  | Yes     | App resource usage, network, energy, execution                                 |
+| Disks & Partitions        | Yes  | Yes     | Physical disk tree view, partition layout, hidden/unmounted partition detection|
 
 ## Installation
 
@@ -147,17 +177,39 @@ These will be installed automatically when you run Crow Eye:
 
 ## Analysis Types
 
-Crow Eye offers two primary modes of operation:
+Crow Eye offers three primary modes of operation for forensic investigations:
 
-### Live Analysis
+### 🦅 Crow-Claw Acquisition
+Crow-Claw is our specialized acquisition engine designed to collect and preserve Windows artifacts from live systems or mounted images.
+- **Selective Collection**: Choose specific artifact categories (Registry, Event Logs, File System) or collect everything.
+- **Deep Scanning**: Automatically walks through directories and subdirectories to identify forensic traces.
+- **Secure Preservation**: Artifacts are collected into a structured case directory, maintaining forensic integrity for later analysis.
+
+### 🔍 Offline Analysis (Offline Importer)
+The Offline Importer allows investigators to analyze artifacts collected from any source without needing a live connection to the target system.
+
+![Offline Importer](C:/Users/Ghass/Pictures/offline-importer.png)
+
+- **Universal Input**: Input a complete directory of artifacts or select individual files for analysis.
+- **Smart Identification (SCAN)**: Hit **SCAN** to walk through the source data; Crow-Eye automatically identifies and indexes every supported artifact type using forensic signatures. This updates the case's **Scan Index** metadata without moving any files.
+- **Forensic Preservation (COLLECT)**: After scanning, you can hit **📦 Collect Artifacts** to physically copy the identified files into your Case's `live_acquisition` folder, organizing them by type (e.g., Registry, Prefetch, Event Logs).
+- **Granular Control (PARSE)**: Use the **Parse Artifact** window to review identified items. Every tab displays all files of a specific type (e.g., AMCACHE, EVTX, PREFETCH), allowing you to select specific files or the entire set for parsing into the forensic database.
+
+![Parse Offline Artifacts](C:/Users/Ghass/Pictures/parse-offline-artifacts.png)
+
+#### ❓ What is the difference between SCAN and COLLECT?
+
+| Feature | 🔍 SCAN | 📦 COLLECT ARTIFACTS |
+| :--- | :--- | :--- |
+| **Action** | **Discovery:** Identifies artifacts at their original location. | **Acquisition:** Copies and preserves artifacts in the Case folder. |
+| **I/O Impact** | Read-only. Does not move or copy any files. | Read + Write. Physically duplicates artifacts. |
+| **Organization** | Updates metadata in `.artifact_scan_index.json`. | Organizes files into type-specific folders (e.g., `Registry_Hives/`). |
+| **Use Case** | Fast triage to see if the source contains relevant data. | Full forensic preservation for long-term analysis or portability. |
+
+### ⚡ Live Analysis
 - Analyzes artifacts directly from the running system.
 - Automatically extracts and parses artifacts from their standard locations.
 - Provides real-time forensic analysis of the current Windows environment.
-
-### Offline Analysis
-- Allows analysis of artifacts from external sources.
-- Ideal for examining evidence from different systems.
-- Supports forensic investigation of collected artifacts.
 
 ### Case Management
 - Upon launch, Crow Eye creates a case to organize and save all analysis output.
@@ -169,16 +221,6 @@ Crow Eye offers two primary modes of operation:
 
 ### Advanced Search Engine
 - Full-text search across live data.
-
-## Custom Artifact Analysis
-To analyze custom artifacts:
-1. Navigate to your case directory.
-2. Go to the `target artifacts/` folder.
-3. Add files to the appropriate subdirectories:
-   - `C_AJL_Lnk/`: For LNK files and automatic/custom jump lists.
-   - `prefetch/`: For prefetch files.
-   - `registry/`: For registry hive files.
-4. After adding the files, press "Parse Offline Artifacts" in the Crow Eye interface.
 
 ## Search and Export Features
 - **Search Bar**: Quickly find specific artifacts or information within the database.
@@ -193,11 +235,6 @@ To analyze custom artifacts:
 
 **Automatic Parsing:**
 - The tool automatically parses Jump Lists and LNK files from standard system locations.
-
-**Custom/Selective Parsing:**
-- Copy specific Jump Lists/LNK files you want to analyze.
-- Paste them into `CrowEye/Artifacts Collectors/Target Artifacts` or your case directory's `C_AJL_Lnk/` folder.
-- Run the analysis.
 
 ### Registry Analysis
 
@@ -219,7 +256,6 @@ To analyze custom artifacts:
 
 ### Prefetch Files Analysis
 - Automatically parses prefetch files from `C:\Windows\Prefetch`.
-- For custom analysis, add prefetch files to your case directory's `prefetch/` folder.
 - Extracts execution history and other forensic metadata.
 
 ### Event Logs Analysis
@@ -672,8 +708,6 @@ Identity: malware.exe
 - 🤖 **AI Integration** - Query results, summarize findings, and assist non-technical users with natural language questions
 
 ### Correlation Engine Features
-- 💾 **Acquisition Function** - Collect and save artifacts for later parsing without immediate analysis
-- 🔧 **Offline Parser** - Parse saved artifacts without live system access, enabling batch processing and remote analysis
 - 🎯 **Enhanced Semantic Mapping** - Comprehensive field mapping across all artifact types
 - 📈 **Advanced Correlation Scoring** - Refined confidence scoring algorithms with explainability
 
@@ -694,13 +728,3 @@ See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.
 ## Development Credits
 - Jump List/LNK parsing based on work by Saleh Muhaysin
 - Created and maintained by Ghassan Elsman
-
-## 💖 Support the Project
-
-Crow-Eye is a free, open-source Windows Forensics Engine built and maintained solely by one person. Every parser, every correlation rule, every new artifact supported represents hours of deep research, reverse engineering raw hexadecimal binary structures, and intensive engineering work done independently.
-
-By supporting Crow-Eye, you are not just donating to a tool. You are directly funding the future of open and accessible digital forensics. Your contribution keeps the research going, accelerates the development of new artifact parsers, and ensures that professional-grade forensics remains free for every investigator, student, and curious person in the world regardless of their budget or background.
-
-Every contribution, no matter the size, makes a real difference to an independent developer who chose to build something meaningful over something profitable.
-
-[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)

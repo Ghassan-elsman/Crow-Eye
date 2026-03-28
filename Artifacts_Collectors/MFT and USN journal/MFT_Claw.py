@@ -773,6 +773,10 @@ class DatabaseManager:
             return
         
         try:
+            # Temporarily disable foreign keys for bulk insert performance
+            # This is safe because we control the data integrity
+            self.connection.execute("PRAGMA foreign_keys = OFF")
+            
             # Prepare bulk data for main records
             main_records_data = []
             standard_info_data = []
@@ -877,9 +881,17 @@ class DatabaseManager:
             
             # Commit the transaction to ensure records are saved before anomaly flushing
             self.connection.commit()
+            
+            # Re-enable foreign keys after bulk insert
+            self.connection.execute("PRAGMA foreign_keys = ON")
                 
         except sqlite3.Error as e:
             self.connection.rollback()
+            # Re-enable foreign keys even on error
+            try:
+                self.connection.execute("PRAGMA foreign_keys = ON")
+            except:
+                pass
             raise DatabaseError(f"Failed to bulk insert MFT records: {e}")
     
     def _insert_standard_info(self, record: MFTRecord):
@@ -1453,6 +1465,9 @@ class MFTParser:
             
         except Exception as e:
             logger.error(f"Failed to parse volume {volume_letter}: {e}")
+            print(f"{COLOR_ERROR}ERROR: Failed to parse volume {volume_letter}: {e}{COLOR_RESET}")
+            import traceback
+            traceback.print_exc()
             return False
         finally:
             if volume_reader:
@@ -1681,6 +1696,15 @@ class MFTParser:
             if current_record >= logical_records:
                 slack_indicator = " [SLACK]"
         
+        # Log milestone progress updates for GUI visibility (every 10%)
+        if not hasattr(self, '_last_logged_milestone'):
+            self._last_logged_milestone = 0
+        
+        current_milestone = int(percentage // 10) * 10
+        if current_milestone > self._last_logged_milestone and current_milestone > 0:
+            logger.info(f"[MFT] Progress: {current_milestone}% - {processed:,}/{total:,} records - {elapsed_time}")
+            self._last_logged_milestone = current_milestone
+        
         # Adaptive formatting based on terminal width
         if terminal_width >= 120:
             # Full format for wide terminals
@@ -1784,14 +1808,19 @@ class MFTParser:
             logger.error(f"Error during cleanup: {e}")
 
 def setup_signal_handlers(parser: MFTParser):
-    """Setup signal handlers for graceful shutdown"""
-    def signal_handler(signum, frame):
-        logger.info(f"Received signal {signum}, shutting down gracefully...")
-        parser.cleanup()
-        sys.exit(0)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    """Setup signal handlers for graceful shutdown (only works in main thread)"""
+    try:
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, shutting down gracefully...")
+            parser.cleanup()
+            sys.exit(0)
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+    except ValueError:
+        # Signal handlers can only be set in the main thread
+        # This is expected when MFT_Claw is called from a background thread
+        logger.debug("Skipping signal handler setup (not in main thread)")
 
 def check_admin_privileges() -> bool:
     """Check if running with administrator privileges"""
@@ -1924,6 +1953,12 @@ def main():
         mft_parser.cleanup()
         
         logger.info(f"Results saved to: {config.output_directory}")
+        
+        # Return non-zero exit code if no volumes were successfully processed
+        if success_count == 0:
+            logger.error("No volumes were successfully processed")
+            return 1
+        
         return 0
         
     except KeyboardInterrupt:

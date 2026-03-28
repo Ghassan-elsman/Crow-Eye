@@ -129,6 +129,7 @@ class DatabaseDiscoveryManager:
         # File System Evidence
         'mft_data.db': 'MFT',
         'mft_claw_analysis.db': 'MFT',
+        'MFT_data.db': 'MFT',  # Support old naming convention
         'MFT Records': 'MFT',
         'usn_data.db': 'USN Journal',
         'USN_journal.db': 'USN Journal',

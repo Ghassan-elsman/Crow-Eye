@@ -39,10 +39,16 @@ class LogCapture:
         self.log_display_callback = log_display_callback
         self.original_stdout = sys.stdout
         self.original_stderr = sys.stderr
+        self.last_progress_line = None  # Track last progress bar update
         
     def __enter__(self):
+        # Store original streams as attributes on the LogCapture object
+        # This allows parsers to detect and bypass log capture for performance
         sys.stdout = self
         sys.stderr = self
+        # Expose original streams as attributes for detection
+        self.original_stdout_ref = self.original_stdout
+        self.original_stderr_ref = self.original_stderr
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -53,8 +59,19 @@ class LogCapture:
         # Write to original stdout/stderr
         self.original_stdout.write(text)
         
-        # Also send to log display if it's meaningful content
+        # Filter out progress bar updates (lines starting with carriage return or containing progress bars)
         if text.strip():
+            # Skip progress bar lines (they contain █ or ░ characters and percentage)
+            if '█' in text or '░' in text or ('\r' in text and '%' in text):
+                # This is a progress bar update - only show the final one
+                self.last_progress_line = text.strip()
+                return
+            
+            # Skip carriage return only lines
+            if text.strip() == '\r' or text == '\r':
+                return
+            
+            # Send meaningful log messages to display
             self.log_display_callback(text.strip())
     
     def flush(self):
@@ -65,6 +82,7 @@ class LoadingDialog(QtWidgets.QDialog):
     """Dark cyberpunk loading dialog with real-time log display and glow effects"""
     
     log_signal = pyqtSignal(str)  # Signal for thread-safe log updates
+    cancelled = pyqtSignal()      # Signal emitted when cancel button is clicked
     
     def __init__(self, title="CROW EYE SYSTEM", parent=None):
         super().__init__(parent)
@@ -86,6 +104,7 @@ class LoadingDialog(QtWidgets.QDialog):
         self.title_text = title
         self.operation_steps = []
         self.current_step = 0
+        self._is_cancelled = False
         
         # Animation properties - cyberpunk glow effects
         self.glow_opacity = 0.0
@@ -104,7 +123,7 @@ class LoadingDialog(QtWidgets.QDialog):
     def setup_ui(self):
         """Setup clean, single-dialog UI with no spacing above title"""
         # Set dialog size
-        self.setFixedSize(800, 650)
+        self.setFixedSize(800, 720) # Increased height to accommodate cancel button
         
         # Single main layout with no margins
         main_layout = QtWidgets.QVBoxLayout()
@@ -151,8 +170,6 @@ class LoadingDialog(QtWidgets.QDialog):
                 color: #ffffff;
                 font-weight: 900;
                 font-size: 14px;
-                /* Qt doesn't support text-shadow, using brighter color and font styling instead */
-                /* Removed: text-shadow: 0 0 5px #00ffff, 0 0 10px #00ffff; */
                 letter-spacing: 1px;
                 text-align: center;
             }
@@ -175,15 +192,55 @@ class LoadingDialog(QtWidgets.QDialog):
         self.log_display.setStyleSheet(CrowEyeStyles.LOADING_DIALOG_LOG_DISPLAY)
         self.log_display.setMinimumHeight(180)
         self.log_display.setMaximumHeight(220)
-        # Apply custom scrollbar style from styles.py
         content_layout.addWidget(self.log_display)
+        
+        # Cancel Button
+        self.cancel_button = QtWidgets.QPushButton("CANCEL OPERATION")
+        self.cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 68, 68, 0.1);
+                color: #ff4444;
+                border: 2px solid #ff4444;
+                border-radius: 6px;
+                font-family: 'Segoe UI', sans-serif;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
+                margin-top: 10px;
+            }
+            QPushButton:hover {
+                background-color: #ff4444;
+                color: #ffffff;
+            }
+            QPushButton:pressed {
+                background-color: #cc0000;
+                border-color: #cc0000;
+            }
+        """)
+        self.cancel_button.clicked.connect(self.on_cancel_clicked)
+        content_layout.addWidget(self.cancel_button)
         
         # Add backdrop to main
         main_layout.addWidget(self.backdrop)
         self.setLayout(main_layout)
         
-        # Center the dialog
+    def on_cancel_clicked(self):
+        """Handle cancel button click"""
+        self._is_cancelled = True
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setText("CANCELLING...")
+        self.add_log_message("[Warning] Cancellation requested by user...")
+        self.cancelled.emit()
+    
+    def showEvent(self, event):
+        """Override showEvent to center dialog after Qt finalizes geometry"""
+        super().showEvent(event)
         self.center_on_screen()
+        
+    def is_cancelled(self):
+        """Check if cancellation has been requested"""
+        return self._is_cancelled
         
     def setup_logo(self, layout):
         """Setup logo with comprehensive fallback paths"""
@@ -284,6 +341,13 @@ class LoadingDialog(QtWidgets.QDialog):
         
         self.progress_dots = 0
         
+        # Animation timer for dots indicator (Bug Fix #2)
+        self.animation_timer = QTimer()
+        self.animation_timer.timeout.connect(self._animate_dots)
+        self.animation_timer.start(500)  # 500ms interval
+        
+        self.dot_state = 0  # 0, 1, 2 for ".", "..", "..."
+        
     def update_glow(self):
         """Update the subtle glow effect on the title"""
         self.glow_opacity += 0.03 * self.glow_direction  # Slower animation
@@ -318,18 +382,59 @@ class LoadingDialog(QtWidgets.QDialog):
 
         
     def animate_progress_text(self):
-        """Animate the progress bar text"""
+        """Animate the progress bar text - handles PROCESSING... animation"""
+        current_text = self.progress_bar.format()
+        
+        # Only animate "PROCESSING..." if we're in indeterminate mode
+        # Check if the text is actually "PROCESSING" (not a percentage display)
+        if not current_text or not current_text.startswith("PROCESSING"):
+            return
+        
+        # Animate "PROCESSING..." for indeterminate mode
         self.progress_dots = (self.progress_dots + 1) % 4
         dots = "." * self.progress_dots
         spaces = " " * (3 - self.progress_dots)
         self.progress_bar.setFormat(f"PROCESSING{dots}{spaces}")
+    
+    def _animate_dots(self):
+        """Animate the dots indicator next to percentage (Bug Fix #2)"""
+        # This method animates dots for percentage displays (like "Step 1/5: 45% ...")
+        
+        current_text = self.progress_bar.format()
+        if not current_text:
+            # If no text, set default
+            self.progress_bar.setFormat("PROCESSING")
+            return
+        
+        # Don't animate "PROCESSING..." (that's handled by animate_progress_text)
+        if current_text.startswith("PROCESSING"):
+            return
+        
+        # Animate dots for percentage displays
+        dots = [".", "..", "..."]
+        self.dot_state = (self.dot_state + 1) % 3
+        
+        # Remove existing dots at the end (strip all dots and spaces)
+        base_text = current_text.rstrip(". ")
+        
+        # Add animated dots with a space before them
+        self.progress_bar.setFormat(base_text + " " + dots[self.dot_state])
         
     def center_on_screen(self):
-        """Center the dialog on the screen"""
-        screen = QApplication.desktop().screenGeometry()
-        size = self.geometry()
-        self.move((screen.width() - size.width()) // 2,
-                 (screen.height() - size.height()) // 2)
+        """Center the dialog on the screen using modern Qt5 API"""
+        # Use modern Qt5 API instead of deprecated desktop()
+        screen = QApplication.screenAt(self.pos())
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        
+        # Use availableGeometry to exclude taskbar area
+        screen_geometry = screen.availableGeometry()
+        dialog_geometry = self.frameGeometry()
+        
+        # Calculate center position
+        center_point = screen_geometry.center()
+        dialog_geometry.moveCenter(center_point)
+        self.move(dialog_geometry.topLeft())
                  
     def set_steps(self, steps):
         """Set the operation steps"""
@@ -444,15 +549,28 @@ class LoadingDialog(QtWidgets.QDialog):
         timestamp = QtCore.QTime.currentTime().toString("hh:mm:ss.zzz")
         
         # Color code based on message content with cyberpunk colors
-        if "[Error]" in message or "Error" in message or "failed" in message.lower():
-            color = "#ff4444"
-            prefix = "[ERR]"
-        elif "[Warning]" in message or "Warning" in message or "warning" in message.lower():
-            color = "#ffaa00"
-            prefix = "[WARN]"
-        elif "[Success]" in message or "Success" in message or "completed" in message.lower():
-            color = "#44ff44"
-            prefix = "[OK]"
+        # Check for actual errors (not just Python logging level names)
+        is_error = (
+            "[Error]" in message or 
+            "Error:" in message or 
+            " - ERROR - " in message or  # Python logging format
+            "failed" in message.lower() and "may have failed" not in message.lower()
+        )
+        
+        is_warning = (
+            "[Warning]" in message or 
+            "Warning:" in message or 
+            " - WARNING - " in message or  # Python logging format
+            "warning" in message.lower()
+        )
+        
+        # Prioritize specific artifact tags over generic error detection
+        if "[MFT]" in message or "[Offline MFT]" in message:
+            color = "#44ff44"  # Green for MFT
+            prefix = "[MFT]"
+        elif "[USN]" in message or "[Offline USN]" in message:
+            color = "#44ff44"  # Green for USN
+            prefix = "[USN]"
         elif "[Registry]" in message:
             color = "#ff00ff"
             prefix = "[REG]"
@@ -465,6 +583,15 @@ class LoadingDialog(QtWidgets.QDialog):
         elif "[Logs]" in message:
             color = "#ff8800"
             prefix = "[LOG]"
+        elif is_error:
+            color = "#ff4444"
+            prefix = "[ERR]"
+        elif is_warning:
+            color = "#ffaa00"
+            prefix = "[WARN]"
+        elif "[Success]" in message or "Success" in message or "completed" in message.lower() or "successfully" in message.lower():
+            color = "#44ff44"
+            prefix = "[OK]"
         elif "Processing:" in message or "%" in message:
             color = "#aaaaff"
             prefix = "[PROC]"

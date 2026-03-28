@@ -566,6 +566,18 @@ class StartupMenuDialog(QtWidgets.QDialog):
         """Get the user's choice."""
         return self.choice
     
+    def showEvent(self, event):
+        """Override showEvent to center dialog after Qt finalizes geometry."""
+        super().showEvent(event)
+        self._center_on_screen()
+    
+    def _center_on_screen(self):
+        """Center the dialog on the screen."""
+        screen = QtWidgets.QApplication.desktop().screenGeometry()
+        center_x = (screen.width() - self.width()) // 2
+        center_y = (screen.height() - self.height()) // 2
+        self.move(center_x, center_y)
+    
     def exec_(self):
         """Execute the dialog and return the choice."""
         result = super().exec_()

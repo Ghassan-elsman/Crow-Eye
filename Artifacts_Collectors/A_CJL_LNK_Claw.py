@@ -139,10 +139,8 @@ def collect_artifacts(source_path, user=None):
         
     try:
         # Only print scanning message for important paths
-        # Note: Only LNK and Jump List files will be processed, others will be silently ignored
-        # This message indicates we're scanning the directory, not that we're processing non-LNK files
         if is_important_path(source_path):
-            print(f"Scanning directory for LNK/JL files (non-LNK/JL files will be silently ignored): {source_path}")
+            print(f"Scanning directory: {source_path}")
             
         # Use the new reusable function to categorize files
         lnk_files, automatic_jump_lists, custom_jump_lists = categorize_files_by_type(source_path)
@@ -175,6 +173,12 @@ def parse_artifacts_directly(source_path, db_path, user=None):
     artifacts = {'recent': [], 'automatic': [], 'custom': []}
     unparsed_files = []
     
+    # Initialize milestone tracking variables at function scope
+    total_files = 0
+    processed_count = 0
+    import time
+    start_time = time.time()
+    
     if not os.path.exists(source_path):
         # Only print error for important paths
         if is_important_path(source_path):
@@ -183,16 +187,18 @@ def parse_artifacts_directly(source_path, db_path, user=None):
         
     try:
         # Only print scanning message for important paths
-        # Note: Only LNK and Jump List files will be processed, others will be silently ignored
-        # This message indicates we're scanning the directory, not that we're processing non-LNK files
         if is_important_path(source_path):
-            print(f"Scanning and parsing LNK/JL files (non-LNK/JL files will be silently ignored): {source_path}")
+            print(f"Scanning: {source_path}")
             
         with sqlite3.connect(db_path) as conn:
             C = conn.cursor()
             
             # Use the new reusable function to categorize files
             lnk_files, automatic_jump_lists, custom_jump_lists = categorize_files_by_type(source_path)
+            
+            # Set milestone tracking for progress logging
+            total_files = len(lnk_files) + len(automatic_jump_lists) + len(custom_jump_lists)
+            last_logged_milestone = 0
             
             # Process LNK and Automatic JumpList files
             for file in lnk_files + automatic_jump_lists:
@@ -216,41 +222,44 @@ def parse_artifacts_directly(source_path, db_path, user=None):
                         owner_gid = stat_info.st_gid
                         
                         try:
-                            u_l_file = Claw(src).CE_dec()
-                            # Debug: Check if parsing returned any results
-                            if not u_l_file:
-                                print(f"Debug: No data returned from parsing {src}")
-                            else:
-                                print(f"Debug: Parsed {len(u_l_file)} items from {src}")
+                            u_l_file = Claw(src, silent=True).CE_dec()
                         except Exception as parse_error:
-                            print(f"Debug: Error parsing {src}: {parse_error}")
-                            import traceback
-                            traceback.print_exc()
-                            u_l_file = []
+                            # Silently skip unparseable files
+                            unparsed_files.append(src)
+                            processed_count += 1
+                            continue
                         
                         # Check if we have any items to process
                         if not u_l_file:
-                            warning_msg = f"Warning: No items parsed from {src} - this file may be corrupted, unsupported, or inaccessible"
-                            print(warning_msg)
                             unparsed_files.append(src)
+                            processed_count += 1
                             continue
                         
                         for item in u_l_file:
                             # Use reusable function for database insertion
                             if insert_lnk_data_to_db(C, src, item, stat_info, artifact_type):
                                 conn.commit()
-                                print_success_message(f"Successfully processed: {src}", source_path, artifact_type)
                                 artifacts[dir_key].append(src)
                             else:
-                                error_msg = f"Failed to insert data for: {src}"
-                                print_error_message(error_msg, source_path)
                                 unparsed_files.append(src)
+                        
+                        processed_count += 1
+                        
+                        # Milestone logging every 10%
+                        if total_files > 0:
+                            progress_percent = int((processed_count / total_files) * 100)
+                            milestone = (progress_percent // 10) * 10
+                            if milestone > last_logged_milestone and milestone > 0:
+                                elapsed = int(time.time() - start_time)
+                                minutes = elapsed // 60
+                                seconds = elapsed % 60
+                                print(f"[LNK] Progress: {milestone}% - {processed_count:,}/{total_files:,} files - {minutes:02d}:{seconds:02d}")
+                                last_logged_milestone = milestone
                                 
                     except Exception as e:
-                        # Only print error for important paths and LNK/JL files
-                        error_msg = f'Error processing file {src}: {e}'
-                        print_error_message(error_msg, source_path, artifact_type)
+                        # Silently skip files with errors
                         unparsed_files.append(src)
+                        processed_count += 1
             
             # Process Custom JumpList files
             for file in custom_jump_lists:
@@ -292,24 +301,40 @@ def parse_artifacts_directly(source_path, db_path, user=None):
                         # Use reusable function for database insertion
                         if insert_custom_jl_data_to_db(C, file_data):
                             conn.commit()
-                            print_success_message(f"Successfully processed custom jump list: {src}", source_path, artifact_type)
                             artifacts[dir_key].append(src)
                         else:
-                            error_msg = f"Failed to insert custom jump list data for: {src}"
-                            print_error_message(error_msg, source_path)
                             unparsed_files.append(src)
+                        
+                        processed_count += 1
+                        
+                        # Milestone logging every 10%
+                        if total_files > 0:
+                            progress_percent = int((processed_count / total_files) * 100)
+                            milestone = (progress_percent // 10) * 10
+                            if milestone > last_logged_milestone and milestone > 0:
+                                elapsed = int(time.time() - start_time)
+                                minutes = elapsed // 60
+                                seconds = elapsed % 60
+                                print(f"[LNK] Progress: {milestone}% - {processed_count:,}/{total_files:,} files - {minutes:02d}:{seconds:02d}")
+                                last_logged_milestone = milestone
                             
                     except Exception as e:
-                        # Only print error for important paths and LNK/JL files
-                        error_msg = f'Error processing custom jump list {src}: {e}'
-                        print_error_message(error_msg, source_path, artifact_type)
+                        # Silently skip files with errors
                         unparsed_files.append(src)
+                        processed_count += 1
                         
     except Exception as e:
         # Only print error for important paths
         # Note: This is for the entire directory scanning process, not individual files
         if is_important_path(source_path):
             print(f" [!] Error scanning directory for parsing {source_path}: {str(e)}")
+    
+    # Print completion message if we processed files
+    if total_files > 0:
+        elapsed = int(time.time() - start_time)
+        minutes = elapsed // 60
+        seconds = elapsed % 60
+        print(f"[LNK] Completed: {processed_count:,}/{total_files:,} files processed - {minutes:02d}:{seconds:02d}")
     
     return artifacts, unparsed_files
 
@@ -508,7 +533,6 @@ def collect_forensic_artifacts():
             print(f"- LNK Files: {len(user_data['recent'])}")
             print(f"- Automatic Jump Lists: {len(user_data['automatic'])}")
             print(f"- Custom Jump Lists: {len(user_data['custom'])}")
-            print("  Note: Only LNK and Jump List files are processed. Other files in these directories are silently ignored.")
             
         except Exception as e:
             print(f" [!!!] Error processing user {user}: {str(e)}")
@@ -525,7 +549,6 @@ def collect_forensic_artifacts():
         print(f"- LNK Files: {len(system_data['recent'])}")
         print(f"- Automatic Jump Lists: {len(system_data['automatic'])}")
         print(f"- Custom Jump Lists: {len(system_data['custom'])}")
-        print("  Note: Only LNK and Jump List files are processed. Other files in these directories are silently ignored.")
         
     except Exception as e:
         print(f" [!!!] Error collecting system artifacts: {str(e)}")
@@ -775,16 +798,11 @@ def process_custom_jump_list(file_path, db_path='LnkDB.db'):
             })
             
             conn.commit()
-            print(f"Successfully added custom jump list to database: {file_path}")
         
         return file_data
     except FileNotFoundError:
-        print(f'The file {file_path} does not exist.')
         return None
     except Exception as e:
-        print(f'An error occurred processing {file_path}: {e}')
-        import traceback
-        traceback.print_exc()
         return None
 
 def process_lnk_and_jump_list_files(folder_path, db_path='LnkDB.db'):
@@ -798,6 +816,13 @@ def process_lnk_and_jump_list_files(folder_path, db_path='LnkDB.db'):
     stats = collect_processing_statistics(lnk_files, automatic_jump_lists, custom_jump_lists)
     print_processing_summary(stats, folder_path)
     
+    # Initialize milestone tracking
+    total_files = len(lnk_files) + len(automatic_jump_lists) + len(custom_jump_lists)
+    processed_count = 0
+    last_logged_milestone = 0
+    import time
+    start_time = time.time()
+    
     # Process each file with Claw(file).CE_dec()
     with sqlite3.connect(db_path) as conn:
         C = conn.cursor()
@@ -807,58 +832,75 @@ def process_lnk_and_jump_list_files(folder_path, db_path='LnkDB.db'):
                 Owner_uid = stat_info.st_uid
                 owner_gid = stat_info.st_gid
                 try:
-                    u_l_file = Claw(file).CE_dec()
-                    # Debug: Check if parsing returned any results
-                    if not u_l_file:
-                        print(f"Debug: No data returned from parsing {file}")
-                    else:
-                        print(f"Debug: Parsed {len(u_l_file)} items from {file}")
+                    u_l_file = Claw(file, silent=True).CE_dec()
                     
                     # Check if we have any items to process
                     if not u_l_file:
-                        print(f"Warning: No items parsed from {file} - this file may be corrupted or unsupported")
                         unparsed_files.append(file)
+                        processed_count += 1
                         continue
                         
                     for item in u_l_file:
                         # Use reusable function for database insertion
                         if insert_lnk_data_to_db(C, file, item, stat_info, detect_artifact(file)):
                             conn.commit()
-                            print_success_message(f"Successfully processed: {file}", file, detect_artifact(file))
                         else:
-                            print_error_message(f"Failed to insert data for: {file}", file)
+                            unparsed_files.append(file)
+                    
+                    processed_count += 1
+                    
+                    # Milestone logging every 10%
+                    if total_files > 0:
+                        progress_percent = int((processed_count / total_files) * 100)
+                        milestone = (progress_percent // 10) * 10
+                        if milestone > last_logged_milestone and milestone > 0:
+                            elapsed = int(time.time() - start_time)
+                            minutes = elapsed // 60
+                            seconds = elapsed % 60
+                            print(f"[LNK] Progress: {milestone}% - {processed_count:,}/{total_files:,} files - {minutes:02d}:{seconds:02d}")
+                            last_logged_milestone = milestone
+                            
                 except Exception as e:
-                    error_msg = f'Error processing file {file}: {e}'
-                    print_error_message(error_msg, file)
-                    import traceback
-                    traceback.print_exc()
                     unparsed_files.append(file)
+                    processed_count += 1
             except FileNotFoundError:
-                error_msg = f'The file {file} does not exist.'
-                print_error_message(error_msg, file)
                 unparsed_files.append(file)
+                processed_count += 1
             except Exception as e:
-                error_msg = f'Error accessing file {file}: {e}'
-                print_error_message(error_msg, file)
                 unparsed_files.append(file)
+                processed_count += 1
     
     # Process custom jump lists
     if custom_jump_lists:
-        print(f"Processing {len(custom_jump_lists)} custom jump lists")
         for file in custom_jump_lists:
             try:
-                print(f"Processing custom jump list: {file}")
                 result = process_custom_jump_list(file, db_path)
-                if result:
-                    print_success_message(f"Successfully processed custom jump list: {file}", file, "Custom JumpList")
-                else:
-                    error_msg = f"Failed to process custom jump list: {file}"
-                    print_error_message(error_msg, file)
+                if not result:
                     unparsed_files.append(file)
+                
+                processed_count += 1
+                
+                # Milestone logging every 10%
+                if total_files > 0:
+                    progress_percent = int((processed_count / total_files) * 100)
+                    milestone = (progress_percent // 10) * 10
+                    if milestone > last_logged_milestone and milestone > 0:
+                        elapsed = int(time.time() - start_time)
+                        minutes = elapsed // 60
+                        seconds = elapsed % 60
+                        print(f"[LNK] Progress: {milestone}% - {processed_count:,}/{total_files:,} files - {minutes:02d}:{seconds:02d}")
+                        last_logged_milestone = milestone
+                        
             except Exception as e:
-                error_msg = f"Error processing custom jump list: {file} - {str(e)}"
-                print_error_message(error_msg, file)
                 unparsed_files.append(file)
+                processed_count += 1
+    
+    # Print completion message
+    if total_files > 0:
+        elapsed = int(time.time() - start_time)
+        minutes = elapsed // 60
+        seconds = elapsed % 60
+        print(f"[LNK] Completed: {processed_count:,}/{total_files:,} files processed - {minutes:02d}:{seconds:02d}")
 
     return len(unparsed_files)
 
@@ -916,7 +958,6 @@ def print_processing_summary(stats, source_description="directory"):
         print(f"Processing {stats['lnk_files']} LNK files, "
               f"{stats['automatic_jump_lists']} Automatic Jump Lists, "
               f"and {stats['custom_jump_lists']} Custom Jump Lists from {source_description}")
-        print("  Note: Only LNK and Jump List files are processed. Other files in these directories are silently ignored.")
 
 def insert_lnk_data_to_db(cursor, source_path, item, stat_info, artifact_type):
     """Insert LNK file data into the database"""
@@ -1074,7 +1115,6 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True):
             # Direct parsing mode - parse artifacts directly without copying (DEFAULT BEHAVIOR)
             print("\n=== DIRECT PARSING MODE (DEFAULT) ===")
             print("Parsing artifacts directly without copying to preserve original file metadata")
-            print("Note: Only LNK and Jump List files will be processed. Other files are silently ignored.")
             
             # Get user profiles
             users = get_user_profiles()
@@ -1124,7 +1164,6 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True):
             # Normal mode - collect artifacts from the live system then parse
             print("\n=== NORMAL COLLECTION MODE ===")
             print("Collecting artifacts by copying files (use direct_parse=True to avoid copying)")
-            print("Note: Only LNK and Jump List files will be processed. Other files are silently ignored.")
             
             collection_stats = collect_forensic_artifacts()
             print("\n=== COLLECTION RESULTS ===")
@@ -1144,7 +1183,6 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True):
                 os.makedirs(folder_path, exist_ok=True)
                 
             print(f"Processing files from: {folder_path}")
-            print("Note: Only LNK and Jump List files will be processed. Other files are silently ignored.")
             
             # Use reusable function to categorize files
             lnk_files, automatic_jump_lists, custom_jump_lists = categorize_files_by_type(folder_path)
@@ -1171,7 +1209,6 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True):
             # Offline mode - process artifacts from the case directory
             print("\n=== OFFLINE MODE ===")
             print("Processing artifacts from case directory")
-            print("Note: Only LNK and Jump List files will be processed. Other files are silently ignored.")
             # No collection needed, files should already be in the target directories
             
             folder_path = TARGET_BASE_DIR  # Process the entire target directory
@@ -1180,7 +1217,6 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True):
                 os.makedirs(folder_path, exist_ok=True)
                 
             print(f"Processing files from: {folder_path}")
-            print("Note: Only LNK and Jump List files will be processed. Other files are silently ignored.")
             
             # Use reusable function to categorize files
             lnk_files, automatic_jump_lists, custom_jump_lists = categorize_files_by_type(folder_path)
@@ -1206,16 +1242,25 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True):
         
     except KeyboardInterrupt:
         print("\nCollection aborted by user.")
-        return None
+        return {'success': False, 'records': 0, 'error': 'Collection aborted by user'}
     except Exception as e:
         error_msg = f"\n [!!!] Critical error: {str(e)}"
         print_error_message(error_msg)
         import traceback
         traceback.print_exc()
-        return None
+        return {'success': False, 'records': 0, 'error': str(e)}
 
+    # Calculate total records parsed
+    total_records = 0
+    if direct_parse:
+        # Direct parse mode - use stats dict
+        total_records = stats.get('total_recent', 0) + stats.get('total_automatic', 0) + stats.get('total_custom', 0)
+    else:
+        # Normal/offline mode - use file_stats dict
+        total_records = file_stats.get('lnk_files', 0) + file_stats.get('automatic_jump_lists', 0) + file_stats.get('custom_jump_lists', 0)
+    
     print(f"\033[92m\nParsing automatic,custom jumplist and LNK files has been completed by Crow Eye\nDatabase saved to: {db_path}\033[0m")
-    return db_path
+    return {'success': True, 'records': total_records, 'output_path': db_path}
 
 if __name__ == "__main__":
     import argparse

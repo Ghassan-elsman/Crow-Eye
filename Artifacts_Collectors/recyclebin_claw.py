@@ -213,6 +213,17 @@ class RecycleBinParser:
         # Initialize Windows API
         self._init_windows_api()
         
+        # Progress callback for reporting progress to GUI
+        self.progress_callback = None
+    
+    def set_progress_callback(self, callback):
+        """Set callback function for progress reporting.
+        
+        Args:
+            callback: Function that takes (current, total, message) as arguments
+        """
+        self.progress_callback = callback
+        
     def detect_file_signature(self, file_path: str) -> Tuple[str, str]:
         """Enhanced file type detection using the dedicated file signature detector utility.
         
@@ -476,8 +487,14 @@ class RecycleBinParser:
                 # Debug output
                 print(f"[RecycleBin Debug] Processing user directory: {user_sid} ({len(i_files)} $I files)")
                 
-                for i_path in i_files:
+                # Report progress for this user's files
+                total_files = len(i_files)
+                for idx, i_path in enumerate(i_files, 1):
                     try:
+                        # Report progress via callback if available
+                        if self.progress_callback:
+                            self.progress_callback(idx, total_files, f"Processing {user_sid}: {os.path.basename(i_path)}")
+                        
                         # Parse the $I file with the user SID
                         entry = self.parse_i_file(i_path, user_sid)
                         if entry:
@@ -671,13 +688,16 @@ class RecycleBinParser:
             random_r_filename = r_file_name
             
             # Analyze file signature and recovery status
+            # PERFORMANCE FIX: Skip expensive operations during collection
+            # These can be done later during analysis if needed
             file_signature = ""
-            recovery_status = "❌ Not found - permanently deleted"
+            recovery_status = "Not analyzed"
             
+            # Only do quick existence check
             if os.path.exists(r_file_path):
-                signature_desc, signature_ext = self.detect_file_signature(r_file_path)
-                file_signature = f"{signature_desc} ({signature_ext})" if signature_desc != "Unknown" else ""
-                recovery_status = self.assess_recovery_status(r_file_path, file_size)
+                recovery_status = "File exists - can be analyzed"
+            else:
+                recovery_status = "Not found - permanently deleted"
             
             return RecycleBinEntry(
                 original_filename=original_filename,
@@ -1040,7 +1060,7 @@ class RecycleBinParser:
     
 
 
-def parse_recycle_bin(case_path: Optional[str] = None, offline_mode: bool = False, network_paths: Optional[List[str]] = None) -> str:
+def parse_recycle_bin(case_path: Optional[str] = None, offline_mode: bool = False, network_paths: Optional[List[str]] = None, artifact_dir: Optional[str] = None) -> str:
     """Parse Windows Recycle Bin artifacts for comprehensive forensic analysis.
     
     This function performs a complete analysis of Windows Recycle Bin artifacts,
@@ -1086,10 +1106,19 @@ def parse_recycle_bin(case_path: Optional[str] = None, offline_mode: bool = Fals
     
     if offline_mode:
         # Parse offline artifacts from case directory
-        target_dir = os.path.join(case_path, 'Target Artifacts', 'Recycle Bin') if case_path else 'Target Artifacts/Recycle Bin'
+        # Use artifact_dir if provided (from scan index), otherwise fall back to legacy path
+        if artifact_dir:
+            target_dir = artifact_dir
+        else:
+            target_dir = os.path.join(case_path, 'Target Artifacts', 'Recycle Bin') if case_path else 'Target Artifacts/Recycle Bin'
         
         if os.path.exists(target_dir):
             print(f"[RecycleBin] Parsing offline artifacts from: {target_dir}")
+            
+            # First, try to parse the directory itself (for files directly in target_dir)
+            entries.extend(parser.parse_recycle_bin_directory(target_dir))
+            
+            # Then, parse any subdirectories (for nested SID directories)
             for item in os.listdir(target_dir):
                 item_path = os.path.join(target_dir, item)
                 if os.path.isdir(item_path):
@@ -1168,11 +1197,10 @@ def parse_recycle_bin(case_path: Optional[str] = None, offline_mode: bool = Fals
         # Save to database only
         result_path = parser.save_to_database(entries)
         logger.info(f"Analysis complete: {len(entries)} entries saved to database: {result_path}")
+        return {'success': True, 'records': len(entries), 'output_path': result_path}
     else:
         logger.warning("No Recycle Bin entries found")
-        result_path = ""
-    
-    return result_path
+        return {'success': True, 'records': 0, 'output_path': ""}
 
 def main():
     """Command-line entry point for Recycle Bin parser."""

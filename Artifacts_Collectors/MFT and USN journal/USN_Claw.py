@@ -843,6 +843,9 @@ def read_journal_events(volume_letter, cursor, conn):
         progress_update_counter = 0
         PROGRESS_UPDATE_FREQUENCY = 50  # Update every 50 records for more frequent updates
         
+        # Milestone logging for GUI visibility (every 10%)
+        last_logged_milestone = 0
+        
         try:
             while True:
                 # Check for timeout conditions
@@ -1012,6 +1015,17 @@ def read_journal_events(volume_letter, cursor, conn):
                             # Update progress bar based on USN position
                             current_progress = next_usn - start_usn
                             if current_progress <= total_usn_range:
+                                # Calculate percentage for milestone logging
+                                percentage = (current_progress / total_usn_range * 100) if total_usn_range > 0 else 0
+                                current_milestone = int(percentage // 10) * 10
+                                
+                                # Log milestone progress updates for GUI visibility (every 10%)
+                                if current_milestone > last_logged_milestone and current_milestone > 0:
+                                    elapsed_time = time.time() - start_time
+                                    elapsed_str = f"{int(elapsed_time//60):02d}:{int(elapsed_time%60):02d}"
+                                    logger.info(f"[USN] Progress: {current_milestone}% - {record_count:,} records - {elapsed_str}")
+                                    last_logged_milestone = current_milestone
+                                
                                 # Calculate elapsed time and rate
                                 elapsed_time = time.time() - start_time
                                 if elapsed_time > 0:

@@ -171,6 +171,8 @@ class PartitionInfo:
     is_removable: bool = False
     is_usb: bool = False
     is_bootable: bool = False
+    # Data source tracking
+    source: str = "Current System"
     
     def to_dict(self) -> dict:
         """Convert to dictionary for easy serialization"""
@@ -197,6 +199,8 @@ class DiskInfo:
     is_usb: bool = False
     media_type: str = "Unknown"
     is_bootable: bool = False
+    # Data source tracking
+    source: str = "Current System"
     
     def to_dict(self) -> dict:
         """Convert to dictionary for easy serialization"""
@@ -1791,13 +1795,14 @@ class PartitionAnalyzer:
             size_bytes /= 1024.0
         return f"{size_bytes:.2f} PB"
 
-    def save_to_database(self, db_path: str, disks: List[DiskInfo] = None):
+    def save_to_database(self, db_path: str, disks: List[DiskInfo] = None, source: str = None):
         """
         Save disk and partition information to a SQLite database.
         
         Args:
             db_path: Path to the SQLite database
             disks: Optional list of DiskInfo objects. If None, will run analysis.
+            source: Optional source tag (e.g., "acquisition" for live acquisition, "offline" for parsed data)
         """
         if disks is None:
             disks = self.get_disks_with_partitions()
@@ -1822,7 +1827,8 @@ class PartitionAnalyzer:
                 is_removable INTEGER,
                 is_usb INTEGER,
                 media_type TEXT,
-                is_bootable INTEGER
+                is_bootable INTEGER,
+                source TEXT
             )
             ''')
             
@@ -1855,6 +1861,7 @@ class PartitionAnalyzer:
                 volume_serial TEXT,
                 is_removable INTEGER,
                 is_usb INTEGER,
+                source TEXT,
                 FOREIGN KEY(disk_index) REFERENCES disks(disk_index)
             )
             ''')
@@ -1866,13 +1873,13 @@ class PartitionAnalyzer:
             # Insert data
             for disk in disks:
                 cursor.execute('''
-                INSERT INTO disks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO disks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     disk.disk_index, disk.size, disk.model, disk.interface_type,
                     disk.partition_style, disk.boot_mode, disk.disk_signature,
                     disk.disk_guid, disk.serial_number, disk.firmware_type,
                     1 if disk.is_removable else 0, 1 if disk.is_usb else 0,
-                    disk.media_type, 1 if disk.is_bootable else 0
+                    disk.media_type, 1 if disk.is_bootable else 0, source
                 ))
                 
                 for part in disk.partitions:
@@ -1884,8 +1891,8 @@ class PartitionAnalyzer:
                         volume_label, partition_guid, partition_style,
                         is_hidden, is_active, is_efi_system, partition_offset,
                         partition_length, disk_signature, volume_serial,
-                        is_removable, is_usb
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        is_removable, is_usb, source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         part.disk_index, part.partition_index, part.device, part.mountpoint, part.fstype,
                         part.total_size, part.used_size, part.free_size, part.percent_used,
@@ -1895,22 +1902,58 @@ class PartitionAnalyzer:
                         1 if part.is_hidden else 0, 1 if part.is_active else 0,
                         1 if part.is_efi_system else 0, part.partition_offset,
                         part.partition_length, part.disk_signature, part.volume_serial,
-                        1 if part.is_removable else 0, 1 if part.is_usb else 0
+                        1 if part.is_removable else 0, 1 if part.is_usb else 0, source
                     ))
             
             conn.commit()
             conn.close()
             print(f"[Partition Analyzer] Results saved to database: {db_path}")
             return True
-            
         except Exception as e:
             print(f"[Partition Analyzer] Error saving to database: {e}")
             return False
-    
+
+    def load_from_json(self, json_path: str) -> List[DiskInfo]:
+        """
+        Load disk and partition information from a JSON file.
+
+        Args:
+            json_path: Path to the JSON file
+
+        Returns:
+            List of DiskInfo objects
+        """
+        if not os.path.exists(json_path):
+            print(f"[Partition Analyzer] Error: JSON file not found at '{json_path}'")
+            return []
+
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+
+            disks = []
+            for disk_data in data:
+                # Create partitions from data
+                partitions = [PartitionInfo(**p_data) for p_data in disk_data.get('partitions', [])]
+
+                # Create disk from data (excluding partitions)
+                disk_info_data = {k: v for k, v in disk_data.items() if k != 'partitions'}
+                disk_info = DiskInfo(partitions=partitions, **disk_info_data)
+
+                disks.append(disk_info)
+
+            return disks
+        except json.JSONDecodeError as e:
+            print(f"[Partition Analyzer] Error decoding JSON from {json_path}: {e}")
+            return []
+        except Exception as e:
+            print(f"[Partition Analyzer] Error loading from JSON: {e}")
+            return []
+
     def load_from_database(self, db_path: str) -> List[DiskInfo]:
         """
         Load disk and partition information from a SQLite database.
-        
+
         Args:
             db_path: Path to the SQLite database
             
@@ -2097,15 +2140,6 @@ def main():
     
     print(f"\n[+] Found {len(disks)} physical disk(s):\n")
     
-    disk_props = {
-        'serial_number': lambda d: f"  Serial Number: {d.serial_number}",
-        'disk_signature': lambda d: f"  Disk Signature: {d.disk_signature}",
-        'disk_guid': lambda d: f"  Disk GUID: {d.disk_guid}",
-        'is_removable': lambda d: "  Media Type: Removable",
-        'is_usb': lambda d: "  Interface: USB",
-        'is_bootable': lambda d: "  Bootable: Yes"
-    }
-    
     for disk in disks:
         print(f"{'='*80}")
         print(f"Disk {disk.disk_index}: {disk.model}")
@@ -2114,61 +2148,66 @@ def main():
         print(f"  Interface: {disk.interface_type}")
         print(f"  Partition Style: {disk.partition_style}")
         print(f"  Boot Mode: {disk.boot_mode}")
-        
-        for prop, formatter in disk_props.items():
-            if getattr(disk, prop, None):
-                print(formatter(disk))
+        if disk.serial_number:
+            print(f"  Serial Number: {disk.serial_number}")
+        if disk.disk_signature:
+            print(f"  Disk Signature: {disk.disk_signature}")
+        if disk.disk_guid:
+            print(f"  Disk GUID: {disk.disk_guid}")
+        if disk.is_removable:
+            print(f"  Media Type: Removable")
+        if disk.is_usb:
+            print(f"  Interface: USB")
+        if disk.is_bootable:
+            print(f"  Bootable: Yes")
         
         print(f"\n  Partitions on this disk: {len(disk.partitions)}")
         print(f"  {'-'*76}")
         
-        part_props = {
-            'mountpoint': lambda p: f"    Mount Point: {p.mountpoint}",
-            'volume_label': lambda p: f"    Volume Label: {p.volume_label}",
-            'volume_serial': lambda p: f"    Volume Serial: {p.volume_serial}"
-        }
-        
-        part_size_props = {
-            'partition_guid': lambda p: f"    Partition GUID: {p.partition_guid}",
-            'disk_signature': lambda p: f"    Disk Signature: {p.disk_signature}",
-            'partition_offset': lambda p: f"    Partition Offset: {analyzer.format_size(p.partition_offset)}",
-            'partition_length': lambda p: f"    Partition Length: {analyzer.format_size(p.partition_length)}"
-        }
-        
         for part in disk.partitions:
             print(f"\n  Device: {part.device}")
-            
-            for prop, formatter in part_props.items():
-                if getattr(part, prop, None):
-                    print(formatter(part))
-            
+            if part.mountpoint:
+                print(f"    Mount Point: {part.mountpoint}")
             print(f"    File System: {part.fstype}")
+            if part.volume_label:
+                print(f"    Volume Label: {part.volume_label}")
+            if part.volume_serial:
+                print(f"    Volume Serial: {part.volume_serial}")
             print(f"    Total Size: {analyzer.format_size(part.total_size)}")
-            
             if part.total_size > 0:
                 print(f"    Used: {analyzer.format_size(part.used_size)} ({part.percent_used}%)")
                 print(f"    Free: {analyzer.format_size(part.free_size)}")
-            
             print(f"    Partition Style: {part.partition_style}")
             print(f"    Partition Type: {part.partition_type}")
             
-            for prop, formatter in part_size_props.items():
-                if getattr(part, prop, None) and (prop in ['partition_offset', 'partition_length'] and getattr(part, prop) > 0 or prop not in ['partition_offset', 'partition_length']):
-                    print(formatter(part))
+            if part.partition_guid:
+                print(f"    Partition GUID: {part.partition_guid}")
+            if part.disk_signature:
+                print(f"    Disk Signature: {part.disk_signature}")
+            if part.partition_offset > 0:
+                print(f"    Partition Offset: {analyzer.format_size(part.partition_offset)}")
+            if part.partition_length > 0:
+                print(f"    Partition Length: {analyzer.format_size(part.partition_length)}")
             
-            flags_map = {
-                'is_boot': 'BOOT',
-                'is_system': 'SYSTEM',
-                'is_swap': 'SWAP',
-                'is_linux': 'LINUX',
-                'is_efi_system': 'EFI_SYSTEM',
-                'is_active': 'ACTIVE',
-                'is_hidden': 'HIDDEN',
-                'is_removable': 'REMOVABLE',
-                'is_usb': 'USB'
-            }
-            
-            flags = [flag_name for is_flag, flag_name in flags_map.items() if getattr(part, is_flag, False)]
+            flags = []
+            if part.is_boot:
+                flags.append("BOOT")
+            if part.is_system:
+                flags.append("SYSTEM")
+            if part.is_swap:
+                flags.append("SWAP")
+            if part.is_linux:
+                flags.append("LINUX")
+            if part.is_efi_system:
+                flags.append("EFI_SYSTEM")
+            if part.is_active:
+                flags.append("ACTIVE")
+            if part.is_hidden:
+                flags.append("HIDDEN")
+            if part.is_removable:
+                flags.append("REMOVABLE")
+            if part.is_usb:
+                flags.append("USB")
             
             if flags:
                 print(f"    Flags: {', '.join(flags)}")

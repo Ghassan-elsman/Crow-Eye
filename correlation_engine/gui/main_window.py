@@ -257,14 +257,16 @@ class PipelineManagerTab(QWidget):
                 self.feather_status_label.setStyleSheet("color: #00BFFF; font-size: 9pt; font-weight: bold;")
                 QApplication.processEvents()
             
-            # Check if Target_Artifacts directory exists
+            # Check if Target_Artifacts or live_acquisition directory exists
             from pathlib import Path
             target_artifacts = Path(self.case_directory) / "Target_Artifacts"
+            live_acquisition = Path(self.case_directory) / "live_acquisition"
             
-            if not target_artifacts.exists():
-                print(f"[Auto-Generation] Target_Artifacts not found: {target_artifacts}")
+            # Check if at least one artifact directory exists
+            if not target_artifacts.exists() and not live_acquisition.exists():
+                print(f"[Auto-Generation] Neither Target_Artifacts nor live_acquisition found")
                 if hasattr(self, 'feather_status_label'):
-                    self.feather_status_label.setText("⚠️ Target_Artifacts not found")
+                    self.feather_status_label.setText("⚠️ No artifact directories found")
                     self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
                 return
             
@@ -385,26 +387,35 @@ class PipelineManagerTab(QWidget):
                 )
                 return
             
-            # Check if Target_Artifacts directory exists
+            # Check if Target_Artifacts or live_acquisition directory exists
             target_artifacts = Path(self.case_directory) / "Target_Artifacts"
+            live_acquisition = Path(self.case_directory) / "live_acquisition"
             
-            if not target_artifacts.exists():
+            # Check if at least one artifact directory exists
+            if not target_artifacts.exists() and not live_acquisition.exists():
                 QMessageBox.warning(
                     self,
-                    "Target Artifacts Not Found",
-                    f"Target_Artifacts directory not found:\n{target_artifacts}\n\n"
-                    "Please ensure Crow-Eye has parsed artifacts for this case."
+                    "No Artifact Directories",
+                    f"Neither Target_Artifacts nor live_acquisition directory found in:\n{self.case_directory}\n\n"
+                    "Please ensure Crow-Eye has parsed artifacts or run offline parsers for this case."
                 )
                 return
             
-            # Check if any database files exist in Target_Artifacts
-            db_files = list(target_artifacts.glob("*.db"))
+            # Check if any database files exist in either directory
+            db_files = []
+            if target_artifacts.exists():
+                db_files.extend(list(target_artifacts.glob("*.db")))
+            if live_acquisition.exists():
+                db_files.extend(list(live_acquisition.glob("*.db")))
+            
             if not db_files:
                 QMessageBox.warning(
                     self,
                     "No Database Files",
-                    f"No database files found in:\n{target_artifacts}\n\n"
-                    "Please run Crow-Eye parsers first to generate artifact databases."
+                    f"No database files found in:\n"
+                    f"  - {target_artifacts}\n"
+                    f"  - {live_acquisition}\n\n"
+                    "Please run Crow-Eye parsers or offline parsers first to generate artifact databases."
                 )
                 return
             
@@ -417,11 +428,17 @@ class PipelineManagerTab(QWidget):
             print(f"[Generate Feathers] Feathers directory ready: {feathers_dir}")
             
             # Confirm with user before regenerating
+            artifact_sources = []
+            if target_artifacts.exists():
+                artifact_sources.append(f"Target_Artifacts ({len(list(target_artifacts.glob('*.db')))} databases)")
+            if live_acquisition.exists():
+                artifact_sources.append(f"live_acquisition ({len(list(live_acquisition.glob('*.db')))} databases)")
+            
             reply = QMessageBox.question(
                 self,
                 "Generate Feathers",
-                f"This will generate Feathers from {len(db_files)} database(s) in:\n"
-                f"{target_artifacts}\n\n"
+                f"This will generate Feathers from databases in:\n"
+                + "\n".join(f"  • {src}" for src in artifact_sources) + "\n\n"
                 f"Output directory:\n{feathers_dir}\n\n"
                 "Continue?",
                 QMessageBox.Yes | QMessageBox.No,

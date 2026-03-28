@@ -186,97 +186,138 @@ class MFTUSNCorrelator:
             self.correlated_db = os.path.join(target_artifacts_dir, "mft_usn_correlated_analysis.db")
             self.case_directory = os.getcwd()
         
-    def run_parsers(self):
-        """Always run both MFT and USN parsers and show their progress in terminal"""
-        logger.info("Running MFT and USN parsers...")
+    def run_parsers(self, run_mft=True, run_usn=True):
+        """Run MFT and/or USN parsers based on parameters
+        
+        Args:
+            run_mft: Whether to run MFT parser (default: True)
+            run_usn: Whether to run USN parser (default: True)
+        
+        Returns:
+            bool: True if all requested parsers completed successfully
+        """
+        logger.info(f"Running parsers (MFT: {run_mft}, USN: {run_usn})...")
         
         # Ensure dependencies are installed
         check_dependencies()
         
-        # Run MFT parser with live terminal output
-        logger.info("Running MFT parser...")
-        try:
-            if HAS_DIRECT_IMPORTS:
-                # Save current directory and change to case directory for direct function call
-                original_cwd = os.getcwd()
-                try:
-                    os.chdir(self.case_directory)
-                    # Run MFT parser directly as a function
-                    result = mft_claw_main()
-                    if result == 0:
+        # Run MFT parser if requested
+        if run_mft:
+            logger.info("Running MFT parser...")
+            try:
+                if HAS_DIRECT_IMPORTS:
+                    # Save current directory and change to case directory for direct function call
+                    original_cwd = os.getcwd()
+                    
+                    # Temporarily restore original stdout/stderr to avoid log capture overhead
+                    # This prevents massive slowdown from capturing thousands of progress bar updates
+                    original_stdout = sys.stdout
+                    original_stderr = sys.stderr
+                    
+                    # Check if stdout/stderr have been redirected (have original_stdout_ref attribute)
+                    if hasattr(sys.stdout, 'original_stdout_ref'):
+                        sys.stdout = sys.stdout.original_stdout_ref
+                    if hasattr(sys.stderr, 'original_stderr_ref'):
+                        sys.stderr = sys.stderr.original_stderr_ref
+                    
+                    try:
+                        os.chdir(self.case_directory)
+                        # Run MFT parser directly as a function
+                        result = mft_claw_main()
+                        if result == 0:
+                            logger.info("MFT parser completed successfully")
+                        else:
+                            logger.error("MFT parser failed")
+                            return False
+                    finally:
+                        os.chdir(original_cwd)
+                        # Restore the redirected stdout/stderr
+                        sys.stdout = original_stdout
+                        sys.stderr = original_stderr
+                else:
+                    # Fallback to subprocess execution
+                    env = os.environ.copy()
+                    env['PYTHONIOENCODING'] = 'utf-8'
+                    env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
+                    
+                    mft_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MFT_Claw.py")
+                    result = subprocess.run([sys.executable, mft_script], 
+                                          cwd=self.case_directory, env=env)
+                    
+                    if result.returncode == 0:
                         logger.info("MFT parser completed successfully")
                     else:
-                        logger.warning("MFT parser may have had display issues but database might be created")
-                finally:
-                    os.chdir(original_cwd)
-            else:
-                # Fallback to subprocess execution
-                env = os.environ.copy()
-                env['PYTHONIOENCODING'] = 'utf-8'
-                env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
+                        logger.error("MFT parser failed")
+                        return False
                 
-                mft_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MFT_Claw.py")
-                result = subprocess.run([sys.executable, mft_script], 
-                                      cwd=self.case_directory, env=env)
-                
-                if result.returncode == 0:
-                    logger.info("MFT parser completed successfully")
-                else:
-                    logger.warning("MFT parser may have had display issues but database might be created")
-            
-            # Check if database was created despite any errors
-            if not os.path.exists(self.mft_db):
-                logger.error("MFT database was not created")
+                # Check if database was created despite any errors
+                if not os.path.exists(self.mft_db):
+                    logger.error("MFT database was not created")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"Error running MFT parser: {e}")
                 return False
-                
-        except Exception as e:
-            logger.error(f"Error running MFT parser: {e}")
-            return False
         
-        # Run USN parser with live terminal output
-        logger.info("Running USN parser...")
-        
-        try:
-            if HAS_DIRECT_IMPORTS:
-                # Save current directory and change to case directory for direct function call
-                original_cwd = os.getcwd()
-                try:
-                    os.chdir(self.case_directory)
-                    # Run USN parser directly as a function
-                    result = usn_claw_main()
-                    if result == 0:
+        # Run USN parser if requested
+        if run_usn:
+            logger.info("Running USN parser...")
+            
+            try:
+                if HAS_DIRECT_IMPORTS:
+                    # Save current directory and change to case directory for direct function call
+                    original_cwd = os.getcwd()
+                    
+                    # Temporarily restore original stdout/stderr to avoid log capture overhead
+                    original_stdout = sys.stdout
+                    original_stderr = sys.stderr
+                    
+                    # Check if stdout/stderr have been redirected (have original_stdout_ref attribute)
+                    if hasattr(sys.stdout, 'original_stdout_ref'):
+                        sys.stdout = sys.stdout.original_stdout_ref
+                    if hasattr(sys.stderr, 'original_stderr_ref'):
+                        sys.stderr = sys.stderr.original_stderr_ref
+                    
+                    try:
+                        os.chdir(self.case_directory)
+                        # Run USN parser directly as a function
+                        result = usn_claw_main()
+                        if result == 0:
+                            logger.info("USN parser completed successfully")
+                        else:
+                            logger.warning("USN parser may have failed due to privilege requirements or missing dependencies")
+                    finally:
+                        os.chdir(original_cwd)
+                        # Restore the redirected stdout/stderr
+                        sys.stdout = original_stdout
+                        sys.stderr = original_stderr
+                else:
+                    # Fallback to subprocess execution
+                    env = os.environ.copy()
+                    env['PYTHONIOENCODING'] = 'utf-8'
+                    env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
+                    
+                    usn_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "USN_Claw.py")
+                    result = subprocess.run([sys.executable, usn_script], 
+                                          cwd=self.case_directory, env=env)
+                    
+                    if result.returncode == 0:
                         logger.info("USN parser completed successfully")
                     else:
-                        logger.warning("USN parser may have failed due to privilege requirements or missing dependencies")
-                finally:
-                    os.chdir(original_cwd)
-            else:
-                # Fallback to subprocess execution
-                env = os.environ.copy()
-                env['PYTHONIOENCODING'] = 'utf-8'
-                env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
+                        # Only warn if the database wasn't created
+                        if not os.path.exists(self.usn_db):
+                            logger.warning("USN parser may have failed due to privilege requirements or missing dependencies")
                 
-                usn_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "USN_Claw.py")
-                result = subprocess.run([sys.executable, usn_script], 
-                                      cwd=self.case_directory, env=env)
-                
-                if result.returncode == 0:
-                    logger.info("USN parser completed successfully")
-                else:
-                    # Only warn if the database wasn't created
-                    if not os.path.exists(self.usn_db):
-                        logger.warning("USN parser may have failed due to privilege requirements or missing dependencies")
-            
-            # Check if database was created despite any errors
-            if not os.path.exists(self.usn_db):
-                logger.warning("USN database was not created - may need admin privileges")
-                logger.warning("Please run USN_Claw.py manually as administrator")
+                # Check if database was created despite any errors
+                if not os.path.exists(self.usn_db):
+                    logger.warning("USN database was not created - may need admin privileges")
+                    logger.warning("Please run USN_Claw.py manually as administrator")
+                    # USN database is optional for correlation, so don't return False here
+                    
+            except Exception as e:
+                logger.error(f"Error running USN parser: {e}")
+                logger.error("This may be due to privilege requirements for USN journal access or missing dependencies")
                 # USN database is optional for correlation, so don't return False here
-                
-        except Exception as e:
-            logger.error(f"Error running USN parser: {e}")
-            logger.error("This may be due to privilege requirements for USN journal access or missing dependencies")
-            # USN database is optional for correlation, so don't return False here
         
         return True
     
@@ -1201,28 +1242,61 @@ class MFTUSNCorrelator:
         """
         logger.info("Starting MFT-USN correlation analysis")
         
-        # Check if databases exist
+        # Check if databases exist AND have data
         mft_exists = os.path.exists(self.mft_db)
         usn_exists = os.path.exists(self.usn_db)
         
-        logger.info(f"MFT database exists: {mft_exists}")
-        logger.info(f"USN database exists: {usn_exists}")
+        mft_has_data = False
+        usn_has_data = False
         
-        # Step 1: Run parsers if databases don't exist
-        if not mft_exists or not usn_exists:
-            logger.info("Source databases not found, running parsers...")
-            if not self.run_parsers():
-                logger.error("Failed to run parsers")
-                
-                # Check if databases were created despite errors
-                mft_exists_now = os.path.exists(self.mft_db)
-                usn_exists_now = os.path.exists(self.usn_db)
-                
-                if mft_exists_now and usn_exists_now:
-                    logger.info("Databases were created successfully, continuing with correlation")
-                else:
-                    logger.error("Cannot proceed without both databases")
-                    return False
+        # Check if MFT database has data
+        if mft_exists:
+            try:
+                conn = sqlite3.connect(self.mft_db)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM mft_records")
+                mft_count = cursor.fetchone()[0]
+                conn.close()
+                mft_has_data = (mft_count > 0)
+                logger.info(f"MFT database exists with {mft_count:,} records")
+            except Exception as e:
+                logger.warning(f"MFT database exists but couldn't check record count: {e}")
+                mft_has_data = False
+        else:
+            logger.info("MFT database does not exist")
+        
+        # Check if USN database has data
+        if usn_exists:
+            try:
+                conn = sqlite3.connect(self.usn_db)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM journal_events")
+                usn_count = cursor.fetchone()[0]
+                conn.close()
+                usn_has_data = (usn_count > 0)
+                logger.info(f"USN database exists with {usn_count:,} records")
+            except Exception as e:
+                logger.warning(f"USN database exists but couldn't check record count: {e}")
+                usn_has_data = False
+        else:
+            logger.info("USN database does not exist")
+        
+        # Step 1: Always run parsers to get fresh data (will append to existing database)
+        # This ensures we capture new activity since last analysis
+        logger.info("Running parsers to collect current data (will append to existing data)...")
+        
+        if not self.run_parsers(run_mft=True, run_usn=True):
+            logger.error("Failed to run parsers")
+            
+            # Check if databases exist despite parser errors
+            mft_exists_now = os.path.exists(self.mft_db)
+            usn_exists_now = os.path.exists(self.usn_db)
+            
+            if mft_exists_now and usn_exists_now:
+                logger.info("Databases exist, continuing with correlation")
+            else:
+                logger.error("Cannot proceed without both databases")
+                return False
         
         # Step 2: Create correlated database
         correlation_success = self.create_correlated_database()

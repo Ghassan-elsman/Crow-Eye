@@ -1010,6 +1010,29 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
             else:
                 logger.warning(f"UserAssist Version 63 data too short: expected 68 bytes, got {len(binary_data)}")
         
+        elif version == 6:
+            # Windows 11 format (72+ bytes) - Version 6
+            # Similar structure to Version 5 but with extended data
+            if len(binary_data) >= 72:
+                # Parse run count at offset 4
+                raw_run_count = struct.unpack('<I', binary_data[4:8])[0]
+                
+                # Parse focus count at offset 8
+                result['focus_count'] = struct.unpack('<I', binary_data[8:12])[0]
+                
+                # Parse focus time at offset 12
+                result['focus_time'] = struct.unpack('<I', binary_data[12:16])[0]
+                
+                # For Version 6, run count may need adjustment similar to Version 5
+                result['run_count'] = max(0, raw_run_count - 5) if raw_run_count > 5 else raw_run_count
+                
+                # Last execution time is at offset 60 (0x3C) for Version 6
+                result['last_execution'] = parse_filetime(binary_data[60:68])
+                
+                logger.info(f"  Parsed V6: raw_count={raw_run_count}, adjusted_count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
+            else:
+                logger.warning(f"UserAssist Version 6 data too short: expected 72 bytes, got {len(binary_data)}")
+        
         else:
             logger.warning(f"Unknown UserAssist version: {version}")
         

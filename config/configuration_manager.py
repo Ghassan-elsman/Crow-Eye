@@ -411,3 +411,290 @@ class ConfigurationManager(QObject):
             errors.append(f"Validation error: {str(e)}")
         
         return (len(errors) == 0, errors)
+    
+    def save_scanned_artifacts(self, artifacts_by_type: Dict[str, List[Dict]]) -> bool:
+        """
+        Save scanned artifacts to case configuration.
+        
+        Args:
+            artifacts_by_type: Dictionary mapping artifact type to list of artifact metadata
+                              Each artifact dict contains: path, size, hash, scanned, parsed
+        
+        Returns:
+            bool: True if save successful
+        
+        Requirements: 3.1, 3.2, 3.3, 3.4
+        """
+        try:
+            if not self.config_file:
+                logger.error("[ConfigManager] Config file path not set")
+                return False
+            
+            # Load existing config or create new one
+            if self.config_file.exists():
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+            else:
+                config_data = {
+                    'version': '1.0',
+                    'case_root': str(self.case_root) if self.case_root else '',
+                    'created_date': datetime.now().isoformat(),
+                    'feathers': []
+                }
+            
+            # Organize artifacts by type with sorted paths
+            scanned_artifacts = {}
+            for artifact_type, artifacts in artifacts_by_type.items():
+                # Sort artifacts alphabetically by path
+                sorted_artifacts = sorted(artifacts, key=lambda x: x.get('path', ''))
+                
+                # Validate each artifact has required fields
+                validated_artifacts = []
+                for artifact in sorted_artifacts:
+                    # Validate path exists
+                    artifact_path = artifact.get('path', '')
+                    if artifact_path and os.path.exists(artifact_path):
+                        # Ensure all required fields are present
+                        validated_artifact = {
+                            'path': artifact_path,
+                            'size': artifact.get('size', 0),
+                            'hash': artifact.get('hash', ''),
+                            'scanned': artifact.get('scanned', datetime.now().isoformat()),
+                            'parsed': artifact.get('parsed', False)
+                        }
+                        validated_artifacts.append(validated_artifact)
+                    else:
+                        logger.warning(f"[ConfigManager] Skipping artifact with invalid path: {artifact_path}")
+                
+                if validated_artifacts:
+                    scanned_artifacts[artifact_type] = validated_artifacts
+            
+            # Update config data
+            config_data['scanned_artifacts'] = scanned_artifacts
+            config_data['last_modified'] = datetime.now().isoformat()
+            
+            # Atomic write using temp file + rename
+            temp_file = self.config_file.with_suffix('.tmp')
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2, ensure_ascii=False)
+            
+            # Atomic rename
+            temp_file.replace(self.config_file)
+            
+            total_artifacts = sum(len(artifacts) for artifacts in scanned_artifacts.values())
+            logger.info(f"[ConfigManager] Saved {total_artifacts} scanned artifacts across {len(scanned_artifacts)} types")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[ConfigManager] Error saving scanned artifacts: {e}")
+            return False
+    
+    def load_scanned_artifacts(self) -> Dict[str, List[Dict]]:
+        """
+        Load scanned artifacts from case configuration.
+        
+        Returns:
+            Dictionary mapping artifact type to list of artifact metadata
+        
+        Requirements: 3.5, 12.2, 12.3
+        """
+        try:
+            if not self.config_file or not self.config_file.exists():
+                logger.info("[ConfigManager] No config file found, returning empty artifacts")
+                return {}
+            
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            # Validate schema
+            is_valid, errors = self._validate_case_config_schema(config_data)
+            
+            if not is_valid:
+                logger.warning(f"[ConfigManager] Invalid case config schema: {errors}")
+                
+                # Attempt migration if version field exists
+                if 'version' in config_data:
+                    logger.info("[ConfigManager] Attempting schema migration...")
+                    config_data = self._migrate_case_config_schema(config_data)
+                    
+                    # Validate migrated config
+                    is_valid, errors = self._validate_case_config_schema(config_data)
+                    
+                    if is_valid:
+                        logger.info("[ConfigManager] Schema migration successful")
+                        # Save migrated config
+                        temp_file = self.config_file.with_suffix('.tmp')
+                        with open(temp_file, 'w', encoding='utf-8') as f:
+                            json.dump(config_data, f, indent=2, ensure_ascii=False)
+                        temp_file.replace(self.config_file)
+                    else:
+                        logger.warning("[ConfigManager] Schema migration failed, returning empty artifacts")
+                        return {}
+                else:
+                    logger.warning("[ConfigManager] No version field, cannot migrate, returning empty artifacts")
+                    return {}
+            
+            # Load scanned artifacts with default values for optional fields
+            scanned_artifacts = config_data.get('scanned_artifacts', {})
+            
+            # Provide default values for missing fields
+            for artifact_type, artifacts in scanned_artifacts.items():
+                for artifact in artifacts:
+                    artifact.setdefault('size', 0)
+                    artifact.setdefault('hash', '')
+                    artifact.setdefault('scanned', '')
+                    artifact.setdefault('parsed', False)
+            
+            total_artifacts = sum(len(artifacts) for artifacts in scanned_artifacts.values())
+            logger.info(f"[ConfigManager] Loaded {total_artifacts} scanned artifacts across {len(scanned_artifacts)} types")
+            return scanned_artifacts
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"[ConfigManager] Corrupted config JSON: {e}")
+            return {}
+            
+        except Exception as e:
+            logger.error(f"[ConfigManager] Error loading scanned artifacts: {e}")
+            return {}
+    
+    def query_artifacts_by_type(self, artifact_type: str) -> List[Dict]:
+        """
+        Query artifacts of a specific type from case configuration.
+        
+        Args:
+            artifact_type: Type of artifact (e.g., "Registry", "Prefetch")
+        
+        Returns:
+            List of artifact metadata dictionaries
+        
+        Requirements: 3.7
+        """
+        try:
+            scanned_artifacts = self.load_scanned_artifacts()
+            return scanned_artifacts.get(artifact_type, [])
+            
+        except Exception as e:
+            logger.error(f"[ConfigManager] Error querying artifacts by type: {e}")
+            return []
+    
+    def _validate_case_config_schema(self, config_data: Dict) -> Tuple[bool, List[str]]:
+        """
+        Validate case configuration schema.
+        
+        Args:
+            config_data: Configuration data to validate
+        
+        Returns:
+            Tuple of (is_valid, list_of_errors)
+        
+        Requirements: 12.2, 12.6
+        """
+        errors = []
+        
+        try:
+            # Check required top-level fields
+            if 'version' not in config_data:
+                errors.append("Missing required field: version")
+            
+            # Validate scanned_artifacts structure if present
+            if 'scanned_artifacts' in config_data:
+                scanned_artifacts = config_data['scanned_artifacts']
+                
+                if not isinstance(scanned_artifacts, dict):
+                    errors.append("scanned_artifacts must be a dictionary")
+                else:
+                    # Validate each artifact type
+                    for artifact_type, artifacts in scanned_artifacts.items():
+                        if not isinstance(artifacts, list):
+                            errors.append(f"Artifacts for type '{artifact_type}' must be a list")
+                            continue
+                        
+                        # Validate each artifact
+                        for idx, artifact in enumerate(artifacts):
+                            if not isinstance(artifact, dict):
+                                errors.append(f"Artifact {idx} in '{artifact_type}' must be a dictionary")
+                                continue
+                            
+                            # Check required fields
+                            required_fields = ['path', 'size', 'hash', 'scanned', 'parsed']
+                            for field in required_fields:
+                                if field not in artifact:
+                                    errors.append(f"Artifact {idx} in '{artifact_type}' missing field: {field}")
+            
+        except Exception as e:
+            errors.append(f"Schema validation error: {str(e)}")
+        
+        return (len(errors) == 0, errors)
+    
+    def _migrate_case_config_schema(self, old_config: Dict) -> Dict:
+        """
+        Migrate old case configuration format to new schema.
+        
+        Args:
+            old_config: Old configuration data
+        
+        Returns:
+            Migrated configuration data
+        
+        Requirements: 12.4
+        """
+        try:
+            # Create new config with current version
+            new_config = {
+                'version': '1.0',
+                'case_root': old_config.get('case_root', ''),
+                'created_date': old_config.get('created_date', datetime.now().isoformat()),
+                'last_modified': datetime.now().isoformat(),
+                'feathers': old_config.get('feathers', []),
+                'scanned_artifacts': old_config.get('scanned_artifacts', {})
+            }
+            
+            logger.info("[ConfigManager] Schema migration completed")
+            return new_config
+            
+        except Exception as e:
+            logger.error(f"[ConfigManager] Error during schema migration: {e}")
+            # Return original config if migration fails
+            return old_config
+    
+    def update_artifact_parsed_status(self, artifact_type: str, artifact_path: str, parsed: bool = True) -> bool:
+        """
+        Update the parsed status of a specific artifact.
+        
+        Args:
+            artifact_type: Type of artifact
+            artifact_path: Path to the artifact file
+            parsed: Parsed status (default: True)
+        
+        Returns:
+            bool: True if update successful
+        
+        Requirements: 3.6
+        """
+        try:
+            # Load current artifacts
+            scanned_artifacts = self.load_scanned_artifacts()
+            
+            if artifact_type not in scanned_artifacts:
+                logger.warning(f"[ConfigManager] Artifact type not found: {artifact_type}")
+                return False
+            
+            # Find and update the artifact
+            updated = False
+            for artifact in scanned_artifacts[artifact_type]:
+                if artifact.get('path') == artifact_path:
+                    artifact['parsed'] = parsed
+                    updated = True
+                    break
+            
+            if not updated:
+                logger.warning(f"[ConfigManager] Artifact not found: {artifact_path}")
+                return False
+            
+            # Save updated artifacts
+            return self.save_scanned_artifacts(scanned_artifacts)
+            
+        except Exception as e:
+            logger.error(f"[ConfigManager] Error updating artifact parsed status: {e}")
+            return False
+

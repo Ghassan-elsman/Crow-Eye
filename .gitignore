@@ -34,3 +34,11 @@ regclaw_errors.log
 edb.log
 edbtmp.log
 
+
+
+# Development artifacts (added by reorganization script)
+dev/*.db
+dev/*.log
+dev/.pytest_cache/
+dev/.hypothesis/
+dev/reorganization.log

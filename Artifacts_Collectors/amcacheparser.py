@@ -366,10 +366,19 @@ class RegistryHivesLive(object):
 
 # Class to parse Amcache.hve and store in a normalized SQLite database
 class AmcacheParser:
-    def __init__(self, file_path: str, normalized_db_path: str, windows_partition: str = "C:"):
+    def __init__(self, file_path: str, normalized_db_path: str, windows_partition: str = "C:", offline_mode: bool = False):
         print("Loading Amcache.hve file...")
         sys.stdout.flush()  # Allow UI to process events
-        self.handle = RegistryHivesLive().open_apphive_by_file(file_path)
+        
+        # For offline mode, use python-registry directly (no admin privileges needed)
+        # For live mode, use RegistryHivesLive (requires admin privileges)
+        if offline_mode:
+            self.handle = file_path  # python-registry can open file path directly
+            self.offline_mode = True
+        else:
+            self.handle = RegistryHivesLive().open_apphive_by_file(file_path)
+            self.offline_mode = False
+        
         sys.stdout.flush()  # Allow UI to process events
         self.normalized_db_path = normalized_db_path
         self.windows_partition = windows_partition  # Store Windows partition for path construction
@@ -818,10 +827,10 @@ def parse_amcache_hive(case_path=None, offline_mode=False, db_path=None, windows
             # Case mode - save to Target_Artifacts in case directory
             artifacts_dir = os.path.join(case_path, "Target_Artifacts")
             os.makedirs(artifacts_dir, exist_ok=True)
-            db_path = os.path.join(artifacts_dir, "amcache_data.db")
+            db_path = os.path.join(artifacts_dir, "amcache.db")
         else:
             # No case - save to current directory
-            db_path = "amcache_data.db"
+            db_path = "amcache.db"
     
     # Select Amcache.hve file path
     if offline_mode:
@@ -863,49 +872,84 @@ def amcache_parser(case_path=None, offline_mode=False, windows_partition="C:"):
         windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
     
     Returns:
-        str: Path to the Amcache database file
+        dict: Parser results including record counts and status
     """
     print(f"Starting Amcache parser (Windows partition: {windows_partition})...")
     
     # Set database path based on case management
     if case_path and os.path.exists(case_path):
-        # Case mode - save to Target_Artifacts in case directory
+        # Case mode - save to Target_Artifacts in case directory (flat structure)
         artifacts_dir = os.path.join(case_path, "Target_Artifacts")
         os.makedirs(artifacts_dir, exist_ok=True)
-        db_path = os.path.join(artifacts_dir, "amcache_data.db")
+        db_path = os.path.join(artifacts_dir, "amcache.db")
     else:
         # No case - save to current directory
-        db_path = "amcache_data.db"
+        db_path = "amcache.db"
     
     # Select Amcache.hve file path
     if offline_mode:
-        # Offline mode - use provided path
-        if case_path and os.path.exists(case_path):
-            filepath = os.path.join(case_path, "Amcache.hve")
+        # Offline mode - try multiple possible locations (input from live_acquisition)
+        if case_path:
+            possible_paths = [
+                os.path.join(case_path, "live_acquisition", "amcache", "Amcache.hve"),
+                os.path.join(case_path, "Amcache.hve"),
+                os.path.join(case_path, "Target_Artifacts", "amcache", "Amcache.hve"),
+                os.path.join(case_path, "Target_Artifacts", "Amcache.hve")
+            ]
+            
+            filepath = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    filepath = path
+                    break
+            
+            if not filepath:
+                filepath = possible_paths[0]  # Default to first option
         else:
             filepath = OFFLINE_AMCACHE_PATH
     else:
         # Live mode - use dynamic path based on Windows partition
         if system() == 'Windows' and int(version().split(".")[0]) < 7:
             print("Your system is not compatible with Amcache.hve")
-            return None
+            return {'success': False, 'records': 0, 'error': 'System not compatible with Amcache.hve'}
         filepath = get_live_amcache_path(windows_partition)
 
     if not os.path.exists(filepath):
         print(f"[Amcache] Input file does not exist: {filepath}")
-        return None
+        return {'success': False, 'records': 0, 'error': f'Input file does not exist: {filepath}', 'output_path': db_path}
 
     try:
-        ap = AmcacheParser(filepath, db_path, windows_partition)
+        ap = AmcacheParser(filepath, db_path, windows_partition, offline_mode=offline_mode)
         ap.parse(search_key=SEARCH_KEYS)
         print(f"[Amcache] Data saved to {db_path}")
-        return db_path
+        
+        # Count total records from database
+        import sqlite3
+        total_records = 0
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                # Get all table names
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = cursor.fetchall()
+                # Count records in each table
+                for table in tables:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table[0]}")
+                    count = cursor.fetchone()[0]
+                    total_records += count
+        except Exception as e:
+            print(f"[Amcache] Warning: Could not count records: {e}")
+            total_records = 0
+        
+        return {'success': True, 'records': total_records, 'output_path': db_path}
     except OSError as e:
+        error_msg = f"Error loading hive: {str(e)}"
         if isAdmin():
-            print(f"[Amcache Error] Error loading hive: {str(e)}")
+            print(f"[Amcache Error] {error_msg}")
         else:
             print("[Amcache Error] Error loading hive. Try execute as administrator")
-        return None
+            error_msg += " (Try running as administrator)"
+        return {'success': False, 'records': 0, 'error': error_msg, 'output_path': db_path}
 
 def main():
     """Main function to run the Amcache parser."""
