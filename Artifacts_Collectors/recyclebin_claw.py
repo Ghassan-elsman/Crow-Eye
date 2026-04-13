@@ -719,10 +719,10 @@ class RecycleBinParser:
     
     def filetime_to_datetime(self, filetime: int) -> Optional[datetime.datetime]:
         """Convert Windows FILETIME to datetime object.
-        
+
         Args:
             filetime (int): Windows FILETIME value (100-nanosecond intervals since 1601)
-            
+
         Returns:
             Optional[datetime.datetime]: Converted datetime object or None if invalid
         """
@@ -730,24 +730,18 @@ class RecycleBinParser:
             # Check for invalid FILETIME values
             if filetime == 0 or filetime < 0:
                 return None
-                
-            # Windows FILETIME epoch: January 1, 1601
-            # Unix epoch: January 1, 1970
-            # Difference: 11644473600 seconds
-            FILETIME_EPOCH_DIFF = 11644473600
-            
-            # Convert from 100-nanosecond intervals to seconds
-            unix_timestamp = (filetime / 10000000.0) - FILETIME_EPOCH_DIFF
-            
-            # Validate timestamp is within reasonable range
-            if unix_timestamp < 0 or unix_timestamp > 4102444800:  # 1970 to 2100
+
+            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+            dt = windows_epoch + datetime.timedelta(microseconds=filetime / 10.0)
+
+            # Basic sanity check: year between 1601 and 3000
+            if dt.year < 1601 or dt.year > 3000:
                 return None
-                
-            return datetime.datetime.fromtimestamp(unix_timestamp)
+
+            return dt
         except (ValueError, OSError, OverflowError) as e:
             print(f"[RecycleBin Warning] Invalid FILETIME value: {filetime}, Error: {e}")
-            return None
-    
+            return None    
     def analyze_file_signature(self, file_path: str) -> str:
         """Analyze file header signature to identify file type.
         

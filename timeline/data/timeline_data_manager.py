@@ -1099,9 +1099,9 @@ class TimelineDataManager:
         
         # Query multiple registry tables that have timestamps
         tables_to_query = [
-            ('UserAssist', 'timestamp', 'Program_Name'),
-            ('MUICache', 'timestamp', 'Program_Name'),
-            ('InstalledSoftware', 'timestamp', 'Display_Name'),
+            ('UserAssist', 'timestamp', 'program_path'),
+            ('MUICache', 'analyzing_date', 'app_path'),
+            ('InstalledSoftware', 'timestamp', 'display_name'),
         ]
         
         for table_name, timestamp_col, name_col in tables_to_query:

@@ -25,8 +25,11 @@ Key Features:
   
   * And more
 
-
-
+Cross-Platform Support:
+- Windows: Full functionality including live system analysis and offline parsing
+- Linux/macOS: Offline analysis only (live parsers disabled, forensic image parsing available)
+- Automatic requirement detection based on operating system
+- Live parser buttons hidden on non-Windows systems
 
 Forensic Value:
 - Provides investigators with a unified interface for Windows artifact analysis
@@ -35,7 +38,7 @@ Forensic Value:
 - Supports both live system analysis and offline forensic image examination
 
 Author: Ghassan Elsman
-Version: 0.3
+Version: 0.8.0
 License: GPL-3.0
 """
 
@@ -61,8 +64,11 @@ def is_admin():
     except:
         return False
 
+# Detect operating system
+IS_WINDOWS = os.name == 'nt'
+
 # Ensure the tool runs with administrator privileges on Windows
-if os.name == 'nt':  # Check if running on Windows
+if IS_WINDOWS:  # Check if running on Windows
     if not is_admin():
         print("This script requires administrator privileges to run. Please run as administrator.")
         # Re-run the script with admin privileges using ShellExecuteW with 'runas' verb
@@ -76,7 +82,7 @@ if os.name == 'nt':  # Check if running on Windows
             print(f"Failed to re-run as administrator: {e}")
         sys.exit(1)  # Exit the non-elevated process
 else:
-    print("This script is designed to run on Windows only.")
+    print("Running on non-Windows system - Live parsers will be disabled, offline analysis available.")
     
 
 def install_initial_requirements():
@@ -135,7 +141,9 @@ def safe_import_initial_modules():
     """
     global init, Fore
     try:
-        from colorama import init, Fore
+        from colorama import init as colorama_init, Fore as colorama_Fore
+        init = colorama_init
+        Fore = colorama_Fore
         init()  # Initialize colorama
         return True
     except ImportError as e:
@@ -239,31 +247,59 @@ def setup_virtual_environment():
 # Setup virtual environment
 setup_virtual_environment()
 
-Crow_Eye_Requirements = [
+# General requirements that work on all operating systems
+General_Requirements = [
     'PyQt5',
+    'PyQtWebEngine',
     'python-registry',
-    'pywin32',
     'pandas',
     'streamlit',
     'altair',
     'olefile',
-    'windowsprefetch',
     'psutil',
     'tqdm',
     'colorama',
-    'wmi',
     'pyyaml',
     'matplotlib',  # Optional: Enhanced chart rendering (PyQt5 native charts work without it)
     'python-evtx',  # Offline EVTX parser
     'dissect.esedb',  # Offline SRUM/ESE database parser (recommended)
-
+    'dissect.target',  # Required for forensic image parsing
+    'dissect.volume',  # Required for forensic image parsing
+    'dissect.ntfs',  # Required for forensic image parsing
+    'dissect.fat',  # Required for forensic image parsing
+    'dissect.extfs',  # Required for forensic image parsing
+    'dissect.evidence',  # Required for forensic image parsing
+    'pycdlib',  # ISO 9660 optical disc image support (pure Python, always works)
 ]
+
+# Optional forensic image parsing requirements
+# Dissect replaced pytsk3, pyewf, pyvhdi, pyvmdk. Dissect and pycdlib are now installed by the forensic deps installer.
+Optional_Forensic_Requirements = []
+
+# Windows-specific requirements (use Windows API)
+Windows_Only_Requirements = [
+    'pywin32',
+    'windowsprefetch',
+    'wmi',
+]
+
+# Combine requirements based on OS
+if IS_WINDOWS:
+    Crow_Eye_Requirements = General_Requirements + Windows_Only_Requirements
+else:
+    Crow_Eye_Requirements = General_Requirements
 
 def check_and_install_requirements():
     """Check and install required packages for Crow Eye application."""
     print('\n' + '='*60)
     print('[STEP 3/4] Checking dependencies...')
     print('='*60)
+    
+    # Show which requirements are being checked based on OS
+    if IS_WINDOWS:
+        print('  -> Checking Windows + General requirements...')
+    else:
+        print('  -> Checking General requirements (non-Windows system)...')
     
     missing_packages = []
     installed_count = 0
@@ -319,9 +355,9 @@ def check_and_install_requirements():
                     print(f'  -> [{i}/{len(missing_packages)}] Installing {package}...')
                     subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
                     success_count += 1
-                    print(Fore.GREEN + f'      ✓ {package} installed successfully' + Fore.RESET)
+                    print(Fore.GREEN + f'      [+] {package} installed successfully' + Fore.RESET)
                 except subprocess.CalledProcessError:
-                    print(Fore.RED + f'      ✗ {package} installation failed' + Fore.RESET)
+                    print(Fore.RED + f'      [-] {package} installation failed' + Fore.RESET)
             
             if success_count > 0:
                 # Restart after individual installation
@@ -356,9 +392,40 @@ print('='*60)
 print('[STEP 4/4] Initializing Crow Eye...')
 print('='*60)
 
-# Handle pywin32 post-install if needed
+def ensure_timeline_built():
+    """Ensure the React timeline frontend is built and ready."""
+    timeline_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'timeline', 'react-timeline')
+    dist_dir = os.path.join(timeline_dir, 'dist')
+    
+    if not os.path.exists(dist_dir):
+        print('\n' + '='*60)
+        print('[INFO] Building Timeline React Application (First time setup)...')
+        print('='*60)
+        try:
+            print("  -> Installing NPM dependencies...")
+            subprocess.run(['npm', 'install'], cwd=timeline_dir, check=True, shell=IS_WINDOWS)
+            print("  -> Building React application...")
+            subprocess.run(['npm', 'run', 'build'], cwd=timeline_dir, check=True, shell=IS_WINDOWS)
+            print(Fore.GREEN + "  -> Timeline built successfully!" + Fore.RESET)
+        except subprocess.CalledProcessError as e:
+            print(Fore.RED + f"  -> Failed to build Timeline: {e}" + Fore.RESET)
+            print(Fore.YELLOW + "  -> Please make sure Node.js and NPM are installed to use the Timeline feature." + Fore.RESET)
+        except FileNotFoundError:
+            print(Fore.RED + "  -> NPM not found. Please install Node.js to use the Timeline feature." + Fore.RESET)
+    else:
+        print("  -> Timeline React application already built")
+
+# Build the Timeline if necessary
+ensure_timeline_built()
+
+# Handle pywin32 post-install if needed (Windows only)
 def handle_pywin32_postinstall():
     """Run pywin32 post-install script if win32 modules are not accessible with automatic retry."""
+    # Skip on non-Windows systems
+    if not IS_WINDOWS:
+        print("  -> Skipping pywin32 post-install (not on Windows)")
+        return True
+    
     max_retries = 2
     
     for attempt in range(max_retries):
@@ -409,8 +476,39 @@ def handle_pywin32_postinstall():
     
     return False
 
-# Ensure pywin32 modules are accessible
+# Ensure pywin32 modules are accessible (Windows only)
 handle_pywin32_postinstall()
+
+# Install forensic image parsing dependencies with status tracking
+# DISABLED: pytsk3 cannot compile on Python 3.12 - use external mounting tools instead
+# See PYTSK3_WINDOWS_SOLUTION.md for alternatives
+"""
+try:
+    from utils.forensic_deps_installer import install_forensic_dependencies, get_installation_status
+    
+    print('\n' + '='*60)
+    print('[FORENSIC DEPENDENCIES] Installing forensic image parsing libraries...')
+    print('='*60)
+    
+    # Install dependencies with automatic retry logic
+    results = install_forensic_dependencies(verbose=True)
+    
+    # Check if any critical failures occurred
+    success_count = sum(1 for v in results.values() if v)
+    total_count = len(results)
+    
+    if success_count > 0:
+        print(Fore.GREEN + f'[FORENSIC DEPENDENCIES] {success_count}/{total_count} packages installed successfully' + Fore.RESET)
+    else:
+        print(Fore.YELLOW + '[FORENSIC DEPENDENCIES] No packages installed - forensic image parsing will use fallback methods' + Fore.RESET)
+    
+except ImportError as e:
+    print(Fore.YELLOW + f'[FORENSIC DEPENDENCIES] Could not load installer: {str(e)}' + Fore.RESET)
+    print(Fore.YELLOW + '[FORENSIC DEPENDENCIES] Forensic image parsing will use fallback methods' + Fore.RESET)
+except Exception as e:
+    print(Fore.YELLOW + f'[FORENSIC DEPENDENCIES] Installation error: {str(e)}' + Fore.RESET)
+    print(Fore.YELLOW + '[FORENSIC DEPENDENCIES] Continuing with available dependencies...' + Fore.RESET)
+"""
 
 # Robust import handling with better error messages
 def safe_import(module_name, import_path=None, alias=None):
@@ -433,11 +531,11 @@ def safe_import(module_name, import_path=None, alias=None):
         # Only show errors, not successful imports to reduce verbosity
         return True
     except ImportError as e:
-        print(Fore.RED + f"✗ Failed to import {module_name}: {str(e)}" + Fore.RESET)
+        print(Fore.RED + f"[-] Failed to import {module_name}: {str(e)}" + Fore.RESET)
         print(Fore.YELLOW + f"   Please ensure {module_name} is properly installed" + Fore.RESET)
         return False
     except Exception as e:
-        print(Fore.RED + f"✗ Unexpected error importing {module_name}: {str(e)}" + Fore.RESET)
+        print(Fore.RED + f"[-] Unexpected error importing {module_name}: {str(e)}" + Fore.RESET)
         return False
 
 # Import standard libraries
@@ -492,9 +590,9 @@ for module_name, import_path in qt5_imports:
 # Import custom modules with error handling
 try:
     from ui.search_filter_dialog import SearchFilterDialog
-    print(Fore.GREEN + "✓ Successfully imported SearchFilterDialog" + Fore.RESET)
+    print(Fore.GREEN + "[+] Successfully imported SearchFilterDialog" + Fore.RESET)
 except ImportError as e:
-    print(Fore.RED + f"✗ Failed to import SearchFilterDialog: {str(e)}" + Fore.RESET)
+    print(Fore.RED + f"[-] Failed to import SearchFilterDialog: {str(e)}" + Fore.RESET)
     # Create a dummy class as fallback
     class SearchFilterDialog:
         def __init__(self, *args, **kwargs):
@@ -526,45 +624,45 @@ class {module_name}:
 # Import other custom modules
 try:
     import GUI_resources
-    print(Fore.GREEN + "✓ Successfully imported GUI_resources" + Fore.RESET)
+    print(Fore.GREEN + "[+] Successfully imported GUI_resources" + Fore.RESET)
 except ImportError as e:
-    print(Fore.RED + f"✗ Failed to import GUI_resources: {str(e)}" + Fore.RESET)
+    print(Fore.RED + f"[-] Failed to import GUI_resources: {str(e)}" + Fore.RESET)
     GUI_resources = None
 
 try:
     from styles import CrowEyeStyles
-    print(Fore.GREEN + "✓ Successfully imported CrowEyeStyles" + Fore.RESET)
+    print(Fore.GREEN + "[+] Successfully imported CrowEyeStyles" + Fore.RESET)
 except ImportError as e:
-    print(Fore.RED + f"✗ Failed to import CrowEyeStyles: {str(e)}" + Fore.RESET)
+    print(Fore.RED + f"[-] Failed to import CrowEyeStyles: {str(e)}" + Fore.RESET)
     CrowEyeStyles = None
 
 try:
     from correlation_engine.integration.correlation_integration import CorrelationIntegration
-    print(Fore.GREEN + "✓ Successfully imported CorrelationIntegration" + Fore.RESET)
+    print(Fore.GREEN + "[+] Successfully imported CorrelationIntegration" + Fore.RESET)
 except ImportError as e:
-    print(Fore.RED + f"✗ Failed to import CorrelationIntegration: {str(e)}" + Fore.RESET)
+    print(Fore.RED + f"[-] Failed to import CorrelationIntegration: {str(e)}" + Fore.RESET)
     CorrelationIntegration = None
 
 try:
     from correlation_engine.config.case_configuration_manager import CaseConfigurationManager
-    print(Fore.GREEN + "✓ Successfully imported CaseConfigurationManager" + Fore.RESET)
+    print(Fore.GREEN + "[+] Successfully imported CaseConfigurationManager" + Fore.RESET)
 except ImportError as e:
-    print(Fore.RED + f"✗ Failed to import CaseConfigurationManager: {str(e)}" + Fore.RESET)
+    print(Fore.RED + f"[-] Failed to import CaseConfigurationManager: {str(e)}" + Fore.RESET)
     CaseConfigurationManager = None
 
 try:
     from utils import SearchUtils, SearchWorker
-    print(Fore.GREEN + "✓ Successfully imported SearchUtils and SearchWorker" + Fore.RESET)
+    print(Fore.GREEN + "[+] Successfully imported SearchUtils and SearchWorker" + Fore.RESET)
 except ImportError as e:
-    print(Fore.RED + f"✗ Failed to import SearchUtils/SearchWorker: {str(e)}" + Fore.RESET)
+    print(Fore.RED + f"[-] Failed to import SearchUtils/SearchWorker: {str(e)}" + Fore.RESET)
     SearchUtils = None
     SearchWorker = None
 
 try:
     from ui.partition_window import PartitionWindow
-    print(Fore.GREEN + "✓ Successfully imported PartitionWindow" + Fore.RESET)
+    print(Fore.GREEN + "[+] Successfully imported PartitionWindow" + Fore.RESET)
 except ImportError as e:
-    print(Fore.RED + f"✗ Failed to import PartitionWindow: {str(e)}" + Fore.RESET)
+    print(Fore.RED + f"[-] Failed to import PartitionWindow: {str(e)}" + Fore.RESET)
     PartitionWindow = None
 
 
@@ -575,6 +673,7 @@ def validate_dependencies():
     
     critical_deps = [
         ('PyQt5', 'GUI framework'),
+        ('PyQt5.QtWebEngineWidgets', 'Web visualization engine'),
         ('sqlite3', 'Database operations'),
         ('win32evtlog', 'Windows event log access'),
         ('Registry', 'Registry parsing'),
@@ -589,19 +688,19 @@ def validate_dependencies():
         try:
             if dep == 'win32evtlog':
                 import win32evtlog
-                print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
+                print(Fore.GREEN + f"[+] {dep}: OK ({purpose})" + Fore.RESET)
             elif dep == 'sqlite3':
                 import sqlite3
-                print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
+                print(Fore.GREEN + f"[+] {dep}: OK ({purpose})" + Fore.RESET)
             elif dep == 'PyQt5':
                 from PyQt5 import QtCore
-                print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
+                print(Fore.GREEN + f"[+] {dep}: OK ({purpose})" + Fore.RESET)
             else:
                 __import__(dep)
-                print(Fore.GREEN + f"✓ {dep}: OK ({purpose})" + Fore.RESET)
+                print(Fore.GREEN + f"[+] {dep}: OK ({purpose})" + Fore.RESET)
         except ImportError:
             if dep == 'win32evtlog':
-                print(Fore.RED + f"✗ {dep}: MISSING ({purpose})" + Fore.RESET)
+                print(Fore.RED + f"[-] {dep}: MISSING ({purpose})" + Fore.RESET)
                 print(Fore.YELLOW + "   Attempting automatic recovery for win32evtlog..." + Fore.RESET)
                 
                 # Try to automatically fix win32evtlog
@@ -609,15 +708,15 @@ def validate_dependencies():
                     # Retry the import after successful post-install
                     try:
                         import win32evtlog
-                        print(Fore.GREEN + f"✓ {dep}: RECOVERED ({purpose})" + Fore.RESET)
+                        print(Fore.GREEN + f"[+] {dep}: RECOVERED ({purpose})" + Fore.RESET)
                         win32evtlog_fixed = True
                         continue  # Skip the error flag for this dependency
                     except ImportError:
-                        print(Fore.RED + f"✗ {dep}: AUTOMATIC RECOVERY FAILED ({purpose})" + Fore.RESET)
+                        print(Fore.RED + f"[-] {dep}: AUTOMATIC RECOVERY FAILED ({purpose})" + Fore.RESET)
                 else:
-                    print(Fore.RED + f"✗ {dep}: AUTOMATIC RECOVERY UNAVAILABLE ({purpose})" + Fore.RESET)
+                    print(Fore.RED + f"[-] {dep}: AUTOMATIC RECOVERY UNAVAILABLE ({purpose})" + Fore.RESET)
             else:
-                print(Fore.RED + f"✗ {dep}: MISSING ({purpose})" + Fore.RESET)
+                print(Fore.RED + f"[-] {dep}: MISSING ({purpose})" + Fore.RESET)
             
             all_ok = False
         except Exception as e:
@@ -631,7 +730,7 @@ def validate_dependencies():
             print(Fore.YELLOW + "   python crow_eye_venv\\Scripts\\pywin32_postinstall.py -install" + Fore.RESET)
         print(Fore.YELLOW + "   Or run: python -m pip install --upgrade -r requirements.txt" + Fore.RESET)
     else:
-        print(Fore.GREEN + "\n✓ All critical dependencies are working properly!" + Fore.RESET)
+        print(Fore.GREEN + "\n[+] All critical dependencies are working properly!" + Fore.RESET)
     
     return all_ok
 
@@ -4996,27 +5095,48 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         spacerItem2 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
         self.verticalLayout_3.addItem(spacerItem2)
+        
+        # Live Analysis section - only visible on Windows
         self.Live_analysis = QtWidgets.QLabel(self.side_fram)
         self.Live_analysis.setAutoFillBackground(False)
         self.Live_analysis.setStyleSheet(CrowEyeStyles.LIVE_ANALYSIS_LABEL)
         self.Live_analysis.setObjectName("Live_analysis")
         self.verticalLayout_3.addWidget(self.Live_analysis)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.Live_analysis.setVisible(False)
+            # Collapse spacers on Linux
+            spacerItem2.changeSize(0, 0, QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+
         # Small spacer after section label
         spacerItem_live = QtWidgets.QSpacerItem(20, 8, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
         self.verticalLayout_3.addItem(spacerItem_live)
+        if not IS_WINDOWS:
+            spacerItem_live.changeSize(0, 0, QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)        
         self.parse_all = QtWidgets.QPushButton(self.side_fram)
         self.parse_all.setStyleSheet(CrowEyeStyles.PARSE_ALL_BUTTON)
         self.parse_all.setObjectName("parse_all")
         self.verticalLayout_3.addWidget(self.parse_all)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.parse_all.setVisible(False)
+        
         self.registrybutton = QtWidgets.QPushButton(self.side_fram)
         self.registrybutton.setAutoFillBackground(False)
         self.setup_parse_button(self.registrybutton, True, True, True)
         self.registrybutton.setObjectName("registrybutton")
         self.verticalLayout_3.addWidget(self.registrybutton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.registrybutton.setVisible(False)
+        
         self.lnkbutton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.lnkbutton, True, True, False)
         self.lnkbutton.setObjectName("lnkbutton")
         self.verticalLayout_3.addWidget(self.lnkbutton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.lnkbutton.setVisible(False)
 
 
         self.Prefetchbutton = QtWidgets.QPushButton(self.side_fram)
@@ -5024,36 +5144,57 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.setup_parse_button(self.Prefetchbutton, True, True, True)
         self.Prefetchbutton.setObjectName("Prefetchbutton")
         self.verticalLayout_3.addWidget(self.Prefetchbutton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.Prefetchbutton.setVisible(False)
         
         self.ShimCacheButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.ShimCacheButton, True, True, True)
         self.ShimCacheButton.setObjectName("ShimCacheButton")
         self.verticalLayout_3.addWidget(self.ShimCacheButton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.ShimCacheButton.setVisible(False)
         
         self.AmcacheButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.AmcacheButton, True, True, True)
         self.AmcacheButton.setObjectName("AmcacheButton")
         self.verticalLayout_3.addWidget(self.AmcacheButton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.AmcacheButton.setVisible(False)
         
         self.MFT_USN_CorrelateButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.MFT_USN_CorrelateButton, True, True, True)
         self.MFT_USN_CorrelateButton.setObjectName("MFT_USN_CorrelateButton")
         self.verticalLayout_3.addWidget(self.MFT_USN_CorrelateButton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.MFT_USN_CorrelateButton.setVisible(False)
         
         self.logbutton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.logbutton, True, True, False)
         self.logbutton.setObjectName("logbutton")
         self.verticalLayout_3.addWidget(self.logbutton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.logbutton.setVisible(False)
         
         self.RecycleBinButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.RecycleBinButton, True, True, True)
         self.RecycleBinButton.setObjectName("RecycleBinButton")
         self.verticalLayout_3.addWidget(self.RecycleBinButton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.RecycleBinButton.setVisible(False)
         
         self.SRUMButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.SRUMButton, True, True, True)
         self.SRUMButton.setObjectName("SRUMButton")
         self.verticalLayout_3.addWidget(self.SRUMButton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.SRUMButton.setVisible(False)
 
         self.PartitionButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.PartitionButton, True, True, True)
@@ -5061,6 +5202,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.PartitionButton.setText("Partition Analyzer")
         self.PartitionButton.clicked.connect(self.open_partition_window)
         self.verticalLayout_3.addWidget(self.PartitionButton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.PartitionButton.setVisible(False)
         
         spacerItem3 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
         self.verticalLayout_3.addItem(spacerItem3)
@@ -7878,26 +8022,58 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             QtWidgets.QMessageBox.critical(self.main_window, "Importer Error", f"Failed to launch Offline Importer: {str(e)}")
 
     def open_image_parsing(self):
-        """Show the Forensics Image Parsing Under Development dialog"""
+        """Open the Forensics Image Parsing Dialog"""
         try:
             print("[Info] Opening Forensics Image Parsing Dialog...")
+            
+            # Check if a case is open
+            case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+            
+            if not case_root:
+                QtWidgets.QMessageBox.warning(
+                    self.main_window,
+                    "No Case Open",
+                    "Please open or create a case before parsing forensic images.\n\n"
+                    "Use File → New Case or File → Open Case to get started."
+                )
+                return
+            
             import sys
             import os
             
             # Add Forensics Image parsing path to sys.path
-            img_parsing_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'Forensics Image parsing')
+            img_parsing_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'Forensics_Image_parsing')
             if img_parsing_path not in sys.path:
                 sys.path.insert(0, img_parsing_path)
             
             # Import the dialog class
             from image_parsing_dialog import ImageParsingDialog
             
-            # Create and show the dialog
-            dialog = ImageParsingDialog(self.main_window)
-            dialog.exec_()
-            print("[Info] Forensics Image Parsing dialog closed")
+            # Create and show the dialog with case_root
+            if not hasattr(self, 'image_parsing_window') or self.image_parsing_window is None:
+                self.image_parsing_window = ImageParsingDialog(case_root)
+                
+                # Pass reference to main Crow Eye window for GUI refresh coordination
+                self.image_parsing_window.crow_eye_main_window = self
+            else:
+                # Update case_root if window already exists
+                self.image_parsing_window.case_root = case_root
+                print(f"[Info] Updated Image Parsing case root: {case_root}")
+            
+            self.image_parsing_window.show()
+            self.image_parsing_window.raise_()
+            self.image_parsing_window.activateWindow()
+            print("[Info] Forensics Image Parsing dialog opened successfully")
+            
         except Exception as e:
+            import traceback
             print(f"[Error] Failed to open Image Parsing Dialog: {str(e)}")
+            traceback.print_exc()
+            QtWidgets.QMessageBox.critical(
+                self.main_window,
+                "Image Parsing Error",
+                f"Failed to launch Forensics Image Parsing:\n\n{str(e)}"
+            )
 
     def on_parse_offline_artifacts(self):
         """
@@ -8077,9 +8253,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                                 if result.success:
                                     artifact_index.mark_as_parsed(artifact.artifact_id)
                                     success_types.add(artifact.artifact_type)
-                                    loading_dialog.add_log_message(f"✓ {artifact.artifact_type} parsed successfully")
+                                    loading_dialog.add_log_message(f"[+] {artifact.artifact_type} parsed successfully")
                                 else:
-                                    loading_dialog.add_log_message(f"✗ Failed to parse {artifact.artifact_type}: {', '.join(result.errors)}")
+                                    loading_dialog.add_log_message(f"[-] Failed to parse {artifact.artifact_type}: {', '.join(result.errors)}")
                             
                             artifact_index.save()
                             loading_dialog.show_completion("OFFLINE ARTIFACT PROCESSING COMPLETE")
@@ -8290,6 +8466,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print("[Info] Refreshing all GUI tabs...")
                 self.run_analysis_with_loading("Loading Parsed Data...", self.load_all_data)
                 print("[Info] All GUI tabs refreshed successfully")
+            
+            # CRITICAL: Force GUI to update all tables before returning
+            # This ensures that any caller (like ImageParsingDialog) knows the data is actually visible
+            QtWidgets.QApplication.processEvents()
             
         except Exception as e:
             print(f"[Error] Failed to refresh GUI tabs: {str(e)}")
@@ -10123,13 +10303,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 )
                 return
             
+            # Ensure main_window has the case_dir attribute that TimelineDialog expects
+            if hasattr(self, 'case_paths') and 'case_root' in self.case_paths:
+                self.main_window.case_dir = self.case_paths['case_root']
+            
             # Import timeline dialog
             from timeline.timeline_dialog import TimelineDialog
-            
-            # Create a wrapper that provides both QWidget parent and case_paths
-            # TimelineDialog expects parent to have case_paths attribute
-            # So we pass self (Ui_Crow_Eye) which has case_paths
-            # But we need to make sure it's treated as a valid parent
             
             # Store reference to Ui object in main_window for timeline to access
             if not hasattr(self.main_window, 'ui'):
@@ -10721,7 +10900,7 @@ if __name__ == "__main__":
         if CaseConfigurationManager:
             case_config_manager = CaseConfigurationManager()
             ui.case_config_manager = case_config_manager
-            print(Fore.GREEN + "✓ Initialized CaseConfigurationManager" + Fore.RESET)
+            print(Fore.GREEN + "[+] Initialized CaseConfigurationManager" + Fore.RESET)
         else:
             ui.case_config_manager = None
             print(Fore.YELLOW + "⚠ CaseConfigurationManager not available" + Fore.RESET)

@@ -14,6 +14,7 @@
 - [Overview](#overview)
 - [Created by](#created-by)
 - [💖 Support the Project](#-support-the-project)
+- [💬 Community & Support](#-community--support)
 - [Supported Artifacts](#supported-artifacts)
 - [Installation](#installation)
 - [How to Use Crow Eye](#how-to-use-crow-eye)
@@ -27,7 +28,6 @@
 - [Correlation Engine](#-correlation-engine)
 - [Coming Soon Features](#-coming-soon-features)
 - [Development Credits](#development-credits)
-- [💬 Community & Support](#-community--support)
 
 ## Overview
 
@@ -35,66 +35,6 @@ Crow Eye is a comprehensive Windows forensics tool designed to collect, parse, a
 
 ## Created by
 Ghassan Elsman
-
-
-
-
-## Vision: Forensics for Everyone
-
-### Our Mission
-
-Crow-Eye mission is to put the truth of what happened on a computer into the hands of every person — not just experts. We believe digital forensics should be accessible to everyone, regardless of technical background.
-
-**Empowering Everyone**
-
-Whether you're a parent worried about what your teen downloaded, a senior who thinks they might have been scammed, or just someone wondering why their PC feels "off," Crow-Eye analyzes your PC, understands the deep forensic traces Windows leaves behind, and explains them in plain, trustworthy language.
-
-**The Future: Crow-Eye Assistant ("Eye")**
-
-Soon you'll simply ask Crow-Eye Assistant (we call it "Eye"):
-- *"Was anyone using my laptop while I was away last weekend?"*
-- *"Which program has been secretly connecting to the internet?"*
-
-Eye answers instantly, shows you the proof, and never sends your data anywhere.
-
-### For Digital Forensics Professionals
-
-**Faster, Smarter DFIR**
-- Advanced parsing of Windows artifacts
-- Detection of evasion techniques
-- Proof-of-execution and file activity tracing
-- One-click proof-of-execution
-- Raw artifact views + correlated views
-- Plugin system for custom parsers, correlation rules, and workflow extensions
-
-Crow-Eye lets investigators skip repetitive manual work, focus on complex reasoning, and achieve faster, more accurate results.
-
-### For Business
-
-**Multi-Machine Forensics at Scale**
-
-Crow-Eye goes beyond single-machine analysis with a scalable multi-machine processing engine.
-
-Businesses can:
-- Parse and store artifacts from multiple machines
-- Maintain historical forensic data (even after Windows deletes it)
-- Access device activity anytime during an incident
-- Reduce dependency on high-cost forensic solutions
-- Gain continuous visibility without enterprise-level budgets
-
-Small and medium businesses finally get the investigative power that only large corporations could afford before. Crow-Eye delivers daily or weekly micro-forensics, giving real security insight without heavy infrastructure.
-
-### Research Platform
-
-**Advancing Windows Forensics**
-
-Crow-Eye is more than software — it's an open research platform accelerating the entire field of Windows forensics.
-
-The project focuses on:
-- Publishing detailed documentation on internal artifact structures
-- Sharing correlation logic and methodologies
-- Enabling peer review, transparency, and academic collaboration
-- Contributing to the forensics community's collective knowledge
 
 ## 💖 Support the Project
 
@@ -117,6 +57,29 @@ Support Crow-Eye by choosing a sponsorship tier that fits your needs:
 *   **⚔️ Kernel Commander ($250/mo)**: Case-specific support and strategic roadmap influence.
 
 See [SPONSORS.md](SPONSORS.md) for full details on each tier.
+
+## 💬 Community & Support
+
+Join our growing community to get faster support, share your investigation techniques, and discuss the future of Crow-eye!
+
+[![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
+
+- **Faster Support**: Get direct help from the developer and experienced users.
+- **Discussions**: Share your forensic findings and discuss new artifact research.
+- **Announcements**: Stay updated on the latest releases and experimental features.
+
+### Research Platform
+
+**Advancing Windows Forensics**
+
+Crow-Eye is more than software — it's an open research platform accelerating the entire field of Windows forensics.
+
+The project focuses on:
+- Publishing detailed documentation on internal artifact structures
+- Sharing correlation logic and methodologies
+- Enabling peer review, transparency, and academic collaboration
+- Contributing to the forensics community's collective knowledge
+
 
 
 ## Supported Artifacts
@@ -179,10 +142,15 @@ Crow-Claw is our specialized acquisition engine designed to collect and preserve
 
 ### 🔍 Offline Analysis (Offline Importer)
 The Offline Importer allows investigators to analyze artifacts collected from any source without needing a live connection to the target system.
+
+![Offline Importer](C:/Users/Ghass/Pictures/offline-importer.png)
+
 - **Universal Input**: Input a complete directory of artifacts or select individual files for analysis.
 - **Smart Identification (SCAN)**: Hit **SCAN** to walk through the source data; Crow-Eye automatically identifies and indexes every supported artifact type using forensic signatures. This updates the case's **Scan Index** metadata without moving any files.
 - **Forensic Preservation (COLLECT)**: After scanning, you can hit **📦 Collect Artifacts** to physically copy the identified files into your Case's `live_acquisition` folder, organizing them by type (e.g., Registry, Prefetch, Event Logs).
 - **Granular Control (PARSE)**: Use the **Parse Artifact** window to review identified items. Every tab displays all files of a specific type (e.g., AMCACHE, EVTX, PREFETCH), allowing you to select specific files or the entire set for parsing into the forensic database.
+
+![Parse Offline Artifacts](C:/Users/Ghass/Pictures/parse-offline-artifacts.png)
 
 #### ❓ What is the difference between SCAN and COLLECT?
 
@@ -205,6 +173,7 @@ The Offline Importer allows investigators to analyze artifacts collected from an
 
 ### Interactive Timeline Visualization
 - Correlate events in real time across artifacts.
+- Now fully functional with Heat Map View, Week View, and Day View for detailed analysis.
 
 ### Advanced Search Engine
 - Full-text search across live data.
@@ -266,6 +235,10 @@ The Offline Importer allows investigators to analyze artifacts collected from an
 - Parses USN (Update Sequence Number) Journal for file change events.
 - Tracks file creations, deletions, modifications with timestamps.
 - Correlates with other artifacts for timeline reconstruction.
+
+### SRUM Data Visualization
+- Features support for duration bars to visualize SRUM App Usage (showing Face time and Background time).
+- Visualizes Network SRUM data to show the duration of activity for every application.
 
   ### Storage Forensics Analyzer
 - Complete tree view of every physical disk and its partitions
@@ -714,15 +687,4 @@ See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.
 
 ## Development Credits
 - Jump List/LNK parsing based on work by Saleh Muhaysin
-
-## 💬 Community & Support
-
-Join our growing community to get faster support, share your investigation techniques, and discuss the future of Crow-eye!
-
-[![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
-
-- **Faster Support**: Get direct help from the developer and experienced users.
-- **Discussions**: Share your forensic findings and discuss new artifact research.
-- **Announcements**: Stay updated on the latest releases and experimental features.
-
 - Created and maintained by Ghassan Elsman

@@ -28,7 +28,11 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 import ctypes
 import re
-from ctypes import windll, wintypes
+try:
+    from ctypes import windll, wintypes
+except ImportError:
+    windll = None
+    wintypes = None
 
 class Version(enum.IntEnum):
     """Enum representing Windows Prefetch file format versions.
@@ -394,7 +398,7 @@ class PrefetchFile:
                 size = struct.unpack("<I", data[4:8])[0]
                 compressed_data = data[8:]
                 
-                if os.name == 'nt':
+                if windll is not None:
                     # Windows 10/11 uses XPRESS_HUFF compression
                     COMPRESSION_FORMAT_XPRESS_HUFF = 4
                     ntdll = windll.ntdll
@@ -439,9 +443,12 @@ class PrefetchFile:
                     # Convert back to Python bytes
                     return bytes(uncompressed_buffer)
                 else:
-                    raise NotImplementedError(
-                        "Windows 10/11 prefetch decompression is only supported on Windows."
-                    )
+                    # Cross-platform Decompression using pure python (dissect framework)
+                    try:
+                        import dissect.util.compression.lzxpress_huffman as huff
+                        return huff.decompress(compressed_data)
+                    except ImportError:
+                        raise Exception("Failed to decompress prefetch on Linux. 'dissect.util.compression.lzxpress_huffman' is missing.")
             except Exception as e:
                 print(f"Error decompressing Windows 10/11 prefetch: {e}")
                 raise
@@ -817,13 +824,9 @@ class PrefetchFile:
     def _filetime_to_datetime(filetime: int) -> datetime.datetime:
         if filetime == 0:
             return None
-        
-        seconds_since_1601 = filetime / 10000000
-        epoch_diff = 11644473600
-        timestamp = seconds_since_1601 - epoch_diff
-        
-        return datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc)
-    
+
+        windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+        return windows_epoch + datetime.timedelta(microseconds=filetime / 10.0)    
     def _format_paths_with_drive_letters(self, paths):
         formatted_paths = []
         

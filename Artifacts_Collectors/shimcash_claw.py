@@ -165,26 +165,25 @@ class ShimCacheParser:
     def filetime_to_datetime(self, filetime: int) -> Optional[datetime.datetime]:
         """
         Convert Windows FILETIME to Python datetime object.
-        
+
         Windows FILETIME represents the number of 100-nanosecond intervals
         since January 1, 1601 UTC.
-        
+
         Args:
             filetime (int): Windows FILETIME value
-            
+
         Returns:
             datetime.datetime: Converted timestamp or None if invalid
         """
         try:
             if filetime == 0:
                 return None
-            # Convert FILETIME to Unix timestamp
-            timestamp = filetime / 10000000.0 - 11644473600
-            return datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc)
-        except (ValueError, OSError) as e:
+            # Convert 100-nanosecond intervals to seconds and add to Windows epoch
+            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+            return windows_epoch + datetime.timedelta(microseconds=filetime / 10.0)
+        except (ValueError, OSError, OverflowError) as e:
             print(f"Warning: Invalid FILETIME value {filetime}: {e}")
-            return None
-    
+            return None    
     def detect_windows_version(self, data: bytes) -> str:
         """
         Detect Windows version based on ShimCache data patterns.

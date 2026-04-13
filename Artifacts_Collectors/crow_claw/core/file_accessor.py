@@ -51,7 +51,11 @@ class FileAccessor:
         
         Standard copy strategy is always available. VSS and raw disk access
         strategies are only added if admin privileges are detected.
+        Image access strategies are always available for forensic image formats.
         """
+        import importlib.util
+        import os
+        import sys
         from .standard_copy_strategy import StandardCopyStrategy
         from .vss_access_strategy import VSSAccessStrategy
         from .raw_disk_access_strategy import RawDiskAccessStrategy
@@ -66,6 +70,78 @@ class FileAccessor:
             # VSS can still create snapshots on-demand during access_file()
             self.strategies.append(VSSAccessStrategy())
             self.strategies.append(RawDiskAccessStrategy())
+        
+        # Add image access strategies (always available, don't require admin)
+        # Import with try/except to handle missing dependencies gracefully
+        # Use importlib to handle directory name with spaces
+        
+        # Get the path to Artifacts_Collectors directory
+        artifacts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        forensics_dir = os.path.join(artifacts_dir, 'Forensics_Image_parsing', 'strategies')
+        
+        # Add to sys.path temporarily if needed
+        if artifacts_dir not in sys.path:
+            sys.path.insert(0, artifacts_dir)
+        
+        try:
+            # Import E01AccessStrategy
+            spec = importlib.util.spec_from_file_location(
+                "e01_access_strategy",
+                os.path.join(forensics_dir, "e01_access_strategy.py")
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.strategies.append(module.E01AccessStrategy())
+        except Exception as e:
+            print(f"[WARNING] E01AccessStrategy not available: {e}")
+        
+        try:
+            # Import VHDXAccessStrategy
+            spec = importlib.util.spec_from_file_location(
+                "vhdx_access_strategy",
+                os.path.join(forensics_dir, "vhdx_access_strategy.py")
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.strategies.append(module.VHDXAccessStrategy())
+        except Exception as e:
+            print(f"[WARNING] VHDXAccessStrategy not available: {e}")
+        
+        try:
+            # Import VMDKAccessStrategy
+            spec = importlib.util.spec_from_file_location(
+                "vmdk_access_strategy",
+                os.path.join(forensics_dir, "vmdk_access_strategy.py")
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.strategies.append(module.VMDKAccessStrategy())
+        except Exception as e:
+            print(f"[WARNING] VMDKAccessStrategy not available: {e}")
+        
+        try:
+            # Import ISOAccessStrategy
+            spec = importlib.util.spec_from_file_location(
+                "iso_access_strategy",
+                os.path.join(forensics_dir, "iso_access_strategy.py")
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.strategies.append(module.ISOAccessStrategy())
+        except Exception as e:
+            print(f"[WARNING] ISOAccessStrategy not available: {e}")
+        
+        try:
+            # Import RawAccessStrategy
+            spec = importlib.util.spec_from_file_location(
+                "raw_access_strategy",
+                os.path.join(forensics_dir, "raw_access_strategy.py")
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.strategies.append(module.RawAccessStrategy())
+        except Exception as e:
+            print(f"[WARNING] RawAccessStrategy not available: {e}")
     
     def access_file_with_retry(
         self,

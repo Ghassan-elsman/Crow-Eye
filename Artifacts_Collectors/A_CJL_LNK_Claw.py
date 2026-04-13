@@ -1209,9 +1209,14 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True):
             # Offline mode - process artifacts from the case directory
             print("\n=== OFFLINE MODE ===")
             print("Processing artifacts from case directory")
-            # No collection needed, files should already be in the target directories
+            # Files should be in live_acquisition (from extraction)
+            folder_path = os.path.join(case_path, "live_acquisition", "C_AJL_Lnk")
             
-            folder_path = TARGET_BASE_DIR  # Process the entire target directory
+            # Fallback to Target_Artifacts if not in live_acquisition
+            if not os.path.exists(folder_path):
+                folder_path = TARGET_BASE_DIR
+            
+            print(f"Source directory: {folder_path}")
             if not os.path.exists(folder_path):
                 print(f"Creating folder path: {folder_path}")
                 os.makedirs(folder_path, exist_ok=True)

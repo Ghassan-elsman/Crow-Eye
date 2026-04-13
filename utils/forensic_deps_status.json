@@ -1,0 +1,44 @@
+{
+  "pycdlib": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-04-10T20:38:20.411594",
+    "platform": "Windows"
+  },
+  "pytsk3": {
+    "status": "failed",
+    "message": "Compilation failed: pip install failed:   error: subprocess-exited-with-error\n  \n  Building wheel for pytsk3 (pyproject.toml) did not run successfully.\n  exit code: 1\n  \n  [42 lines of output]\n  <string>:47: DeprecationWarning: dep_util is . Use external mounting tools as alternative.",
+    "timestamp": "2026-04-08T21:18:03.728945",
+    "platform": "Windows"
+  },
+  "pyewf": {
+    "status": "skipped",
+    "message": "Not available on Windows. Fallback: External mounting tools",
+    "timestamp": "2026-04-08T21:12:21.019571",
+    "platform": "Windows"
+  },
+  "pyvhdi": {
+    "status": "skipped",
+    "message": "Not available on Windows. Fallback: External mounting tools",
+    "timestamp": "2026-04-08T21:12:21.020735",
+    "platform": "Windows"
+  },
+  "pyvmdk": {
+    "status": "skipped",
+    "message": "Not available on Windows. Fallback: External mounting tools",
+    "timestamp": "2026-04-08T21:12:21.021751",
+    "platform": "Windows"
+  },
+  "dissect.target": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-04-10T20:38:20.524762",
+    "platform": "Windows"
+  },
+  "dissect.volume": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-04-10T20:38:20.526334",
+    "platform": "Windows"
+  }
+}

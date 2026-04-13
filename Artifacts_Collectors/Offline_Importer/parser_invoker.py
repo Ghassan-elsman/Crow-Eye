@@ -40,13 +40,13 @@ class ParserInvoker:
     def __init__(self, case_root: str):
         """
         Initialize parser invoker.
-        
+
         Args:
             case_root: Path to case directory root
         """
         self.case_root = Path(case_root)
-        self.target_artifacts_dir = self.case_root / 'Target_Artifacts'
-    
+        self.input_dir = self.case_root / 'live_acquisition'
+        self.target_artifacts_dir = self.case_root / 'Target_Artifacts'    
     def _validate_path_in_case(self, path: str) -> tuple[bool, str]:
         """
         Validate that path is within case directory.
@@ -597,7 +597,7 @@ class ParserInvoker:
                 logger.info(f"Using Prefetch directory from artifacts: {prefetch_dir}")
             else:
                 # Fallback to standard location
-                prefetch_dir = os.path.join(self.target_artifacts_dir, 'Prefetch')
+                prefetch_dir = os.path.join(self.input_dir, 'Prefetch')
                 logger.info(f"Using standard Prefetch directory: {prefetch_dir}")
             
             # Prefetch parser doesn't need registry hive paths
@@ -710,7 +710,8 @@ class ParserInvoker:
             # and don't require registry context
             
             result = run_offline_acjl(
-                case_path=self.case_root
+                case_path=self.case_root,
+                direct_parse=False
                 # Removed: registry_hive_paths parameter (parser doesn't accept it)
             )
             
@@ -719,7 +720,7 @@ class ParserInvoker:
                 logger.warning(f"JumpLists parser returned invalid format: {type(result).__name__} instead of dict")
                 result = {'success': False, 'records': 0, 'error': f'Parser returned invalid format: {type(result).__name__}'}
             
-            output_path = os.path.join(self.target_artifacts_dir, 'C_AJL_Lnk', 'LnkDB.db')
+            output_path = os.path.join(self.target_artifacts_dir, 'LnkDB.db')
             
             # Create initial ParserResult
             parser_result = ParserResult(
@@ -761,10 +762,15 @@ class ParserInvoker:
         try:
             from Artifacts_Collectors.offline_parsers.offline_RecycleBinClaw import run_offline_recyclebin
             
+            # Use input_dir/RecycleBin as the default artifact directory
+            artifact_dir = kwargs.get('artifact_dir')
+            if not artifact_dir or not os.path.exists(artifact_dir):
+                artifact_dir = os.path.join(self.input_dir, 'RecycleBin')
+            
             result = run_offline_recyclebin(
                 case_path=self.case_root,
                 network_paths=kwargs.get('network_paths'),
-                artifact_dir=kwargs.get('artifact_dir')
+                artifact_dir=artifact_dir
             )
             
             # Defensive check: Ensure result is a dict
@@ -939,9 +945,9 @@ class ParserInvoker:
             from Artifacts_Collectors.offline_parsers.offline_WinLog_Claw import main as run_offline_winlog
             
             # EVTX parser expects evtx_dir and case_path
-            evtx_dir = os.path.join(self.case_root, 'live_acquisition', 'event_logs')
+            evtx_dir = os.path.join(self.input_dir, 'EVTX_Logs')
             
-            # Check if event_logs directory exists
+            # Check if EVTX_Logs directory exists
             if not os.path.exists(evtx_dir):
                 return ParserResult(
                     success=False,
@@ -996,17 +1002,6 @@ class ParserInvoker:
             sanitized_error = self._sanitize_dependency_error(error_message, error_type, str(artifact_path))
             
             return ParserResult(success=False, artifact_type='EVTX', records_parsed=0, output_path="", errors=[sanitized_error], execution_time=time.time() - start_time)
-            artifact_path = kwargs.get('artifact_path', kwargs.get('evtx_dir', 'unknown'))
-            
-            # Log full exception details before sanitizing
-            logger.error(f"EVTX parser failed - Type: {error_type}, Path: {artifact_path}")
-            logger.error(f"Error message: {error_message}")
-            logger.error(f"Stack trace:\n{stack_trace}")
-            
-            # Sanitize error for user display with context
-            sanitized_error = self._sanitize_dependency_error(error_message, error_type, str(artifact_path))
-            
-            return ParserResult(success=False, artifact_type='EVTX', records_parsed=0, output_path="", errors=[sanitized_error], execution_time=time.time() - start_time)
 
     def _invoke_srum_parser(self, start_time: float, **kwargs) -> ParserResult:
         """Invoke SRUM (System Resource Usage Monitor) parser using offline_SRUM_Claw."""
@@ -1014,7 +1009,7 @@ class ParserInvoker:
             from Artifacts_Collectors.offline_parsers.offline_SRUM_Claw import main as run_offline_srum
             
             # SRUM parser expects srudb_path and case_path
-            srudb_path = os.path.join(self.case_root, 'live_acquisition', 'srum_database', 'SRUDB.dat')
+            srudb_path = os.path.join(self.input_dir, 'SRUM_Data', 'SRUDB.dat')
             
             # Check if SRUDB.dat exists
             if not os.path.exists(srudb_path):
@@ -1224,6 +1219,11 @@ class ParserInvoker:
         # Process each artifact type in the specified order
         processed_count = 0
         for artifact_type in ordered_types:
+            # Skip unknown artifact types silently - they are files we collected but have no parser for
+            if artifact_type == 'Unknown':
+                processed_count += len(artifacts_by_type[artifact_type])
+                continue
+
             type_artifacts = artifacts_by_type[artifact_type]
             
             # Check for cancellation

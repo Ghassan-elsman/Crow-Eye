@@ -26,7 +26,7 @@ except ImportError:
             sys.path.insert(0, grandparent_dir)
         from Artifacts_Collectors.A_CJL_LNK_Claw import A_CJL_LNK_Claw
 
-def run_offline_acjl(case_path, registry_hive_paths=None):
+def run_offline_acjl(case_path, registry_hive_paths=None, direct_parse=False):
     """
     Run Jump Lists and LNK analysis in offline mode.
     
@@ -34,6 +34,7 @@ def run_offline_acjl(case_path, registry_hive_paths=None):
         case_path (str): Path to the case directory
         registry_hive_paths (dict, optional): DEPRECATED - Not used by this parser.
                                               Kept for backward compatibility only.
+        direct_parse (bool, optional): Whether to parse artifacts directly.
     
     Note:
         JumpLists/LNK parser operates on file artifacts (.lnk, .automaticDestinations-ms)
@@ -50,7 +51,7 @@ def run_offline_acjl(case_path, registry_hive_paths=None):
         result = A_CJL_LNK_Claw(
             case_path=case_path,
             offline_mode=True,
-            direct_parse=True
+            direct_parse=direct_parse
             # Removed: registry_hive_paths parameter (underlying function doesn't accept it)
         )
         return result

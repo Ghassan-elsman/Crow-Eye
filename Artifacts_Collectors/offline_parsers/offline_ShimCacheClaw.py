@@ -112,6 +112,7 @@ def run_offline_shimcache(case_path):
     possible_dirs = [
         os.path.join(case_path, "live_acquisition", "Registry_Hives"),
         os.path.join(case_path, "live_acquisition", "registry"),
+        os.path.join(case_path, "live_acquisition", "ShimCache"),
     ]
     
     system_hive = None

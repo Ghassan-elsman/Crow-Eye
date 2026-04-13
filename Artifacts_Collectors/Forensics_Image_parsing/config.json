@@ -1,0 +1,46 @@
+{
+  "default_artifact_types": [
+    "Registry",
+    "Prefetch",
+    "JumpLists",
+    "MFT",
+    "USN",
+    "AmCache",
+    "RecycleBin",
+    "EVTX",
+    "SRUM"
+  ],
+  "calculate_hashes": true,
+  "verify_integrity": true,
+  "max_retries": 3,
+  "chunk_size_mb": 1,
+  "enable_caching": true,
+  "cache_size_mb": 100,
+  "supported_formats": {
+    "E01": {
+      "extensions": [".E01", ".Ex01", ".e01", ".ex01"],
+      "library": "dissect.target",
+      "description": "Expert Witness Format (EnCase)"
+    },
+    "VHDX": {
+      "extensions": [".vhdx", ".vhd", ".VHDX", ".VHD"],
+      "library": "dissect.target",
+      "description": "Virtual Hard Disk (Hyper-V)"
+    },
+    "VMDK": {
+      "extensions": [".vmdk", ".VMDK"],
+      "library": "dissect.target",
+      "description": "Virtual Machine Disk (VMware)"
+    },
+    "ISO": {
+      "extensions": [".iso", ".ISO"],
+      "library": "pycdlib",
+      "description": "ISO 9660 Optical Disc Image"
+    },
+    "RAW": {
+      "extensions": [".dd", ".raw", ".img", ".DD", ".RAW", ".IMG", ".001"],
+      "library": "dissect.target",
+      "description": "Raw Disk Image"
+    }
+  }
+}

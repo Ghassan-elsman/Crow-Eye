@@ -348,11 +348,8 @@ class StandardInformationParser(MFTAttributeParser):
                 return None
             
             # Convert from 100-nanosecond intervals since 1601-01-01
-            seconds_since_1601 = ft / 10000000
-            epoch_diff = 11644473600  # Seconds between 1601 and 1970
-            seconds_since_1970 = seconds_since_1601 - epoch_diff
-            
-            return datetime.datetime.fromtimestamp(seconds_since_1970, tz=datetime.timezone.utc)
+            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+            return windows_epoch + datetime.timedelta(microseconds=ft / 10.0)
         except (ValueError, OverflowError, OSError):
             return None
 
@@ -439,11 +436,8 @@ class FileNameParser(MFTAttributeParser):
             if ft == 0:
                 return None
             
-            seconds_since_1601 = ft / 10000000
-            epoch_diff = 11644473600
-            seconds_since_1970 = seconds_since_1601 - epoch_diff
-            
-            return datetime.datetime.fromtimestamp(seconds_since_1970, tz=datetime.timezone.utc)
+            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+            return windows_epoch + datetime.timedelta(microseconds=ft / 10.0)
         except (ValueError, OverflowError, OSError):
             return None
 

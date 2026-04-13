@@ -340,8 +340,9 @@ def filetime_to_datetime(filetime_value):
         return None
     # FILETIME is 100-nanosecond intervals since Jan 1, 1601 (UTC)
     try:
-        ts = (ft / 10_000_000.0) - 11644473600  # convert to seconds since epoch
-        return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).isoformat()
+        windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+        dt = windows_epoch + datetime.timedelta(microseconds=ft / 10.0)
+        return dt.isoformat()
     except Exception:
         return None
 

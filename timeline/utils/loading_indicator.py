@@ -213,6 +213,15 @@ class LoadingOverlay(QWidget):
         self.artifact_label.hide()
         self.event_count_label.hide()
     
+    def set_message(self, message):
+        """
+        Set the loading message text.
+        
+        Args:
+            message (str): Loading message to display
+        """
+        self.show_loading(message)
+    
     def show_loading(self, message="Loading..."):
         """
         Show the loading overlay with a message.

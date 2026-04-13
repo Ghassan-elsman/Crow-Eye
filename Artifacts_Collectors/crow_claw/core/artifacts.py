@@ -17,17 +17,17 @@ import glob
 
 class ArtifactType(Enum):
     """Enumeration of all collectible forensic artifact types."""
-    REGISTRY_HIVES = "registry"
-    PREFETCH = "prefetch"
-    AMCACHE = "amcache"
-    JUMPLISTS_LNK = "jumplists_lnk"
-    MFT = "mft"
-    USN_JOURNAL = "usn_journal"
-    RECYCLE_BIN = "recycle_bin"
-    EVENT_LOGS = "event_logs"
-    SRUM_DATABASE = "srum_database"
-    SHIMCACHE = "shimcache"
-    PARTITION_INFO = "partition_info"
+    REGISTRY_HIVES = "Registry"
+    PREFETCH = "Prefetch"
+    AMCACHE = "AmCache"
+    JUMPLISTS_LNK = "JumpLists"
+    MFT = "MFT"
+    USN_JOURNAL = "USN"
+    RECYCLE_BIN = "RecycleBin"
+    EVENT_LOGS = "EVTX"
+    SRUM_DATABASE = "SRUM"
+    SHIMCACHE = "ShimCache"
+    PARTITION_INFO = "PartitionInfo"
 
 
 @dataclass
@@ -212,13 +212,15 @@ def create_jumplists_lnk_artifact() -> Artifact:
         name="Jump Lists & LNK Files",
         artifact_type=ArtifactType.JUMPLISTS_LNK,
         default_paths=[
-            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent",
-            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent Automatic Destinations",
-            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent Custom Destinations",
-            r"{PARTITION}\Users\*\Desktop",
-            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Recent",
-            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned Items",
-            r"{PARTITION}\Users\*\AppData\Local\Microsoft\Windows\Explorer",
+            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent\*",
+            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations\*",
+            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations\*",
+            r"{PARTITION}\Users\*\Desktop\*",
+            r"{PARTITION}\Users\Public\Desktop\*",
+            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Recent\*",
+            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\**",
+            r"{PARTITION}\Users\*\AppData\Local\Microsoft\Windows\ApplicationShortcuts\*",
+            r"{PARTITION}\Users\*\AppData\Local\Microsoft\Windows\Explorer\*.db",
         ],
         description="Shortcut files (.lnk) and Jump Lists tracking recently accessed files, shortcuts, and application usage patterns",
         required_admin=False,
