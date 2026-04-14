@@ -231,8 +231,11 @@ def setup_virtual_environment():
             # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
 
             script_path = os.path.abspath(sys.argv[0])
-            subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
-            sys.exit(0)  # Exit current process after starting the new one
+            if os.name == 'nt':
+                subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
+                sys.exit(0)  # Exit current process after starting the new one
+            else:
+                os.execv(venv_python, [venv_python, script_path] + sys.argv[1:])
         else:
             print(f'  -> Virtual environment Python not found at {venv_python}')
             input('Press Enter to continue with global Python environment...')
