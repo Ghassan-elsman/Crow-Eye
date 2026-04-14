@@ -113,21 +113,32 @@ class PathValidator:
             List of drive letters (e.g., ['C:', 'D:', 'E:'])
         """
         partitions = []
-        try:
-            # Try Windows-specific method
-            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
-            for i in range(26):
-                if bitmask & (1 << i):
-                    drive = f"{chr(65 + i)}:"
-                    partitions.append(drive)
-        except (AttributeError, OSError):
-            # Fallback for non-Windows or import failure
-            for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
-                drive = f"{letter}:"
-                if os.path.exists(drive):
-                    partitions.append(drive)
+        if os.name == 'nt':
+            try:
+                # Try Windows-specific method
+                import ctypes
+                bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+                for i in range(26):
+                    if bitmask & (1 << i):
+                        drive = f"{chr(65 + i)}:"
+                        partitions.append(drive)
+            except (AttributeError, OSError):
+                # Fallback for Windows
+                for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+                    drive = f"{letter}:"
+                    if os.path.exists(drive + "\\"):
+                        partitions.append(drive)
+        else:
+            # Linux/macOS fallback using root and mounts
+            try:
+                import psutil
+                for part in psutil.disk_partitions(all=False):
+                    if part.mountpoint:
+                        partitions.append(part.mountpoint)
+            except ImportError:
+                partitions.append("/")
 
-        return sorted(partitions)
+        return sorted(list(set(partitions)))
 
     @staticmethod
     def is_admin() -> bool:
@@ -137,11 +148,17 @@ class PathValidator:
         Returns:
             True if running as admin
         """
-        try:
-            return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        except (AttributeError, OSError):
-            # Non-Windows system
-            return os.getuid() == 0 if hasattr(os, 'getuid') else False
+        if os.name == 'nt':
+            try:
+                import ctypes
+                return ctypes.windll.shell32.IsUserAnAdmin() != 0
+            except (AttributeError, OSError):
+                return False
+        else:
+            try:
+                return os.getuid() == 0
+            except (AttributeError, OSError):
+                return False
 
     @staticmethod
     def get_admin_status_string() -> str:

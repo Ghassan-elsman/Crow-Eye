@@ -390,10 +390,16 @@ def get_file_size(handle):
 # --------- Admin check ----------
 def is_admin():
     """Check if the script is running with administrator privileges."""
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except Exception:
-        return False
+    if os.name == 'nt':
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        except Exception:
+            return False
+    else:
+        try:
+            return os.getuid() == 0
+        except Exception:
+            return False
 
 # --------- Volume discovery ----------
 def get_ntfs_volumes():

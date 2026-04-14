@@ -70,11 +70,17 @@ class RawDiskAccessStrategy(FileAccessStrategy):
         Requirements:
             - 3.3: Check admin privileges before raw disk access
         """
-        try:
-            import ctypes
-            return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        except Exception:
-            return False
+        if os.name == 'nt':
+            try:
+                import ctypes
+                return ctypes.windll.shell32.IsUserAnAdmin() != 0
+            except Exception:
+                return False
+        else:
+            try:
+                return os.getuid() == 0
+            except:
+                return False
     
     def can_handle(self, file_path: str, artifact_type: str) -> bool:
         """Check if this strategy can handle the file.

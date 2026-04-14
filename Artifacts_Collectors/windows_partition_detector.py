@@ -54,11 +54,11 @@ class WindowsPartitionDetector:
     
     # Critical Windows system files used for verification
     CRITICAL_SYSTEM_FILES = [
-        "Windows\\System32\\ntoskrnl.exe",
-        "Windows\\System32\\kernel32.dll",
-        "Windows\\System32\\ntdll.dll",
-        "Windows\\System32\\config\\SYSTEM",
-        "Windows\\System32\\config\\SOFTWARE"
+        os.path.join("Windows", "System32", "ntoskrnl.exe"),
+        os.path.join("Windows", "System32", "kernel32.dll"),
+        os.path.join("Windows", "System32", "ntdll.dll"),
+        os.path.join("Windows", "System32", "config", "SYSTEM"),
+        os.path.join("Windows", "System32", "config", "SOFTWARE")
     ]
     
     # Minimum number of critical files that must exist for verification
@@ -90,20 +90,27 @@ class WindowsPartitionDetector:
             system_root = os.getenv('SystemRoot')
             
             if not system_root:
+                if os.name != 'nt':
+                    logger.warning("SystemRoot not available on non-Windows system")
+                    return ""
                 raise RuntimeError(
                     "SystemRoot environment variable is not set. "
                     "This may not be a Windows system or environment is corrupted."
                 )
             
-            # Extract partition letter (first character before colon)
-            if ':' not in system_root:
-                raise ValueError(
-                    f"Invalid SystemRoot format: {system_root}. "
-                    "Expected format like 'C:\\Windows'"
-                )
-            
-            partition_letter = system_root.split(':')[0] + ':'
-            partition_path = partition_letter + '\\'
+            # Extract partition letter
+            if os.name == 'nt':
+                if ':' not in system_root:
+                    raise ValueError(
+                        f"Invalid SystemRoot format: {system_root}. "
+                        "Expected format like 'C:\\Windows'"
+                    )
+                partition_letter = system_root.split(':')[0] + ':'
+                partition_path = partition_letter + os.path.sep
+            else:
+                # On Linux, SystemRoot might be /mnt/windows/Windows
+                partition_path = system_root.split('Windows')[0]
+                partition_letter = partition_path
             
             logger.info(f"Detected Windows partition: {partition_letter}")
             logger.info(f"SystemRoot: {system_root}")
@@ -133,7 +140,7 @@ class WindowsPartitionDetector:
                     f"SystemRoot points to {partition_letter}, but verification failed. "
                     "Windows installation may be corrupted."
                 )
-                return partition_letter  # Return anyway, but log warning
+                return partition_letter
                 
         except Exception as e:
             logger.error(f"Error detecting Windows partition on live system: {e}")
@@ -166,44 +173,71 @@ class WindowsPartitionDetector:
         
         # Scan each partition
         for partition_path in mounted_partitions:
-            # Ensure partition path ends with backslash
-            if not partition_path.endswith('\\'):
-                partition_path += '\\'
+            # Ensure partition path ends with separator
+            if not partition_path.endswith(os.path.sep):
+                partition_path += os.path.sep
             
-            # Extract partition letter
-            partition_letter = partition_path.rstrip('\\').split(':')[0] + ':'
+            # Extract partition identifier
+            if os.name == 'nt':
+                partition_letter = partition_path.rstrip(os.path.sep).split(':')[0] + ':'
+            else:
+                partition_letter = partition_path
             
             logger.debug(f"Checking partition: {partition_path}")
             
-            # Check if Windows directory exists
-            windows_dir = os.path.join(partition_path, "Windows")
-            system32_dir = os.path.join(windows_dir, "System32")
+            # Case-insensitive directory check for Linux
+            windows_dir_name = "Windows"
+            if os.name != 'nt':
+                try:
+                    entries = os.listdir(partition_path)
+                    for entry in entries:
+                        if entry.lower() == "windows":
+                            windows_dir_name = entry
+                            break
+                except:
+                    pass
+
+            windows_dir = os.path.join(partition_path, windows_dir_name)
             
-            if os.path.exists(windows_dir) and os.path.exists(system32_dir):
-                logger.info(f"Found Windows directory structure on {partition_letter}")
+            if os.path.exists(windows_dir):
+                system32_dir_name = "System32"
+                if os.name != 'nt':
+                    try:
+                        entries = os.listdir(windows_dir)
+                        for entry in entries:
+                            if entry.lower() == "system32":
+                                system32_dir_name = entry
+                                break
+                    except:
+                        pass
                 
-                # Verify the installation
-                if self.verify_windows_installation(partition_path):
-                    windows_version = self._detect_windows_version(partition_path)
+                system32_dir = os.path.join(windows_dir, system32_dir_name)
+                
+                if os.path.exists(system32_dir):
+                    logger.info(f"Found Windows directory structure on {partition_letter}")
                     
-                    result = WindowsDetectionResult(
-                        partition_letter=partition_letter,
-                        partition_path=partition_path,
-                        windows_version=windows_version,
-                        system_root=os.path.join(partition_path, "Windows"),
-                        detection_method="filesystem_scan",
-                        confidence="high",
-                        verification_files=self._get_found_verification_files(partition_path)
-                    )
-                    
-                    self.detected_partitions.append(result)
-                    windows_partitions.append(partition_letter)
-                    logger.info(f"Verified Windows installation on {partition_letter}")
-                else:
-                    logger.warning(
-                        f"Windows directory found on {partition_letter}, "
-                        "but verification failed (insufficient critical files)"
-                    )
+                    # Verify the installation
+                    if self.verify_windows_installation(partition_path):
+                        windows_version = self._detect_windows_version(partition_path)
+                        
+                        result = WindowsDetectionResult(
+                            partition_letter=partition_letter,
+                            partition_path=partition_path,
+                            windows_version=windows_version,
+                            system_root=windows_dir,
+                            detection_method="filesystem_scan",
+                            confidence="high",
+                            verification_files=self._get_found_verification_files(partition_path)
+                        )
+                        
+                        self.detected_partitions.append(result)
+                        windows_partitions.append(partition_letter)
+                        logger.info(f"Verified Windows installation on {partition_letter}")
+                    else:
+                        logger.warning(
+                            f"Windows directory found on {partition_letter}, "
+                            "but verification failed (insufficient critical files)"
+                        )
         
         if not windows_partitions:
             logger.warning("No Windows installations found on any partition")
@@ -227,23 +261,48 @@ class WindowsPartitionDetector:
         """
         logger.debug(f"Verifying Windows installation on {partition_path}")
         
-        # Ensure partition path ends with backslash
-        if not partition_path.endswith('\\'):
-            partition_path += '\\'
+        # Ensure partition path ends with separator
+        if not partition_path.endswith(os.path.sep):
+            partition_path += os.path.sep
         
         found_files = 0
         missing_files = []
         
         # Check for critical system files
-        for file_path in self.CRITICAL_SYSTEM_FILES:
-            full_path = os.path.join(partition_path, file_path)
+        for rel_file_path in self.CRITICAL_SYSTEM_FILES:
+            full_path = os.path.join(partition_path, rel_file_path)
             
+            # Case-insensitive file check for Linux
+            if os.name != 'nt' and not os.path.exists(full_path):
+                # Try to find the file case-insensitively
+                parts = rel_file_path.split(os.path.sep)
+                current_path = partition_path
+                all_parts_found = True
+                for part in parts:
+                    found_part = False
+                    try:
+                        entries = os.listdir(current_path)
+                        for entry in entries:
+                            if entry.lower() == part.lower():
+                                current_path = os.path.join(current_path, entry)
+                                found_part = True
+                                break
+                    except:
+                        pass
+                    
+                    if not found_part:
+                        all_parts_found = False
+                        break
+                
+                if all_parts_found:
+                    full_path = current_path
+
             if os.path.exists(full_path):
                 found_files += 1
-                logger.debug(f"  ✓ Found: {file_path}")
+                logger.debug(f"  ✓ Found: {rel_file_path}")
             else:
-                missing_files.append(file_path)
-                logger.debug(f"  ✗ Missing: {file_path}")
+                missing_files.append(rel_file_path)
+                logger.debug(f"  ✗ Missing: {rel_file_path}")
         
         # Verify minimum number of critical files exist
         is_valid = found_files >= self.MIN_VERIFICATION_FILES

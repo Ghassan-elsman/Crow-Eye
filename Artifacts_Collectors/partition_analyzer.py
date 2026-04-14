@@ -132,10 +132,16 @@ GPT_PARTITION_TYPES = PARTITION_TYPE_GUIDS
 
 def check_admin_privileges() -> bool:
     """Check if the script is running with administrator privileges."""
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except:
-        return False
+    if os.name == 'nt':
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except:
+            return False
+    else:
+        try:
+            return os.getuid() == 0
+        except:
+            return False
 
 
 @dataclass
@@ -280,23 +286,29 @@ class PartitionAnalyzer:
                 part_info.is_linux = self._is_linux_partition(partition)
                 
                 # === NEW: Windows hibernation & modern swap detection (for mounted NTFS) ===
-                if part_info.mountpoint and part_info.mountpoint.endswith(":\\") and os.path.exists(part_info.mountpoint):
-                    try:
-                        # Windows 10/11 uses swapfile.sys (virtual swap)
-                        if os.path.exists(os.path.join(part_info.mountpoint, "swapfile.sys")):
-                            part_info.is_swap = True
-                            if "Basic" in part_info.partition_type or part_info.partition_type == "Unknown":
-                                part_info.partition_type = "Windows Swap Partition (swapfile.sys)"
-                            if not part_info.volume_label:
-                                part_info.volume_label = "Windows Virtual Swap"
+                if part_info.mountpoint and os.path.exists(part_info.mountpoint):
+                    is_windows_mount = (os.name == 'nt' and part_info.mountpoint.endswith(":\\")) or \
+                                     (os.name != 'nt' and part_info.is_system)
+                    
+                    if is_windows_mount:
+                        try:
+                            # Windows 10/11 uses swapfile.sys (virtual swap)
+                            swapfile = os.path.join(part_info.mountpoint, "swapfile.sys")
+                            if os.path.exists(swapfile):
+                                part_info.is_swap = True
+                                if "Basic" in part_info.partition_type or part_info.partition_type == "Unknown":
+                                    part_info.partition_type = "Windows Swap Partition (swapfile.sys)"
+                                if not part_info.volume_label:
+                                    part_info.volume_label = "Windows Virtual Swap"
 
-                        # hiberfil.sys = hibernation file = effectively swap when system hibernates
-                        if os.path.exists(os.path.join(part_info.mountpoint, "hiberfil.sys")):
-                            part_info.is_swap = True
-                            if "Hibernation" not in part_info.partition_type:
-                                part_info.partition_type += " (Hibernation)"
-                    except (PermissionError, OSError, FileNotFoundError):
-                        pass
+                            # hiberfil.sys = hibernation file
+                            hiberfil = os.path.join(part_info.mountpoint, "hiberfil.sys")
+                            if os.path.exists(hiberfil):
+                                part_info.is_swap = True
+                                if "Hibernation" not in part_info.partition_type:
+                                    part_info.partition_type += " (Hibernation)"
+                        except (PermissionError, OSError, FileNotFoundError):
+                            pass
                 
                 # Get additional Windows-specific info if WMI is available
                 if self.wmi_available:

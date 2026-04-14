@@ -840,6 +840,13 @@ def parse_amcache_hive(case_path=None, offline_mode=False, db_path=None, windows
         # Offline mode - use provided path
         if case_path and os.path.exists(case_path):
             filepath = os.path.join(case_path, "Amcache.hve")
+            
+            # Case-insensitive check for Linux
+            if not os.path.exists(filepath):
+                for f in os.listdir(case_path):
+                    if f.lower() == "amcache.hve":
+                        filepath = os.path.join(case_path, f)
+                        break
         else:
             filepath = OFFLINE_AMCACHE_PATH
     else:
@@ -905,6 +912,17 @@ def amcache_parser(case_path=None, offline_mode=False, windows_partition="C:"):
                 if os.path.exists(path):
                     filepath = path
                     break
+                else:
+                    # Case-insensitive fallback for Linux
+                    dirname = os.path.dirname(path)
+                    basename = os.path.basename(path)
+                    if os.path.exists(dirname):
+                        for f in os.listdir(dirname):
+                            if f.lower() == basename.lower():
+                                filepath = os.path.join(dirname, f)
+                                break
+                    if filepath:
+                        break
             
             if not filepath:
                 filepath = possible_paths[0]  # Default to first option

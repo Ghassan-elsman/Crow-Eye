@@ -67,6 +67,15 @@ def is_admin():
 # Detect operating system
 IS_WINDOWS = os.name == 'nt'
 
+# Fix for PyQtWebEngine on Linux when running as root (disable sandbox)
+if not IS_WINDOWS:
+    try:
+        if os.getuid() == 0:
+            os.environ["QTWEBENGINE_ARGUMENTS"] = "--no-sandbox"
+    except AttributeError:
+        # getuid() not available on some non-Unix platforms
+        pass
+
 # Ensure the tool runs with administrator privileges on Windows
 if IS_WINDOWS:  # Check if running on Windows
     if not is_admin():
@@ -10865,6 +10874,19 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 
 if __name__ == "__main__":
     import sys
+    import os
+    
+    # ---------------------------------------------------------
+    # LINUX ROOT RUNTIME FIX
+    # Fixes: [ERROR:zygote_host_impl_linux.cc(90)] Running as root without --no-sandbox is not supported.
+    # Essential for running the QtWebEngine/Timeline visualization as root user in Linux distributions.
+    if sys.platform.startswith('linux'):
+        if hasattr(os, 'geteuid') and os.geteuid() == 0:
+            os.environ['QTWEBENGINE_DISABLE_SANDBOX'] = '1'
+            if '--no-sandbox' not in sys.argv:
+                sys.argv.append('--no-sandbox')
+    # ---------------------------------------------------------
+
     app = QtWidgets.QApplication(sys.argv)
     
     # Note: Qt message handler removed - all threading issues have been fixed at the source

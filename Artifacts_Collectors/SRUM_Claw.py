@@ -195,17 +195,22 @@ except ImportError:
 
 # Windows ESE API constants and types
 try:
-    esent = ctypes.windll.esent
-    ESENT_AVAILABLE = True
-    
-    # JET API types
-    JET_ERR = ctypes.c_long
-    JET_INSTANCE = c_void_p
-    JET_SESID = c_void_p
-    JET_DBID = wintypes.DWORD
-    JET_TABLEID = c_void_p
-    JET_COLUMNID = wintypes.DWORD
-    JET_GRBIT = wintypes.DWORD
+    if os.name == 'nt':
+        esent = ctypes.windll.esent
+        ESENT_AVAILABLE = True
+        
+        # JET API types
+        JET_ERR = ctypes.c_long
+        JET_INSTANCE = c_void_p
+        JET_SESID = c_void_p
+        JET_DBID = wintypes.DWORD
+        JET_TABLEID = c_void_p
+        JET_COLUMNID = wintypes.DWORD
+        JET_GRBIT = wintypes.DWORD
+    else:
+        ESENT_AVAILABLE = False
+        esent = None
+        JET_ERR = JET_INSTANCE = JET_SESID = JET_DBID = JET_TABLEID = JET_COLUMNID = JET_GRBIT = None
     
     # Additional ctypes for Windows API
     c_wchar_p = ctypes.c_wchar_p

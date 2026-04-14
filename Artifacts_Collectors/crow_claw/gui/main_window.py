@@ -2192,10 +2192,22 @@ class CrowClawMainWindow(QMainWindow):
 
     def open_output_folder(self):
         """Open output folder in explorer."""
-        if self.full_output_path:
-            os.startfile(self.full_output_path)
-        else:
+        if not self.full_output_path:
             QMessageBox.warning(self, "No Output", "Please select an output directory first")
+            return
+
+        import platform
+        import subprocess
+        
+        try:
+            if platform.system() == "Windows":
+                os.startfile(self.full_output_path)
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.Popen(["open", self.full_output_path])
+            else:  # Linux
+                subprocess.Popen(["xdg-open", self.full_output_path])
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not open folder: {e}")
 
     def view_manifest(self):
         """View collection manifest."""

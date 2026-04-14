@@ -184,16 +184,24 @@ class ArtifactCollector:
         """
         Detect if running with administrator privileges.
         
-        Uses ctypes to call Windows API IsUserAnAdmin().
+        Uses ctypes to call Windows API IsUserAnAdmin() on Windows,
+        or os.getuid() on Linux.
         
         Returns:
             True if running as administrator, False otherwise
         """
-        try:
-            return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        except Exception as e:
-            self.log(f"Warning: Could not detect admin privileges: {e}")
-            return False
+        if os.name == 'nt':
+            try:
+                import ctypes
+                return ctypes.windll.shell32.IsUserAnAdmin() != 0
+            except Exception as e:
+                self.log(f"Warning: Could not detect admin privileges: {e}")
+                return False
+        else:
+            try:
+                return os.getuid() == 0
+            except:
+                return False
     
     def get_admin_required_artifacts(self, artifacts: List) -> List[str]:
         """

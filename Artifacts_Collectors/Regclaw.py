@@ -39,9 +39,16 @@ def check_admin_privileges():
     Returns:
         bool: True if running as admin, False otherwise
     """
-    if platform.system() != "Windows":
-        return False
-    return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    if os.name == 'nt':
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except:
+            return False
+    else:
+        try:
+            return os.getuid() == 0
+        except:
+            return False
 
 def require_admin_privileges():
     """Require administrative privileges or exit.
@@ -49,12 +56,12 @@ def require_admin_privileges():
     This function should be called by operations that absolutely require admin access.
     For operations that can work with degraded functionality, use check_admin_privileges() instead.
     """
-    if platform.system() != "Windows":
-        print("Error: This script is designed for Windows systems only.")
-        exit(1)
-    if not ctypes.windll.shell32.IsUserAnAdmin():
-        print("Error: This script requires administrative privileges.")
-        print("Please run as Administrator to access all registry data.")
+    if not check_admin_privileges():
+        if os.name == 'nt':
+            print("Error: This script requires administrative privileges.")
+            print("Please run as Administrator to access all registry data.")
+        else:
+            print("Error: This operation requires root privileges on Linux.")
         exit(1)
 
 def get_current_user_sid():

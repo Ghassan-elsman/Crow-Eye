@@ -58,16 +58,22 @@ class VSSAccessStrategy(FileAccessStrategy):
         self._creation_attempted: dict[str, bool] = {}  # Track per volume
     
     def _check_admin_privileges(self) -> bool:
-        """Check if the current process has administrator privileges.
-        
+        """Check if current process has administrator privileges.
+
         Returns:
             True if running with admin privileges, False otherwise
         """
-        try:
-            import ctypes
-            return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        except Exception:
-            return False
+        if os.name == 'nt':
+            try:
+                import ctypes
+                return ctypes.windll.shell32.IsUserAnAdmin() != 0
+            except Exception:
+                return False
+        else:
+            try:
+                return os.getuid() == 0
+            except:
+                return False
     
     def _parse_datetime_flexible(self, time_str: str) -> Optional[datetime]:
         """Parse datetime string with multiple format attempts.

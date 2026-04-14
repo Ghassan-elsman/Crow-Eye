@@ -394,6 +394,9 @@ class RecycleBinParser:
     
     def _get_recycle_bin_path_windows_api(self) -> Optional[str]:
         """Get Recycle Bin path using Windows API."""
+        if os.name != 'nt':
+            return None
+
         try:
             # Use CSIDL_BITBUCKET to get Recycle Bin path
             from ctypes import create_unicode_buffer
