@@ -58,7 +58,7 @@ def update_target_directories(case_path=None):
 
 
 # System configuration
-SYSTEM_DRIVE = os.environ["SystemDrive"] + "\\"  
+SYSTEM_DRIVE = os.environ.get("SystemDrive", "C:") + "\\"  
 USER_PROFILES_PATH = os.path.join(SYSTEM_DRIVE, "Users")
 
 def create_target_directories():

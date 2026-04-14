@@ -1,4 +1,7 @@
-import win32evtlog
+try:
+    import win32evtlog
+except ImportError:
+    win32evtlog = None
 import sqlite3
 import os
 import sys

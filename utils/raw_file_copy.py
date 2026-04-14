@@ -32,35 +32,44 @@ FSCTL_GET_RETRIEVAL_POINTERS = 0x00090073
 FSCTL_GET_NTFS_VOLUME_DATA = 0x00090064
 
 # Load Windows API functions
-kernel32 = ctypes.windll.kernel32
+if os.name == 'nt':
+    kernel32 = ctypes.windll.kernel32
 
-CreateFileW = kernel32.CreateFileW
-CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                        c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-CreateFileW.restype = wintypes.HANDLE
+    CreateFileW = kernel32.CreateFileW
+    CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    CreateFileW.restype = wintypes.HANDLE
 
-ReadFile = kernel32.ReadFile
-ReadFile.argtypes = [wintypes.HANDLE, c_void_p, wintypes.DWORD,
-                     ctypes.POINTER(wintypes.DWORD), c_void_p]
-ReadFile.restype = wintypes.BOOL
+    ReadFile = kernel32.ReadFile
+    ReadFile.argtypes = [wintypes.HANDLE, c_void_p, wintypes.DWORD,
+                         ctypes.POINTER(wintypes.DWORD), c_void_p]
+    ReadFile.restype = wintypes.BOOL
 
-CloseHandle = kernel32.CloseHandle
-CloseHandle.argtypes = [wintypes.HANDLE]
-CloseHandle.restype = wintypes.BOOL
+    CloseHandle = kernel32.CloseHandle
+    CloseHandle.argtypes = [wintypes.HANDLE]
+    CloseHandle.restype = wintypes.BOOL
 
-SetFilePointer = kernel32.SetFilePointer
-SetFilePointer.argtypes = [wintypes.HANDLE, wintypes.LONG,
-                          ctypes.POINTER(wintypes.LONG), wintypes.DWORD]
-SetFilePointer.restype = wintypes.DWORD
+    SetFilePointer = kernel32.SetFilePointer
+    SetFilePointer.argtypes = [wintypes.HANDLE, wintypes.LONG,
+                              ctypes.POINTER(wintypes.LONG), wintypes.DWORD]
+    SetFilePointer.restype = wintypes.DWORD
 
-GetFileSizeEx = kernel32.GetFileSizeEx
-GetFileSizeEx.argtypes = [wintypes.HANDLE, ctypes.POINTER(c_ulonglong)]
-GetFileSizeEx.restype = wintypes.BOOL
+    GetFileSizeEx = kernel32.GetFileSizeEx
+    GetFileSizeEx.argtypes = [wintypes.HANDLE, ctypes.POINTER(c_ulonglong)]
+    GetFileSizeEx.restype = wintypes.BOOL
 
-DeviceIoControl = kernel32.DeviceIoControl
-DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, c_void_p, wintypes.DWORD,
-                           c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), c_void_p]
-DeviceIoControl.restype = wintypes.BOOL
+    DeviceIoControl = kernel32.DeviceIoControl
+    DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, c_void_p, wintypes.DWORD,
+                               c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), c_void_p]
+    DeviceIoControl.restype = wintypes.BOOL
+else:
+    kernel32 = None
+    CreateFileW = None
+    ReadFile = None
+    CloseHandle = None
+    SetFilePointer = None
+    GetFileSizeEx = None
+    DeviceIoControl = None
 
 
 class LARGE_INTEGER(ctypes.Structure):

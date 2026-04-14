@@ -678,11 +678,14 @@ def validate_dependencies():
         ('PyQt5', 'GUI framework'),
         ('PyQt5.QtWebEngineWidgets', 'Web visualization engine'),
         ('sqlite3', 'Database operations'),
-        ('win32evtlog', 'Windows event log access'),
         ('Registry', 'Registry parsing'),
         ('pandas', 'Data analysis'),
         ('psutil', 'System monitoring')
     ]
+    
+    # Add Windows-only dependencies if running on Windows
+    if IS_WINDOWS:
+        critical_deps.append(('win32evtlog', 'Windows event log access'))
     
     all_ok = True
     win32evtlog_fixed = False

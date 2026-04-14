@@ -1,5 +1,8 @@
 import sqlite3
-import winreg
+try:
+    import winreg
+except ImportError:
+    winreg = None
 import os
 import datetime
 import logging
