@@ -22,7 +22,7 @@ TABLE_NAME_MAPPING = {
     "ShimCache_table": "ShimCache",
     "ShimCache_main_table": "ShimCache",
     "MachineRun_table": "Machine Run",
-    "MachineRunOnce_tabel": "Machine Run Once",
+    "MachineRunOnce_table": "Machine Run Once",
     "UserRun_table": "User Run",
     "UserRunOnce_table": "User Run Once",
     "LastUpdate_table": "Last Update",

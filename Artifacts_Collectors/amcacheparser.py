@@ -403,6 +403,8 @@ class AmcacheParser:
                 )
                 """
                 cursor.execute(create_table_sql)
+                # Add index on id for fast duplicate checking
+                cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_id ON {table_name} (id)")
                 # Yield to UI periodically during database initialization
                 sys.stdout.flush()
             conn.commit()

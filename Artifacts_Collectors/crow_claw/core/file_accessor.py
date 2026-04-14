@@ -215,11 +215,18 @@ class FileAccessor:
                         
                         # Detect locked file errors (WinError 32 or WinError 5 with usage keywords)
                         error_lower = result.error.lower()
-                        if "winerror 32" in error_lower or "winerror 5" in error_lower or \
-                           "being used by another process" in error_lower or "access is denied" in error_lower:
+                        is_locked = "winerror 32" in error_lower or \
+                                    "being used by another process" in error_lower or \
+                                    "lock violation" in error_lower
+                        
+                        is_access_denied = "winerror 5" in error_lower or \
+                                          "access is denied" in error_lower or \
+                                          "permission denied" in error_lower
+                        
+                        if is_locked or is_access_denied:
                             locked_file_detected = True
-                            self._report_progress(f"[FILE_ACCESSOR] Locked file detected, breaking retry loop")
-                            # If we hit a lock, immediately break this strategy's retry loop
+                            self._report_progress(f"[FILE_ACCESSOR] Locked or Access Denied detected, breaking retry loop")
+                            # If we hit a lock or access denied, immediately break this strategy's retry loop
                             # and let the outer strategy loop move to the next strategy (VSS/Raw)
                             break
                         
@@ -339,7 +346,8 @@ class FileAccessor:
         elif any(keyword in error_msg.lower() for keyword in ['sharing violation', 'locked', 'being used']):
             # Create an OSError with sharing violation code
             error = OSError(error_msg)
-            error.winerror = ERROR_SHARING_VIOLATION
+            if os.name == 'nt':
+                error.winerror = ERROR_SHARING_VIOLATION
             return self.error_classifier.classify_error(error, context)
         else:
             # Generic OSError

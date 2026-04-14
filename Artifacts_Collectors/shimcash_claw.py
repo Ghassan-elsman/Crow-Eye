@@ -61,12 +61,14 @@ class ShimCacheEntry:
     
     def generate_hash(self) -> str:
         """
-        Generate MD5 hash of path and timestamp for duplicate detection.
+        Generate MD5 hash of path, timestamp, and metadata for robust duplicate detection.
         
         Returns:
             str: MD5 hash of the entry
         """
-        hash_input = f"{self.path}_{self.last_modified}".encode('utf-8')
+        # Include data_size and position to handle files that might have been 
+        # executed multiple times but share a timestamp (rare but possible in some OS versions)
+        hash_input = f"{self.path}_{self.last_modified}_{self.data_size}_{self.cache_entry_position}".encode('utf-8')
         return hashlib.md5(hash_input).hexdigest()
     
     def extract_filename(self):

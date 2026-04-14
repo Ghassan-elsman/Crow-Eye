@@ -400,7 +400,10 @@ class ShadowCopyManager:
         # Check 1: Administrator privileges
         logger.debug("[ShadowCopyManager] Checking administrator privileges")
         try:
-            is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+            if os.name == 'nt':
+                is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+            else:
+                is_admin = os.getuid() == 0
             checks["admin_privileges"] = is_admin
             
             if not is_admin:

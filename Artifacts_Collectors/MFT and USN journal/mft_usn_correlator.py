@@ -493,7 +493,7 @@ class MFTUSNCorrelator:
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             
             -- Unique constraint to prevent duplicate entries
-            UNIQUE(mft_record_number, fn_filename, usn_event_id, usn_timestamp)
+            UNIQUE(mft_record_number, fn_filename, usn_event_id, usn_timestamp, usn_reason)
         )
         """)
     
@@ -796,92 +796,97 @@ class MFTUSNCorrelator:
             fn_file_flags_text = file_attributes_to_text(fn_file_flags)
             
             # Check if this record has matching USN entries
-            usn_event_id = None
-            usn_value = None
-            usn_reason = None
-            usn_timestamp = None
-            usn_volume_letter = None
-            usn_file_attributes_val = None
-            usn_file_attributes_text = None
-            has_usn_event = 0
+            usn_events_to_process = []
             
             # Check if this MFT record has any corresponding USN events
             if record_num in usn_by_mft_record and usn_by_mft_record[record_num]:
-                # Use the most recent USN event for this file (last in list)
-                usn_event = usn_by_mft_record[record_num][-1]
-                usn_event_id = usn_event[usn_select_columns.index('usn')]
-                usn_value = usn_event[usn_select_columns.index('usn')]
-                usn_reason = usn_reason_to_text(usn_event[usn_select_columns.index('reason')])
-                usn_timestamp = usn_event[usn_select_columns.index('timestamp')]
-                usn_volume_letter = usn_event[usn_select_columns.index('source_info')]
-                
-                # Extract USN file attributes if available
-                try:
-                    usn_file_attributes_val = usn_event[usn_select_columns.index('file_attributes')]
-                    if usn_file_attributes_val is not None:
-                        usn_file_attributes_text = file_attributes_to_text(usn_file_attributes_val)
-                except (IndexError, ValueError):
-                    # File attributes column might not exist or be invalid
-                    usn_file_attributes_text = None
-                
-                has_usn_event = 1
+                usn_events_to_process = usn_by_mft_record[record_num]
                 matched_with_usn += 1
+            else:
+                # If no USN events, still process once for MFT record
+                usn_events_to_process = [None]
             
-            # Add to batch with all the glorious data
-            insert_batch.append((
-                record_num,
-                fn_filename,
-                reconstructed_path,
-                sequence_number,
-                flags_text,
-                is_directory,
-                is_deleted,
-                si_created,
-                si_modified,
-                si_mft_modified,
-                si_accessed,
-                si_file_attributes_text,
-                parent_record,
-                parent_sequence,  # fn_parent_sequence_number - now available from MFT data
-                fn_created,
-                fn_modified,
-                fn_mft_modified,
-                fn_accessed,
-                fn_allocated_size,
-                fn_real_size,
-                fn_file_flags_text,
-                namespace,  # fn_namespace - now available from MFT data
-                usn_event_id,
-                usn_timestamp,
-                usn_reason,
-                usn_volume_letter,
-                usn_file_attributes_text,  # usn_file_attributes - now extracted from USN data
-                1,  # has_mft_record
-                has_usn_event,
-                'HIGH' if has_usn_event else 'MEDIUM',
+            # Process each USN event (or once if no events)
+            for usn_event in usn_events_to_process:
+                usn_event_id = None
+                usn_value = None
+                usn_reason = None
+                usn_timestamp = None
+                usn_volume_letter = None
+                usn_file_attributes_val = None
+                usn_file_attributes_text = None
+                has_usn_event = 0
                 
-                # Forensic Analysis Fields - will be populated after correlation
-                None,  # filename_change_timeline (placeholder)
-                None  # namespace_evolution (placeholder)
-            ))
+                if usn_event:
+                    usn_event_id = usn_event[usn_select_columns.index('usn')]
+                    usn_value = usn_event[usn_select_columns.index('usn')]
+                    usn_reason = usn_reason_to_text(usn_event[usn_select_columns.index('reason')])
+                    usn_timestamp = usn_event[usn_select_columns.index('timestamp')]
+                    usn_volume_letter = usn_event[usn_select_columns.index('source_info')]
+                    
+                    # Extract USN file attributes if available
+                    try:
+                        usn_file_attributes_val = usn_event[usn_select_columns.index('file_attributes')]
+                        if usn_file_attributes_val is not None:
+                            usn_file_attributes_text = file_attributes_to_text(usn_file_attributes_val)
+                    except (IndexError, ValueError):
+                        usn_file_attributes_text = None
+                    
+                    has_usn_event = 1
+                
+                # Add to batch with all the glorious data
+                insert_batch.append((
+                    record_num,
+                    fn_filename,
+                    reconstructed_path,
+                    sequence_number,
+                    flags_text,
+                    is_directory,
+                    is_deleted,
+                    si_created,
+                    si_modified,
+                    si_mft_modified,
+                    si_accessed,
+                    si_file_attributes_text,
+                    parent_record,
+                    parent_sequence,
+                    fn_created,
+                    fn_modified,
+                    fn_mft_modified,
+                    fn_accessed,
+                    fn_allocated_size,
+                    fn_real_size,
+                    fn_file_flags_text,
+                    namespace,
+                    usn_event_id,
+                    usn_timestamp,
+                    usn_reason,
+                    usn_volume_letter,
+                    usn_file_attributes_text,
+                    1,  # has_mft_record
+                    has_usn_event,
+                    'HIGH' if has_usn_event else 'MEDIUM',
+                    None,  # filename_change_timeline
+                    None  # namespace_evolution
+                ))
 
-            # Execute batch insert when batch is full
-            if len(insert_batch) >= batch_size:
-                corr_cursor.executemany("""
-                INSERT OR IGNORE INTO mft_usn_correlated (
-                    mft_record_number, fn_filename, reconstructed_path,
-                    mft_sequence_number, mft_flags, is_directory, is_deleted,
-                    si_creation_time, si_modification_time, si_mft_entry_change_time, si_access_time, si_file_attributes,
-                    fn_parent_record_number, fn_parent_sequence_number,
-                    fn_creation_time, fn_modification_time, fn_mft_entry_change_time, fn_access_time,
-                    fn_allocated_size, fn_real_size, fn_file_attributes, fn_namespace,
-                    usn_event_id, usn_timestamp, usn_reason, usn_source_info, usn_file_attributes,
-                    has_mft_record, has_usn_event, correlation_confidence,
-                    filename_change_timeline, namespace_evolution
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, insert_batch)
-                inserted_count += len(insert_batch)
-                insert_batch = []
+                # Execute batch insert when batch is full
+                if len(insert_batch) >= batch_size:
+                    corr_cursor.executemany("""
+                    INSERT OR IGNORE INTO mft_usn_correlated (
+                        mft_record_number, fn_filename, reconstructed_path,
+                        mft_sequence_number, mft_flags, is_directory, is_deleted,
+                        si_creation_time, si_modification_time, si_mft_entry_change_time, si_access_time, si_file_attributes,
+                        fn_parent_record_number, fn_parent_sequence_number,
+                        fn_creation_time, fn_modification_time, fn_mft_entry_change_time, fn_access_time,
+                        fn_allocated_size, fn_real_size, fn_file_attributes, fn_namespace,
+                        usn_event_id, usn_timestamp, usn_reason, usn_source_info, usn_file_attributes,
+                        has_mft_record, has_usn_event, correlation_confidence,
+                        filename_change_timeline, namespace_evolution
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, insert_batch)
+                    inserted_count += len(insert_batch)
+                    insert_batch = []
 
                 # Show progress with detailed statistics - use time-based updates to prevent freezing
                 current_time = time.time()

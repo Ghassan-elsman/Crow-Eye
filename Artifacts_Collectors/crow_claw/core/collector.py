@@ -300,7 +300,8 @@ class ArtifactCollector:
         artifacts: List,
         output_directory: str,
         windows_partition: str = "C:",
-        handle_locked_files: str = "skip"  # "skip", "lock", "admin"
+        handle_locked_files: str = "skip",  # "skip", "lock", "admin"
+        hard_fail_on_low_space: bool = False
     ) -> Tuple[bool, CollectionStatistics]:
         """
         Collect all enabled artifacts.
@@ -310,6 +311,7 @@ class ArtifactCollector:
             output_directory: Root output directory for collected artifacts
             windows_partition: Windows partition (e.g., "C:")
             handle_locked_files: Strategy for locked files
+            hard_fail_on_low_space: If True, stop collection if space is insufficient
 
         Returns:
             Tuple of (success: bool, statistics: CollectionStatistics)
@@ -354,7 +356,13 @@ class ArtifactCollector:
         if not sufficient_space:
             self.log(space_warning)
             self.statistics.add_warning(space_warning)
-            # Note: We continue anyway but user has been warned
+            
+            if hard_fail_on_low_space:
+                self.log("[CRITICAL] Stopping collection due to insufficient disk space (hard_fail_on_low_space=True)")
+                self.statistics.add_error("Collection stopped: Insufficient disk space")
+                return False, self.statistics
+            else:
+                self.log("[WARNING] Proceeding with collection despite low space. Monitor disk usage carefully.")
 
         # Collect each artifact
         for idx, artifact in enumerate(enabled_artifacts, 1):
@@ -764,11 +772,10 @@ class ArtifactCollector:
                         matches = glob.glob(expanded_path, recursive=False)
                         self.log(f"[COLLECTOR] Wildcard matches: {len(matches)} files")
                         
-                        # Limit to prevent memory issues with large collections (e.g., many prefetch files)
-                        if len(matches) > 2000:
-                            self.log(f"[WARNING] Found {len(matches)} files, limiting to first 2000 to prevent memory issues")
-                            self.log(f"[WARNING] This is a safety limit. If you need all files, consider collecting in batches.")
-                            matches = matches[:2000]
+                        # Warning for very large collections instead of hard truncation
+                        if len(matches) > 10000:
+                            self.log(f"[WARNING] Large wildcard match detected: {len(matches)} files.")
+                            self.log(f"[WARNING] Processing many files may increase memory usage and collection time.")
                         
                         expanded.extend(matches)
                     except Exception as glob_error:

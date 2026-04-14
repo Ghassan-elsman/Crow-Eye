@@ -613,9 +613,9 @@ def main_live_reg(db_filename='registry_data.db'):
                 drive_letter TEXT,
                 mft_record_number INTEGER,
                 registry_path TEXT,
+                parent_path TEXT,
                 analyzing_date TEXT
             )''')
-        
         # Create indexes for performance
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_file_name ON Shellbags(file_name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_mru_position ON Shellbags(mru_position)')
@@ -1730,7 +1730,8 @@ def main_live_reg(db_filename='registry_data.db'):
                             mru_position = mru_order.index(entry_index)
                             if mru_position == 0 and most_recent_access:
                                 # Most recent entry gets the key's last write time
-                                access_date = most_recent_access
+                                # Mark it as such for forensic clarity
+                                access_date = f"{most_recent_access} (Registry Key LastWrite)"
                             # For other entries, leave access_date empty
                     except (ValueError, TypeError):
                         pass # Name is not a number

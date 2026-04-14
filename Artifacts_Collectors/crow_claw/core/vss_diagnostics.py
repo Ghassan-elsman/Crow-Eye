@@ -1616,7 +1616,10 @@ class VSSDiagnostics:
         # Check if running as administrator
         is_admin = False
         try:
-            is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+            if os.name == 'nt':
+                is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+            else:
+                is_admin = os.getuid() == 0
             logger.info(f"[VSSDiagnostics] Administrator privileges: {is_admin}")
         except Exception as e:
             logger.warning(f"[VSSDiagnostics] Could not check admin privileges: {e}")

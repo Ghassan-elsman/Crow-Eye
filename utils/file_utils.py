@@ -36,6 +36,46 @@ class FileUtils:
         except Exception as e:
             self.logger.error(f"Failed to create directory {directory}: {str(e)}")
             return False
+            
+    def normalize_existing_path(self, file_path: Union[str, Path]) -> Path:
+        """
+        Validates path existence, applying robust cross-platform case-insensitive resolution if necessary.
+        Always returns a Path object (either the resolved physically-existing path, or the original if unresolvable).
+        """
+        path = Path(file_path)
+        if path.exists():
+            return path
+            
+        try:
+            from utils.path_utils import PathUtils
+        except ImportError:
+            try:
+                from .path_utils import PathUtils
+            except ImportError:
+                return path
+                
+        try:
+            import sys
+            abs_path = path.absolute()
+            path_str = str(abs_path).replace('\\', '/')
+            
+            # Split off the root drive or slash
+            if sys.platform.startswith('win'):
+                drive, tail = os.path.splitdrive(path_str)
+                base_path = drive + '/' if drive else '/'
+                target_str = tail.strip('/')
+            else:
+                base_path = '/'
+                target_str = path_str.strip('/')
+                
+            if target_str:
+                resolved = PathUtils.get_case_insensitive_path(base_path, target_str)
+                if resolved:
+                    return Path(resolved)
+        except Exception as e:
+            self.logger.debug(f"Case-insensitive path resolution failed for {file_path}: {e}")
+            
+        return path
     
     def read_json_file(self, file_path: Union[str, Path]) -> Optional[Dict[str, Any]]:
         """
@@ -48,7 +88,8 @@ class FileUtils:
             Parsed JSON data as a dictionary, or None if an error occurred
         """
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            path = self.normalize_existing_path(file_path)
+            with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             self.logger.error(f"Error reading JSON file {file_path}: {str(e)}")
@@ -87,7 +128,7 @@ class FileUtils:
             bool: True if copy was successful, False otherwise
         """
         try:
-            src = Path(source)
+            src = self.normalize_existing_path(source)
             dst = Path(destination)
             
             if not src.exists():
@@ -152,7 +193,7 @@ class FileUtils:
         import hashlib
         
         try:
-            path = Path(file_path)
+            path = self.normalize_existing_path(file_path)
             if not path.exists() or not path.is_file():
                 self.logger.error(f"File does not exist or is not a file: {file_path}")
                 return None

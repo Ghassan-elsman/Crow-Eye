@@ -16,6 +16,21 @@ try:
 except (ImportError, ValueError):
     from data_models import FileMetadata
 
+# Import PathUtils for Linux compatibility
+try:
+    if __package__ or "." in __name__:
+        from ...utils.path_utils import PathUtils
+    else:
+        # Check if utils is in sys.path or use direct import
+        try:
+            from utils.path_utils import PathUtils
+        except ImportError:
+            import sys
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            from utils.path_utils import PathUtils
+except (ImportError, ValueError):
+    PathUtils = None
+
 # Optional imports - gracefully handle missing dependencies
 try:
     from dissect.target.volume import open as open_volume
@@ -440,6 +455,57 @@ class FileSystemAccessor:
             return self.fs_info.exists(path)
         except:
             return False
+
+    def find_path_case_insensitive(self, path: str) -> Optional[str]:
+        """
+        Finds a case-insensitive match for a path within the forensic image.
+        Essential for Linux hosts where the filesystem is case-sensitive but 
+        the image (Windows/NTFS) may be treated with case-insensitive logic.
+        
+        Args:
+            path: Target path (e.g., /windows/system32/config/SYSTEM)
+            
+        Returns:
+            The correctly-cased path if found, or None
+        """
+        if not self.fs_info:
+            return None
+            
+        # Standardize to forward slashes
+        path = path.replace('\\', '/')
+        parts = [p for p in path.split('/') if p]
+        
+        current_path = "/"
+        
+        for part in parts:
+            found_part = None
+            try:
+                # Get the current directory entry
+                dir_entry = self.fs_info.get(current_path)
+                if not dir_entry or not dir_entry.is_dir():
+                    return None
+                    
+                # Search entries for a case-insensitive match
+                target_lower = part.lower()
+                for entry in dir_entry.scandir():
+                    name = getattr(entry, 'name', '')
+                    if name.lower() == target_lower:
+                        found_part = name
+                        break
+                
+                if not found_part:
+                    return None
+                
+                # Update current path for next iteration
+                if current_path == "/":
+                    current_path = "/" + found_part
+                else:
+                    current_path = current_path + "/" + found_part
+                    
+            except Exception:
+                return None
+                
+        return current_path
     
     def _extract_metadata(self, entry, parent_path: str) -> FileMetadata:
         """

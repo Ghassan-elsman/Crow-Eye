@@ -41,6 +41,14 @@ except ModuleNotFoundError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from Artifacts_Collectors import registry_binary_parser
 
+# Import PathUtils for Linux compatibility
+try:
+    from utils.path_utils import PathUtils
+except ImportError:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.path_utils import PathUtils
+
 
 # ============================================================================
 # PHASE 1: UTILITY FUNCTIONS & HELPERS

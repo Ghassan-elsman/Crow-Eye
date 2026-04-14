@@ -126,11 +126,17 @@ class ParserInvoker:
         Requirements: 4.3
         """
         try:
+            from utils.file_utils import FileUtils
+            file_utils = FileUtils()
+            
             path_obj = Path(path)
             
             # Convert relative paths to absolute based on case_root
             if not path_obj.is_absolute():
                 path_obj = self.case_root / path_obj
+            
+            # Apply strict cross-platform normalizing to counter Linux case-drops
+            path_obj = file_utils.normalize_existing_path(path_obj)
             
             # Resolve symlinks and normalize
             return path_obj.resolve()
@@ -347,6 +353,9 @@ class ParserInvoker:
         Requirements: 2.2, 3.4
         """
         # Try both possible registry directory locations
+        from utils.file_utils import FileUtils
+        file_utils = FileUtils()
+        
         possible_dirs = [
             self.case_root / 'live_acquisition' / 'Registry',
             self.case_root / 'live_acquisition' / 'Registry_Hives'
@@ -354,8 +363,9 @@ class ParserInvoker:
         
         registry_dir = None
         for dir_path in possible_dirs:
-            if dir_path.exists() and dir_path.is_dir():
-                registry_dir = dir_path
+            safe_path = file_utils.normalize_existing_path(dir_path)
+            if safe_path.exists() and safe_path.is_dir():
+                registry_dir = safe_path
                 logger.debug(f"Found registry directory: {registry_dir}")
                 break
         

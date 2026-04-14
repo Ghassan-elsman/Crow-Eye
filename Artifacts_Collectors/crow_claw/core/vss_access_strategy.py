@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import time
+import locale
 from datetime import datetime
 from typing import List, Optional, TYPE_CHECKING
 

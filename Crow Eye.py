@@ -1014,14 +1014,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM machine_run_once")
             rows = cursor.fetchall()
-            if hasattr(self, 'MachineRunOnce_tabel'):  # Note: keeping original typo for compatibility
-                self.MachineRunOnce_tabel.setRowCount(0)
+            if hasattr(self, 'MachineRunOnce_table'):  # Note: keeping original typo for compatibility
+                self.MachineRunOnce_table.setRowCount(0)
                 for row in rows:
-                    row_index = self.MachineRunOnce_tabel.rowCount()
-                    self.MachineRunOnce_tabel.insertRow(row_index)
+                    row_index = self.MachineRunOnce_table.rowCount()
+                    self.MachineRunOnce_table.insertRow(row_index)
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
-                        self.MachineRunOnce_tabel.setItem(row_index, col_index, item)
+                        self.MachineRunOnce_table.setItem(row_index, col_index, item)
             conn.close()
         except Exception as e:
             print(f"[MachineRunOnce] Error loading data: {str(e)}")
@@ -1092,7 +1092,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             db_path = self.get_registry_db_path()
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM Windows_lastupdate")
+            cursor.execute("SELECT * FROM Windows_lastupdate_subkeys")
             rows = cursor.fetchall()
             if hasattr(self, 'LastUpdateInfo_table'):
                 self.LastUpdateInfo_table.setRowCount(0)
@@ -1112,7 +1112,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             db_path = self.get_registry_db_path()
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM Windows_lastupdate")  # Note: using same table as original
+            cursor.execute("SELECT * FROM shutdown_information")
             rows = cursor.fetchall()
             if hasattr(self, 'ShutDown_table'):
                 self.ShutDown_table.setRowCount(0)
@@ -4770,7 +4770,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             "Network_list": self.NetworkLists_table,
             "SystemServices": self.SystemServices_table,
             "machine_run": self.MachineRun_table,
-            "machine_run_once": self.MachineRunOnce_tabel,
+            "machine_run_once": self.MachineRunOnce_table,
             "user_run": self.UserRun_table,
             "user_run_once": self.UserRunOnce_table,
             "RunMRU": self.RunMRU_table,
@@ -5368,10 +5368,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.Machine_run_once.setObjectName("Machine_run_once")
         self.verticalLayout_12 = QtWidgets.QVBoxLayout(self.Machine_run_once)
         self.verticalLayout_12.setObjectName("verticalLayout_12")
-        self.MachineRunOnce_tabel = QtWidgets.QTableWidget(self.Machine_run_once)
-        self.setup_standard_table(self.MachineRunOnce_tabel, 3, False, 300, 190)
-        self.MachineRunOnce_tabel.setObjectName("MachineRunOnce_tabel")
-        self.verticalLayout_12.addWidget(self.MachineRunOnce_tabel)
+        self.MachineRunOnce_table = QtWidgets.QTableWidget(self.Machine_run_once)
+        self.setup_standard_table(self.MachineRunOnce_table, 3, False, 300, 190)
+        self.MachineRunOnce_table.setObjectName("MachineRunOnce_table")
+        self.verticalLayout_12.addWidget(self.MachineRunOnce_table)
         self.Registry_widget.addTab(self.Machine_run_once, "")
 
 
@@ -6067,11 +6067,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             )
         
         # Initialize MachineRunOnce_table headers if it exists
-        if hasattr(self, 'MachineRunOnce_tabel'):
-            self.MachineRunOnce_tabel.setColumnCount(3)
+        if hasattr(self, 'MachineRunOnce_table'):
+            self.MachineRunOnce_table.setColumnCount(3)
             for i, header in enumerate(["Name", "Data", "Data Type"]):
                 item = QtWidgets.QTableWidgetItem()
-                self.MachineRunOnce_tabel.setHorizontalHeaderItem(i, item)
+                self.MachineRunOnce_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
         
         # Set tab text for Machine Run Once tab
@@ -10199,7 +10199,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "NetworkLists": self.NetworkLists_table,
                 "SystemServices": self.SystemServices_table,
                 "MachineRun": self.MachineRun_table,
-                "MachineRunOnce": self.MachineRunOnce_tabel,
+                "MachineRunOnce": self.MachineRunOnce_table,
                 "UserRun": self.UserRun_table,
                 "UserRunOnce": self.UserRunOnce_table,
                 "LastUpdate": self.LastUpdate_table,
