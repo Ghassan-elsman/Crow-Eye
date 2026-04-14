@@ -131,40 +131,43 @@ class _TOKEN_PRIVILEGES_5(ctypes.Structure):
                 ('Privilege3', _LUID_AND_ATTRIBUTES), ('Privilege4', _LUID_AND_ATTRIBUTES)]
 
 # Windows API function definitions
-ctypes.windll.kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-ctypes.windll.kernel32.GetCurrentProcess.argtypes = []
-ctypes.windll.advapi32.LookupPrivilegeValueW.restype = ctypes.c_int32
-ctypes.windll.advapi32.LookupPrivilegeValueW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_void_p]
-ctypes.windll.advapi32.OpenProcessToken.restype = ctypes.c_int32
-ctypes.windll.advapi32.OpenProcessToken.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
-ctypes.windll.advapi32.AdjustTokenPrivileges.restype = ctypes.c_int32
-ctypes.windll.advapi32.AdjustTokenPrivileges.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p]
-ctypes.windll.kernel32.GetLastError.restype = ctypes.c_uint32
-ctypes.windll.kernel32.GetLastError.argtypes = []
-ctypes.windll.kernel32.CloseHandle.restype = ctypes.c_int32
-ctypes.windll.kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-ctypes.windll.kernel32.CreateFileW.restype = ctypes.c_void_p
-ctypes.windll.kernel32.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
-ctypes.windll.advapi32.RegOpenKeyExW.restype = ctypes.c_int32
-ctypes.windll.advapi32.RegOpenKeyExW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
-ctypes.windll.advapi32.RegCloseKey.restype = ctypes.c_int32
-ctypes.windll.advapi32.RegCloseKey.argtypes = [ctypes.c_void_p]
-ctypes.windll.advapi32.RegOpenCurrentUser.restype = ctypes.c_int32
-ctypes.windll.advapi32.RegOpenCurrentUser.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+import os
 
-_APP_HIVES_SUPPORTED = hasattr(ctypes.windll.advapi32, 'RegLoadAppKeyW')
-if _APP_HIVES_SUPPORTED:
-    ctypes.windll.advapi32.RegLoadAppKeyW.restype = ctypes.c_int32
-    ctypes.windll.advapi32.RegLoadAppKeyW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
+if os.name == 'nt':
+    ctypes.windll.kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    ctypes.windll.kernel32.GetCurrentProcess.argtypes = []
+    ctypes.windll.advapi32.LookupPrivilegeValueW.restype = ctypes.c_int32
+    ctypes.windll.advapi32.LookupPrivilegeValueW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_void_p]
+    ctypes.windll.advapi32.OpenProcessToken.restype = ctypes.c_int32
+    ctypes.windll.advapi32.OpenProcessToken.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+    ctypes.windll.advapi32.AdjustTokenPrivileges.restype = ctypes.c_int32
+    ctypes.windll.advapi32.AdjustTokenPrivileges.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p]
+    ctypes.windll.kernel32.GetLastError.restype = ctypes.c_uint32
+    ctypes.windll.kernel32.GetLastError.argtypes = []
+    ctypes.windll.kernel32.CloseHandle.restype = ctypes.c_int32
+    ctypes.windll.kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    ctypes.windll.kernel32.CreateFileW.restype = ctypes.c_void_p
+    ctypes.windll.kernel32.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    ctypes.windll.advapi32.RegOpenKeyExW.restype = ctypes.c_int32
+    ctypes.windll.advapi32.RegOpenKeyExW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    ctypes.windll.advapi32.RegCloseKey.restype = ctypes.c_int32
+    ctypes.windll.advapi32.RegCloseKey.argtypes = [ctypes.c_void_p]
+    ctypes.windll.advapi32.RegOpenCurrentUser.restype = ctypes.c_int32
+    ctypes.windll.advapi32.RegOpenCurrentUser.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
 
-ctypes.windll.ntdll.NtSaveKeyEx.restype = ctypes.c_int32
-ctypes.windll.ntdll.NtSaveKeyEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32]
-ctypes.windll.kernel32.GetTempFileNameA.restype = ctypes.c_uint32
-ctypes.windll.kernel32.GetTempFileNameA.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32, ctypes.c_void_p]
-ctypes.windll.kernel32.SetFilePointer.restype = ctypes.c_uint32
-ctypes.windll.kernel32.SetFilePointer.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p, ctypes.c_uint32]
-ctypes.windll.kernel32.ReadFile.restype = ctypes.c_int32
-ctypes.windll.kernel32.ReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p]
+    _APP_HIVES_SUPPORTED = hasattr(ctypes.windll.advapi32, 'RegLoadAppKeyW')
+    if _APP_HIVES_SUPPORTED:
+        ctypes.windll.advapi32.RegLoadAppKeyW.restype = ctypes.c_int32
+        ctypes.windll.advapi32.RegLoadAppKeyW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
+
+    ctypes.windll.ntdll.NtSaveKeyEx.restype = ctypes.c_int32
+    ctypes.windll.ntdll.NtSaveKeyEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32]
+    ctypes.windll.kernel32.GetTempFileNameA.restype = ctypes.c_uint32
+    ctypes.windll.kernel32.GetTempFileNameA.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32, ctypes.c_void_p]
+    ctypes.windll.kernel32.SetFilePointer.restype = ctypes.c_uint32
+    ctypes.windll.kernel32.SetFilePointer.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p, ctypes.c_uint32]
+    ctypes.windll.kernel32.ReadFile.restype = ctypes.c_int32
+    ctypes.windll.kernel32.ReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p]
 
 # File-like object for handling Windows file handles
 class NTFileLikeObject(object):
