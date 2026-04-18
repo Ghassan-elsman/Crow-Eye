@@ -19,6 +19,7 @@ import os
 import gc
 import psutil
 from tqdm import tqdm
+from utils.time_utils import get_current_utc, format_forensic_timestamp, get_current_forensic_timestamp
 
 # Colorama for colored terminal output
 try:
@@ -64,7 +65,7 @@ COMMIT_FREQUENCY_BYTES = 4 * 1024 * 1024  # or commit when this many bytes proce
 
 # --------- Logging ---------
 # Create timestamped log filename
-log_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+log_timestamp = get_current_utc().strftime("%Y%m%d_%H%M%S")
 # Create Target_Artifacts directory for logs if it doesn't exist
 target_artifacts_dir = os.path.join(".", "Target_Artifacts")
 os.makedirs(target_artifacts_dir, exist_ok=True)
@@ -342,7 +343,7 @@ def filetime_to_datetime(filetime_value):
     try:
         windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
         dt = windows_epoch + datetime.timedelta(microseconds=ft / 10.0)
-        return dt.isoformat()
+        return format_forensic_timestamp(dt)
     except Exception:
         return None
 
@@ -1007,7 +1008,7 @@ def read_journal_events(volume_letter, cursor, conn):
                         
                         record_count += 1
                         chunk_records += 1
-                        inserted_at = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+                        inserted_at = get_current_forensic_timestamp()
                         
                         # Add to batch instead of immediate insert
                         batch_records.append((

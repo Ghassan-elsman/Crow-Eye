@@ -34,6 +34,9 @@ except ImportError:
     windll = None
     wintypes = None
 
+# Import time formatting utilities
+from utils.time_utils import format_forensic_timestamp
+
 class Version(enum.IntEnum):
     """Enum representing Windows Prefetch file format versions.
     
@@ -244,7 +247,7 @@ class TraceChain:
     loaded_block_count: int = 0
     
     @classmethod
-    def from_bytes(cls, data: bytes, has_loaded_count: bool) -> 'TraceChain':
+    def from_bytes(cls, data: bytes, version: Version) -> 'TraceChain':
         """Parse trace chain information from binary data.
         
         The structure varies between Windows versions. Some versions include a
@@ -252,15 +255,21 @@ class TraceChain:
         
         Args:
             data (bytes): Raw binary data containing the trace chain entry
-            has_loaded_count (bool): Whether the format includes a loaded block count field
+            version (Version): Windows format version
             
         Returns:
             TraceChain: Parsed trace chain object
         """
+        if version >= Version.WIN10_OR_WIN11:
+            # Version 30/31 format - 8 bytes
+            total_count = struct.unpack_from("<I", data, 0)[0]
+            unknown = struct.unpack_from("<I", data, 4)[0]
+            return cls(-1, total_count, unknown)
+
         next_index = struct.unpack_from("<I", data, 0)[0]  # Index to next entry
         total_count = struct.unpack_from("<I", data, 4)[0]  # Total blocks to load
         
-        if has_loaded_count:
+        if version >= Version.WIN8X_OR_WIN2012X:
             # Format with separate loaded count (2-byte values)
             unknown = struct.unpack_from("<H", data, 8)[0]
             loaded_count = struct.unpack_from("<H", data, 10)[0]  # Actual blocks loaded
@@ -365,9 +374,30 @@ class PrefetchFile:
         Raises:
             Various exceptions if the file cannot be read or parsed
         """
+        # Forensically capture stat info before opening to preserve access times
+        try:
+            original_stat = os.stat(file_path)
+            original_atime = original_stat.st_atime_ns
+            original_mtime = original_stat.st_mtime_ns
+            can_restore_times = True
+        except OSError:
+            can_restore_times = False
+
         with open(file_path, 'rb') as f:
             raw_bytes = f.read()
-            return cls.from_bytes(raw_bytes, file_path)
+            
+        instance = cls.from_bytes(raw_bytes, file_path)
+        
+        # Restore MAC times to maintain forensic integrity
+        if can_restore_times:
+            try:
+                os.utime(file_path, ns=(original_atime, original_mtime))
+                # Fix the instance's accessed property which got polluted by f.read()
+                instance.source_accessed_on = datetime.datetime.fromtimestamp(original_atime / 1e9, tz=datetime.timezone.utc)
+            except OSError:
+                pass
+                
+        return instance
     
     @staticmethod
     def _decompress_win10_prefetch(data: bytes) -> bytes:
@@ -422,9 +452,7 @@ class PrefetchFile:
                     final_size = wintypes.ULONG()
                     
                     # Convert compressed data to ctypes buffer
-                    compressed_buffer = (ctypes.c_ubyte * len(compressed_data))()
-                    for i, b in enumerate(compressed_data):
-                        compressed_buffer[i] = b
+                    compressed_buffer = (ctypes.c_ubyte * len(compressed_data)).from_buffer_copy(compressed_data)
                     
                     # Call Windows API to decompress the data
                     status = ntdll.RtlDecompressBufferEx(
@@ -502,9 +530,9 @@ class PrefetchFile:
         if source_filename:
             try:
                 stat_info = os.stat(source_filename)
-                instance.source_created_on = datetime.datetime.fromtimestamp(stat_info.st_ctime)
-                instance.source_modified_on = datetime.datetime.fromtimestamp(stat_info.st_mtime)
-                instance.source_accessed_on = datetime.datetime.fromtimestamp(stat_info.st_atime)
+                instance.source_created_on = datetime.datetime.fromtimestamp(stat_info.st_ctime, tz=datetime.timezone.utc)
+                instance.source_modified_on = datetime.datetime.fromtimestamp(stat_info.st_mtime, tz=datetime.timezone.utc)
+                instance.source_accessed_on = datetime.datetime.fromtimestamp(stat_info.st_atime, tz=datetime.timezone.utc)
             except Exception:
                 pass  # Silently continue if metadata collection fails
         
@@ -543,6 +571,8 @@ class PrefetchFile:
         
         self.file_metrics_offset = struct.unpack_from("<I", file_info_bytes, 0)[0]
         self.file_metrics_count = struct.unpack_from("<I", file_info_bytes, 4)[0]
+        self.trace_chains_offset = struct.unpack_from("<I", file_info_bytes, 8)[0]
+        self.trace_chains_count = struct.unpack_from("<I", file_info_bytes, 12)[0]
         self.filename_strings_offset = struct.unpack_from("<I", file_info_bytes, 16)[0]
         self.filename_strings_size = struct.unpack_from("<I", file_info_bytes, 20)[0]
         self.volumes_info_offset = struct.unpack_from("<I", file_info_bytes, 24)[0]
@@ -566,21 +596,18 @@ class PrefetchFile:
         
         self.file_metrics_offset = struct.unpack_from("<I", file_info_bytes, 0)[0]
         self.file_metrics_count = struct.unpack_from("<I", file_info_bytes, 4)[0]
+        self.trace_chains_offset = struct.unpack_from("<I", file_info_bytes, 8)[0]
+        self.trace_chains_count = struct.unpack_from("<I", file_info_bytes, 12)[0]
         self.filename_strings_offset = struct.unpack_from("<I", file_info_bytes, 16)[0]
         self.filename_strings_size = struct.unpack_from("<I", file_info_bytes, 20)[0]
         self.volumes_info_offset = struct.unpack_from("<I", file_info_bytes, 24)[0]
         self.volume_count = struct.unpack_from("<I", file_info_bytes, 28)[0]
         self.volumes_info_size = struct.unpack_from("<I", file_info_bytes, 32)[0]
         
-        run_time_offset = 44
-        self.last_run_times = []
-        for i in range(8):
-            raw_time = struct.unpack_from("<Q", file_info_bytes, run_time_offset)[0]
-            if raw_time > 0:
-                self.last_run_times.append(self._filetime_to_datetime(raw_time))
-            run_time_offset += 8
-        
-        self.run_count = struct.unpack_from("<I", file_info_bytes, run_time_offset)[0]
+        # Version 23 only has ONE last run time
+        raw_time = struct.unpack_from("<Q", file_info_bytes, 44)[0]
+        self.last_run_times = [self._filetime_to_datetime(raw_time)] if raw_time > 0 else []
+        self.run_count = struct.unpack_from("<I", file_info_bytes, 68)[0]
         
         self._parse_file_metrics(False)
         self._parse_filenames()
@@ -594,6 +621,8 @@ class PrefetchFile:
         
         self.file_metrics_offset = struct.unpack_from("<I", file_info_bytes, 0)[0]
         self.file_metrics_count = struct.unpack_from("<I", file_info_bytes, 4)[0]
+        self.trace_chains_offset = struct.unpack_from("<I", file_info_bytes, 8)[0]
+        self.trace_chains_count = struct.unpack_from("<I", file_info_bytes, 12)[0]
         self.filename_strings_offset = struct.unpack_from("<I", file_info_bytes, 16)[0]
         self.filename_strings_size = struct.unpack_from("<I", file_info_bytes, 20)[0]
         self.volumes_info_offset = struct.unpack_from("<I", file_info_bytes, 24)[0]
@@ -619,10 +648,22 @@ class PrefetchFile:
         header_bytes = self.raw_bytes[:84]
         self.header = Header.from_bytes(header_bytes)
         
-        file_info_bytes = self.raw_bytes[84:224]
+        # Determine variant based on file_metrics_offset
+        metrics_offset = struct.unpack_from("<I", self.raw_bytes, 84)[0]
         
-        self.file_metrics_offset = struct.unpack_from("<I", file_info_bytes, 0)[0]
+        if metrics_offset == 304: # Variant 1
+            file_info_size = 220
+            run_count_offset = 124
+        else: # Variant 2 or version 31
+            file_info_size = 212
+            run_count_offset = 116
+            
+        file_info_bytes = self.raw_bytes[84:84+file_info_size]
+        
+        self.file_metrics_offset = metrics_offset
         self.file_metrics_count = struct.unpack_from("<I", file_info_bytes, 4)[0]
+        self.trace_chains_offset = struct.unpack_from("<I", file_info_bytes, 8)[0]
+        self.trace_chains_count = struct.unpack_from("<I", file_info_bytes, 12)[0]
         self.filename_strings_offset = struct.unpack_from("<I", file_info_bytes, 16)[0]
         self.filename_strings_size = struct.unpack_from("<I", file_info_bytes, 20)[0]
         self.volumes_info_offset = struct.unpack_from("<I", file_info_bytes, 24)[0]
@@ -638,7 +679,7 @@ class PrefetchFile:
                 self.last_run_times.append(self._filetime_to_datetime(raw_time))
             run_time_offset += 8
         
-        self.run_count = struct.unpack_from("<I", file_info_bytes, run_time_offset)[0]
+        self.run_count = struct.unpack_from("<I", file_info_bytes, run_count_offset)[0]
         
         self._parse_file_metrics(False)
         self._parse_filenames()
@@ -673,22 +714,20 @@ class PrefetchFile:
             return
         
         # Parse trace chains (if applicable, for newer versions)
-        if not is_version17:
-            trace_chain_offset = self.file_metrics_offset + (self.file_metrics_count * metric_size)
-            trace_chain_size = 12 if self.header.version <= Version.VISTA_OR_WIN7 else 16
-            trace_chain_end = trace_chain_offset + (self.file_metrics_count * trace_chain_size)
+        if hasattr(self, 'trace_chains_offset') and self.trace_chains_offset > 0 and self.trace_chains_count > 0:
+            trace_chain_size = 12 if self.header.version <= Version.WIN8X_OR_WIN2012X else 8
+            trace_chain_end = self.trace_chains_offset + (self.trace_chains_count * trace_chain_size)
             
             if trace_chain_end <= len(self.raw_bytes):
                 try:
-                    trace_data = self.raw_bytes[trace_chain_offset:trace_chain_end]
-                    for i in range(self.file_metrics_count):
+                    trace_data = self.raw_bytes[self.trace_chains_offset:trace_chain_end]
+                    for i in range(min(self.file_metrics_count, self.trace_chains_count)):
                         offset = i * trace_chain_size
                         if offset + trace_chain_size > len(trace_data):
                             print(f"Warning: Incomplete trace chain at index {i}")
                             break
                         trace_chain_data = trace_data[offset:offset + trace_chain_size]
-                        has_loaded_count = self.header.version >= Version.WIN8X_OR_WIN2012X
-                        self.file_metrics[i].trace_chain = TraceChain.from_bytes(trace_chain_data, has_loaded_count)
+                        self.file_metrics[i].trace_chain = TraceChain.from_bytes(trace_chain_data, self.header.version)
                 except Exception as e:
                     print(f"Error parsing trace chains: {e}")
     
@@ -722,7 +761,12 @@ class PrefetchFile:
             print(f"Warning: Volume info extends beyond file size (offset:{self.volumes_info_offset}, size:{self.volumes_info_size}, file size:{len(self.raw_bytes)})")
             return
         
-        vol_entry_size = 40
+        if self.header.version == Version.WIN_XP_OR_2003:
+            vol_entry_size = 40
+        elif self.header.version in (Version.VISTA_OR_WIN7, Version.WIN8X_OR_WIN2012X):
+            vol_entry_size = 104
+        else:
+            vol_entry_size = 96
         
         try:
             volume_data = self.raw_bytes[self.volumes_info_offset:
@@ -822,11 +866,19 @@ class PrefetchFile:
     
     @staticmethod
     def _filetime_to_datetime(filetime: int) -> datetime.datetime:
-        if filetime == 0:
+        if filetime <= 0:
             return None
 
-        windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
-        return windows_epoch + datetime.timedelta(microseconds=filetime / 10.0)    
+        # Max safe filetime (roughly year 2440) to prevent OverflowError
+        MAX_FILETIME = 2650467743990000000
+        if filetime > MAX_FILETIME:
+            return None
+
+        try:
+            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
+            return windows_epoch + datetime.timedelta(microseconds=filetime / 10.0)
+        except (OverflowError, ValueError):
+            return None
     def _format_paths_with_drive_letters(self, paths):
         formatted_paths = []
         
@@ -923,7 +975,7 @@ class PrefetchFile:
                 creation_time_str = None
                 if vol.creation_time:
                     if vol.creation_time.tzinfo is not None:
-                        creation_time_str = vol.creation_time.strftime("%Y-%m-%d %H:%M:%S")
+                        creation_time_str = format_forensic_timestamp(vol.creation_time)
                     else:
                         # Remove milliseconds from string representation
                         creation_time_str = str(vol.creation_time).split('.')[0]
@@ -971,7 +1023,7 @@ class PrefetchFile:
             for t in sorted([t for t in self.last_run_times if t is not None], reverse=True):
                 if t.tzinfo is not None:
                     # Remove timezone info and milliseconds for display
-                    run_times_data.append(t.strftime("%Y-%m-%d %H:%M:%S"))
+                    run_times_data.append(format_forensic_timestamp(t))
                 else:
                     # Remove milliseconds from string representation
                     run_times_data.append(str(t).split('.')[0])
@@ -997,15 +1049,15 @@ class PrefetchFile:
                 self.header.hash,
                 display_run_count,
                 # Format most_recent without timezone information and milliseconds
-                most_recent.strftime("%Y-%m-%d %H:%M:%S") if most_recent and most_recent.tzinfo is not None else (str(most_recent).split('.')[0] if most_recent else most_recent),
+                format_forensic_timestamp(most_recent) if most_recent and most_recent.tzinfo is not None else (str(most_recent).split('.')[0] if most_recent else most_recent),
                 json.dumps(run_times_data),
                 json.dumps(volumes_data),
                 json.dumps(directories_data),
                 json.dumps(formatted_resources),
-                # Format source timestamps to remove milliseconds
-                str(self.source_created_on).split('.')[0] if self.source_created_on else self.source_created_on,
-                str(self.source_modified_on).split('.')[0] if self.source_modified_on else self.source_modified_on,
-                str(self.source_accessed_on).split('.')[0] if self.source_accessed_on else self.source_accessed_on
+                # Format source timestamps cleanly in native UTC format
+                format_forensic_timestamp(self.source_created_on) if self.source_created_on else None,
+                format_forensic_timestamp(self.source_modified_on) if self.source_modified_on else None,
+                format_forensic_timestamp(self.source_accessed_on) if self.source_accessed_on else None
             ))
 
             conn.commit()
@@ -1036,7 +1088,7 @@ class PrefetchFile:
             if most_recent:
                 # Format without timezone for display and remove milliseconds
                 if most_recent.tzinfo is not None:
-                    formatted_time = most_recent.strftime("%Y-%m-%d %H:%M:%S")
+                    formatted_time = format_forensic_timestamp(most_recent)
                 else:
                     # Remove milliseconds from string representation
                     formatted_time = str(most_recent).split('.')[0]
@@ -1048,7 +1100,7 @@ class PrefetchFile:
                 for i, time in enumerate(sorted(valid_times, reverse=True), 1):
                     # Format without timezone for display and remove milliseconds
                     if time.tzinfo is not None:
-                        formatted_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                        formatted_time = format_forensic_timestamp(time)
                     else:
                         # Remove milliseconds from string representation
                         formatted_time = str(time).split('.')[0]
@@ -1079,7 +1131,7 @@ class PrefetchFile:
                 # Format volume creation time without timezone
                 if vol.creation_time:
                     if vol.creation_time.tzinfo is not None:
-                        formatted_time = vol.creation_time.strftime("%Y-%m-%d %H:%M:%S")
+                        formatted_time = format_forensic_timestamp(vol.creation_time)
                     else:
                         # Remove milliseconds from string representation
                         formatted_time = str(vol.creation_time).split('.')[0]
@@ -1241,7 +1293,8 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False, wi
             db_path = default_db_path
             print(f"Live mode (Windows partition: {windows_partition}): Using prefetch files from {default_prefetch_dir}")
             print(f"Database will be saved to: {db_path}")
-        prefetch_dir = default_prefetch_dir
+        if prefetch_dir is None:
+            prefetch_dir = default_prefetch_dir
     
     parsed_files = []
     total_pf_files = 0

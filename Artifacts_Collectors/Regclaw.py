@@ -22,6 +22,14 @@ except ModuleNotFoundError:
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from Artifacts_Collectors import registry_binary_parser
+
+# Import time utilities for standardized timestamp formatting
+try:
+    from utils.time_utils import format_forensic_timestamp, get_current_utc, filetime_to_datetime
+except ModuleNotFoundError:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.time_utils import format_forensic_timestamp, get_current_utc, filetime_to_datetime
 def _configure_logging():
     try:
         usage = shutil.disk_usage(os.getcwd())
@@ -326,22 +334,22 @@ def main_live_reg(db_filename='registry_data.db'):
         }
         # Use the provided database filename
         # No need to override the db_filename as it's passed as a parameter
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = get_current_utc().strftime("%Y%m%d_%H%M%S")
         # Connect to SQLite database (or create it if it doesn't exist)
         with sqlite3.connect(db_filename) as conn:
             cursor = conn.cursor()
             # Create tables if they don't exist (original tables for backward compatibility)
             tables = [
-                ("machine_run", "name TEXT, data TEXT, type TEXT"),
-                ("machine_run_once", "name TEXT, data TEXT, type TEXT"),
-                ("user_run", "name TEXT, data TEXT, type TEXT"),
-                ("user_run_once", "name TEXT, data TEXT, type TEXT"),
-                ("Windows_lastupdate", "name TEXT, data TEXT, type TEXT"),
-                ("Windows_lastupdate_subkeys", "subkey TEXT, name TEXT, data TEXT, type TEXT"),
-                ("computer_Name", "name TEXT, data TEXT, type TEXT"),
-                ("time_zone", "name TEXT, data TEXT, type TEXT"),
-                ("network_interfaces", "subkey TEXT, name TEXT, data TEXT, type TEXT"),
-                ("shutdown_information", "name TEXT, data TEXT, type TEXT")
+                ("machine_run", "name TEXT, row_data TEXT, type TEXT"),
+                ("machine_run_once", "name TEXT, row_data TEXT, type TEXT"),
+                ("user_run", "name TEXT, row_data TEXT, type TEXT"),
+                ("user_run_once", "name TEXT, row_data TEXT, type TEXT"),
+                ("Windows_lastupdate", "name TEXT, row_data TEXT, type TEXT"),
+                ("Windows_lastupdate_subkeys", "subkey TEXT, name TEXT, row_data TEXT, type TEXT"),
+                ("computer_Name", "name TEXT, row_data TEXT, type TEXT"),
+                ("time_zone", "name TEXT, row_data TEXT, type TEXT"),
+                ("network_interfaces", "subkey TEXT, name TEXT, row_data TEXT, type TEXT"),
+                ("shutdown_information", "name TEXT, row_data TEXT, type TEXT")
             ]
             for table_name, schema in tables:
                 cursor.execute(f'CREATE TABLE IF NOT EXISTS {table_name} ({schema})')
@@ -502,27 +510,27 @@ def main_live_reg(db_filename='registry_data.db'):
         CREATE TABLE IF NOT EXISTS DAM (
             subkey TEXT,
             name TEXT,
-            data TEXT,
+            row_data TEXT,
             type TEXT,
             app_name TEXT,
             process_path TEXT,
             sid TEXT,
             last_execution TEXT,
             execution_count INTEGER,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS BAM (
             subkey TEXT,
             name TEXT,
-            data TEXT,
+            row_data TEXT,
             type TEXT,
             app_name TEXT,
             process_path TEXT,
             sid TEXT,
             last_execution TEXT,
             execution_flags INTEGER,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # WordWheelQuery table for Windows Explorer search history
         cursor.execute('''
@@ -551,7 +559,7 @@ def main_live_reg(db_filename='registry_data.db'):
         cursor.execute("PRAGMA table_info(Shellbags)")
         columns = [col[1] for col in cursor.fetchall()]
         
-        if columns and 'timestamp' in columns and 'analyzing_date' not in columns:
+        if columns and 'timestamp' in columns and 'parsed_at' not in columns:
             # Migration needed - old schema exists
             logging.info("Migrating Shellbags table to new schema...")
             
@@ -574,14 +582,14 @@ def main_live_reg(db_filename='registry_data.db'):
                 drive_letter TEXT,
                 mft_record_number INTEGER,
                 registry_path TEXT,
-                analyzing_date TEXT
+                parsed_at TEXT
             )''')
             
             # Copy existing data (folder_name becomes file_name, mru_position becomes TEXT)
             cursor.execute('''INSERT INTO Shellbags_new 
                 (file_name, shell_item_type, mru_position, 
                  created_date, modified_date, accessed_date, attributes, 
-                 file_size, special_folder, network_share, registry_path, analyzing_date)
+                 file_size, special_folder, network_share, registry_path, parsed_at)
                 SELECT folder_name, shell_item_type, 
                        CAST(mru_position AS TEXT), 
                        created_date, modified_date, access_date, attributes, 
@@ -614,7 +622,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 mft_record_number INTEGER,
                 registry_path TEXT,
                 parent_path TEXT,
-                analyzing_date TEXT
+                parsed_at TEXT
             )''')
         # Create indexes for performance
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_file_name ON Shellbags(file_name)')
@@ -635,7 +643,7 @@ def main_live_reg(db_filename='registry_data.db'):
             app_path TEXT,
             app_name TEXT,
             file_extension TEXT,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # Enhanced Network List table with readable information
         cursor.execute('''
@@ -660,8 +668,8 @@ def main_live_reg(db_filename='registry_data.db'):
             extension TEXT,
             drive_letter TEXT,
             access_date TEXT,
-            data TEXT,
-            analyzing_date TEXT
+            row_data TEXT,
+            parsed_at TEXT
         )''')
         # Enhanced LastSaveMRU table with readable information
         cursor.execute('''
@@ -673,8 +681,8 @@ def main_live_reg(db_filename='registry_data.db'):
             folder_name TEXT,
             drive_letter TEXT,
             access_date TEXT,
-            data TEXT,
-            analyzing_date TEXT
+            row_data TEXT,
+            parsed_at TEXT
         )''')
         # User Profiles table for user account information from ProfileList
         cursor.execute('''
@@ -694,10 +702,10 @@ def main_live_reg(db_filename='registry_data.db'):
                 try:
                     # Check if entry exists for tables without primary keys
                     if db_table_name in ['machine_run', 'machine_run_once', 'user_run', 'user_run_once', 'DAM', 'BAM']:
-                        if check_exists(cursor, db_table_name, ['name', 'data', 'type'], (name, str(data), value_type)):
+                        if check_exists(cursor, db_table_name, ['name', 'row_data', 'type'], (name, str(data), value_type)):
                             logging.info(f"Skipping duplicate entry in {db_table_name}: {name}")
                             continue
-                    cursor.execute(f'INSERT OR IGNORE INTO {db_table_name} (name, data, type) VALUES (?, ?, ?)',
+                    cursor.execute(f'INSERT OR IGNORE INTO {db_table_name} (name, row_data, type) VALUES (?, ?, ?)',
                                   (name, str(data), value_type))
                     # Also insert into the AutoStartPrograms table
                     if table_name in ["machine_run", "machine_run_once", "user_run", "user_run_once"]:
@@ -708,7 +716,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             "user_run_once": "HKCU RunOnce"
                         }[table_name]
                         cursor.execute('INSERT OR IGNORE INTO AutoStartPrograms (location, program_name, command, timestamp) VALUES (?, ?, ?, ?)',
-                                      (location, name, str(data), datetime.datetime.now().isoformat()))
+                                      (location, name, str(data), format_forensic_timestamp(get_current_utc())))
                 except Exception as e:
                     logging.error(f"Error inserting into table {db_table_name} for key {key}: {e}")
         print("Auto start programs data inserted into database successfully.")
@@ -754,8 +762,9 @@ def main_live_reg(db_filename='registry_data.db'):
                     if 'LastAccessed' in values:
                         try:
                             filetime = int(values['LastAccessed'][0])
-                            dt = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
-                            last_execution = dt.isoformat()
+                            # Convert to datetime using centralized utility
+                            dt = filetime_to_datetime(filetime)
+                            last_execution = format_forensic_timestamp(dt)
                         except:
                             pass
                     if 'AccessCount' in values:
@@ -764,11 +773,11 @@ def main_live_reg(db_filename='registry_data.db'):
                         except:
                             pass
                     # Check if entry exists
-                    if check_exists(cursor, 'DAM', ['subkey', 'name', 'data', 'type'], (subkey, name, str(data), value_type)):
+                    if check_exists(cursor, 'DAM', ['subkey', 'name', 'row_data', 'type'], (subkey, name, str(data), value_type)):
                         logging.info(f"Skipping duplicate DAM entry: {subkey}/{name}")
                         continue
-                    cursor.execute('INSERT OR IGNORE INTO DAM (subkey, name, data, type, app_name, process_path, sid, last_execution, execution_count, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                  (subkey, name, str(data), value_type, app_name, process_path, sid, last_execution, execution_count, datetime.datetime.now().isoformat()))
+                    cursor.execute('INSERT OR IGNORE INTO DAM (subkey, name, row_data, type, app_name, process_path, sid, last_execution, execution_count, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                  (subkey, name, str(data), value_type, app_name, process_path, sid, last_execution, execution_count, format_forensic_timestamp(get_current_utc())))
                 except Exception as e:
                     logging.error(f"Error processing DAM entry {subkey}/{name}: {e}")
         # Process BAM data
@@ -814,11 +823,11 @@ def main_live_reg(db_filename='registry_data.db'):
                         except:
                             pass
                     # Check if entry exists
-                    if check_exists(cursor, 'BAM', ['subkey', 'name', 'data', 'type'], (subkey, name, str(data), value_type)):
+                    if check_exists(cursor, 'BAM', ['subkey', 'name', 'row_data', 'type'], (subkey, name, str(data), value_type)):
                         logging.info(f"Skipping duplicate BAM entry: {subkey}/{name}")
                         continue
-                    cursor.execute('INSERT OR IGNORE INTO BAM (subkey, name, data, type, app_name, process_path, sid, last_execution, execution_flags, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                  (subkey, name, str(data), value_type, app_name, process_path, sid, last_execution, execution_flags, datetime.datetime.now().isoformat()))
+                    cursor.execute('INSERT OR IGNORE INTO BAM (subkey, name, row_data, type, app_name, process_path, sid, last_execution, execution_flags, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                  (subkey, name, str(data), value_type, app_name, process_path, sid, last_execution, execution_flags, format_forensic_timestamp(get_current_utc())))
                 except Exception as e:
                     logging.error(f"Error processing BAM entry {subkey}/{name}: {e}")
         print("DAM and BAM data inserted into database successfully.")
@@ -890,7 +899,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                                    (program_path, run_count, last_execution, focus_count, focus_time, user_sid, timestamp)
                                                    VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                                  (program_path, run_count, last_execution, focus_count, focus_time_formatted,
-                                                  user_sid, datetime.datetime.now().isoformat()))
+                                                  user_sid, format_forensic_timestamp(get_current_utc())))
                                     
                                     logging.info(f"Inserted UserAssist: {program_path} | count={run_count}, focus={focus_count}, time={focus_time_formatted} ({focus_time_ms}ms), exec={last_execution}")
                                    
@@ -1051,13 +1060,13 @@ def main_live_reg(db_filename='registry_data.db'):
                                            (file_name, short_name, shell_item_type, mru_position, 
                                             created_date, modified_date, accessed_date, attributes,
                                             file_size, special_folder, network_share, server_name, share_name,
-                                            drive_letter, mft_record_number, registry_path, analyzing_date)
+                                            drive_letter, mft_record_number, registry_path, parsed_at)
                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                          (file_name, short_name, shell_item_type, mru_position, 
                                           created_date, modified_date, accessed_date, attributes,
                                           file_size, special_folder, network_share, server_name, share_name,
                                           drive_letter, mft_record_number, registry_path, 
-                                          datetime.datetime.now().isoformat()))
+                                          format_forensic_timestamp(get_current_utc())))
                            
                             shellbags_count += 1
                             logging.debug(f"Shellbag {value_name} MRU position: {mru_position}")
@@ -1134,7 +1143,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     cursor.execute('''INSERT OR IGNORE INTO RunMRU
                                    (command, mru_position, access_date, timestamp)
                                    VALUES (?, ?, ?, ?)''',
-                                 (command, mru_position, access_date, datetime.datetime.now().isoformat()))
+                                 (command, mru_position, access_date, format_forensic_timestamp(get_current_utc())))
                    
                     runmru_count += 1
                    
@@ -1194,9 +1203,9 @@ def main_live_reg(db_filename='registry_data.db'):
                        
                         # Insert into database
                         cursor.execute('''INSERT OR IGNORE INTO MUICache
-                                       (app_path, app_name, file_extension, timestamp)
+                                       (app_path, app_name, file_extension, parsed_at)
                                        VALUES (?, ?, ?, ?)''',
-                                     (app_path, app_name, file_extension, datetime.datetime.now().isoformat()))
+                                     (app_path, app_name, file_extension, format_forensic_timestamp(get_current_utc())))
                        
                         muicache_count += 1
                        
@@ -1265,7 +1274,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                        (search_term, search_type, mru_position, access_date, timestamp)
                                        VALUES (?, ?, ?, ?, ?)''',
                                      (search_term, search_type, mru_position, access_date,
-                                      datetime.datetime.now().isoformat()))
+                                      format_forensic_timestamp(get_current_utc())))
                         wordwheelquery_count += 1
                     except Exception as db_error:
                         logging.error(f"Error inserting WordWheelQuery entry into database: {db_error}")
@@ -1326,9 +1335,8 @@ def main_live_reg(db_filename='registry_data.db'):
                                     elif profile_name.lower() == 'datelastaccesstime':
                                         try:
                                             # Convert Windows FILETIME to datetime
-                                            filetime = int(profile_value)
-                                            dt = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
-                                            connection_date = dt.isoformat()
+                                            dt = filetime_to_datetime(int(profile_value))
+                                            connection_date = format_forensic_timestamp(dt)
                                         except:
                                             pass
                                     elif profile_name.lower() == 'nametype':
@@ -1340,14 +1348,22 @@ def main_live_reg(db_filename='registry_data.db'):
                             except Exception as e:
                                 logging.debug(f"Error accessing profile {profile_path}: {e}")
                        
-                        elif name.lower() == 'defaultgatewaymacc':
+                        elif name.lower() == 'defaultgatewaymac':
                             # Format MAC address for readability
                             try:
                                 if isinstance(data, bytes) and len(data) >= 6:
-                                    mac_bytes = data[:6]
-                                    gateway_mac = ':'.join(f'{b:02x}' for b in mac_bytes)
+                                    gateway_mac = registry_binary_parser.format_mac_address(data)
                             except:
                                 gateway_mac = str(data)
+                        
+                        # Parse binary timestamps if applicable
+                        if name.lower() in ['datecreated', 'datelastconnected'] and isinstance(data, bytes) and len(data) >= 16:
+                            try:
+                                formatted_time = registry_binary_parser.parse_systemtime(data)
+                                if formatted_time:
+                                    data = formatted_time
+                            except:
+                                pass
                         
                         # Check if entry exists
                         if check_exists(cursor, 'Network_list', ['subkey', 'name', 'data', 'type'], (str(subkey), name, str(data), value_type)):
@@ -1379,10 +1395,20 @@ def main_live_reg(db_filename='registry_data.db'):
         for name, (data, _) in last_update_regkey.items():
             if name.lower() == "lastchecktime":
                 last_check = str(data)
-            if check_exists(cursor, 'Windows_lastupdate', ['name', 'data', 'type'], (name, str(data), _)):
+            elif name.lower() == "susclientidvalidation" and isinstance(data, bytes):
+                # Parse SusClientIdValidation binary data
+                try:
+                    parsed_val = registry_binary_parser.parse_susclientid_validation(data)
+                    if parsed_val:
+                        cursor.execute('INSERT OR IGNORE INTO Windows_lastupdate (name, row_data, type) VALUES (?, ?, ?)',
+                                      ("SusClientIdValidation_Parsed", parsed_val, "REG_SZ"))
+                except:
+                    pass
+
+            if check_exists(cursor, 'Windows_lastupdate', ['name', 'row_data', 'type'], (name, str(data), _)):
                 logging.info(f"Skipping duplicate Windows_lastupdate entry: {name}")
                 continue
-            cursor.execute('INSERT OR IGNORE INTO Windows_lastupdate (name, data, type) VALUES (?, ?, ?)',
+            cursor.execute('INSERT OR IGNORE INTO Windows_lastupdate (name, row_data, type) VALUES (?, ?, ?)',
                           (name, str(data), _))
         # Check Auto Update key
         for name, (data, _) in auto_update_regkey.items():
@@ -1409,16 +1435,16 @@ def main_live_reg(db_filename='registry_data.db'):
             INSERT INTO WindowsUpdateInfo
             (last_check_time, last_install_time, au_options, scheduled_install_day, scheduled_install_time, timestamp)
             VALUES (?, ?, ?, ?, ?, ?)''',
-            (last_check, last_install, au_options, scheduled_day, scheduled_time, datetime.datetime.now().isoformat()))
+            (last_check, last_install, au_options, scheduled_day, scheduled_time, format_forensic_timestamp(get_current_utc())))
         else:
             logging.info("Skipping duplicate WindowsUpdateInfo entry")
         # Insert subkeys data
         for subkey, values in last_update_subkey.items():
             for name, (data, value_type) in values.items():
-                if check_exists(cursor, 'Windows_lastupdate_subkeys', ['subkey', 'name', 'data', 'type'], (str(subkey), name, str(data), value_type)):
+                if check_exists(cursor, 'Windows_lastupdate_subkeys', ['subkey', 'name', 'row_data', 'type'], (str(subkey), name, str(data), value_type)):
                     logging.info(f"Skipping duplicate Windows_lastupdate_subkeys entry: {subkey}/{name}")
                     continue
-                cursor.execute('INSERT OR IGNORE INTO Windows_lastupdate_subkeys (subkey, name, data, type) VALUES (?, ?, ?, ?)',
+                cursor.execute('INSERT OR IGNORE INTO Windows_lastupdate_subkeys (subkey, name, row_data, type) VALUES (?, ?, ?, ?)',
                               (str(subkey), name, str(data), value_type))
         print("Windows last update key data inserted into database successfully.")
         # Computer Name - Enhanced version
@@ -1438,10 +1464,10 @@ def main_live_reg(db_filename='registry_data.db'):
             if name.lower() == "computername":
                 computer_name = str(data)
                 logging.debug(f"Extracted ComputerName: {computer_name}")
-            if check_exists(cursor, 'computer_Name', ['name', 'data', 'type'], (name, str(data), _)):
+            if check_exists(cursor, 'computer_Name', ['name', 'row_data', 'type'], (name, str(data), _)):
                 logging.info(f"Skipping duplicate computer_Name entry: {name}")
                 continue
-            cursor.execute('INSERT OR IGNORE INTO computer_Name (name, data, type) VALUES (?, ?, ?)',
+            cursor.execute('INSERT OR IGNORE INTO computer_Name (name, row_data, type) VALUES (?, ?, ?)',
                           (name, str(data), _))
         # Extract system info
         for name, (data, _) in system_info.items():
@@ -1460,7 +1486,7 @@ def main_live_reg(db_filename='registry_data.db'):
             elif name.lower() == "installdate":
                 try:
                     # Convert Windows timestamp to readable date
-                    install_date = datetime.datetime.fromtimestamp(int(data)).isoformat()
+                    install_date = format_forensic_timestamp(datetime.datetime.fromtimestamp(int(data), tz=datetime.timezone.utc))
                     logging.debug(f"Extracted InstallDate: {install_date}")
                 except:
                     install_date = str(data)
@@ -1471,7 +1497,7 @@ def main_live_reg(db_filename='registry_data.db'):
             INSERT INTO ComputerNameInfo
             (computer_name, registered_owner, registered_organization, product_id, installation_date, timestamp)
             VALUES (?, ?, ?, ?, ?, ?)''',
-            (computer_name, registered_owner, registered_org, product_id, install_date, datetime.datetime.now().isoformat()))
+            (computer_name, registered_owner, registered_org, product_id, install_date, format_forensic_timestamp(get_current_utc())))
         else:
             logging.info("Skipping duplicate ComputerNameInfo entry")
         print("Computer name data inserted into database successfully.")
@@ -1501,10 +1527,10 @@ def main_live_reg(db_filename='registry_data.db'):
                     active_bias = int(data)
                 except:
                     active_bias = 0
-            if check_exists(cursor, 'time_zone', ['name', 'data', 'type'], (name, str(data), value_type)):
+            if check_exists(cursor, 'time_zone', ['name', 'row_data', 'type'], (name, str(data), value_type)):
                 logging.info(f"Skipping duplicate time_zone entry: {name}")
                 continue
-            cursor.execute('INSERT OR IGNORE INTO time_zone (name, data, type) VALUES (?, ?, ?)',
+            cursor.execute('INSERT OR IGNORE INTO time_zone (name, row_data, type) VALUES (?, ?, ?)',
                           (name, str(data), value_type))
         # Insert into the enhanced table
         if not check_exists(cursor, 'TimeZoneInfo', ['time_zone_name', 'standard_name'], (tz_name, standard_name)):
@@ -1512,7 +1538,7 @@ def main_live_reg(db_filename='registry_data.db'):
             INSERT INTO TimeZoneInfo
             (time_zone_name, standard_name, daylight_name, bias, active_time_bias, timestamp)
             VALUES (?, ?, ?, ?, ?, ?)''',
-            (tz_name, standard_name, daylight_name, bias, active_bias, datetime.datetime.now().isoformat()))
+            (tz_name, standard_name, daylight_name, bias, active_bias, format_forensic_timestamp(get_current_utc())))
         else:
             logging.info("Skipping duplicate TimeZoneInfo entry")
         print("Time zone information inserted into database successfully.")
@@ -1546,10 +1572,10 @@ def main_live_reg(db_filename='registry_data.db'):
                     dns_servers = str(data)
                 elif name.lower() == "macaddress":
                     mac_address = str(data)
-                if check_exists(cursor, 'network_interfaces', ['subkey', 'name', 'data', 'type'], (str(interface_id), name, str(data), value_type)):
+                if check_exists(cursor, 'network_interfaces', ['subkey', 'name', 'row_data', 'type'], (str(interface_id), name, str(data), value_type)):
                     logging.info(f"Skipping duplicate network_interfaces entry: {interface_id}/{name}")
                     continue
-                cursor.execute('INSERT OR IGNORE INTO network_interfaces (subkey, name, data, type) VALUES (?, ?, ?, ?)',
+                cursor.execute('INSERT OR IGNORE INTO network_interfaces (subkey, name, row_data, type) VALUES (?, ?, ?, ?)',
                               (str(interface_id), name, str(data), value_type))
             # Insert into the enhanced table
             if not check_exists(cursor, 'NetworkInterfacesInfo', ['interface_id', 'ip_address'], (interface_id, ip_address)):
@@ -1558,7 +1584,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 (interface_id, ip_address, subnet_mask, default_gateway, dhcp_enabled, dhcp_server, dns_servers, mac_address, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (interface_id, ip_address, subnet_mask, default_gateway, dhcp_enabled, dhcp_server, dns_servers, mac_address,
-                 datetime.datetime.now().isoformat()))
+                 format_forensic_timestamp(get_current_utc())))
             else:
                 logging.info(f"Skipping duplicate NetworkInterfacesInfo entry: {interface_id}")
         print("Network interfaces information inserted into database successfully.")
@@ -1582,16 +1608,16 @@ def main_live_reg(db_filename='registry_data.db'):
                     shutdown_count = 0
             elif name.lower() == "shutdowntype":
                 shutdown_type = str(data)
-            if check_exists(cursor, 'shutdown_information', ['name', 'data', 'type'], (name, str(data), value_type)):
+            if check_exists(cursor, 'shutdown_information', ['name', 'row_data', 'type'], (name, str(data), value_type)):
                 logging.info(f"Skipping duplicate shutdown_information entry: {name}")
                 continue
-            cursor.execute('INSERT OR IGNORE INTO shutdown_information (name, data, type) VALUES (?, ?, ?)',
+            cursor.execute('INSERT OR IGNORE INTO shutdown_information (name, row_data, type) VALUES (?, ?, ?)',
                           (name, str(data), value_type))
         for name, (data, _) in shutdown_time_key.items():
             if name.lower() == "lastpoweroff":
                 try:
                     # Convert Windows timestamp to readable date if possible
-                    shutdown_time = datetime.datetime.fromtimestamp(int(data)).isoformat()
+                    shutdown_time = format_forensic_timestamp(datetime.datetime.fromtimestamp(int(data), tz=datetime.timezone.utc))
                 except:
                     shutdown_time = str(data)
             elif name.lower() == "cleanshutdown":
@@ -1605,7 +1631,7 @@ def main_live_reg(db_filename='registry_data.db'):
             INSERT INTO ShutdownInfo
             (shutdown_time, shutdown_count, shutdown_type, clean_shutdown, timestamp)
             VALUES (?, ?, ?, ?, ?)''',
-            (shutdown_time, shutdown_count, shutdown_type, clean_shutdown, datetime.datetime.now().isoformat()))
+            (shutdown_time, shutdown_count, shutdown_type, clean_shutdown, format_forensic_timestamp(get_current_utc())))
         else:
             logging.info("Skipping duplicate ShutdownInfo entry")
         print('Shutdown information inserted into database successfully.')
@@ -1705,8 +1731,8 @@ def main_live_reg(db_filename='registry_data.db'):
                             # Convert from Windows FILETIME to Unix timestamp
                             FILETIME_EPOCH_DIFF = 116444736000000000
                             microseconds = (last_write_time_ns - FILETIME_EPOCH_DIFF) / 10
-                            last_write_dt = datetime.datetime(1970, 1, 1) + datetime.timedelta(microseconds=microseconds)
-                            most_recent_access = last_write_dt.strftime('%Y-%m-%d %H:%M:%S')
+                            last_write_dt = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(microseconds=microseconds)
+                            most_recent_access = format_forensic_timestamp(last_write_dt)
                         else:
                             most_recent_access = ""
                 except Exception as e:
@@ -1763,11 +1789,11 @@ def main_live_reg(db_filename='registry_data.db'):
                             except:
                                 pass
                    
-                    if check_exists(cursor, 'OpenSaveMRU', ['subkey', 'name', 'data', 'type'], (subkey, name, str(data), value_type)):
+                    if check_exists(cursor, 'OpenSaveMRU', ['subkey', 'name', 'row_data', 'type'], (subkey, name, str(data), value_type)):
                         logging.info(f"Skipping duplicate OpenSaveMRU entry: {subkey}/{name}")
                         continue
-                    cursor.execute('INSERT OR IGNORE INTO OpenSaveMRU (subkey, name, type, file_path, file_name, extension, drive_letter, access_date, data, analyzing_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                  (subkey, name, value_type, file_path, file_name, extension, drive_letter, access_date, str(data), datetime.datetime.now().isoformat()))
+                    cursor.execute('INSERT OR IGNORE INTO OpenSaveMRU (subkey, name, type, file_path, file_name, extension, drive_letter, access_date, row_data, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                  (subkey, name, value_type, file_path, file_name, extension, drive_letter, access_date, str(data), format_forensic_timestamp(get_current_utc())))
             print("OpenSaveMRU subkeys data inserted into database successfully with enhanced information.")
         except Exception as e:
             logging.error(f"Error accessing OpenSavePidlMRU: {e}")
@@ -1795,8 +1821,8 @@ def main_live_reg(db_filename='registry_data.db'):
                     if last_write_time_ns > 0:
                         FILETIME_EPOCH_DIFF = 116444736000000000
                         microseconds = (last_write_time_ns - FILETIME_EPOCH_DIFF) / 10
-                        last_write_dt = datetime.datetime(1970, 1, 1) + datetime.timedelta(microseconds=microseconds)
-                        most_recent_access = last_write_dt.strftime('%Y-%m-%d %H:%M:%S')
+                        last_write_dt = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(microseconds=microseconds)
+                        most_recent_access = format_forensic_timestamp(last_write_dt)
                     else:
                         most_recent_access = ""
             except Exception as e:
@@ -1859,11 +1885,11 @@ def main_live_reg(db_filename='registry_data.db'):
                 except (ValueError, TypeError):
                     pass
                
-                if check_exists(cursor, 'LastSaveMRU', ['mru_number', 'data', 'type'], (name, str(data), value_type)):
+                if check_exists(cursor, 'LastSaveMRU', ['mru_number', 'row_data', 'type'], (name, str(data), value_type)):
                     logging.info(f"Skipping duplicate LastSaveMRU entry: {name}")
                     continue
-                cursor.execute('INSERT OR IGNORE INTO LastSaveMRU (mru_number, type, application, folder_path, folder_name, drive_letter, access_date, data, analyzing_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                              (name, value_type, application, folder_path, folder_name, drive_letter, access_date, str(data), datetime.datetime.now().isoformat()))
+                cursor.execute('INSERT OR IGNORE INTO LastSaveMRU (mru_number, type, application, folder_path, folder_name, drive_letter, access_date, row_data, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                              (name, value_type, application, folder_path, folder_name, drive_letter, access_date, str(data), format_forensic_timestamp(get_current_utc())))
             print("LastSaveMRU has been inserted into database successfully with enhanced information.")
         except Exception as e:
             logging.error(f"Error accessing LastVisitedPidlMRU: {e}")
@@ -1910,8 +1936,9 @@ def main_live_reg(db_filename='registry_data.db'):
                                 time_part = name.split('\\')[-1]
                                 if time_part.isdigit() and len(time_part) > 8:
                                     filetime = int(time_part)
-                                    dt = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
-                                    last_execution = dt.isoformat()
+                                    # Convert to datetime using centralized utility
+                                    dt = filetime_to_datetime(filetime)
+                                    last_execution = format_forensic_timestamp(dt)
                         except Exception as e:
                             logging.error(f"Error processing DAM timestamp for {subkey}/{name}: {e}")
                     if check_exists(cursor, 'DAM', ['subkey', 'name', 'data', 'type'], (subkey, name, str(data), value_type)):
@@ -1962,8 +1989,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                 try:
                                     # Convert Windows FILETIME to datetime
                                     filetime = int.from_bytes(data, byteorder='little')
-                                    first_connected = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
-                                    first_connected = first_connected.isoformat()
+                                    first_connected = format_forensic_timestamp(filetime_to_datetime(filetime))
                                 except:
                                     first_connected = str(data)
                     except Exception as e:
@@ -1976,8 +2002,8 @@ def main_live_reg(db_filename='registry_data.db'):
                                 try:
                                     # Convert Windows FILETIME to datetime
                                     filetime = int.from_bytes(data, byteorder='little')
-                                    last_connected = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
-                                    last_connected = last_connected.isoformat()
+                                    # Convert to datetime using centralized utility
+                                    last_connected = format_forensic_timestamp(filetime_to_datetime(filetime))
                                 except:
                                     last_connected = str(data)
                     except Exception as e:
@@ -1989,8 +2015,8 @@ def main_live_reg(db_filename='registry_data.db'):
                             for _, (data, _) in last_removal.items():
                                 try:
                                     filetime = int.from_bytes(data, byteorder='little')
-                                    last_removed = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
-                                    last_removed = last_removed.isoformat()
+                                    # Convert to datetime using centralized utility
+                                    last_removed = format_forensic_timestamp(filetime_to_datetime(filetime))
                                 except:
                                     last_removed = str(data)
                     except Exception as e:
@@ -2002,7 +2028,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     (device_id, friendly_name, serial_number, vendor_id, product_id, revision, first_connected, last_connected, last_removed, timestamp)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                     (f"{device_class}\\{serial_number}", friendly_name, serial_number, vendor_id, product_id, revision,
-                     first_connected, last_connected, last_removed, datetime.datetime.now().isoformat()))
+                     first_connected, last_connected, last_removed, format_forensic_timestamp(get_current_utc())))
             print("USB storage device information inserted into database successfully.")
             # Try to get volume information from mounted devices
             try:
@@ -2067,7 +2093,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                             INSERT OR IGNORE INTO USBStorageVolumes
                                             (device_id, volume_guid, volume_name, drive_letter, timestamp)
                                             VALUES (?, ?, ?, ?, ?)''',
-                                            (candidate_id, volume_guid, "", drive_letter, datetime.datetime.now().isoformat()))
+                                            (candidate_id, volume_guid, "", drive_letter, format_forensic_timestamp(get_current_utc())))
                                             volume_count += 1
                                 except sqlite3.OperationalError as e:
                                     logging.error(f"Error querying USBStorageDevices table: {e}")
@@ -2089,7 +2115,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 INSERT INTO BrowserHistory
                 (browser, url, title, visit_count, last_visit, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)''',
-                ("Internet Explorer/Edge", str(url), "", 0, "", datetime.datetime.now().isoformat()))
+                ("Internet Explorer/Edge", str(url), "", 0, "", format_forensic_timestamp(get_current_utc())))
             print("Browser history from registry inserted into database successfully.")
         except Exception as e:
             logging.error(f"Error accessing browser history: {e}")
@@ -2129,7 +2155,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     (display_name, display_version, publisher, install_date, install_location, uninstall_string, timestamp)
                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
                     (display_name, display_version, publisher, install_date, install_location, uninstall_string,
-                     datetime.datetime.now().isoformat()))
+                     format_forensic_timestamp(get_current_utc())))
             # 32-bit applications on 64-bit Windows
             software_path_32 = "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
             try:
@@ -2165,7 +2191,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         (display_name, display_version, publisher, install_date, install_location, uninstall_string, timestamp)
                         VALUES (?, ?, ?, ?, ?, ?, ?)''',
                         (display_name, display_version, publisher, install_date, install_location, uninstall_string,
-                         datetime.datetime.now().isoformat()))
+                         format_forensic_timestamp(get_current_utc())))
             except Exception as e:
                 logging.error(f"Error accessing 32-bit software registry: {e}")
        
@@ -2220,7 +2246,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 (service_name, display_name, description, image_path, start_type, service_type, error_control, status, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (service_name, display_name, description, image_path, start_type, service_type, error_control, status,
-                 datetime.datetime.now().isoformat()))
+                 format_forensic_timestamp(get_current_utc())))
             print("System services information inserted into database successfully.")
         except Exception as e:
             logging.error(f"Error accessing system services: {e}")
@@ -2252,8 +2278,8 @@ def main_live_reg(db_filename='registry_data.db'):
                                 try:
                                     # Convert Windows FILETIME to datetime
                                     filetime = int.from_bytes(data, byteorder='little')
-                                    last_connected = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=filetime/10)
-                                    last_connected = last_connected.isoformat()
+                                    # Convert to datetime using centralized utility
+                                    last_connected = format_forensic_timestamp(filetime_to_datetime(filetime))
                                 except:
                                     last_connected = str(data)
                     except Exception as e:
@@ -2355,7 +2381,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     (user_sid, username, profile_path, profile_image_path, profile_loaded, timestamp)
                     VALUES (?, ?, ?, ?, ?, ?)''',
                     (sid, username, profile_path, profile_image_path, profile_loaded, 
-                     datetime.datetime.now().isoformat()))
+                     format_forensic_timestamp(get_current_utc())))
                     
                     user_count += 1
                     
@@ -2384,7 +2410,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 app_path TEXT,
                 app_name TEXT,
                 file_extension TEXT,
-                analyzing_date TEXT
+                parsed_at TEXT
             )''')
             
             # Get MUICache values
@@ -2437,9 +2463,9 @@ def main_live_reg(db_filename='registry_data.db'):
                     # Insert into database
                     cursor.execute('''
                     INSERT OR IGNORE INTO MUICache 
-                    (app_path, app_name, file_extension, analyzing_date)
+                    (app_path, app_name, file_extension, parsed_at)
                     VALUES (?, ?, ?, ?)''',
-                    (app_path, app_name, file_extension, datetime.datetime.now().isoformat()))
+                    (app_path, app_name, file_extension, format_forensic_timestamp(get_current_utc())))
                     
                     muicache_count += 1
                     

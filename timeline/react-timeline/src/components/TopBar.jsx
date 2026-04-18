@@ -3,7 +3,7 @@
  */
 import { memo, useState, useEffect } from 'react';
 
-function TopBar({ state, loading }) {
+function TopBar({ state, loading, stats }) {
   const {
     zoomIn, zoomOut, zoomLabel,
     viewMode, setViewModeOverride,
@@ -80,6 +80,27 @@ function TopBar({ state, loading }) {
       </div>
 
       <div className="topbar__spacer" />
+
+      {/* Reactive Forensic Stats */}
+      {stats && stats.loaded && (
+        <div className="topbar__stats" style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          marginRight: 20,
+          fontFamily: 'var(--font-mono)',
+          lineHeight: 1
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--accent-blue)' }}>
+            {stats.hasSearch ? `${stats.visibleEvents.toLocaleString()} FOUND` : `${stats.totalEvents.toLocaleString()} TOTAL`}
+          </div>
+          {stats.hasSearch && (
+            <div style={{ fontSize: 9, color: 'var(--text-subtle)', marginTop: 2 }}>
+              FROM {stats.totalEvents.toLocaleString()} LOADED
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Explicit Day/Week Navigation */}
       {(viewMode === '24h' || viewMode === 'week') && timeRange.start && (

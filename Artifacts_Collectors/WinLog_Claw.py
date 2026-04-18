@@ -9,7 +9,7 @@ from datetime import datetime
 
 # Add the parent directory to sys.path to import utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.time_utils import ensure_utc, format_timestamp
+from utils.time_utils import ensure_utc, format_timestamp, format_forensic_timestamp, get_current_forensic_timestamp
 
 # Create the database and tables
 def create_database(case_path=None):
@@ -217,14 +217,14 @@ def read_event_logs(log_type, cursor):
                     if dt is None:
                         raise ValueError(f"Time format not recognized: {original_time}")
                         
-                    # Convert to UTC and format as YYYY-MM-DD HH:MM:SS
+                    # Convert to UTC and format as DD/MM/YYYY HH:MM:SS
                     utc_dt = ensure_utc(dt)
-                    utc_time = utc_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    utc_time = format_forensic_timestamp(utc_dt)
                     
                 except Exception as e:
                     # If conversion fails, use current UTC time and log the error
                     print(f"Error converting time '{original_time}': {str(e)}")
-                    utc_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                    utc_time = get_current_forensic_timestamp()
                 
                 computer = event.ComputerName
                 user = "N/A"

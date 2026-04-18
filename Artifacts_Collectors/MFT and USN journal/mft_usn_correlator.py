@@ -17,7 +17,14 @@ import logging
 import time
 import importlib.util
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+
+# Add utils directory to path for time_utils import
+utils_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'utils')
+if utils_dir not in sys.path:
+    sys.path.insert(0, utils_dir)
+
+from time_utils import get_current_forensic_timestamp
 
 # Import the main functions from MFT_Claw and USN_Claw for direct function calls
 # Add the current directory to sys.path to allow importing the scripts
@@ -1374,7 +1381,7 @@ class MFTUSNCorrelator:
             report_lines.append("=" * 80)
             report_lines.append("MFT-USN CORRELATION FORENSIC REPORT")
             report_lines.append("=" * 80)
-            report_lines.append(f"Generated: {datetime.now().isoformat()}")
+            report_lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M:%S')}")
             report_lines.append("")
             
             # Add explanation for tilde (~) in paths
@@ -1569,7 +1576,7 @@ def main():
     """Main function"""
     # Start total script timer
     total_start_time = time.time()
-    print(f"{COLOR_HEADER}Starting MFT-USN correlation script at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{COLOR_RESET}")
+    print(f"{COLOR_HEADER}Starting MFT-USN correlation script at {get_current_forensic_timestamp()}{COLOR_RESET}")
     print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
     
     # Check dependencies before starting
@@ -1606,7 +1613,7 @@ def main():
         
         print(f"\n{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
         print(f"{COLOR_SUCCESS}✓ Total script execution time: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{milliseconds:03d}{COLOR_RESET}")
-        print(f"{COLOR_SUCCESS}✓ Completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{COLOR_RESET}")
+        print(f"{COLOR_SUCCESS}✓ Completed at {get_current_forensic_timestamp()}{COLOR_RESET}")
         print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
     
     return 0

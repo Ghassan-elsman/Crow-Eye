@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from 'react';
+import { cleanForensicDate } from '../utils/formatters';
 
 /**
  * HeatmapView — Calendar grid showing per-day forensic artifact density.
@@ -43,8 +44,8 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
   const days = useMemo(() => {
     if (!globalBounds?.start || !globalBounds?.end) return [];
 
-    const start = new Date(globalBounds.start);
-    const end = new Date(globalBounds.end);
+    const start = new Date(cleanForensicDate(globalBounds.start));
+    const end = new Date(cleanForensicDate(globalBounds.end));
 
     if (isNaN(start.getTime()) || isNaN(end.getTime())) return [];
 
@@ -142,26 +143,12 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
     if (setLoadingMessage) setLoadingMessage('Loading detailed forensic artifacts for selected range...');
 
     setTimeout(() => {
-      // Task 10.1: Use UTC component arithmetic for date manipulation
-      const jumpStart = new Date(Date.UTC(
-        dateObj.getUTCFullYear(),
-        dateObj.getUTCMonth(),
-        dateObj.getUTCDate(),
-        0, 0, 0, 0
-      ));
-
-      const jumpEnd = new Date(Date.UTC(
-        dateObj.getUTCFullYear(),
-        dateObj.getUTCMonth(),
-        dateObj.getUTCDate(),
-        23, 59, 59, 999
-      ));
-
-      // Task 10.1: toISOString() returns UTC format
-      setTimeRange({
-        start: jumpStart.toISOString(),
-        end: jumpEnd.toISOString()
-      });
+      // Force UTC-normalized start/end range
+      const s = new Date(Date.UTC(dateObj.getUTCFullYear(), dateObj.getUTCMonth(), dateObj.getUTCDate(), 0, 0, 0));
+      const e = new Date(Date.UTC(dateObj.getUTCFullYear(), dateObj.getUTCMonth(), dateObj.getUTCDate(), 23, 59, 59, 999));
+      
+      // Use toISOString() for consistent UTC transmission
+      setTimeRange({ start: s.toISOString(), end: e.toISOString() });
       setViewModeOverride('24h');
     }, 10);
   };
@@ -247,22 +234,62 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
               );
             })()}
 
-            {Object.entries(hoveredDay.sources || {}).sort((a,b)=>b[1]-a[1]).map(([source, count]) => {
-              const pct = hoveredDay.count > 0 ? Math.round((count / hoveredDay.count) * 100) : 0;
+            {/* Granular Breakdown Sections */}
+            {(() => {
+              const src = hoveredDay.sources || {};
+              const sourceLabels = {
+                'prefetch': 'Prefetch Executions',
+                'lnk': 'LNK/JumpList Activity',
+                'amcache': 'Amcache App/Driver Activity',
+                'shimcache': 'ShimCache AppCompat',
+                'recyclebin': 'Recycle Bin Deletions',
+                'registry_others': 'Registry/MRU Artifacts',
+                'SystemLogs': 'Windows System Logs',
+                'ApplicationLogs': 'Application Event Logs',
+                'SecurityLogs': 'Security/Logon Logs',
+                'srum_app': 'App Resource Usage (SRUM)',
+                'srum_net': 'Network Data Usage (SRUM)',
+                'mft_usn': 'MFT/USN Journal Ops'
+              };
+
+              const forensicKeys = ['prefetch', 'lnk', 'amcache', 'shimcache', 'recyclebin', 'registry_others'];
+              const systemKeys = ['SystemLogs', 'ApplicationLogs', 'SecurityLogs', 'srum_app', 'srum_net', 'mft_usn'];
+
+              const renderGroup = (title, keys, color) => {
+                const groupItems = keys.filter(k => src[k] > 0).sort((a,b) => src[b] - src[a]);
+                if (groupItems.length === 0) return null;
+                return (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 4 }}>{title}</div>
+                    {groupItems.map(k => {
+                      const count = src[k];
+                      const pct = hoveredDay.count > 0 ? Math.round((count / hoveredDay.count) * 100) : 0;
+                      return (
+                        <div key={k} style={{ marginBottom: 8 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 2 }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>{sourceLabels[k] || k}</span>
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{count.toLocaleString()}</span>
+                          </div>
+                          <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 2 }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              };
+
               return (
-                <div key={source} style={{ marginBottom: 6 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 2 }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>{source}</span>
-                    <span style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>{count.toLocaleString()}</span>
-                  </div>
-                  <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent-cyan)', borderRadius: 2, transition: 'width 0.3s ease' }} />
-                  </div>
-                </div>
+                <>
+                  {renderGroup('Forensic Artifact Hub', forensicKeys, 'var(--accent-cyan)')}
+                  {renderGroup('System Activity & Logs', systemKeys, 'var(--accent-blue)')}
+                </>
               );
-            })}
+            })()}
+
             {hoveredDay.count === 0 && (
-              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No data for this day.</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No activity detected for this date.</div>
             )}
           </div>
         ) : (
@@ -283,7 +310,7 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
            <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Time Span</div>
               <div style={{ fontSize: 13, fontWeight: 500, marginTop: 4 }}>
-                 {fmtDate(new Date(globalBounds.start))} — {fmtDate(new Date(globalBounds.end))}
+                 {fmtDate(new Date(cleanForensicDate(globalBounds.start)))} — {fmtDate(new Date(cleanForensicDate(globalBounds.end)))}
               </div>
            </div>
            <div style={{ flex: 1 }}>

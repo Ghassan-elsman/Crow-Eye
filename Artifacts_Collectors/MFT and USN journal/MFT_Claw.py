@@ -73,6 +73,11 @@ try:
 except ImportError:
     HAS_WIN32 = False
 
+# Import time utilities for forensic timestamp formatting
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from utils.time_utils import format_forensic_timestamp, get_current_forensic_timestamp
+
 
 
 # Configure module-level logger
@@ -600,7 +605,7 @@ class DatabaseManager:
             """Convert datetime to ISO format string"""
             if dt is None:
                 return None
-            return dt.isoformat()
+            return format_forensic_timestamp(dt)
         
         def convert_datetime(val):
             """Convert ISO format string back to datetime"""
@@ -1762,7 +1767,7 @@ class MFTParser:
                 'batch_size': self.config.batch_size
             },
             'volumes_processed': self.state.get('volumes_processed', []),
-            'analysis_timestamp': datetime.datetime.now().isoformat()
+            'analysis_timestamp': get_current_forensic_timestamp()
         }
     
     def _build_parent_child_mapping(self, volume_letter: str) -> Dict[int, List[int]]:

@@ -2,33 +2,51 @@
  * PillBar — Artifact type toggle filter pills.
  */
 import { memo, useMemo } from 'react';
-import { ARTIFACT_CONFIG, formatCount } from '../utils/formatters';
+import { ARTIFACT_CONFIG, formatCount, getForensicTimestamps, getArtifactSources } from '../utils/formatters';
+import { heuristicFlatten } from '../utils/dataUtils';
 
 function PillBar({ state, data }) {
   const { activeArtifacts, toggleArtifact } = state;
 
   // Compute event counts per artifact type
   const counts = useMemo(() => {
-    const c = {};
-    c.sessions = data.sessions?.events?.length || 0;
-    c.srum_app = Array.isArray(data.srum_app) ? data.srum_app.length : 0;
-    c.srum_net =
-      (data.srum_net?.connectivity?.length || 0) +
-      (data.srum_net?.data_usage?.length || 0);
-    c.mft_usn = Array.isArray(data.mft_usn) ? data.mft_usn.length : 0;
-    c.prefetch = Array.isArray(data.prefetch) ? data.prefetch.length : 0;
-    c.lnk = Array.isArray(data.lnk) ? data.lnk.length : 0;
-    c.bam = Array.isArray(data.bam) ? data.bam.length : 0;
-    c.registry =
-      (data.registry?.open_save_mru?.length || 0) +
-      (data.registry?.last_save_mru?.length || 0) +
-      (data.registry?.shellbags?.length || 0);
-    c.amcache =
-      (data.amcache?.application_files?.length || 0) +
-      (data.amcache?.applications?.length || 0) +
-      (data.amcache?.drivers?.length || 0);
-    c.shimcache = Array.isArray(data.shimcache) ? data.shimcache.length : 0;
-    c.recyclebin = Array.isArray(data.recyclebin) ? data.recyclebin.length : 0;
+    const c = {
+      sessions: 0, srum_app: 0, srum_net: 0, mft_usn: 0,
+      prefetch: 0, lnk: 0, bam: 0, registry: 0, amcache: 0,
+      shimcache: 0, recyclebin: 0
+    };
+
+    const countDots = (arr) => {
+      let dots = 0;
+      heuristicFlatten(arr).forEach(item => {
+        dots += getForensicTimestamps(item).length;
+      });
+      return dots;
+    };
+
+    // 1. Specialized Lane Counts
+    c.sessions = countDots(data.sessions?.events) + heuristicFlatten(data.sessions?.bands).length;
+    c.srum_app = countDots(data.srum_app);
+    c.srum_net = countDots(data.srum_net?.connectivity) + countDots(data.srum_net?.data_usage);
+    c.mft_usn = countDots(data.mft_usn);
+
+    // 2. Artifact Lane - Global Discovery Summation
+    const sources = getArtifactSources(data);
+    sources.forEach(src => {
+      const dots = countDots(src.items);
+      // Map back to high-level categories for PillBar display
+      if (src.type === 'prefetch') c.prefetch += dots;
+      else if (src.type === 'lnk') c.lnk += dots;
+      else if (src.type === 'bam' || src.type === 'dam') c.bam += dots;
+      else if (src.type === 'amcache') c.amcache += dots;
+      else if (src.type === 'shimcache') c.shimcache += dots;
+      else if (src.type === 'recyclebin') c.recyclebin += dots;
+      else {
+        // Anything else in registry is counted towards 'Registry'
+        c.registry += dots;
+      }
+    });
+
     return c;
   }, [data]);
 

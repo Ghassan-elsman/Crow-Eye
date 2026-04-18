@@ -405,6 +405,54 @@ def get_current_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def format_forensic_timestamp(dt: datetime.datetime) -> str:
+    """
+    Format datetime as YYYY-MM-DD HH:MM:SS in UTC for forensic output.
+    
+    This function ensures consistent timestamp formatting across all forensic
+    artifact parsers. It converts any timezone-aware datetime to UTC and
+    formats it in the standardized ISO 8601 YYYY-MM-DD HH:MM:SS format.
+    
+    Args:
+        dt: datetime object (can be naive or timezone-aware)
+        
+    Returns:
+        str: Formatted timestamp string in YYYY-MM-DD HH:MM:SS format (UTC)
+             Returns empty string if dt is None
+        
+    Example:
+        >>> dt = datetime.datetime(2024, 1, 15, 14, 30, 22, tzinfo=datetime.timezone.utc)
+        >>> format_forensic_timestamp(dt)
+        '2024-01-15 14:30:22'
+    """
+    if dt is None:
+        return ""
+    
+    # Ensure the datetime is in UTC
+    utc_dt = ensure_utc(dt)
+    
+    # Format as YYYY-MM-DD HH:MM:SS (ISO 8601 standard)
+    return utc_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def get_current_forensic_timestamp() -> str:
+    """
+    Get current UTC time formatted as YYYY-MM-DD HH:MM:SS.
+    
+    This is a convenience function that combines get_current_utc() and
+    format_forensic_timestamp() for generating standardized timestamps
+    for forensic logging and output.
+    
+    Returns:
+        str: Current UTC time in YYYY-MM-DD HH:MM:SS format
+        
+    Example:
+        >>> get_current_forensic_timestamp()
+        '2024-01-15 14:30:22'
+    """
+    return format_forensic_timestamp(get_current_utc())
+
+
 # Example usage
 if __name__ == "__main__":
     # Current time in various formats

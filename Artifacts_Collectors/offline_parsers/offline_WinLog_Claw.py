@@ -14,6 +14,11 @@ import os
 from datetime import datetime
 from typing import Optional, Tuple, Iterator, Dict, Any
 
+# Import time utilities for standardized forensic timestamp formatting
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from utils.time_utils import format_forensic_timestamp, get_current_utc
+
 try:
     import Evtx.Evtx as evtx
     import Evtx.Views as e_views
@@ -365,7 +370,7 @@ class EVTXParser:
             dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
             
             # Format as string for database storage
-            return dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]  # Trim to milliseconds
+            return format_forensic_timestamp(dt)
             
         except Exception as e:
             logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
@@ -525,7 +530,7 @@ def process_evtx_files(evtx_dir: str, conn: sqlite3.Connection, cursor: sqlite3.
     
     Requirements: 1.7, 6.1, 6.3, 6.4, 6.5, 7.2, 7.3
     """
-    start_time = datetime.now()
+    start_time = get_current_utc()
     
     stats = {
         'total_files': 0,
@@ -624,7 +629,7 @@ def process_evtx_files(evtx_dir: str, conn: sqlite3.Connection, cursor: sqlite3.
             continue
     
     # Calculate processing time
-    end_time = datetime.now()
+    end_time = get_current_utc()
     stats['processing_time'] = (end_time - start_time).total_seconds()
     
     # Print final completion percentage

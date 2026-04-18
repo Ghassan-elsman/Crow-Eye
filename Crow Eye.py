@@ -616,7 +616,6 @@ artifact_modules = [
     ('Prefetch_claw', 'Artifacts_Collectors'),
     ('WinLog_Claw', 'Artifacts_Collectors'),
     ('A_CJL_LNK_Claw', 'Artifacts_Collectors'),
-    ('JLParser', 'Artifacts_Collectors'),
     ('Regclaw', 'Artifacts_Collectors')
 ]
 
@@ -1294,7 +1293,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     mru_position, created_date, modified_date, accessed_date, 
                     attributes, file_size, special_folder, network_share, 
                     server_name, share_name, drive_letter, mft_record_number, 
-                    registry_path, analyzing_date
+                    registry_path, parsed_at
                 FROM Shellbags 
                 ORDER BY 
                     CASE 
@@ -5957,7 +5956,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize computerName_table headers
         if hasattr(self, 'computerName_table'):
             self.computerName_table.setColumnCount(3)
-            for i, header in enumerate(["Name", "Data", "Data Type"]):
+            for i, header in enumerate(["Name", "Row data", "Type"]):
                 item = QtWidgets.QTableWidgetItem()
                 self.computerName_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
@@ -5971,7 +5970,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize TimeZone_table headers
         if hasattr(self, 'TimeZone_table'):
             self.TimeZone_table.setColumnCount(3)
-            for i, header in enumerate(["Name", "Data", "Data Type"]):
+            for i, header in enumerate(["Name", "Row data", "Type"]):
                 item = QtWidgets.QTableWidgetItem()
                 self.TimeZone_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
@@ -5985,7 +5984,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize NetworkInterface_table headers
         if hasattr(self, 'NetworkInterface_table'):
             self.NetworkInterface_table.setColumnCount(4)
-            headers = ["Sub Key name", "Service", "Data", "Data Type"]
+            headers = ["Subkey", "Name", "Row data", "Type"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.NetworkInterface_table.setHorizontalHeaderItem(i, item)
@@ -6053,7 +6052,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize MachineRun_table headers if it exists
         if hasattr(self, 'MachineRun_table'):
             self.MachineRun_table.setColumnCount(3)
-            headers = ["Name", "Data", "Data Type"]
+            headers = ["Name", "Row data", "Type"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.MachineRun_table.setHorizontalHeaderItem(i, item)
@@ -6069,7 +6068,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize MachineRunOnce_table headers if it exists
         if hasattr(self, 'MachineRunOnce_table'):
             self.MachineRunOnce_table.setColumnCount(3)
-            for i, header in enumerate(["Name", "Data", "Data Type"]):
+            for i, header in enumerate(["Name", "Row data", "Type"]):
                 item = QtWidgets.QTableWidgetItem()
                 self.MachineRunOnce_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
@@ -6084,7 +6083,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize UserRun_table headers if it exists
         if hasattr(self, 'UserRun_table'):
             self.UserRun_table.setColumnCount(3)
-            for i, header in enumerate(["Name", "Data", "Data Type"]):
+            for i, header in enumerate(["Name", "Row data", "Type"]):
                 item = QtWidgets.QTableWidgetItem()
                 self.UserRun_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
@@ -6246,7 +6245,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize UserRunOnce_table headers if it exists
         if hasattr(self, 'UserRunOnce_table'):
             self.UserRunOnce_table.setColumnCount(3)
-            for i, header in enumerate(["Name", "Data", "Data Type"]):
+            for i, header in enumerate(["Name", "Row data", "Type"]):
                 item = QtWidgets.QTableWidgetItem()
                 self.UserRunOnce_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
@@ -6261,7 +6260,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize LastUpdate_table headers if it exists
         if hasattr(self, 'LastUpdate_table'):
             self.LastUpdate_table.setColumnCount(3)
-            for i, header in enumerate(["Name", "Data", "Data Type"]):
+            for i, header in enumerate(["Name", "Row data", "Type"]):
                 item = QtWidgets.QTableWidgetItem()
                 self.LastUpdate_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
@@ -6277,7 +6276,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         if hasattr(self, 'LastUpdateInfo_table'):
             self.LastUpdateInfo_table.setSortingEnabled(True)
             self.LastUpdateInfo_table.setColumnCount(4)
-            headers = ["Sub key Name", "Service", "Data", "Data Type"]
+            headers = ["Subkey", "Name", "Row data", "Type"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.LastUpdateInfo_table.setHorizontalHeaderItem(i, item)
@@ -6293,7 +6292,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize ShutDown_table headers if it exists
         if hasattr(self, 'ShutDown_table'):
             self.ShutDown_table.setColumnCount(3)
-            for i, header in enumerate(["Name", "Data", "Data Type"]):
+            for i, header in enumerate(["Name", "Row data", "Type"]):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShutDown_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
@@ -6448,7 +6447,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize OpenSaveMRU_table headers if it exists
         if hasattr(self, 'OpenSaveMRU_table'):
             self.OpenSaveMRU_table.setColumnCount(10)
-            headers = ["Subkey", "Name", "Type", "File Path", "File Name", "Extension", "Drive Letter", "Access Date", "Data", "Analyzing Date"]
+            headers = ["Subkey", "Name", "Type", "File Path", "File Name", "Extension", "Drive Letter", "Access Date", "Row data", "Parsed at"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.OpenSaveMRU_table.setHorizontalHeaderItem(i, item)
@@ -6464,7 +6463,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize LastSaveMRU_table headers if it exists
         if hasattr(self, 'LastSaveMRU_table'):
             self.LastSaveMRU_table.setColumnCount(9)
-            headers = ["MRU Number", "Type", "Application", "Folder Path", "Folder Name", "Drive Letter", "Access Date", "Data", "Analyzing Date"]
+            headers = ["MRU Number", "Type", "Application", "Folder Path", "Folder Name", "Drive Letter", "Access Date", "Row data", "Parsed at"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.LastSaveMRU_table.setHorizontalHeaderItem(i, item)
@@ -6496,7 +6495,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize Bam_table headers if it exists (BAM)
         if hasattr(self, 'Bam_table'):
             self.Bam_table.setColumnCount(10)
-            headers = ["Sub Key Name", "Service", "Data", "Data Type", "App Name", "Process Path", "SID", "Last Execution", "Execution Flags", "Timestamp"]
+            headers = ["Sub Key Name", "Service", "Row data", "Type", "App Name", "Process Path", "SID", "Last Execution", "Execution Flags", "Parsed at"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.Bam_table.setHorizontalHeaderItem(i, item)
@@ -6512,7 +6511,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize Dam_table headers if it exists (DAM)
         if hasattr(self, 'Dam_table'):
             self.Dam_table.setColumnCount(10)
-            headers = ["Sub Key Name", "Service", "Data", "Data Type", "App Name", "Process Path", "SID", "Last Execution", "Execution Count", "Timestamp"]
+            headers = ["Sub Key Name", "Service", "Row data", "Type", "App Name", "Process Path", "SID", "Last Execution", "Execution Count", "Parsed at"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.Dam_table.setHorizontalHeaderItem(i, item)
@@ -6575,8 +6574,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Initialize MUICache_table headers if it exists
         if hasattr(self, 'MUICache_table'):
-            self.MUICache_table.setColumnCount(3)
-            headers = ["Application Path", "Application Name", "File Extension"]
+            self.MUICache_table.setColumnCount(4)
+            headers = ["Application Path", "Application Name", "File Extension", "Parsed at"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.MUICache_table.setHorizontalHeaderItem(i, item)
@@ -6669,7 +6668,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize LNK_table headers if it exists
         if hasattr(self, 'LNK_table'):
             self.LNK_table.setSortingEnabled(True)
-            self.LNK_table.setColumnCount(33)  # Total number of columns in the table
+            self.LNK_table.setColumnCount(48)  # Extended to include forensic metadata
             headers = [
                 "Source_Name", "Source_path", "Owner UID", "Owner GID", "Time_Access",
                 "Time_Creation", "Time_modefication", "app_Type", "App_ID",
@@ -6680,10 +6679,16 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "File_Size", "Drive_Type", "Drive_Serial_Number", "Volume_Name",
                 "Network_Providers", "Network_share_Flags", "Network_Share_Name",
                 "Network_Share_Name_UNI", "File_Permission", "Number of the hardlinks",
-                "Device_ID", "Inode number"
+                "Device_ID", "Inode number",
+                
+                # Extended Forensic Headers
+                "Volume Type (Ext)", "Volume Serial (Ext)", "Volume Label (Ext)",
+                "Forensic CLI Args", "MFT Entry Num", "MFT Sequence Num",
+                "Property Metadata", "Darwin ID", "Env Variables",
+                "Known Folder GUID", "DestList Last ID", "DestList Actions"
             ]
             for i, header in enumerate(headers):
-                if i < self.LNK_table.columnCount():  # Ensure we don't exceed column count
+                if i < self.LNK_table.columnCount():
                     item = QtWidgets.QTableWidgetItem()
                     self.LNK_table.setHorizontalHeaderItem(i, item)
                     item.setText(_translate("Crow_Eye", header))
@@ -6717,7 +6722,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize AJL_table headers if it exists
         if hasattr(self, 'AJL_table'):
             self.AJL_table.setSortingEnabled(True)
-            self.AJL_table.setColumnCount(33)  # Same columns as LNK table
+            self.AJL_table.setColumnCount(48)  # Same as LNK table
             headers = [
                 "Source_Name", "Source_path", "Owner UID", "Owner GID", "Time_Access",
                 "Time_Creation", "Time_modefication", "app_Type", "App_ID",
@@ -6728,10 +6733,16 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "File_Size", "Drive_Type", "Drive_Serial_Number", "Volume_Name",
                 "Network_Providers", "Network_share_Flags", "Network_Share_Name",
                 "Network_Share_Name_UNI", "File_Permission", "Number of the hardlinks",
-                "Device_ID", "Inode number"
+                "Device_ID", "Inode number",
+
+                # Extended Forensic Headers
+                "Volume Type (Ext)", "Volume Serial (Ext)", "Volume Label (Ext)",
+                "Forensic CLI Args", "MFT Entry Num", "MFT Sequence Num",
+                "Property Metadata", "Darwin ID", "Env Variables",
+                "Known Folder GUID", "DestList Last ID", "DestList Actions"
             ]
             for i, header in enumerate(headers):
-                if i < self.AJL_table.columnCount():  # Ensure we don't exceed column count
+                if i < self.AJL_table.columnCount():
                     item = QtWidgets.QTableWidgetItem()
                     self.AJL_table.setHorizontalHeaderItem(i, item)
                     item.setText(_translate("Crow_Eye", header))
@@ -6739,14 +6750,21 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize Clj_table headers if it exists
         if hasattr(self, 'Clj_table'):
             self.Clj_table.setSortingEnabled(True)
-            self.Clj_table.setColumnCount(13)  # Total number of columns in the table
+            self.Clj_table.setColumnCount(27)  # Corrected to 27 (14 base + 13 extensions)
             headers = [
                 "File name", "File Directory", "Owner UID", "Owner GID", "Access time",
                 "Creation Time", "Modification Time", "File Size", "File permission", "File Type",
-                "numbers_hard_links", "Device_id", "Inode number", "Artifact"
+                "numbers_hard_links", "Device_id", "Inode number", "Artifact",
+                
+                # Extended Forensic Headers
+                "Category", "Local Path (Ext)", "LNK Class ID (Ext)",
+                "Volume Type", "Volume Serial", "Volume Label",
+                "CLI Arguments", "MFT Entry Num", "MFT Sequence Num",
+                "Property Metadata", "Darwin ID", "Env Variables",
+                "Known Folder GUID"
             ]
             for i, header in enumerate(headers):
-                if i < self.Clj_table.columnCount():  # Ensure we don't exceed column count
+                if i < self.Clj_table.columnCount():
                     item = QtWidgets.QTableWidgetItem()
                     self.Clj_table.setHorizontalHeaderItem(i, item)
                     item.setText(_translate("Crow_Eye", header))

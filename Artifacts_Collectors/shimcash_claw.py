@@ -26,6 +26,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+from utils.time_utils import format_forensic_timestamp
 
 try:
     from winreg import HKEY_LOCAL_MACHINE, OpenKey, QueryValueEx, CloseKey
@@ -92,8 +93,8 @@ class ShimCacheEntry:
         if self.last_modified:
             # Check if datetime object has timezone info and format accordingly
             if self.last_modified.tzinfo is not None:
-                # Timezone-aware datetime: use strftime to format without timezone
-                self.last_modified_readable = self.last_modified.strftime('%Y-%m-%d %H:%M:%S')
+                # Timezone-aware datetime: use format_forensic_timestamp for consistent formatting
+                self.last_modified_readable = format_forensic_timestamp(self.last_modified)
             else:
                 # Timezone-naive datetime: convert to string and remove milliseconds
                 self.last_modified_readable = str(self.last_modified).split('.')[0]
@@ -535,8 +536,8 @@ class ShimCacheParser:
                 # Format datetime consistently without timezone info and milliseconds
                 if entry.last_modified:
                     if entry.last_modified.tzinfo is not None:
-                        # Timezone-aware datetime: use strftime to format without timezone
-                        last_modified_str = entry.last_modified.strftime('%Y-%m-%d %H:%M:%S')
+                        # Timezone-aware datetime: use format_forensic_timestamp for consistent formatting
+                        last_modified_str = format_forensic_timestamp(entry.last_modified)
                     else:
                         # Timezone-naive datetime: convert to string and remove milliseconds
                         last_modified_str = str(entry.last_modified).split('.')[0]
@@ -609,7 +610,7 @@ class ShimCacheParser:
         print(f"💾 Database: {self.database_path}")
         
         if timestamps:
-            print(f"📅 Time range: {oldest.strftime('%Y-%m-%d')} to {newest.strftime('%Y-%m-%d')}")
+            print(f"📅 Time range: {format_forensic_timestamp(oldest).split(' ')[0]} to {format_forensic_timestamp(newest).split(' ')[0]}")
         
         print(f"\n🔧 Top file extensions:")
         for ext, count in sorted(extensions.items(), key=lambda x: x[1], reverse=True)[:10]:

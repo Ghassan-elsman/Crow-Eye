@@ -29,6 +29,7 @@ from datetime import datetime
 from timeline.utils.timestamp_parser import TimestampParser
 from timeline.data.timestamp_indexer import TimestampIndexer
 from timeline.data.srum_app_resolver import SrumAppResolver
+from timeline.utils.value_parser import parsable_num_adapter
 from timeline.utils.error_handler import (
     ErrorHandler, DatabaseError, DataLoadError, 
     ErrorSeverity, create_recovery_options
@@ -136,29 +137,69 @@ class TimelineDataManager:
     }
     
     # Timestamp column mappings for each artifact type
-    # Format: artifact_type -> [(table_name, timestamp_column, timestamp_type)]
+    # Format: artifact_type -> [(table_name, timestamp_column, timestamp_type, description)]
     # Updated to match actual database schemas in case directory
     TIMESTAMP_MAPPINGS = {
         'Prefetch': [
-            ('prefetch_data', 'last_executed', 'executed'),
+            ('prefetch_data', 'last_executed', 'executed', 'Last execution time'),
+            ('prefetch_data', 'created_on', 'created', 'File creation time'),
+            ('prefetch_data', 'modified_on', 'modified', 'File modification time'),
+            ('prefetch_data', 'accessed_on', 'accessed', 'File access time'),
         ],
         'LNK': [
             ('JLCE', 'Time_Creation', 'created'),
             ('JLCE', 'Time_Modification', 'modified'),
             ('JLCE', 'Time_Access', 'accessed'),
+            ('Custom_JLCE', 'Time_Creation', 'created'),
+            ('Custom_JLCE', 'Time_Modification', 'modified'),
+            ('Custom_JLCE', 'Time_Access', 'accessed'),
         ],
         'Registry': [
-            ('UserAssist', 'timestamp', 'various'),
+            ('UserAssist', 'last_execution', 'executed'),
             ('MUICache', 'timestamp', 'various'),
-            ('InstalledSoftware', 'timestamp', 'various'),
+            ('InstalledSoftware', 'install_date', 'installed'),
+            ('ComputerNameInfo', 'installation_date', 'installed'),
+            ('Auto', 'last_install_time', 'installed'),
+            ('Auto', 'scheduled_install_time', 'created'),
+            ('WindowsUpdateInfo', 'last_check_time', 'accessed'),
+            ('WindowsUpdateInfo', 'last_install_time', 'installed'),
+            ('WindowsUpdateInfo', 'scheduled_install_time', 'created'),
+            ('ShutdownInfo', 'shutdown_time', 'executed'),
+            ('WordWheelQuery', 'access_date', 'accessed'),
+            ('RunMRU', 'access_date', 'accessed'),
+            ('Network_list', 'connection_date', 'accessed'),
+            ('NetworkListProfiles', 'timestamp', 'various'),
+            ('OpenSaveMRU', 'access_date', 'accessed'),
+            ('LastSaveMRU', 'access_date', 'accessed'),
+            ('NetworkInterfacesInfo', 'timestamp', 'various'),
+        ],
+        'DAM': [
+            ('DAM', 'last_execution', 'executed'),
+        ],
+        'USBStorageDevices': [
+            ('USBStorageDevices', 'first_connected', 'installed'),
+            ('USBStorageDevices', 'last_connected', 'accessed'),
+            ('USBStorageDevices', 'last_removed', 'deleted'),
         ],
         'BAM': [
-            ('BAM', 'timestamp', 'executed'),
+            ('BAM', 'last_execution', 'executed'),
         ],
-        'ShellBag': [
+        'Amcache': [
+            ('InventoryApplication', 'install_date', 'installed', 'Application install date'),
+            ('InventoryApplicationFile', 'link_date', 'linked', 'Application file link date'),
+            ('InventoryDriverBinary', 'driver_last_write_time', 'modified', 'Driver last write time'),
+            ('InventoryDriverBinary', 'driver_time_stamp', 'created', 'Driver timestamp'),
+        ],
+        'Shimcache': [
+            ('shimcache_entries', 'last_modified', 'modified', 'Shimcache last modified time'),
+        ],
+        'RecycleBin': [
+            ('recycle_bin_entries', 'deletion_time', 'deleted', 'File deletion time'),
+        ],
+        'Shellbags': [
             ('Shellbags', 'created_date', 'created'),
             ('Shellbags', 'modified_date', 'modified'),
-            ('Shellbags', 'access_date', 'accessed'),
+            ('Shellbags', 'accessed_date', 'accessed'),
         ],
         'SRUM': [
             ('srum_application_usage', 'timestamp', 'various'),
@@ -425,6 +466,10 @@ class TimelineDataManager:
                 db_path,
                 timeout=30.0  # 30 second timeout
             )
+            
+            # Register the dynamic value parser as a custom SQLite function
+            conn.create_function("PARSABLE_NUM", 1, parsable_num_adapter)
+            
             conn.row_factory = sqlite3.Row  # Enable column access by name
             
             # Test connection
@@ -705,7 +750,7 @@ class TimelineDataManager:
         all_timestamps = []
         cursor = conn.cursor()
         
-        for table_name, timestamp_column, _ in timestamp_mappings:
+        for table_name, timestamp_column, *_ in timestamp_mappings:
             try:
                 # Query min and max timestamps from this table/column
                 query = f"""
@@ -929,62 +974,103 @@ class TimelineDataManager:
         cursor = conn.cursor()
         
         try:
-            # Build query with time range filters
+            # Build query with time range filters on ALL timestamp columns
             query = """
-                SELECT 
-                    filename,
-                    executable_name,
-                    hash,
-                    run_count,
-                    last_executed,
-                    created_on,
-                    modified_on
+                SELECT rowid, *
                 FROM prefetch_data
-                WHERE last_executed IS NOT NULL
+                WHERE (last_executed IS NOT NULL)
             """
             
             params = []
-            
-            if start_time:
-                query += " AND last_executed >= ?"
-                params.append(start_time.isoformat())
-            
-            if end_time:
-                query += " AND last_executed <= ?"
-                params.append(end_time.isoformat())
+            if start_time and end_time:
+                query += """ AND (
+                    (last_executed BETWEEN ? AND ?) OR
+                    (created_on BETWEEN ? AND ?) OR
+                    (modified_on BETWEEN ? AND ?) OR
+                    (accessed_on BETWEEN ? AND ?)
+                )"""
+                s, e = start_time.isoformat(), end_time.isoformat()
+                params.extend([s, e, s, e, s, e, s, e])
+            elif start_time:
+                query += " AND (last_executed >= ? OR created_on >= ? OR modified_on >= ? OR accessed_on >= ?)"
+                s = start_time.isoformat()
+                params.extend([s, s, s, s])
+            elif end_time:
+                query += " AND (last_executed <= ? OR created_on <= ? OR modified_on <= ? OR accessed_on <= ?)"
+                e = end_time.isoformat()
+                params.extend([e, e, e, e])
             
             query += " ORDER BY last_executed ASC"
             
-            # Add LIMIT only if max_events is specified
             if max_events is not None:
                 query += f" LIMIT {max_events}"
             
             cursor.execute(query, params)
             rows = cursor.fetchall()
             
-            # Convert rows to event dictionaries
+            # Helper to check if timestamp is in range
+            def is_in_range(ts_dt):
+                if not ts_dt: return False
+                if start_time and ts_dt < start_time: return False
+                if end_time and ts_dt > end_time: return False
+                return True
+
             for row in rows:
-                timestamp = TimestampParser.parse_timestamp(row['last_executed'])
+                # Emit events for all in-range timestamps
+                ts_map = [
+                    ('last_executed', 'executed'),
+                    ('created_on',    'created'),
+                    ('modified_on',   'modified'),
+                    ('accessed_on',   'accessed')
+                ]
                 
-                if timestamp:
-                    event = {
-                        'id': f"prefetch_{row['filename']}",
-                        'timestamp': timestamp,
-                        'artifact_type': 'Prefetch',
-                        'source_db': 'prefetch_data.db',
-                        'source_table': 'prefetch_data',
-                        'source_row_id': row['filename'],
-                        'display_name': row['executable_name'] or 'Unknown',
-                        'full_path': row['filename'] or '',
-                        'details': {
-                            'run_count': row['run_count'],
-                            'hash': row['hash'],
-                            'created_on': row['created_on'],
-                            'modified_on': row['modified_on'],
-                        },
-                        'annotation': None
-                    }
-                    events.append(event)
+                rid = row['rowid']
+                
+                for col, sub_type in ts_map:
+                    raw_ts = row[col]
+                    if not raw_ts: continue
+                    ts = TimestampParser.parse_timestamp(raw_ts)
+                    if ts and is_in_range(ts):
+                        events.append({
+                            'id': f"prefetch_{rid}_{sub_type}_{raw_ts}",
+                            'timestamp': ts,
+                            'subType': sub_type,
+                            'artifact_type': 'Prefetch',
+                            'source_db': 'prefetch_data.db',
+                            'source_table': 'prefetch_data',
+                            'source_row_id': str(rid),
+                            'display_name': row['executable_name'] or 'Unknown',
+                            'full_path': row['filename'] or '',
+                            'details': {k: row[k] for k in row.keys()},
+                            'annotation': None
+                        })
+                
+                # Also process historical run_times if present
+                try:
+                    import json
+                    rt_json = row['run_times']
+                    if rt_json:
+                        run_times = json.loads(rt_json)
+                        if isinstance(run_times, list):
+                            for rt_str in run_times:
+                                if not rt_str: continue
+                                rt_ts = TimestampParser.parse_timestamp(rt_str)
+                                if rt_ts and is_in_range(rt_ts):
+                                    events.append({
+                                        'id': f"prefetch_{rid}_run_time_{rt_str}",
+                                        'timestamp': rt_ts,
+                                        'subType': 'run_time',
+                                        'artifact_type': 'Prefetch',
+                                        'source_db': 'prefetch_data.db',
+                                        'source_table': 'prefetch_data',
+                                        'source_row_id': str(rid),
+                                        'display_name': row['executable_name'] or 'Unknown',
+                                        'full_path': row['filename'] or '',
+                                        'details': {k: row[k] for k in row.keys()},
+                                        'annotation': None
+                                    })
+                except Exception as e:
+                    logger.debug(f"Failed to parse run_times for prefetch row {rid}: {e}")
         
         except sqlite3.Error as e:
             logger.error(f"Failed to query Prefetch data: {e}")
@@ -1006,77 +1092,78 @@ class TimelineDataManager:
         cursor = conn.cursor()
         
         try:
-            # Query using primary timestamp (Time_Modification)
-            # LnkDB.db has JLCE and Custom_JLCE tables
-            query = """
-                SELECT *
-                FROM JLCE
-                WHERE Time_Modification IS NOT NULL
-            """
-            
-            params = []
-            if start_time:
-                query += " AND Time_Modification >= ?"
-                params.append(start_time.isoformat())
-            if end_time:
-                query += " AND Time_Modification <= ?"
-                params.append(end_time.isoformat())
-            
-            query += " ORDER BY Time_Modification ASC"
-            
-            # Add LIMIT only if max_events is specified
-            if max_events is not None:
-                query += f" LIMIT {max_events}"
-            
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            
-            for row in rows:
-                timestamp = TimestampParser.parse_timestamp(row['Time_Modification'])
-                if timestamp:
-                    # Get column names safely - sqlite3.Row doesn't have .get()
-                    try:
-                        lnk_name = row['LNK_Name']
-                    except (KeyError, IndexError):
-                        lnk_name = 'Unknown'
+            # Query both JLCE and Custom_JLCE tables
+            for table_name in ['JLCE', 'Custom_JLCE']:
+                query = f"""
+                    SELECT rowid, *
+                    FROM {table_name}
+                    WHERE (Time_Modification IS NOT NULL OR Time_Creation IS NOT NULL OR Time_Access IS NOT NULL)
+                """
+                
+                params = []
+                if start_time and end_time:
+                    query += " AND (Time_Modification BETWEEN ? AND ? OR Time_Creation BETWEEN ? AND ? OR Time_Access BETWEEN ? AND ?)"
+                    s, e = start_time.isoformat(), end_time.isoformat()
+                    params.extend([s, e, s, e, s, e])
+                elif start_time:
+                    query += " AND (Time_Modification >= ? OR Time_Creation >= ? OR Time_Access >= ?)"
+                    s = start_time.isoformat()
+                    params.extend([s, s, s])
+                elif end_time:
+                    query += " AND (Time_Modification <= ? OR Time_Creation <= ? OR Time_Access <= ?)"
+                    e = end_time.isoformat()
+                    params.extend([e, e, e])
+                
+                query += " ORDER BY COALESCE(Time_Modification, Time_Creation, Time_Access) ASC"
+                
+                if max_events is not None:
+                    remaining = max_events - len(events)
+                    if remaining <= 0: break
+                    query += f" LIMIT {remaining}"
+                
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                
+                def is_in_range(ts_dt):
+                    if not ts_dt: return False
+                    if start_time and ts_dt < start_time: return False
+                    if end_time and ts_dt > end_time: return False
+                    return True
+
+                for row in rows:
+                    rid = row['rowid']
+                    ts_map = [
+                        ('Time_Modification', 'modified'),
+                        ('Time_Creation',     'created'),
+                        ('Time_Access',       'accessed')
+                    ]
                     
-                    try:
-                        lnk_path = row['LNK_Path']
-                    except (KeyError, IndexError):
-                        lnk_path = ''
-                    
-                    try:
-                        target_path = row['Target_Path']
-                    except (KeyError, IndexError):
-                        target_path = ''
-                    
-                    try:
-                        creation_time = row['Time_Creation']
-                    except (KeyError, IndexError):
-                        creation_time = None
-                    
-                    try:
-                        access_time = row['Time_Access']
-                    except (KeyError, IndexError):
-                        access_time = None
-                    
-                    event = {
-                        'id': f"lnk_{lnk_name}_{row['Time_Modification']}",
-                        'timestamp': timestamp,
-                        'artifact_type': 'LNK',
-                        'source_db': 'LnkDB.db',
-                        'source_table': 'JLCE',
-                        'source_row_id': lnk_name,
-                        'display_name': lnk_name,
-                        'full_path': lnk_path,
-                        'details': {
-                            'target_path': target_path,
-                            'creation_time': creation_time,
-                            'access_time': access_time,
-                        },
-                        'annotation': None
-                    }
-                    events.append(event)
+                    for col, sub_type in ts_map:
+                        raw_ts = row[col]
+                        if not raw_ts: continue
+                        ts = TimestampParser.parse_timestamp(raw_ts)
+                        if ts and is_in_range(ts):
+                            lnk_name = 'Unknown'
+                            if 'LNK_Name' in row.keys(): lnk_name = row['LNK_Name']
+                            elif 'Source_Name' in row.keys(): lnk_name = row['Source_Name']
+                            
+                            lnk_path = ''
+                            if 'LNK_Path' in row.keys(): lnk_path = row['LNK_Path']
+                            elif 'Source_Path' in row.keys(): lnk_path = row['Source_Path']
+                            
+                            events.append({
+                                'id': f"lnk_{rid}_{sub_type}_{raw_ts}_{table_name}",
+                                'timestamp': ts,
+                                'subType': sub_type,
+                                'artifact_type': 'LNK',
+                                'source_db': 'LnkDB.db',
+                                'source_table': table_name,
+                                'source_row_id': str(rid),
+                                'display_name': lnk_name,
+                                'full_path': lnk_path,
+                                'details': {k: row[k] for k in row.keys()},
+                                'annotation': None
+                            })
         
         except sqlite3.Error as e:
             logger.error(f"Failed to query LNK data: {e}")
@@ -1097,21 +1184,17 @@ class TimelineDataManager:
         events = []
         cursor = conn.cursor()
         
-        # Query multiple registry tables that have timestamps
-        tables_to_query = [
-            ('UserAssist', 'timestamp', 'program_path'),
-            ('MUICache', 'analyzing_date', 'app_path'),
-            ('InstalledSoftware', 'timestamp', 'display_name'),
-        ]
+        # Use mappings to iterate through all registry sub-tables
+        registry_mappings = self.TIMESTAMP_MAPPINGS.get('Registry', [])
         
-        for table_name, timestamp_col, name_col in tables_to_query:
+        for table_name, timestamp_col, type_tag, *extra in registry_mappings:
             # Check if we've reached max_events limit
             if max_events is not None and len(events) >= max_events:
                 break
             
             try:
                 query = f"""
-                    SELECT *
+                    SELECT rowid, *
                     FROM {table_name}
                     WHERE {timestamp_col} IS NOT NULL
                 """
@@ -1135,26 +1218,28 @@ class TimelineDataManager:
                 rows = cursor.fetchall()
                 
                 for row in rows:
+                    rid = row['rowid']
                     timestamp = TimestampParser.parse_timestamp(row[timestamp_col])
                     if timestamp:
-                        # Get name safely - sqlite3.Row doesn't have .get()
-                        try:
-                            name = row[name_col]
-                        except (KeyError, IndexError):
-                            name = 'Unknown'
+                        # Find a name column safely
+                        name = 'Unknown'
+                        for name_col in ['filename', 'name', 'program_path', 'app_path', 'path', 'display_name', 'folder_name', 'extension']:
+                            try:
+                                if name_col in row.keys() and row[name_col]:
+                                    name = row[name_col]
+                                    break
+                            except: continue
                         
                         event = {
-                            'id': f"registry_{table_name}_{name}_{row[timestamp_col]}",
+                            'id': f"registry_{table_name}_{rid}_{row[timestamp_col]}",
                             'timestamp': timestamp,
                             'artifact_type': 'Registry',
                             'source_db': 'registry_data.db',
                             'source_table': table_name,
-                            'source_row_id': name,
-                            'display_name': name,
+                            'source_row_id': str(rid),
+                            'display_name': f"[{table_name}] {name}",
                             'full_path': '',
-                            'details': {
-                                'table': table_name,
-                            },
+                            'details': {k: row[k] for k in row.keys()},
                             'annotation': None
                         }
                         events.append(event)
@@ -1182,20 +1267,20 @@ class TimelineDataManager:
         
         try:
             query = """
-                SELECT *
+                SELECT rowid, *
                 FROM BAM
-                WHERE timestamp IS NOT NULL
+                WHERE last_execution IS NOT NULL
             """
             
             params = []
             if start_time:
-                query += " AND timestamp >= ?"
+                query += " AND last_execution >= ?"
                 params.append(start_time.isoformat())
             if end_time:
-                query += " AND timestamp <= ?"
+                query += " AND last_execution <= ?"
                 params.append(end_time.isoformat())
             
-            query += " ORDER BY timestamp ASC"
+            query += " ORDER BY last_execution ASC"
             
             # Add LIMIT only if max_events is specified
             if max_events is not None:
@@ -1205,29 +1290,22 @@ class TimelineDataManager:
             rows = cursor.fetchall()
             
             for row in rows:
-                timestamp = TimestampParser.parse_timestamp(row['timestamp'])
+                rid = row['rowid']
+                timestamp = TimestampParser.parse_timestamp(row['last_execution'])
                 if timestamp:
-                    # Get program name safely - sqlite3.Row doesn't have .get()
-                    try:
-                        program_name = row['Program_Name']
-                    except (KeyError, IndexError):
-                        program_name = 'Unknown'
-                    
-                    try:
-                        program_path = row['Program_Path']
-                    except (KeyError, IndexError):
-                        program_path = ''
+                    program_name = row['Program_Name'] if 'Program_Name' in row.keys() else 'Unknown'
+                    program_path = row['Program_Path'] if 'Program_Path' in row.keys() else ''
                     
                     event = {
-                        'id': f"bam_{program_name}_{row['timestamp']}",
+                        'id': f"bam_{rid}_{row['last_execution']}",
                         'timestamp': timestamp,
                         'artifact_type': 'BAM',
                         'source_db': 'registry_data.db',
                         'source_table': 'BAM',
-                        'source_row_id': program_name,
+                        'source_row_id': str(rid),
                         'display_name': program_name,
                         'full_path': program_path,
-                        'details': {},
+                        'details': {k: row[k] for k in row.keys()},
                         'annotation': None
                     }
                     events.append(event)
@@ -1253,65 +1331,72 @@ class TimelineDataManager:
         cursor = conn.cursor()
         
         try:
-            # Use modified_date as primary timestamp
+            # Filter on all available shellbag timestamps
             query = """
-                SELECT *
+                SELECT rowid, *
                 FROM Shellbags
-                WHERE modified_date IS NOT NULL
+                WHERE (modified_date IS NOT NULL OR created_date IS NOT NULL OR access_date IS NOT NULL OR accessed_date IS NOT NULL)
             """
             
             params = []
-            if start_time:
-                query += " AND modified_date >= ?"
-                params.append(start_time.isoformat())
-            if end_time:
-                query += " AND modified_date <= ?"
-                params.append(end_time.isoformat())
+            if start_time and end_time:
+                query += " AND (modified_date BETWEEN ? AND ? OR created_date BETWEEN ? AND ? OR access_date BETWEEN ? AND ? OR accessed_date BETWEEN ? AND ?)"
+                s, e = start_time.isoformat(), end_time.isoformat()
+                params.extend([s, e, s, e, s, e, s, e])
+            elif start_time:
+                query += " AND (modified_date >= ? OR created_date >= ? OR access_date >= ? OR accessed_date >= ?)"
+                s = start_time.isoformat()
+                params.extend([s, s, s, s])
+            elif end_time:
+                query += " AND (modified_date <= ? OR created_date <= ? OR access_date <= ? OR accessed_date <= ?)"
+                e = end_time.isoformat()
+                params.extend([e, e, e, e])
             
-            query += " ORDER BY modified_date ASC"
+            query += " ORDER BY COALESCE(modified_date, created_date, access_date) ASC"
             
-            # Add LIMIT only if max_events is specified
             if max_events is not None:
                 query += f" LIMIT {max_events}"
             
             cursor.execute(query, params)
             rows = cursor.fetchall()
             
+            def is_in_range(ts_dt):
+                if not ts_dt: return False
+                if start_time and ts_dt < start_time: return False
+                if end_time and ts_dt > end_time: return False
+                return True
+
             for row in rows:
-                timestamp = TimestampParser.parse_timestamp(row['modified_date'])
-                if timestamp:
-                    # Get path safely - sqlite3.Row doesn't have .get()
-                    try:
-                        path = row['Path']
-                    except (KeyError, IndexError):
-                        path = 'Unknown'
-                    
-                    try:
-                        created_date = row['created_date']
-                    except (KeyError, IndexError):
-                        created_date = None
-                    
-                    try:
-                        access_date = row['access_date']
-                    except (KeyError, IndexError):
-                        access_date = None
-                    
-                    event = {
-                        'id': f"shellbag_{path}_{row['modified_date']}",
-                        'timestamp': timestamp,
-                        'artifact_type': 'ShellBag',
-                        'source_db': 'registry_data.db',
-                        'source_table': 'Shellbags',
-                        'source_row_id': path,
-                        'display_name': os.path.basename(path) if path else 'Unknown',
-                        'full_path': path,
-                        'details': {
-                            'created_date': created_date,
-                            'access_date': access_date,
-                        },
-                        'annotation': None
-                    }
-                    events.append(event)
+                rid = row['rowid']
+                ts_map = [
+                    ('modified_date', 'modified'),
+                    ('created_date',  'created'),
+                    ('access_date',   'accessed'),
+                    ('accessed_date', 'accessed')
+                ]
+                
+                path = 'Unknown'
+                if 'Path' in row.keys(): path = row['Path']
+                elif 'path' in row.keys(): path = row['path']
+
+                for col, sub_type in ts_map:
+                    raw_ts = row[col]
+                    if not raw_ts: continue
+                    ts = TimestampParser.parse_timestamp(raw_ts)
+                    if ts and is_in_range(ts):
+                        events.append({
+                            'id': f"shellbag_{rid}_{sub_type}_{raw_ts}",
+                            'timestamp': ts,
+                            'subType': sub_type,
+                            'artifact_type': 'ShellBag',
+                            'source_db': 'registry_data.db',
+                            'source_table': 'Shellbags',
+                            'source_row_id': str(rid),
+                            'display_name': os.path.basename(path) if path else 'Unknown',
+                            'full_path': path,
+                            'details': {k: row[k] for k in row.keys()},
+                            'annotation': None
+                        })
         
         except sqlite3.Error as e:
             logger.error(f"Failed to query ShellBag data: {e}")
@@ -1335,7 +1420,7 @@ class TimelineDataManager:
         # Query from srum_application_usage table (primary table)
         try:
             query = """
-                SELECT *
+                SELECT rowid, *
                 FROM srum_application_usage
                 WHERE timestamp IS NOT NULL
             """
@@ -1360,6 +1445,7 @@ class TimelineDataManager:
             rows = cursor.fetchall()
             
             for row in rows:
+                rid = row['rowid']
                 timestamp = TimestampParser.parse_timestamp(row['timestamp'])
                 if timestamp:
                     # sqlite3.Row doesn't have .get() method, use dict() or direct access with try/except
@@ -1376,24 +1462,18 @@ class TimelineDataManager:
                     resolved_user_name = self.srum_resolver.resolve_user_name(user_sid, user_name_raw)
                     
                     event = {
-                        'id': f"srum_{app_id}_{row['timestamp']}",
+                        'id': f"srum_{rid}_{row['timestamp']}",
                         'timestamp': timestamp,
                         'artifact_type': 'SRUM',
                         'source_db': 'srum_data.db',
                         'source_table': 'srum_application_usage',
-                        'source_row_id': app_id,
+                        'source_row_id': str(rid),
                         'display_name': resolved_app_name,
                         'full_path': app_path if app_path != app_id else '',
-                        'details': {
-                            'app_id': app_id,
-                            'user_sid': user_sid,
-                            'user_name': resolved_user_name,
-                            'foreground_cycle_time': foreground_cycle_time,
-                        },
+                        'details': {k: row[k] for k in row.keys()},
                         'annotation': None
                     }
                     events.append(event)
-        
         except sqlite3.Error as e:
             logger.error(f"Failed to query SRUM data: {e}")
         

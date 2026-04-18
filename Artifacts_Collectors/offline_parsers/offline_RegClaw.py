@@ -49,6 +49,14 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from utils.path_utils import PathUtils
 
+# Import time_utils for standardized forensic timestamp formatting
+try:
+    from utils.time_utils import format_forensic_timestamp, get_current_utc, get_current_forensic_timestamp, filetime_to_datetime
+except ImportError:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.time_utils import format_forensic_timestamp, get_current_utc, get_current_forensic_timestamp, filetime_to_datetime
+
 
 # ============================================================================
 # PHASE 1: UTILITY FUNCTIONS & HELPERS
@@ -339,7 +347,7 @@ def validate_hive_file(hive_path, hive_type=''):
 # ============================================================================
 
 def get_active_controlset(system_hive):
-    """
+    r"""
     Detect the active ControlSet from SYSTEM\Select\Current value.
     
     Args:
@@ -719,14 +727,14 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
 
     # Create comprehensive table set (40+ tables) - Phase 1-9
     tables_basic = [
-        ("machine_run", "name TEXT, data TEXT, type TEXT"),
-        ("machine_run_once", "name TEXT, data TEXT, type TEXT"),
-        ("user_run", "name TEXT, data TEXT, type TEXT"),
-        ("user_run_once", "name TEXT, data TEXT, type TEXT"),
-        ("Network_list", "subkey TEXT, name TEXT, data TEXT"),
-        ("computer_Name", "name TEXT, data TEXT"),
-        ("time_zone", "name TEXT, data TEXT"),
-        ("Search_Explorer_bar", "name TEXT, data TEXT"),
+        ("machine_run", "name TEXT, row_data TEXT, type TEXT"),
+        ("machine_run_once", "name TEXT, row_data TEXT, type TEXT"),
+        ("user_run", "name TEXT, row_data TEXT, type TEXT"),
+        ("user_run_once", "name TEXT, row_data TEXT, type TEXT"),
+        ("Network_list", "subkey TEXT, name TEXT, row_data TEXT"),
+        ("computer_Name", "name TEXT, row_data TEXT"),
+        ("time_zone", "name TEXT, row_data TEXT"),
+        ("Search_Explorer_bar", "name TEXT, row_data TEXT"),
     ]
 
     for table_name, schema in tables_basic:
@@ -767,16 +775,16 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     # DAM and BAM
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS DAM (
-        subkey TEXT, name TEXT, data TEXT, type TEXT, app_name TEXT,
+        subkey TEXT, name TEXT, row_data TEXT, type TEXT, app_name TEXT,
         process_path TEXT, sid TEXT, last_execution TEXT,
-        execution_count INTEGER, timestamp TEXT
+        execution_count INTEGER, parsed_at TEXT
     )''')
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS BAM (
-        subkey TEXT, name TEXT, data TEXT, type TEXT, app_name TEXT,
+        subkey TEXT, name TEXT, row_data TEXT, type TEXT, app_name TEXT,
         process_path TEXT, sid TEXT, last_execution TEXT,
-        execution_flags INTEGER, timestamp TEXT
+        execution_flags INTEGER, parsed_at TEXT
     )''')
 
     # User/execution tracking
@@ -793,7 +801,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         accessed_date TEXT, attributes TEXT, file_size INTEGER DEFAULT 0,
         special_folder TEXT, network_share TEXT, server_name TEXT,
         share_name TEXT, drive_letter TEXT, mft_record_number INTEGER,
-        registry_path TEXT, analyzing_date TEXT
+        registry_path TEXT, parsed_at TEXT
     )''')
 
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_file_name ON Shellbags(file_name)')
@@ -808,25 +816,25 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS OpenSaveMRU (
         subkey TEXT, name TEXT, type TEXT, file_path TEXT, file_name TEXT,
-        extension TEXT, drive_letter TEXT, access_date TEXT, data TEXT,
-        analyzing_date TEXT
+        extension TEXT, drive_letter TEXT, access_date TEXT, row_data TEXT,
+        parsed_at TEXT
     )''')
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS LastSaveMRU (
         mru_number TEXT, type TEXT, application TEXT, folder_path TEXT,
-        folder_name TEXT, drive_letter TEXT, access_date TEXT, data TEXT,
-        analyzing_date TEXT
+        folder_name TEXT, drive_letter TEXT, access_date TEXT, row_data TEXT,
+        parsed_at TEXT
     )''')
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS RecentDocs (
-        subkey TEXT, name TEXT, data TEXT, type TEXT
+        subkey TEXT, name TEXT, row_data TEXT, type TEXT
     )''')
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS TypedPaths (
-        name TEXT, data TEXT, type TEXT
+        name TEXT, row_data TEXT, type TEXT
     )''')
 
     cursor.execute('''
@@ -837,7 +845,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS MUICache (
-        app_path TEXT, app_name TEXT, file_extension TEXT, analyzing_date TEXT
+        app_path TEXT, app_name TEXT, file_extension TEXT, parsed_at TEXT
     )''')
 
     # NEW: Browser & Software Inventory Tables
@@ -951,7 +959,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             for name, (data, value_type) in output.items():
                 try:
                     command_str = str(data)
-                    cursor.execute(f'INSERT OR IGNORE INTO {table_name} (name, data, type) VALUES (?, ?, ?)',
+                    cursor.execute(f'INSERT OR IGNORE INTO {table_name} (name, row_data, type) VALUES (?, ?, ?)',
                                   (name, command_str, value_type))
                     
                     # Also populate AutoStartPrograms table
@@ -960,7 +968,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         cursor.execute('''INSERT INTO AutoStartPrograms
                             (location, program_name, command, timestamp)
                             VALUES (?, ?, ?, ?)''',
-                            (full_location, name, command_str, datetime.datetime.now().isoformat()))
+                            (full_location, name, command_str, get_current_forensic_timestamp()))
 
                     # Check for suspicious indicators
                     risk_level = 1
@@ -980,7 +988,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             (location, program_name, suspicious_reason, command, risk_level, risk_severity, timestamp)
                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
                             (f"{location}\\{auto_type}", name, reason, command_str,
-                             _get_risk_level(risk_level), risk_level, datetime.datetime.now().isoformat()))
+                             _get_risk_level(risk_level), risk_level, get_current_forensic_timestamp()))
 
                 except Exception as e:
                     logging.error(f"Error processing autostart {name}: {e}")
@@ -998,7 +1006,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 for name, (data, value_type) in output.items():
                     try:
                         command_str = str(data)
-                        cursor.execute(f'INSERT OR IGNORE INTO {table_name} (name, data, type) VALUES (?, ?, ?)',
+                        cursor.execute(f'INSERT OR IGNORE INTO {table_name} (name, row_data, type) VALUES (?, ?, ?)',
                                       (name, command_str, value_type))
                         
                         # Also populate AutoStartPrograms table
@@ -1007,7 +1015,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             cursor.execute('''INSERT INTO AutoStartPrograms
                                 (location, program_name, command, timestamp)
                                 VALUES (?, ?, ?, ?)''',
-                                (full_location, name, command_str, datetime.datetime.now().isoformat()))
+                                (full_location, name, command_str, get_current_forensic_timestamp()))
 
                         # Check for suspicious indicators
                         risk_level = 1
@@ -1027,7 +1035,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 (location, program_name, suspicious_reason, command, risk_level, risk_severity, timestamp)
                                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                 (f"{location}\\{auto_type}", name, reason, command_str,
-                                 _get_risk_level(risk_level), risk_level, datetime.datetime.now().isoformat()))
+                                 _get_risk_level(risk_level), risk_level, get_current_forensic_timestamp()))
 
                     except Exception as e:
                         logging.error(f"Error processing autostart {name}: {e}")
@@ -1095,9 +1103,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         try:
                             last_accessed_data, last_accessed_type = values['LastAccessed']
                             if isinstance(last_accessed_data, int):
-                                # Convert FILETIME integer to datetime
-                                dt = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=last_accessed_data/10)
-                                last_execution = dt.isoformat()
+                                # Convert FILETIME integer to datetime using utility
+                                dt = filetime_to_datetime(last_accessed_data)
+                                last_execution = format_forensic_timestamp(dt)
                             elif isinstance(last_accessed_data, bytes) and len(last_accessed_data) >= 8:
                                 # Parse FILETIME from bytes
                                 from Artifacts_Collectors.registry_binary_parser import parse_filetime
@@ -1125,10 +1133,10 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     # Insert into database with all columns
                     if not check_exists(cursor, 'DAM', ['subkey', 'name'], (subkey, name)):
                         cursor.execute('''INSERT INTO DAM
-                            (subkey, name, data, type, app_name, process_path, sid, last_execution, execution_count, timestamp)
+                            (subkey, name, row_data, type, app_name, process_path, sid, last_execution, execution_count, parsed_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                             (subkey, name, str(data)[:200], value_type, app_name, process_path, sid,
-                             last_execution, execution_count, datetime.datetime.now().isoformat()))
+                             last_execution, execution_count, get_current_forensic_timestamp()))
                 except Exception as e:
                     logging.error(f"Error processing DAM entry {name}: {e}")
 
@@ -1191,10 +1199,10 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     # Insert into database
                     if not check_exists(cursor, 'BAM', ['subkey', 'name'], (subkey, name)):
                         cursor.execute('''INSERT INTO BAM
-                            (subkey, name, data, type, app_name, process_path, sid, last_execution, execution_flags, timestamp)
+                            (subkey, name, row_data, type, app_name, process_path, sid, last_execution, execution_flags, parsed_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                             (subkey, name, str(data)[:200], value_type, app_name, process_path, sid,
-                             last_execution, execution_flags, datetime.datetime.now().isoformat()))
+                             last_execution, execution_flags, get_current_forensic_timestamp()))
                 except Exception as e:
                     logging.error(f"Error processing BAM entry {name}: {e}")
 
@@ -1243,7 +1251,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                         (program_path, run_count, last_execution, focus_count, focus_time, user_sid, timestamp)
                                         VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                         (program_path, run_count, last_execution, focus_count,
-                                         int(focus_time_ms), guid_name, datetime.datetime.now().isoformat()))
+                                         int(focus_time_ms), guid_name, get_current_forensic_timestamp()))
                             except Exception as e:
                                 logging.debug(f"Error parsing UserAssist entry: {e}")
 
@@ -1272,8 +1280,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         except: parsed_filename = str(data)[:200]
                     else: parsed_filename = str(data)[:200]
 
-                    if not check_exists(cursor, 'RecentDocs', ['name', 'subkey', 'data'], (name, subkey_label, parsed_filename)):
-                        cursor.execute('INSERT INTO RecentDocs (subkey, name, data, type) VALUES (?, ?, ?, ?)',
+                    if not check_exists(cursor, 'RecentDocs', ['name', 'subkey', 'row_data'], (name, subkey_label, parsed_filename)):
+                        cursor.execute('INSERT INTO RecentDocs (subkey, name, row_data, type) VALUES (?, ?, ?, ?)',
                                       (subkey_label, name, str(parsed_filename), value_type))
                 except Exception as e:
                     logging.debug(f"Error with RecentDocs entry in {subkey_label}: {e}")
@@ -1362,13 +1370,13 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                  created_date, modified_date, accessed_date, attributes,
                                  file_size, special_folder, network_share, server_name,
                                  share_name, drive_letter, mft_record_number,
-                                 registry_path, analyzing_date)
+                                 registry_path, parsed_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                 (file_name, short_name, shell_item_type, mru_position,
                                  created_date, modified_date, accessed_date, attributes,
                                  file_size, special_folder, network_share, server_name,
                                  share_name, drive_letter, mft_record_number,
-                                 registry_path, datetime.datetime.now().isoformat()))
+                                 registry_path, get_current_forensic_timestamp()))
                 except Exception as e:
                     logging.error(f"Error parsing Shellbag entry at {full_path}\\{name}: {e}")
             
@@ -1465,10 +1473,10 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 file_name = parsed_data.get('file_name', '')
                                 if not check_exists(cursor, 'OpenSaveMRU', ['subkey', 'name', 'file_name'], (ext_subkey, name, file_name)):
                                     cursor.execute('''INSERT INTO OpenSaveMRU
-                                        (subkey, name, type, file_path, file_name, extension, drive_letter, access_date, data, analyzing_date)
+                                        (subkey, name, type, file_path, file_name, extension, drive_letter, access_date, row_data, parsed_at)
                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                         (ext_subkey, name, value_type, parsed_data.get('file_path', ''), file_name, ext_subkey,
-                                         parsed_data.get('drive_letter', ''), parsed_data.get('access_date', ''), str(data)[:100], datetime.datetime.now().isoformat()))
+                                         parsed_data.get('drive_letter', ''), parsed_data.get('access_date', ''), str(data)[:100], get_current_forensic_timestamp()))
                         except Exception as e:
                             logging.debug(f"Error parsing OpenSaveMRU in {ext_subkey}: {e}")
             except Exception as e:
@@ -1489,10 +1497,10 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             app = parsed_data.get('application', '')
                             if not check_exists(cursor, 'LastSaveMRU', ['mru_number', 'application'], (name, app)):
                                 cursor.execute('''INSERT INTO LastSaveMRU
-                                    (mru_number, type, application, folder_path, folder_name, drive_letter, access_date, data, analyzing_date)
+                                    (mru_number, type, application, folder_path, folder_name, drive_letter, access_date, row_data, parsed_at)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                     (name, value_type, app, parsed_data.get('folder_path', ''), parsed_data.get('file_name', ''),
-                                     parsed_data.get('drive_letter', ''), '', str(data)[:100], datetime.datetime.now().isoformat()))
+                                     parsed_data.get('drive_letter', ''), '', str(data)[:100], get_current_forensic_timestamp()))
                     except Exception as e:
                         logging.debug(f"Error parsing LastSaveMRU in {hive_label}: {e}")
             except Exception as e:
@@ -1521,7 +1529,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             parsed = registry_binary_parser.parse_runmru_entry(value_name, cmd, mru_list)
                             if not check_exists(cursor, 'RunMRU', ['command'], (parsed.get('command', cmd),)):
                                 cursor.execute('INSERT INTO RunMRU (command, mru_position, access_date, timestamp) VALUES (?, ?, ?, ?)',
-                                              (parsed.get('command', cmd), parsed.get('mru_position', -1), None, datetime.datetime.now().isoformat()))
+                                              (parsed.get('command', cmd), parsed.get('mru_position', -1), None, get_current_forensic_timestamp()))
                     except: pass
             except: pass
 
@@ -1539,7 +1547,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         term = parsed.get('search_term', '')
                         if term and not check_exists(cursor, 'WordWheelQuery', ['search_term'], (term,)):
                             cursor.execute('INSERT INTO WordWheelQuery (search_term, search_type, mru_position, access_date, timestamp) VALUES (?, ?, ?, ?, ?)',
-                                          (term, 'General', -1, None, datetime.datetime.now().isoformat()))
+                                          (term, 'General', -1, None, get_current_forensic_timestamp()))
                     except: pass
             except: pass
 
@@ -1560,8 +1568,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 parsed = registry_binary_parser.parse_muicache_entry(v_name, display_name)
                                 path = parsed.get('app_path', '')
                                 if path and not check_exists(cursor, 'MUICache', ['app_path'], (path,)):
-                                    cursor.execute('INSERT INTO MUICache (app_path, app_name, file_extension, analyzing_date) VALUES (?, ?, ?, ?)',
-                                                  (path, parsed.get('app_name', ''), "", datetime.datetime.now().isoformat()))
+                                    cursor.execute('INSERT INTO MUICache (app_path, app_name, file_extension, parsed_at) VALUES (?, ?, ?, ?)',
+                                                  (path, parsed.get('app_name', ''), "", get_current_forensic_timestamp()))
                         except: pass
             except: pass
 
@@ -1590,8 +1598,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 tp_values = read_registry_values(Ntuser_reg_hive, tp_path)
                 for v_name, (v_data, v_type) in tp_values.items():
                     p_data = str(v_data).strip()
-                    if p_data and not check_exists(cursor, 'TypedPaths', ['name', 'data'], (v_name, p_data)):
-                        cursor.execute('INSERT INTO TypedPaths (name, data, type) VALUES (?, ?, ?)',
+                    if p_data and not check_exists(cursor, 'TypedPaths', ['name', 'row_data'], (v_name, p_data)):
+                        cursor.execute('INSERT INTO TypedPaths (name, row_data, type) VALUES (?, ?, ?)',
                                       (v_name, p_data, v_type))
             except: pass
 
@@ -1665,7 +1673,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
 
                 if not check_exists(cursor, 'USBDevices', ['device_id'], (device_id,)):
                     # Fold timestamp into description to match live schema
-                    desc_with_timestamp = f'{description} {{"timestamp": "{datetime.datetime.now().isoformat()}"}}'
+                    desc_with_timestamp = f'{description} {{"timestamp": "{get_current_forensic_timestamp()}"}}'
                     cursor.execute('''INSERT INTO USBDevices
                         (device_id, description, manufacturer, friendly_name, last_connected)
                         VALUES (?, ?, ?, ?, ?)''',
@@ -1805,7 +1813,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                     (device_id, friendly_name, serial_number, vendor_id, product_id, revision, timestamp)
                                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                     (device_id, friendly_name, serial_number, vendor_id,
-                                     product_id, revision, datetime.datetime.now().isoformat()))
+                                     product_id, revision, get_current_forensic_timestamp()))
                             
                             # 5. USB Storage Volumes table (USBStorageVolumes)
                             if drive_letter or volume_guid or volume_name:
@@ -1816,7 +1824,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                         (device_id, volume_guid, volume_name, drive_letter, timestamp)
                                         VALUES (?, ?, ?, ?, ?)''',
                                         (device_id, volume_guid, volume_name, drive_letter,
-                                         datetime.datetime.now().isoformat()))
+                                         get_current_forensic_timestamp()))
 
                 except Exception as e:
                     logging.error(f"Error processing USB storage {device_class}: {e}")
@@ -1845,7 +1853,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             cursor.execute('''INSERT INTO BrowserHistory
                                 (browser, url, title, visit_count, last_visit, timestamp)
                                 VALUES (?, ?, ?, ?, ?, ?)''',
-                                ('Internet Explorer', url, '', 0, '', datetime.datetime.now().isoformat()))
+                                ('Internet Explorer', url, '', 0, '', get_current_forensic_timestamp()))
                     except Exception as e:
                         logging.error(f"Error with BrowserHistory entry: {e}")
             except Exception as e:
@@ -1873,7 +1881,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         display_name_str = str(display_name)
                         if display_name_str and not check_exists(cursor, 'InstalledSoftware', ['display_name'], (display_name_str,)):
                             # Fold estimated_size into last TEXT column to match live schema
-                            ts = datetime.datetime.now().isoformat()
+                            ts = get_current_forensic_timestamp()
                             ts_with_size = f'{ts} {{"estimated_size": "{estimated_size}"}}'
                             cursor.execute('''INSERT INTO InstalledSoftware
                                 (display_name, display_version, publisher, install_date, install_location, uninstall_string, timestamp)
@@ -1887,7 +1895,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                     (indicator_type, indicator_value, registry_source, risk_level, risk_severity, description, timestamp)
                                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                     ('Software', display_name_str, path, 'MEDIUM', 3,
-                                     'Software without publisher information', datetime.datetime.now().isoformat()))
+                                     'Software without publisher information', get_current_forensic_timestamp()))
 
                             any_keyword = any(kw in display_name_str.lower() for kw in _malware_keywords())
                             if any_keyword:
@@ -1895,7 +1903,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                     (indicator_type, indicator_value, registry_source, risk_level, risk_severity, description, timestamp)
                                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                     ('Software', display_name_str, path, 'CRITICAL', 5,
-                                     'Potential hacking/malware tool detected', datetime.datetime.now().isoformat()))
+                                     'Potential hacking/malware tool detected', get_current_forensic_timestamp()))
 
                     except Exception as e:
                         logging.error(f"Error with software {software_name}: {e}")
@@ -1957,7 +1965,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                         (service_name, str(display_name), desc_with_sysType, str(image_path),
                          int(start_type), int(service_type), int(error_control),
-                         status, datetime.datetime.now().isoformat()))
+                         status, get_current_forensic_timestamp()))
 
                     # Check for suspicious services
                     image_path_str = str(image_path).lower()
@@ -1986,7 +1994,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                 ('AutoStart Service', service_name, 'SYSTEM\\ControlSet001\\Services',
                                  _get_risk_level(risk_level), risk_level, reason or 'AutoStart service flagged',
-                                 datetime.datetime.now().isoformat()))
+                                 get_current_forensic_timestamp()))
 
             except Exception as e:
                 logging.error(f"Error with service {service_name}: {e}")
@@ -2031,21 +2039,19 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         category_map = {0: 'Public', 1: 'Private', 2: 'Domain'}
                         category_text = category_map.get(category, f'Unknown({category})')
                         
-                        # Try to parse date_created and date_last_connected as FILETIME
+                        # Parse binary timestamps (SYSTEMTIME 16 bytes)
                         date_created_str = ""
                         date_last_connected_str = ""
                         
-                        if isinstance(date_created, bytes) and len(date_created) == 8:
+                        if isinstance(date_created, bytes) and len(date_created) >= 16:
                             try:
-                                from Artifacts_Collectors.registry_binary_parser import parse_filetime
-                                date_created_str = parse_filetime(date_created)
+                                date_created_str = registry_binary_parser.parse_systemtime(date_created)
                             except:
                                 pass
                         
-                        if isinstance(date_last_connected, bytes) and len(date_last_connected) == 8:
+                        if isinstance(date_last_connected, bytes) and len(date_last_connected) >= 16:
                             try:
-                                from Artifacts_Collectors.registry_binary_parser import parse_filetime
-                                date_last_connected_str = parse_filetime(date_last_connected)
+                                date_last_connected_str = registry_binary_parser.parse_systemtime(date_last_connected)
                             except:
                                 pass
                         
@@ -2066,8 +2072,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             cursor.execute('INSERT OR IGNORE INTO Network_list (subkey, name, data) VALUES (?, ?, ?)',
                                          (profile_guid, 'SSID', str(ssid)))
                         if default_gateway_mac:
+                            formatted_mac = registry_binary_parser.format_mac_address(default_gateway_mac) if isinstance(default_gateway_mac, bytes) else str(default_gateway_mac)
                             cursor.execute('INSERT OR IGNORE INTO Network_list (subkey, name, data) VALUES (?, ?, ?)',
-                                         (profile_guid, 'DefaultGatewayMac', str(default_gateway_mac)))
+                                         (profile_guid, 'DefaultGatewayMac', formatted_mac))
                         
                     except Exception as e:
                         logging.error(f"Error with network profile {profile_guid}: {e}")
@@ -2110,7 +2117,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         (interface_id, ip_address, subnet_mask, default_gateway, dhcp_enabled, dhcp_server, dns_servers, timestamp)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                         (interface_id, str(ip_address), str(subnet_mask), str(default_gateway),
-                         int(dhcp_enabled), str(dhcp_server), str(dns_servers), datetime.datetime.now().isoformat()))
+                         int(dhcp_enabled), str(dhcp_server), str(dns_servers), get_current_forensic_timestamp()))
             except Exception as e:
                 logging.error(f"Error with network interface {interface_id}: {e}")
 
@@ -2155,12 +2162,13 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             install_date_str = ""
             if install_date and install_date > 0:
                 try:
-                    install_date_str = datetime.datetime.fromtimestamp(int(install_date)).isoformat()
+                    # Convert Windows timestamp to readable date (ensure UTC)
+                    install_date_str = format_forensic_timestamp(datetime.datetime.fromtimestamp(int(install_date), tz=datetime.timezone.utc))
                 except:
                     pass
             
             # Fold product_name into timestamp to match live schema
-            ts = datetime.datetime.now().isoformat()
+            ts = get_current_forensic_timestamp()
             ts_with_productName = f'{ts} {{"product_name": "{product_name}"}}'
             cursor.execute('''INSERT OR IGNORE INTO ComputerNameInfo
                 (computer_name, registered_owner, registered_organization, product_id, installation_date, timestamp)
@@ -2198,7 +2206,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 (time_zone_name, standard_name, daylight_name, bias, active_time_bias, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)''',
                 (str(time_zone_name), str(standard_name), str(daylight_name),
-                 int(bias), int(active_time_bias), datetime.datetime.now().isoformat()))
+                 int(bias), int(active_time_bias), get_current_forensic_timestamp()))
             
             # Also populate legacy time_zone table
             cursor.execute('INSERT OR IGNORE INTO time_zone (name, data) VALUES (?, ?)',
@@ -2230,7 +2238,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             (user_sid, username, profile_path, profile_image_path, profile_loaded, timestamp)
                             VALUES (?, ?, ?, ?, ?, ?)''',
                             (user_sid, username, str(profile_image_path), str(profile_image_path),
-                             int(profile_loaded), datetime.datetime.now().isoformat()))
+                             int(profile_loaded), get_current_forensic_timestamp()))
                 
                 except Exception as e:
                     logging.error(f"Error with user profile {user_sid}: {e}")
@@ -2262,7 +2270,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             scheduled_install_time = winupdate_values.get('ScheduledInstallTime', (0, 'REG_DWORD'))[0] if 'ScheduledInstallTime' in winupdate_values else 0
 
             # Fold au_options_text into timestamp to match live schema
-            ts = datetime.datetime.now().isoformat()
+            ts = get_current_forensic_timestamp()
             ts_with_auOptions = f'{ts} {{"au_options_text": "{au_options_text}"}}'
             cursor.execute('''INSERT OR IGNORE INTO WindowsUpdateInfo
                 (last_check_time, last_install_time, au_options, scheduled_install_day, scheduled_install_time, timestamp)
@@ -2277,7 +2285,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
                     ('Windows Update', 'Auto Update Disabled', 'WindowsUpdate\\Auto Update', 'CRITICAL', 5,
                      'Windows Update auto-update disabled - system vulnerable to known exploits',
-                     datetime.datetime.now().isoformat()))
+                     get_current_forensic_timestamp()))
 
         except Exception as e:
             logging.debug(f"Windows Update path unavailable: {e}")
@@ -2308,7 +2316,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             cursor.execute('''INSERT OR IGNORE INTO ShutdownInfo
                 (shutdown_time, timestamp)
                 VALUES (?, ?)''',
-                (shutdown_time, datetime.datetime.now().isoformat()))
+                (shutdown_time, get_current_forensic_timestamp()))
 
         except Exception as e:
             logging.debug(f"Shutdown info unavailable: {e}")

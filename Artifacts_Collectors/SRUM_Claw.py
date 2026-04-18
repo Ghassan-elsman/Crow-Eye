@@ -75,6 +75,7 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.raw_file_copy import copy_locked_file_raw
+from utils.time_utils import format_forensic_timestamp, get_current_forensic_timestamp, get_current_utc
 
 # Configure logging for forensic analysis
 logging.basicConfig(
@@ -1663,7 +1664,7 @@ class SRUMParser:
                 batch = []
                 for record in records:
                     batch.append((
-                        record.timestamp.isoformat() if record.timestamp else None,
+                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
                         record.app_name,
                         record.app_path,
                         record.user_sid,
@@ -1727,7 +1728,7 @@ class SRUMParser:
                 batch = []
                 for record in records:
                     batch.append((
-                        record.timestamp.isoformat() if record.timestamp else None,
+                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
                         record.app_name,
                         record.app_path,
                         record.user_sid,
@@ -1736,7 +1737,7 @@ class SRUMParser:
                         format_number(record.l2_profile_id),
                         format_number(record.l2_profile_flags),
                         format_time_duration(record.connected_time),
-                        record.connect_start_time.isoformat() if record.connect_start_time else None,
+                        format_forensic_timestamp(record.connect_start_time) if record.connect_start_time else None,
                     ))
                     
                     if len(batch) >= 1000:
@@ -1769,7 +1770,7 @@ class SRUMParser:
                 batch = []
                 for record in records:
                     batch.append((
-                        record.timestamp.isoformat() if record.timestamp else None,
+                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
                         record.app_name,
                         record.app_path,
                         record.user_sid,
@@ -1808,12 +1809,12 @@ class SRUMParser:
                 batch = []
                 for record in records:
                     batch.append((
-                        record.timestamp.isoformat() if record.timestamp else None,
+                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
                         record.app_name,
                         record.app_path,
                         record.user_sid,
                         record.user_name,
-                        record.event_timestamp.isoformat() if record.event_timestamp else None,
+                        format_forensic_timestamp(record.event_timestamp) if record.event_timestamp else None,
                         format_number(record.state_transition),
                         format_charge_level(record.charge_level),
                         format_number(record.cycle_count),
@@ -1848,7 +1849,7 @@ class SRUMParser:
                             parsing_duration_seconds, windows_version, notes
                         ) VALUES (?, ?, ?, ?, ?, ?)
                     """, (
-                        metadata.get('parse_timestamp', datetime.datetime.now().isoformat()),
+                        metadata.get('parse_timestamp', get_current_forensic_timestamp()),
                         metadata.get('srudb_path', self.srudb_path),
                         metadata.get('total_records', total_records),
                         metadata.get('parsing_duration_seconds', 0.0),
@@ -2076,7 +2077,7 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         'output_db': None,
     }
     
-    start_time = datetime.datetime.now()
+    start_time = get_current_utc()
     parser = None
     
     try:
@@ -2133,7 +2134,7 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
             result['warnings'].extend(parsed_data['warnings'])
         
         # Calculate statistics
-        end_time = datetime.datetime.now()
+        end_time = get_current_utc()
         duration = (end_time - start_time).total_seconds()
         
         total_records = sum([
@@ -2155,7 +2156,7 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         
         # Prepare metadata for database storage
         metadata = {
-            'parse_timestamp': datetime.datetime.now().isoformat(),
+            'parse_timestamp': get_current_forensic_timestamp(),
             'srudb_path': srudb_path,
             'total_records': total_records,
             'parsing_duration_seconds': duration,

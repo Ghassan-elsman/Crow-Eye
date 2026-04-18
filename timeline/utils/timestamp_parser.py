@@ -261,7 +261,8 @@ class TimestampParser:
             "%Y-%m-%dT%H:%M:%S.%f",        # 2023-11-13T16:00:00.000
             "%Y-%m-%dT%H:%M:%S",           # 2023-11-13T16:00:00
             "%Y-%m-%d %H:%M:%S.%f",        # 2023-11-13 16:00:00.000
-            "%Y-%m-%d %H:%M:%S",           # 2023-11-13 16:00:00
+            "%Y-%m-%d %H:%M:%S",           # 2023-11-13 16:00:00 (ISO 8601 standard)
+            "%d/%m/%Y %H:%M:%S",           # 15/01/2024 14:30:22 (DD/MM/YYYY format - backward compatibility)
             "%Y-%m-%d",                    # 2023-11-13
         ]
         

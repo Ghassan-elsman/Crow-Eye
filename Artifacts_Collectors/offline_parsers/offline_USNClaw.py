@@ -18,6 +18,13 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
+# Add utils directory to path for time_utils
+utils_dir = os.path.join(os.path.dirname(parent_dir), 'utils')
+if utils_dir not in sys.path:
+    sys.path.insert(0, utils_dir)
+
+from time_utils import get_current_forensic_timestamp
+
 # Add USN parser directory to path
 usn_dir = os.path.join(parent_dir, 'MFT and USN journal')
 if usn_dir not in sys.path:
@@ -169,7 +176,7 @@ def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
                             
                             # Add to batch
                             record_count += 1
-                            inserted_at = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+                            inserted_at = get_current_forensic_timestamp()
                             
                             batch_records.append((
                                 volume_letter,

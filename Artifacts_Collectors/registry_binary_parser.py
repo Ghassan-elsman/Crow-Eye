@@ -7,7 +7,8 @@ found in Windows registry keys such as OpenSaveMRU, LastSaveMRU, BAM, DAM, and R
 
 import struct
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from utils.time_utils import format_forensic_timestamp, filetime_to_datetime, systemtime_to_datetime
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -80,20 +81,11 @@ def parse_filetime(binary_data: bytes) -> str:
         if filetime == 0:
             return ""
         
-        # Convert to datetime
-        # FILETIME epoch: January 1, 1601
-        # Unix epoch: January 1, 1970
-        # Difference: 11644473600 seconds
-        FILETIME_EPOCH_DIFF = 116444736000000000  # in 100-nanosecond intervals
+        # Convert to datetime using centralized utility
+        dt = filetime_to_datetime(filetime)
         
-        # Convert to microseconds (divide by 10)
-        microseconds = (filetime - FILETIME_EPOCH_DIFF) / 10
-        
-        # Create datetime object
-        dt = datetime(1970, 1, 1) + timedelta(microseconds=microseconds)
-        
-        # Return ISO 8601 format
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
+        # Return standardized forensic format
+        return format_forensic_timestamp(dt)
         
     except Exception as e:
         logger.error(f"Error parsing FILETIME: {e}")
@@ -1103,8 +1095,9 @@ def _convert_dos_datetime(dos_time: int) -> str:
             return ""
         
         # Validate the date is actually valid (e.g., not Feb 30)
-        dt = datetime(year, month, day, hours, minutes, seconds)
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
+        # Create UTC-aware datetime
+        dt = datetime(year, month, day, hours, minutes, seconds, tzinfo=timezone.utc)
+        return format_forensic_timestamp(dt)
         
     except Exception as e:
         # Invalid date (e.g., Feb 30) or other error
@@ -2354,3 +2347,87 @@ def parse_lastsavemru_entry(binary_data: bytes) -> dict:
     except Exception as e:
         logger.error(f"Error parsing LastSaveMRU entry: {e}")
         return result
+
+
+def parse_systemtime(binary_data: bytes) -> str:
+    """
+    Convert 16-byte Windows SYSTEMTIME to standardized forensic string.
+    
+    Args:
+        binary_data: 16-byte binary data containing SYSTEMTIME structure
+        
+    Returns:
+        Standardized forensic timestamp string (YYYY-MM-DD HH:MM:SS)
+    """
+    try:
+        if not binary_data or len(binary_data) < 16:
+            return ""
+        
+        # Use centralized utility for parsing
+        dt = systemtime_to_datetime(binary_data[:16])
+        return format_forensic_timestamp(dt)
+    except Exception as e:
+        logger.error(f"Error parsing SYSTEMTIME: {e}")
+        return ""
+
+
+def format_mac_address(binary_data: bytes) -> str:
+    """
+    Format 6-byte binary MAC address as human-readable string.
+    
+    Args:
+        binary_data: 6-byte binary data containing MAC address
+        
+    Returns:
+        Formatted MAC address (e.g., 00:11:22:33:44:55)
+    """
+    try:
+        if not binary_data or len(binary_data) < 6:
+            return ""
+        
+        mac_bytes = binary_data[:6]
+        return ':'.join(f'{b:02x}' for b in mac_bytes).upper()
+    except Exception as e:
+        logger.error(f"Error formatting MAC address: {e}")
+        return str(binary_data)
+
+
+def parse_susclientid_validation(binary_data: bytes) -> str:
+    """
+    Extract readable strings from SusClientIdValidation binary blob.
+    
+    This validation data often contains hardware/system IDs encoded as 
+    UTF-16-LE strings mixed with binary metadata.
+    
+    Args:
+        binary_data: Binary data from SusClientIdValidation registry value
+        
+    Returns:
+        Concatenated readable strings found in the blob
+    """
+    if not binary_data:
+        return ""
+    
+    try:
+        import re
+        # Decode as UTF-16-LE with error ignoring to handle binary parts
+        decoded = binary_data.decode('utf-16-le', errors='ignore')
+        
+        # Extract sequences of printable characters at least 3 chars long
+        # This captures the various IDs often found in this blob
+        found_strings = re.findall(r'[\x20-\x7E]{3,}', decoded)
+        
+        # Filter and clean strings
+        cleaned_strings = [s.strip() for s in found_strings if s.strip()]
+        
+        if not cleaned_strings:
+            # Fallback to ASCII if UTF-16 didn't yield results
+            ascii_decoded = binary_data.decode('ascii', errors='ignore')
+            found_ascii = re.findall(r'[\x20-\x7E]{4,}', ascii_decoded)
+            cleaned_strings = [s.strip() for s in found_ascii if s.strip()]
+            
+        return ' | '.join(cleaned_strings)
+        
+    except Exception as e:
+        logger.error(f"Error parsing SusClientIdValidation: {e}")
+        return str(binary_data)[:100]

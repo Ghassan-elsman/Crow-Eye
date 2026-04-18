@@ -77,6 +77,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from file_signature_detector import FileSignatureDetector, get_detector
+from time_utils import get_current_utc, format_forensic_timestamp, get_current_forensic_timestamp
 
 # Helper function to run PowerShell without showing window
 def run_powershell_hidden(command: str, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -948,7 +949,7 @@ class RecycleBinParser:
         """
         if not self.db_path:
             # Create default database path
-            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            timestamp = get_current_utc().strftime('%Y%m%d_%H%M%S_%f')
             self.db_path = f'recyclebin_analysis_{timestamp}.db'
         
         # Check if database already exists
@@ -956,7 +957,7 @@ class RecycleBinParser:
         if db_exists:
             logger.info(f"Database already exists at {self.db_path} - appending new data")
             # Create a backup of the existing file for safety
-            backup_path = f"{self.db_path}.bak_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            backup_path = f"{self.db_path}.bak_{get_current_utc().strftime('%Y%m%d_%H%M%S')}"
             try:
                 import shutil
                 shutil.copy2(self.db_path, backup_path)
@@ -1010,7 +1011,7 @@ class RecycleBinParser:
             """, (
                 entry.original_filename,
                 entry.original_path,
-                entry.deletion_time.isoformat() if entry.deletion_time else None,
+                format_forensic_timestamp(entry.deletion_time) if entry.deletion_time else None,
                 entry.formatted_file_size,
                 entry.user_sid,
                 entry.recycle_bin_path,
@@ -1032,7 +1033,7 @@ class RecycleBinParser:
                 """, (
                     entry.original_filename,
                     entry.original_path,
-                    entry.deletion_time.isoformat() if entry.deletion_time else None,
+                    format_forensic_timestamp(entry.deletion_time) if entry.deletion_time else None,
                     entry.formatted_file_size,
                     entry.user_sid,
                     entry.recycle_bin_path,
@@ -1041,7 +1042,7 @@ class RecycleBinParser:
                     entry.random_r_filename,
                     entry.file_signature,
                     entry.recovery_status,
-                    datetime.datetime.now().isoformat()
+                    get_current_forensic_timestamp()
                 ))
                 inserted_count += 1
             else:

@@ -6,7 +6,6 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
-[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
 [![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
 
 
@@ -45,7 +44,6 @@ By supporting Crow-Eye, you are not just donating to a tool. You are directly fu
 Every contribution, no matter the size, makes a real difference to an independent developer who chose to build something meaningful over something profitable.
 
 [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
-[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
 
 ### 🚀 Sponsorship Tiers
 
@@ -143,13 +141,14 @@ Crow-Claw is our specialized acquisition engine designed to collect and preserve
 ### 🔍 Offline Analysis (Offline Importer)
 The Offline Importer allows investigators to analyze artifacts collected from any source without needing a live connection to the target system.
 
+![Offline Importer](C:/Users/Ghass/Pictures/offline-importer.png)
 
 - **Universal Input**: Input a complete directory of artifacts or select individual files for analysis.
 - **Smart Identification (SCAN)**: Hit **SCAN** to walk through the source data; Crow-Eye automatically identifies and indexes every supported artifact type using forensic signatures. This updates the case's **Scan Index** metadata without moving any files.
 - **Forensic Preservation (COLLECT)**: After scanning, you can hit **📦 Collect Artifacts** to physically copy the identified files into your Case's `live_acquisition` folder, organizing them by type (e.g., Registry, Prefetch, Event Logs).
 - **Granular Control (PARSE)**: Use the **Parse Artifact** window to review identified items. Every tab displays all files of a specific type (e.g., AMCACHE, EVTX, PREFETCH), allowing you to select specific files or the entire set for parsing into the forensic database.
 
-
+![Parse Offline Artifacts](C:/Users/Ghass/Pictures/parse-offline-artifacts.png)
 
 #### ❓ What is the difference between SCAN and COLLECT?
 
@@ -663,7 +662,6 @@ Identity: malware.exe
 ### Crow-Eye Core Features
 - 📊 **Advanced GUI Views and Reports** - Enhanced visualization and reporting capabilities
 - 🔄 **Enhanced Search Dialog** - Advanced filtering with natural language support
-- ⏱️ **Enhanced Visualization Timeline** - Interactive zooming and event correlation
 - 🤖 **AI Integration** - Query results, summarize findings, and assist non-technical users with natural language questions
 
 ### Correlation Engine Features
@@ -685,5 +683,4 @@ See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.
 - Documentation standards
 
 ## Development Credits
-- Jump List/LNK parsing based on work by Saleh Muhaysin
 - Created and maintained by Ghassan Elsman

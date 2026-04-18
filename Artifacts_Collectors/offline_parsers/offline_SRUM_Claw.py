@@ -68,6 +68,11 @@ import datetime
 from typing import List, Optional, Dict, Tuple
 from pathlib import Path
 
+# Import time utilities for standardized forensic timestamp formatting
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from utils.time_utils import format_forensic_timestamp, get_current_forensic_timestamp, get_current_utc
+
 # Try to import Registry library for registry hive parsing
 try:
     from Registry import Registry
@@ -912,7 +917,7 @@ class ESEDatabaseParser:
 
                         # Extract resource usage metrics
                         parsed_record = {
-                            'timestamp': timestamp.isoformat(),
+                            'timestamp': format_forensic_timestamp(timestamp),
                             'app_name': app_name,
                             'app_path': app_path,
                             'user_sid': user_sid,
@@ -988,7 +993,7 @@ class ESEDatabaseParser:
 
                         # Create record dictionary
                         parsed_record = {
-                            'timestamp': timestamp.isoformat(),
+                            'timestamp': format_forensic_timestamp(timestamp),
                             'app_name': app_name,
                             'app_path': app_path,
                             'user_sid': user_sid,
@@ -1076,7 +1081,7 @@ class ESEDatabaseParser:
                         connect_start_time = self._convert_filetime_to_datetime(connect_start_time_raw) if connect_start_time_raw else None
 
                         parsed_record = {
-                            'timestamp': timestamp.isoformat(),
+                            'timestamp': format_forensic_timestamp(timestamp),
                             'app_name': app_name,
                             'app_path': app_path,
                             'user_sid': user_sid,
@@ -1085,7 +1090,7 @@ class ESEDatabaseParser:
                             'l2_profile_id': record.get('L2ProfileId'),
                             'l2_profile_flags': record.get('L2ProfileFlags'),
                             'connected_time': record.get('ConnectedTime'),
-                            'connect_start_time': connect_start_time.isoformat() if connect_start_time else None
+                            'connect_start_time': format_forensic_timestamp(connect_start_time) if connect_start_time else None
                         }
 
                         records.append(parsed_record)
@@ -1133,7 +1138,7 @@ class ESEDatabaseParser:
 
                         # Create record dictionary
                         parsed_record = {
-                            'timestamp': timestamp.isoformat(),
+                            'timestamp': format_forensic_timestamp(timestamp),
                             'app_name': app_name,
                             'app_path': app_path,
                             'user_sid': user_sid,
@@ -1142,7 +1147,7 @@ class ESEDatabaseParser:
                             'l2_profile_id': l2_profile_id,
                             'l2_profile_flags': l2_profile_flags,
                             'connected_time': connected_time,
-                            'connect_start_time': connect_start_time.isoformat() if connect_start_time else None
+                            'connect_start_time': format_forensic_timestamp(connect_start_time) if connect_start_time else None
                         }
 
                         records.append(parsed_record)
@@ -1293,7 +1298,7 @@ class ESEDatabaseParser:
                         user_sid, user_name = resolver.resolve_sid(user_id) if user_id else ("Unknown", "Unknown")
 
                         parsed_record = {
-                            'timestamp': timestamp.isoformat(),
+                            'timestamp': format_forensic_timestamp(timestamp),
                             'app_name': app_name,
                             'app_path': app_path,
                             'user_sid': user_sid,
@@ -1347,7 +1352,7 @@ class ESEDatabaseParser:
 
                         # Create record dictionary
                         parsed_record = {
-                            'timestamp': timestamp.isoformat(),
+                            'timestamp': format_forensic_timestamp(timestamp),
                             'app_name': app_name,
                             'app_path': app_path,
                             'user_sid': user_sid,
@@ -1424,12 +1429,12 @@ class ESEDatabaseParser:
                         event_timestamp = self._convert_filetime_to_datetime(event_timestamp_raw) if event_timestamp_raw else None
 
                         parsed_record = {
-                            'timestamp': timestamp.isoformat(),
+                            'timestamp': format_forensic_timestamp(timestamp),
                             'app_name': app_name,
                             'app_path': app_path,
                             'user_sid': user_sid,
                             'user_name': user_name,
-                            'event_timestamp': event_timestamp.isoformat() if event_timestamp else None,
+                            'event_timestamp': format_forensic_timestamp(event_timestamp) if event_timestamp else None,
                             'state_transition': record.get('StateTransition') if record.get('StateTransition') is not None else 0,
                             'charge_level': record.get('ChargeLevel') if record.get('ChargeLevel') is not None else 0,
                             'cycle_count': record.get('CycleCount') if record.get('CycleCount') is not None else 0
@@ -1480,12 +1485,12 @@ class ESEDatabaseParser:
 
                         # Create record dictionary
                         parsed_record = {
-                            'timestamp': timestamp.isoformat(),
+                            'timestamp': format_forensic_timestamp(timestamp),
                             'app_name': app_name,
                             'app_path': app_path,
                             'user_sid': user_sid,
                             'user_name': user_name,
-                            'event_timestamp': event_timestamp.isoformat() if event_timestamp else None,
+                            'event_timestamp': format_forensic_timestamp(event_timestamp) if event_timestamp else None,
                             'state_transition': state_transition if state_transition is not None else 0,
                             'charge_level': charge_level if charge_level is not None else 0,
                             'cycle_count': cycle_count if cycle_count is not None else 0
@@ -1536,7 +1541,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
     
     Requirements: 8.4, 8.6, 8.7
     """
-    start_time = datetime.datetime.now()
+    start_time = get_current_utc()
     
     logger.info("=" * 70)
     logger.info("Crow Eye - Offline SRUM Parser")
@@ -1788,7 +1793,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             logger.info("SRUM parsing completed successfully")
             
             # Calculate duration
-            end_time = datetime.datetime.now()
+            end_time = get_current_utc()
             duration = (end_time - start_time).total_seconds()
             
             # Insert metadata
@@ -1797,7 +1802,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 (parse_timestamp, srudb_path, total_records_parsed, parsing_duration_seconds, notes)
                 VALUES (?, ?, ?, ?, ?)
             """, (
-                datetime.datetime.now().isoformat(),
+                get_current_forensic_timestamp(),
                 srudb_path,
                 stats['total_records'],
                 duration,

@@ -17,6 +17,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
+from utils.time_utils import get_current_forensic_timestamp
 try:
     from tqdm import tqdm
     TQDM_AVAILABLE = True
@@ -452,8 +453,8 @@ class AmcacheParser:
         if self._check_entry_exists(table_name, entry_id, data_json):
             return  # Skip if identical entry exists
         fields = AMCACHE_SCHEMAS[table_name]
-        # Format as YYYY-MM-DD HH:MM:SS without timezone
-        parsed_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        # Format as DD/MM/YYYY HH:MM:SS in UTC
+        parsed_at = get_current_forensic_timestamp()
         
         # Handle DeviceCensus: store all data as JSON in 'data' column
         if table_name == "DeviceCensus":

@@ -34,6 +34,5 @@ We would like to thank all our sponsors for supporting the development of Crow-E
 If you find Crow-Eye useful and would like to support its development, please consider becoming a sponsor!
 
 [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
-[![Support via PayPal](https://img.shields.io/badge/Support-PayPal-blue?style=for-the-badge&logo=paypal)](https://www.paypal.me/CrowEyeDevelopment)
 
 *Thank you for being part of our mission to make forensics accessible to everyone!*

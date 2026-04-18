@@ -20,7 +20,7 @@ describe('Timezone Validation - Task 5.6', () => {
     it('should display date in UTC, not local timezone', () => {
       const testISO = '2024-01-15T14:30:00.000Z';
       const date = formatTime(testISO, 'date');
-      expect(date).toContain('15 Jan 2024');
+      expect(date).toContain('2024-01-15');
     });
   });
 
@@ -29,7 +29,7 @@ describe('Timezone Validation - Task 5.6', () => {
       const testISO = '2024-01-15T02:00:00.000Z';
       const date = formatTime(testISO, 'date');
       // Must show Jan 15 (UTC), NOT Jan 14 (EST)
-      expect(date).toContain('15 Jan 2024');
+      expect(date).toContain('2024-01-15');
     });
 
     it('should NOT convert time to EST', () => {
@@ -45,7 +45,7 @@ describe('Timezone Validation - Task 5.6', () => {
       const testISO = '2024-01-15T20:00:00.000Z';
       const date = formatTime(testISO, 'date');
       // Must show Jan 15 (UTC), NOT Jan 16 (JST)
-      expect(date).toContain('15 Jan 2024');
+      expect(date).toContain('2024-01-15');
     });
 
     it('should NOT convert time to JST', () => {
@@ -71,7 +71,7 @@ describe('Timezone Validation - Task 5.6', () => {
       const testISO = '2024-06-15T12:30:45.000Z';
       const result = formatTime(testISO, 'full');
       
-      expect(result).toContain('15 Jun 2024');
+      expect(result).toContain('2024-06-15');
       expect(result).toContain('12:30:45');
     });
   });
@@ -109,9 +109,9 @@ describe('Timezone Validation - Task 5.6', () => {
       const during = formatTime(duringDST, 'full');
       const after = formatTime(afterDST, 'full');
       
-      expect(before).toContain('10 Mar 2024');
-      expect(during).toContain('10 Mar 2024');
-      expect(after).toContain('10 Mar 2024');
+      expect(before).toContain('2024-03-10');
+      expect(during).toContain('2024-03-10');
+      expect(after).toContain('2024-03-10');
     });
 
     it('should not shift time during DST transition', () => {

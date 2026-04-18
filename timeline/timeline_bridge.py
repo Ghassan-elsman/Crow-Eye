@@ -12,6 +12,7 @@ Author: Crow Eye Development Team
 """
 
 import json
+import time
 import logging
 import os
 import re
@@ -20,7 +21,10 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
+
 from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread
+
+from timeline.utils.value_parser import parsable_num_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -98,14 +102,10 @@ class UniversalTimestampParser:
         except (AttributeError, ValueError):
             return None
         
-        # Normalize to UTC ISO 8601 (strictly 3 decimal milliseconds for JS compatibility)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        else:
-            dt = dt.astimezone(timezone.utc)
+        if dt is None:
+            return None
             
-        ms = dt.microsecond // 1000
-        return dt.strftime(f"%Y-%m-%dT%H:%M:%S.{ms:03d}Z")
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
     
     @classmethod
     def _parse_string(cls, value: str) -> Optional[datetime]:
@@ -182,44 +182,9 @@ class UniversalDurationParser:
     
     @classmethod
     def parse_to_seconds(cls, value: Any) -> float:
-        if value is None or value == '' or value == 'N/A' or value == '0s':
-            return 0.0
-        
-        if isinstance(value, (int, float)):
-            return float(value)
-            
-        val_str = str(value).lower().strip()
-        
-        # 1. Regex for structured time: 1h 2m 3s
-        # Use negative lookahead/lookbehind to prevent 'ms' being matched as 's' or 'm'
-        h = re.search(r'(\d+(?:\.\d+)?)\s*h', val_str)
-        m = re.search(r'(\d+(?:\.\d+)?)\s*m(?!s)(?:in)?', val_str)
-        s = re.search(r'(\d+(?:\.\d+)?)\s*(?<!m)s(?:ec)?', val_str)
-        ms = re.search(r'(\d+(?:\.\d+)?)\s*ms', val_str)
-        
-        if h or m or s or ms:
-            total = 0.0
-            if h: total += float(h.group(1)) * 3600
-            if m: total += float(m.group(1)) * 60
-            if s: total += float(s.group(1))
-            if ms: total += float(ms.group(1)) / 1000
-            return total
-            
-        # 2. Decimal units: "1.01 hrs"
-        try:
-            parts = val_str.split()
-            if len(parts) == 2:
-                num = float(parts[0])
-                unit = parts[1]
-                if 'hr' in unit: return num * 3600
-                if 'min' in unit: return num * 60
-                if 'ms' in unit: return num / 1000
-                if 's' in unit: return num
-            
-            # Fallback: pure numeric
-            return float(val_str)
-        except (ValueError, IndexError):
-            return 0.0
+        """Delegates to high-fidelity ValueParser."""
+        from timeline.utils.value_parser import ValueParser
+        return ValueParser.parse_to_num(value)
 
 
 class TimelineBridge(QObject):
@@ -255,6 +220,14 @@ class TimelineBridge(QObject):
             return path
         return None
     
+    def _table_exists(self, db_name: str, table_name: str) -> bool:
+        """Safe helper to verify table existence without external data_manager."""
+        try:
+            res = self._query_db(db_name, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+            return len(res) > 0
+        except Exception:
+            return False
+    
     def _query_db(self, db_name: str, sql: str, params: tuple = ()) -> List[Dict]:
         """
         Execute a query and return results as list of dicts.
@@ -272,17 +245,34 @@ class TimelineBridge(QObject):
             logger.warning(f"Database not found: {db_name}")
             return []
         
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(sql, params)
-            rows = [dict(row) for row in cursor.fetchall()]
-            conn.close()
-            return rows
-        except Exception as e:
-            logger.error(f"Query error on {db_name}: {e}")
-            return []
+        retries = 3
+        delay = 0.1
+        
+        for attempt in range(retries):
+            try:
+                conn = sqlite3.connect(db_path)
+                # Register the dynamic value parser as a custom SQLite function
+                conn.create_function("PARSABLE_NUM", 1, parsable_num_adapter)
+                
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
+                rows = [dict(row) for row in cursor.fetchall()]
+                conn.close()
+                return rows
+            except sqlite3.OperationalError as e:
+                # Handle busy/locked errors with backoff
+                if ("locked" in str(e).lower() or "busy" in str(e).lower()) and attempt < retries - 1:
+                    logger.warning(f"Database {db_name} is locked. Retrying in {delay}s (Attempt {attempt+1}/{retries})")
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                logger.error(f"Query error on {db_name}: {e}")
+                return []
+            except Exception as e:
+                logger.error(f"Critical query failure on {db_name}: {e}")
+                return []
+        return []
     
     def _parse_timestamps_in_rows(self, rows: List[Dict], timestamp_cols: List[str]) -> List[Dict]:
         """Parse and validate timestamps in specified columns, discard rows with no valid timestamp."""
@@ -822,7 +812,7 @@ class TimelineBridge(QObject):
             SELECT id, timestamp, app_name,
                    foreground_cycle_time, background_cycle_time, face_time
             FROM srum_application_usage
-            WHERE timestamp BETWEEN ? AND ?
+            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
         """
         rows = self._query_time_sliced("srum_data.db", base_sql, (start, end), "timestamp", 1000)
         rows = self._parse_timestamps_in_rows(rows, ['timestamp'])
@@ -846,7 +836,7 @@ class TimelineBridge(QObject):
         conn_sql = """
             SELECT id, timestamp, app_name, connected_time
             FROM srum_network_connectivity
-            WHERE timestamp BETWEEN ? AND ?
+            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
             ORDER BY timestamp
             LIMIT 5000
         """
@@ -860,7 +850,7 @@ class TimelineBridge(QObject):
         data_sql = """
             SELECT id, timestamp, app_name, bytes_sent, bytes_received
             FROM srum_network_data_usage
-            WHERE timestamp BETWEEN ? AND ?
+            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
             ORDER BY timestamp
             LIMIT 5000
         """
@@ -884,8 +874,8 @@ class TimelineBridge(QObject):
                    si_creation_time, si_modification_time,
                    usn_timestamp, usn_reason, is_deleted
             FROM mft_usn_correlated
-            WHERE (usn_timestamp BETWEEN ? AND ?)
-               OR (si_modification_time BETWEEN ? AND ?)
+            WHERE (datetime(usn_timestamp) BETWEEN datetime(?) AND datetime(?))
+               OR (datetime(si_modification_time) BETWEEN datetime(?) AND datetime(?))
         """
         # Time slicing MFT is tricky due to multiple timestamp columns, 
         # using usn_timestamp as the primary coverage driver.
@@ -905,11 +895,11 @@ class TimelineBridge(QObject):
     def getPrefetchData(self, start: str, end: str) -> str:
         """Get prefetch execution data."""
         sql = """
-            SELECT filename, executable_name, hash, run_count,
+            SELECT filename, executable_name, PARSABLE_NUM(run_count) as run_count,
                    last_executed, run_times,
                    created_on, modified_on, accessed_on
             FROM prefetch_data
-            WHERE last_executed BETWEEN ? AND ?
+            WHERE datetime(last_executed) BETWEEN datetime(?) AND datetime(?)
             ORDER BY last_executed
         """
         rows = self._query_db("prefetch_data.db", sql, (start, end))
@@ -938,12 +928,14 @@ class TimelineBridge(QObject):
         
         # JLCE table
         jlce_sql = """
-            SELECT Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
-                   AppType, AppID, Artifact, Local_Path, Common_Path, File_Attributes, FileSize
+            SELECT rowid as id, Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
+                   AppType, AppID, Artifact, Local_Path, Common_Path, 
+                   File_Attributes_Flags AS File_Attributes, 
+                   PARSABLE_NUM(File_Size) AS FileSize, File_Size AS Formatted_Size
             FROM JLCE
-            WHERE (Time_Access BETWEEN ? AND ?)
-               OR (Time_Creation BETWEEN ? AND ?)
-               OR (Time_Modification BETWEEN ? AND ?)
+            WHERE (datetime(Time_Access) BETWEEN datetime(?) AND datetime(?))
+               OR (datetime(Time_Creation) BETWEEN datetime(?) AND datetime(?))
+               OR (datetime(Time_Modification) BETWEEN datetime(?) AND datetime(?))
             ORDER BY COALESCE(Time_Access, Time_Creation)
         """
         jlce_rows = self._query_db("LnkDB.db", jlce_sql,
@@ -953,12 +945,12 @@ class TimelineBridge(QObject):
         
         # Custom_JLCE table 
         custom_sql = """
-            SELECT Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
-                   FileSize, Artifact
+            SELECT rowid as id, Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
+                   PARSABLE_NUM(FileSize) AS FileSize, FileSize AS Formatted_Size, Artifact
             FROM Custom_JLCE
-            WHERE (Time_Access BETWEEN ? AND ?)
-               OR (Time_Creation BETWEEN ? AND ?)
-               OR (Time_Modification BETWEEN ? AND ?)
+            WHERE (datetime(Time_Access) BETWEEN datetime(?) AND datetime(?))
+               OR (datetime(Time_Creation) BETWEEN datetime(?) AND datetime(?))
+               OR (datetime(Time_Modification) BETWEEN datetime(?) AND datetime(?))
             ORDER BY COALESCE(Time_Access, Time_Creation)
         """
         custom_rows = self._query_db("LnkDB.db", custom_sql,
@@ -973,16 +965,34 @@ class TimelineBridge(QObject):
     
     @pyqtSlot(str, str, result=str)
     def getBamData(self, start: str, end: str) -> str:
-        """Get BAM (Background Activity Moderator) data."""
-        sql = """
-            SELECT process_path, last_execution, sid
+        """Get BAM (Background Activity Moderator) and DAM data."""
+        results = {}
+        
+        # BAM
+        bam_sql = """
+            SELECT process_path, last_execution, sid, PARSABLE_NUM(run_count) as run_count
             FROM BAM
-            WHERE last_execution BETWEEN ? AND ?
+            WHERE datetime(last_execution) BETWEEN datetime(?) AND datetime(?)
             ORDER BY last_execution
         """
-        rows = self._query_db("registry_data.db", sql, (start, end))
-        rows = self._parse_timestamps_in_rows(rows, ['last_execution'])
-        return json.dumps(rows)
+        results['bam'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", bam_sql, (start, end)), 
+            ['last_execution']
+        )
+        
+        # DAM (Desktop Activity Moderator)
+        dam_sql = """
+            SELECT app_name as process_path, last_execution, 'N/A' as sid
+            FROM DAM
+            WHERE datetime(last_execution) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY last_execution
+        """
+        results['dam'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", dam_sql, (start, end)), 
+            ['last_execution']
+        )
+        
+        return json.dumps(results)
     
     @pyqtSlot(str, str, result=str)
     def getRegistryData(self, start: str, end: str) -> str:
@@ -991,8 +1001,10 @@ class TimelineBridge(QObject):
         
         # OpenSaveMRU
         open_sql = """
-            SELECT extension, file_name as filename, file_path, access_date FROM OpenSaveMRU
-            WHERE access_date BETWEEN ? AND ? ORDER BY access_date
+            SELECT extension, file_name as filename, file_path, access_date,
+                   'opensavemru' as tsType
+            FROM OpenSaveMRU
+            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?) ORDER BY access_date
         """
         result['open_save_mru'] = self._parse_timestamps_in_rows(
             self._query_db("registry_data.db", open_sql, (start, end)),
@@ -1001,8 +1013,10 @@ class TimelineBridge(QObject):
         
         # LastSaveMRU
         last_sql = """
-            SELECT type as extension, folder_name as filename, folder_path, access_date FROM LastSaveMRU
-            WHERE access_date BETWEEN ? AND ? ORDER BY access_date
+            SELECT type as extension, folder_name as filename, folder_path, access_date,
+                   application, 'lastsavemru' as tsType
+            FROM LastSaveMRU
+            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?) ORDER BY access_date
         """
         result['last_save_mru'] = self._parse_timestamps_in_rows(
             self._query_db("registry_data.db", last_sql, (start, end)),
@@ -1011,22 +1025,25 @@ class TimelineBridge(QObject):
         
         # Shellbags
         shell_sql = """
-            SELECT file_name as path, shell_item_type as shell_type, modified_date, accessed_date, created_date
+            SELECT rowid as id, file_name as path, file_name as name, shell_item_type as shell_type, modified_date, accessed_date, created_date,
+                   'shellbags' as tsType
             FROM Shellbags
-            WHERE modified_date BETWEEN ? AND ?
-               OR accessed_date BETWEEN ? AND ?
-            ORDER BY COALESCE(modified_date, accessed_date)
+            WHERE datetime(modified_date) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(accessed_date) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(created_date) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY COALESCE(modified_date, accessed_date, created_date)
         """
         result['shellbags'] = self._parse_timestamps_in_rows(
-            self._query_db("registry_data.db", shell_sql, (start, end, start, end)),
+            self._query_db("registry_data.db", shell_sql, (start, end, start, end, start, end)),
             ['modified_date', 'accessed_date', 'created_date']
         )
 
         # RecentDocs
         recent_docs_sql = """
-            SELECT file_name as filename, file_path as path, extension, access_date
+            SELECT rowid as id, file_name as filename, file_path as path, extension, access_date,
+                   'linked' as tsType
             FROM RecentDocs
-            WHERE access_date BETWEEN ? AND ?
+            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?)
             ORDER BY access_date
         """
         result['recent_docs'] = self._parse_timestamps_in_rows(
@@ -1036,16 +1053,151 @@ class TimelineBridge(QObject):
 
         # UserAssist
         userassist_sql = """
-            SELECT program_path as filename, program_path as path, last_execution as access_date, run_count
+            SELECT program_path as filename, program_path as path, program_path as name, 
+                   last_execution as access_date, PARSABLE_NUM(focus_time) as focus_time, run_count,
+                   'executed' as tsType
             FROM UserAssist
-            WHERE last_execution BETWEEN ? AND ?
+            WHERE datetime(last_execution) BETWEEN datetime(?) AND datetime(?)
             ORDER BY last_execution
         """
         result['user_assist'] = self._parse_timestamps_in_rows(
             self._query_db("registry_data.db", userassist_sql, (start, end)),
             ['access_date']
         )
+
+        # BAM
+        bam_sql = """
+            SELECT rowid as id, process_path as filename, process_path as path, last_execution as access_date, sid,
+                   'bam' as tsType
+            FROM BAM
+            WHERE datetime(last_execution) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY last_execution
+        """
+        result['bam'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", bam_sql, (start, end)),
+            ['access_date']
+        )
         
+        # ComputerNameInfo
+        comp_name_sql = """
+            SELECT * FROM ComputerNameInfo
+            WHERE datetime(installation_date) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['computer_name'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", comp_name_sql, (start, end)),
+            ['installation_date']
+        )
+
+        # Auto (Autoruns)
+        auto_sql = """
+            SELECT * FROM Auto
+            WHERE datetime(last_install_time) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(scheduled_install_time) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['auto'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", auto_sql, (start, end, start, end)),
+            ['last_install_time', 'scheduled_install_time']
+        )
+
+        # WindowsUpdateInfo
+        winupdate_sql = """
+            SELECT * FROM WindowsUpdateInfo
+            WHERE datetime(last_check_time) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(last_install_time) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(scheduled_install_time) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['windows_update'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", winupdate_sql, (start, end, start, end, start, end)),
+            ['last_check_time', 'last_install_time', 'scheduled_install_time']
+        )
+
+        # NetworkInterfacesInfo
+        net_info_sql = """
+            SELECT interface_id, ip_address, mac_address, timestamp as access_date 
+            FROM NetworkInterfacesInfo
+            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['network_interfaces'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", net_info_sql, (start, end)),
+            ['access_date']
+        )
+
+        # NetworkListProfiles
+        net_list_sql = """
+            SELECT profile_name as filename, profile_name as name, guid, timestamp as access_date
+            FROM NetworkListProfiles
+            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['network_list_profiles'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", net_list_sql, (start, end)),
+            ['access_date']
+        )
+
+        # USBStorageDevices
+        usb_sql = """
+            SELECT rowid as id, friendly_name as filename, friendly_name as name, vendor_id, product_id, serial_number,
+                   first_connected, last_connected, last_removed,
+                   'usb_devices' as tsType
+            FROM USBStorageDevices
+            WHERE datetime(first_connected) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(last_connected) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(last_removed) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['usb_devices'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", usb_sql, (start, end, start, end, start, end)),
+            ['first_connected', 'last_connected', 'last_removed']
+        )
+
+        # ShutdownInfo
+        shutdown_sql = """
+            SELECT * FROM ShutdownInfo
+            WHERE datetime(shutdown_time) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['shutdown_info'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", shutdown_sql, (start, end)),
+            ['shutdown_time']
+        )
+
+        # InstalledSoftware
+        installed_software_sql = """
+            SELECT * FROM InstalledSoftware
+            WHERE datetime(install_date) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['installed_software'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", installed_software_sql, (start, end)),
+            ['install_date']
+        )
+
+        # WordWheelQuery
+        wordwheel_sql = """
+            SELECT *, 'wordwheelquery' as tsType FROM WordWheelQuery
+            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['wordwheel'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", wordwheel_sql, (start, end)),
+            ['access_date']
+        )
+
+        # RunMRU
+        run_mru_sql = """
+            SELECT * FROM RunMRU
+            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['run_mru'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", run_mru_sql, (start, end)),
+            ['access_date']
+        )
+
+        # Network_list
+        netlist_sql = """
+            SELECT * FROM Network_list
+            WHERE datetime(connection_date) BETWEEN datetime(?) AND datetime(?)
+        """
+        result['network_list'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", netlist_sql, (start, end)),
+            ['connection_date']
+        )
+
         return json.dumps(result)
     
     # ──────────────────────────────────────────────
@@ -1061,7 +1213,7 @@ class TimelineBridge(QObject):
         app_file_sql = """
             SELECT name, link_date
             FROM InventoryApplicationFile
-            WHERE link_date BETWEEN ? AND ?
+            WHERE datetime(link_date) BETWEEN datetime(?) AND datetime(?)
         """
         app_file_rows = self._query_time_sliced("amcache.db", app_file_sql, (start, end), "link_date", 1000)
         result['application_files'] = self._parse_timestamps_in_rows(app_file_rows, ['link_date'])
@@ -1070,19 +1222,20 @@ class TimelineBridge(QObject):
         app_sql = """
             SELECT name, install_date
             FROM InventoryApplication
-            WHERE install_date BETWEEN ? AND ?
+            WHERE datetime(install_date) BETWEEN datetime(?) AND datetime(?)
         """
         app_rows = self._query_time_sliced("amcache.db", app_sql, (start, end), "install_date", 1000)
         result['applications'] = self._parse_timestamps_in_rows(app_rows, ['install_date'])
         
         # InventoryDriverBinary
         driver_sql = """
-            SELECT driver_name, driver_time_stamp
+            SELECT driver_name, driver_time_stamp, driver_last_write_time
             FROM InventoryDriverBinary
-            WHERE driver_time_stamp BETWEEN ? AND ?
+            WHERE datetime(driver_time_stamp) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(driver_last_write_time) BETWEEN datetime(?) AND datetime(?)
         """
-        driver_rows = self._query_time_sliced("amcache.db", driver_sql, (start, end), "driver_time_stamp", 1000)
-        result['drivers'] = self._parse_timestamps_in_rows(driver_rows, ['driver_time_stamp'])
+        driver_rows = self._query_db("amcache.db", driver_sql, (start, end, start, end))
+        result['drivers'] = self._parse_timestamps_in_rows(driver_rows, ['driver_time_stamp', 'driver_last_write_time'])
         
         return json.dumps(result)
     
@@ -1093,7 +1246,7 @@ class TimelineBridge(QObject):
             SELECT id, filename, path, last_modified, last_modified_readable,
                    data_size, entry_size, cache_entry_position
             FROM shimcache_entries
-            WHERE last_modified BETWEEN ? AND ?
+            WHERE datetime(last_modified) BETWEEN datetime(?) AND datetime(?)
             ORDER BY last_modified
         """
         rows = self._query_db("shimcache.db", sql, (start, end))
@@ -1105,9 +1258,10 @@ class TimelineBridge(QObject):
         """Get Recycle Bin entries."""
         sql = """
             SELECT original_filename, original_path, deletion_time,
-                   formatted_file_size, user_sid, file_signature, recovery_status
+                   PARSABLE_NUM(formatted_file_size) as file_size_raw, formatted_file_size,
+                   user_sid, file_signature, recovery_status
             FROM recycle_bin_entries
-            WHERE deletion_time BETWEEN ? AND ?
+            WHERE datetime(deletion_time) BETWEEN datetime(?) AND datetime(?)
             ORDER BY deletion_time
         """
         rows = self._query_db("recyclebin_analysis.db", sql, (start, end))
@@ -1125,7 +1279,7 @@ class TimelineBridge(QObject):
             SELECT id, timestamp, app_name, user_name,
                    event_timestamp, state_transition, charge_level, cycle_count
             FROM srum_energy_usage
-            WHERE timestamp BETWEEN ? AND ?
+            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
             ORDER BY timestamp
         """
         rows = self._query_db("srum_data.db", sql, (start, end))
@@ -1145,7 +1299,9 @@ class TimelineBridge(QObject):
             'srum_application_usage', 'srum_network_connectivity',
             'srum_network_data_usage', 'srum_energy_usage',
             'mft_usn_correlated', 'prefetch_data', 'JLCE', 'Custom_JLCE',
-            'BAM', 'Shellbags', 'OpenSaveMRU', 'LastSaveMRU',
+            'BAM', 'DAM', 'Shellbags', 'OpenSaveMRU', 'LastSaveMRU', 'RecentDocs', 'RunMRU',
+            'WordWheelQuery', 'Network_list', 'NetworkListProfiles', 'NetworkInterfacesInfo',
+            'USBStorageDevices', 'ShutdownInfo', 'InstalledSoftware', 'WindowsUpdateInfo',
             'shimcache_entries', 'recycle_bin_entries',
             'InventoryApplicationFile', 'InventoryApplication', 'InventoryDriverBinary',
         }
@@ -1183,7 +1339,7 @@ class TimelineBridge(QObject):
             return self._query_db("Log_Claw.db", """
                 SELECT DATE(EventTimestampUTC) as day, STRFTIME('%H', EventTimestampUTC) as hour, COUNT(*) as count
                 FROM [SystemLogs]
-                WHERE EventTimestampUTC BETWEEN ? AND ?
+                WHERE datetime(EventTimestampUTC) BETWEEN datetime(?) AND datetime(?)
                 GROUP BY DATE(EventTimestampUTC), STRFTIME('%H', EventTimestampUTC) ORDER BY day
             """, (start, end))
 
@@ -1191,7 +1347,7 @@ class TimelineBridge(QObject):
             return self._query_db("Log_Claw.db", """
                 SELECT DATE(EventTimestampUTC) as day, STRFTIME('%H', EventTimestampUTC) as hour, COUNT(*) as count
                 FROM [ApplicationLogs]
-                WHERE EventTimestampUTC BETWEEN ? AND ?
+                WHERE datetime(EventTimestampUTC) BETWEEN datetime(?) AND datetime(?)
                 GROUP BY DATE(EventTimestampUTC), STRFTIME('%H', EventTimestampUTC) ORDER BY day
             """, (start, end))
 
@@ -1199,7 +1355,7 @@ class TimelineBridge(QObject):
             return self._query_db("Log_Claw.db", """
                 SELECT DATE(EventTimestampUTC) as day, STRFTIME('%H', EventTimestampUTC) as hour, COUNT(*) as count
                 FROM [SecurityLogs]
-                WHERE EventTimestampUTC BETWEEN ? AND ?
+                WHERE datetime(EventTimestampUTC) BETWEEN datetime(?) AND datetime(?)
                 GROUP BY DATE(EventTimestampUTC), STRFTIME('%H', EventTimestampUTC) ORDER BY day
             """, (start, end))
             
@@ -1207,16 +1363,16 @@ class TimelineBridge(QObject):
             return self._query_db("srum_data.db", """
                 SELECT DATE(timestamp) as day, STRFTIME('%H', timestamp) as hour, COUNT(*) as count
                 FROM srum_application_usage
-                WHERE timestamp BETWEEN ? AND ?
+                WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
                 GROUP BY DATE(timestamp), STRFTIME('%H', timestamp) ORDER BY day
             """, (start, end))
             
         def fetch_srum_net():
             return self._query_db("srum_data.db", """
                 SELECT DATE(timestamp) as day, STRFTIME('%H', timestamp) as hour, COUNT(*) as count,
-                       SUM(bytes_sent) as total_sent, SUM(bytes_received) as total_received
+                       SUM(PARSABLE_NUM(bytes_sent)) as total_sent, SUM(PARSABLE_NUM(bytes_received)) as total_received
                 FROM srum_network_data_usage
-                WHERE timestamp BETWEEN ? AND ?
+                WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
                 GROUP BY DATE(timestamp), STRFTIME('%H', timestamp) ORDER BY day
             """, (start, end))
             
@@ -1224,97 +1380,115 @@ class TimelineBridge(QObject):
             return self._query_db("mft_usn_correlated_analysis.db", """
                 SELECT DATE(COALESCE(usn_timestamp, si_modification_time)) as day, STRFTIME('%H', COALESCE(usn_timestamp, si_modification_time)) as hour, COUNT(*) as count
                 FROM mft_usn_correlated
-                WHERE (usn_timestamp BETWEEN ? AND ?) OR (si_modification_time BETWEEN ? AND ?)
+                WHERE (datetime(usn_timestamp) BETWEEN datetime(?) AND datetime(?)) OR (datetime(si_modification_time) BETWEEN datetime(?) AND datetime(?))
                 GROUP BY day, hour ORDER BY day
             """, (start, end, start, end))
-            
         def fetch_prefetch():
             return self._query_db("prefetch_data.db", """
                 SELECT DATE(last_executed) as day, STRFTIME('%H', last_executed) as hour, COUNT(*) as count
-                FROM prefetch_data
-                WHERE last_executed BETWEEN ? AND ?
-                GROUP BY DATE(last_executed), STRFTIME('%H', last_executed) ORDER BY day
+                FROM prefetch_data WHERE datetime(last_executed) BETWEEN datetime(?) AND datetime(?)
+                GROUP BY day, hour ORDER BY day
             """, (start, end))
-            
+
         def fetch_shimcache():
             return self._query_db("shimcache.db", """
                 SELECT DATE(last_modified) as day, STRFTIME('%H', last_modified) as hour, COUNT(*) as count
-                FROM shimcache_entries
-                WHERE last_modified BETWEEN ? AND ?
-                GROUP BY DATE(last_modified), STRFTIME('%H', last_modified) ORDER BY day
-            """, (start, end))
-
-        def fetch_bam():
-            return self._query_db("registry_data.db", """
-                SELECT DATE(last_execution) as day, STRFTIME('%H', last_execution) as hour, COUNT(*) as count
-                FROM BAM WHERE last_execution BETWEEN ? AND ?
-                GROUP BY day, hour ORDER BY day
-            """, (start, end))
-
-        def fetch_lnk():
-            return self._query_db("LnkDB.db", """
-                SELECT DATE(Time_Access) as day, STRFTIME('%H', Time_Access) as hour, COUNT(*) as count
-                FROM (SELECT Time_Access FROM JLCE UNION ALL SELECT Time_Access FROM Custom_JLCE)
-                WHERE Time_Access BETWEEN ? AND ?
-                GROUP BY day, hour ORDER BY day
-            """, (start, end))
-
-        def fetch_recyclebin():
-            return self._query_db("recyclebin_analysis.db", """
-                SELECT DATE(deletion_time) as day, STRFTIME('%H', deletion_time) as hour, COUNT(*) as count
-                FROM recycle_bin_entries WHERE deletion_time BETWEEN ? AND ?
+                FROM shimcache_entries WHERE datetime(last_modified) BETWEEN datetime(?) AND datetime(?)
                 GROUP BY day, hour ORDER BY day
             """, (start, end))
 
         def fetch_amcache():
             return self._query_db("amcache.db", """
-                SELECT DATE(link_date) as day, STRFTIME('%H', link_date) as hour, COUNT(*) as count
-                FROM InventoryApplicationFile WHERE link_date BETWEEN ? AND ?
-                GROUP BY day, hour ORDER BY day
-            """, (start, end))
-
-        def fetch_registry():
-            return self._query_db("registry_data.db", """
                 SELECT day, hour, SUM(c) as count FROM (
-                    SELECT DATE(access_date) as day, STRFTIME('%H', access_date) as hour, COUNT(*) as c FROM OpenSaveMRU GROUP BY day, hour
+                    SELECT DATE(link_date) as day, STRFTIME('%H', link_date) as hour, COUNT(*) as c FROM InventoryApplicationFile GROUP BY day, hour
                     UNION ALL
-                    SELECT DATE(access_date) as day, STRFTIME('%H', access_date) as hour, COUNT(*) as c FROM LastSaveMRU GROUP BY day, hour
-                    UNION ALL
-                    SELECT DATE(access_date) as day, STRFTIME('%H', access_date) as hour, COUNT(*) as c FROM RecentDocs GROUP BY day, hour
-                    UNION ALL
-                    SELECT DATE(last_execution_time) as day, STRFTIME('%H', last_execution_time) as hour, COUNT(*) as c FROM UserAssist GROUP BY day, hour
-                ) WHERE day BETWEEN DATE(?) AND DATE(?)
+                    SELECT DATE(install_date) as day, STRFTIME('%H', install_date) as hour, COUNT(*) as c FROM InventoryApplication GROUP BY day, hour
+                ) WHERE day BETWEEN DATE(?) AND DATE(?) GROUP BY day, hour ORDER BY day
+            """, (start, end))
+
+        def fetch_recycle():
+            return self._query_db("recyclebin_analysis.db", """
+                SELECT DATE(deletion_time) as day, STRFTIME('%H', deletion_time) as hour, COUNT(*) as count
+                FROM recycle_bin_entries WHERE datetime(deletion_time) BETWEEN datetime(?) AND datetime(?)
                 GROUP BY day, hour ORDER BY day
             """, (start, end))
 
-        with ThreadPoolExecutor(max_workers=12) as executor:
-            future_sys = executor.submit(fetch_system)
-            future_app = executor.submit(fetch_app)
-            future_sec = executor.submit(fetch_sec)
-            future_srum_app = executor.submit(fetch_srum_app)
-            future_srum_net = executor.submit(fetch_srum_net)
-            future_mft = executor.submit(fetch_mft)
-            future_prefetch = executor.submit(fetch_prefetch)
-            future_shimcache = executor.submit(fetch_shimcache)
-            future_bam = executor.submit(fetch_bam)
-            future_lnk = executor.submit(fetch_lnk)
-            future_amcache = executor.submit(fetch_amcache)
-            future_recycle = executor.submit(fetch_recyclebin)
-            future_registry = executor.submit(fetch_registry)
+        def fetch_lnk():
+            # Robust dynamic union to skip missing tables
+            query_parts = []
+            if self._table_exists("LnkDB.db", "JLCE"):
+                query_parts.append("SELECT DATE(Time_Access) as day, STRFTIME('%H', Time_Access) as hour, COUNT(*) as c FROM JLCE GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Creation) as day, STRFTIME('%H', Time_Creation) as hour, COUNT(*) as c FROM JLCE GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Modification) as day, STRFTIME('%H', Time_Modification) as hour, COUNT(*) as c FROM JLCE GROUP BY day, hour")
+            if self._table_exists("LnkDB.db", "Custom_JLCE"):
+                query_parts.append("SELECT DATE(Time_Access) as day, STRFTIME('%H', Time_Access) as hour, COUNT(*) as c FROM Custom_JLCE GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Creation) as day, STRFTIME('%H', Time_Creation) as hour, COUNT(*) as c FROM Custom_JLCE GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Modification) as day, STRFTIME('%H', Time_Modification) as hour, COUNT(*) as c FROM Custom_JLCE GROUP BY day, hour")
             
-            result['SystemLogs'] = future_sys.result()
-            result['ApplicationLogs'] = future_app.result()
-            result['SecurityLogs'] = future_sec.result()
-            result['srum_app'] = future_srum_app.result()
-            result['srum_net'] = future_srum_net.result()
-            result['mft_usn'] = future_mft.result()
-            result['prefetch'] = future_prefetch.result()
-            result['shimcache'] = future_shimcache.result()
-            result['bam'] = future_bam.result()
-            result['lnk'] = future_lnk.result()
-            result['amcache'] = future_amcache.result()
-            result['recyclebin'] = future_recycle.result()
-            result['registry'] = future_registry.result()
+            if not query_parts: return []
+            union_sql = f"SELECT day, hour, SUM(c) as count FROM ({' UNION ALL '.join(query_parts)}) WHERE day BETWEEN DATE(?) AND DATE(?) GROUP BY day, hour ORDER BY day"
+            return self._query_db("LnkDB.db", union_sql, (start, end))
+
+        def fetch_artifacts_registry():
+            """Exhaustive Lane 5 Aggregation: Synchronized with 33-field Manifest"""
+            query_parts = []
+            # List of (table_name, date_column) pairs from the master forensic manifest
+            tables = [
+                ("OpenSaveMRU", "access_date"), ("LastSaveMRU", "access_date"), 
+                ("RecentDocs", "access_date"), ("UserAssist", "focus_time"),
+                ("BAM", "last_execution"), ("DAM", "last_execution"),
+                ("ComputerNameInfo", "installation_date"), ("Network_list", "connection_date"),
+                ("NetworkListProfiles", "timestamp"), ("WordWheelQuery", "access_date"),
+                ("Shellbags", "created_date"), ("Shellbags", "modified_date"),
+                ("Shellbags", "accessed_date"), ("RunMRU", "access_date"),
+                ("InstalledSoftware", "install_date"), ("Registry_Run", "timestamp"),
+                ("JumpList", "last_access"), ("AppX_Execution", "last_execution")
+            ]
+            
+            for table, date_col in tables:
+                if self._table_exists("registry_data.db", table):
+                    # Robust SQL: Filter out 'N/A' or empty dates at the database level to prevent NULL days
+                    query_parts.append(f"""
+                        SELECT DATE({date_col}) as day, STRFTIME('%H', {date_col}) as hour, COUNT(*) as c 
+                        FROM {table} 
+                        WHERE {date_col} IS NOT NULL AND {date_col} NOT IN ('', 'N/A', '0s')
+                        GROUP BY day, hour
+                    """)
+            
+            if not query_parts: return []
+            
+            union_sql = f"SELECT day, hour, SUM(c) as count FROM ({' UNION ALL '.join(query_parts)}) WHERE day BETWEEN DATE(?) AND DATE(?) GROUP BY day, hour ORDER BY day"
+            return self._query_db("registry_data.db", union_sql, (start, end))
+
+        with ThreadPoolExecutor(max_workers=11) as executor:
+            fut_sys = executor.submit(fetch_system)
+            fut_app = executor.submit(fetch_app)
+            fut_sec = executor.submit(fetch_sec)
+            fut_sap = executor.submit(fetch_srum_app)
+            fut_snt = executor.submit(fetch_srum_net)
+            fut_mft = executor.submit(fetch_mft)
+            fut_pref = executor.submit(fetch_prefetch)
+            fut_shim = executor.submit(fetch_shimcache)
+            fut_amc = executor.submit(fetch_amcache)
+            fut_recy = executor.submit(fetch_recycle)
+            fut_lnk = executor.submit(fetch_lnk)
+            fut_reg = executor.submit(fetch_artifacts_registry)
+            
+            # Consolidate results
+            result['SystemLogs'] = fut_sys.result()
+            result['ApplicationLogs'] = fut_app.result()
+            result['SecurityLogs'] = fut_sec.result()
+            result['srum_app'] = fut_sap.result()
+            result['srum_net'] = fut_snt.result()
+            result['mft_usn'] = fut_mft.result()
+            
+            # Individual Forensic Keys
+            result['prefetch'] = fut_pref.result()
+            result['shimcache'] = fut_shim.result()
+            result['amcache'] = fut_amc.result()
+            result['recyclebin'] = fut_recy.result()
+            result['lnk'] = fut_lnk.result()
+            result['registry_others'] = fut_reg.result()
         
         return json.dumps(result)
     

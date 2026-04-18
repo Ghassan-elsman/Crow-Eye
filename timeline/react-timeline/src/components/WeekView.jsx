@@ -2,6 +2,8 @@
  * WeekView — Aggregated daily columns for exactly 7 days.
  */
 import { memo, useMemo } from 'react';
+import { getForensicName, getPrimaryTimestamp, getForensicTimestamps, cleanForensicDate } from '../utils/formatters';
+import { heuristicFlatten } from '../utils/dataUtils';
 
 function WeekView({ data, state }) {
   const { timeRange, setTimeRange, setViewModeOverride } = state;
@@ -9,7 +11,7 @@ function WeekView({ data, state }) {
   // Task 5.5.1: All date bucketing uses UTC methods for forensic accuracy
   const days = useMemo(() => {
     if (!timeRange.start) return [];
-    const start = new Date(timeRange.start);
+    const start = new Date(cleanForensicDate(timeRange.start));
     // Task 5.5.1: setUTCHours ensures UTC-based day boundaries
     start.setUTCHours(0, 0, 0, 0);
 
@@ -41,7 +43,6 @@ function WeekView({ data, state }) {
     }
 
     // Task 5.5.3: Initialize with aggregated statistics if available
-    // This provides "stable" bars even while background detailed data is loading
     if (data.aggregated) {
       Object.entries(data.aggregated).forEach(([source, rows]) => {
         if (!Array.isArray(rows)) return;
@@ -61,8 +62,6 @@ function WeekView({ data, state }) {
         });
       });
       
-      // Zero out detailed counts if we're using aggregated as the base
-      // We will only use count() for topArtifacts and names
       dayArray.forEach(d => {
         d._srumDetail = 0; d._mftDetail = 0; d._execDetail = 0;
         d._amcacheDetail = 0; d._shimcacheDetail = 0; d._recyclebinDetail = 0;
@@ -70,117 +69,37 @@ function WeekView({ data, state }) {
       });
     }
 
-    // FIX: Bug 11 - WeekView Timestamp Fallback Chain
-    // Implements artifact-type-specific timestamp extraction instead of fragile fallback chain
-    // Ensures consistent timestamp selection per artifact type for accurate event counts
-    /**
-     * Extract timestamp for a specific artifact type.
-     * Uses consistent primary timestamp field per artifact type.
-     * 
-     * Timestamp field mapping per artifact type:
-     * - srum: timestamp (SRUM app and network data)
-     * - mft: usn_timestamp (primary), si_creation_time (fallback)
-     * - exec: last_executed (Prefetch), last_execution (BAM), Time_Access (LNK)
-     * - amcache: link_date (application_files), install_date (applications), driver_time_stamp (drivers)
-     * - shimcache: last_modified
-     * - recyclebin: deletion_time
-     * - registry: access_date (primary), accessed_date, modified_date (fallbacks)
-     * - sessions: timestamp or start
-     * 
-     * @param {Object} artifact - The artifact object
-     * @param {string} type - The artifact type identifier
-     * @returns {string|null} The timestamp value or null if not found
-     */
-    const getTimestampForArtifact = (artifact, type) => {
-      if (!artifact) return null;
-      
-      // Use switch/case for type-specific extraction
-      switch (type) {
-        case 'srum':
-          // SRUM: timestamp (primary field for SRUM app and network data)
-          return artifact.timestamp;
-        
-        case 'mft':
-          // MFT/USN: usn_timestamp (primary), fallback to si_creation_time
-          return artifact.usn_timestamp || artifact.si_creation_time;
-        
-        case 'exec':
-          // Execution artifacts: last_executed (Prefetch), last_execution (BAM), Time_Access (LNK)
-          return artifact.last_executed || artifact.last_execution || artifact.Time_Access;
-        
-        case 'amcache':
-          // Amcache: link_date (application_files), install_date (applications), driver_time_stamp (drivers)
-          return artifact.link_date || artifact.install_date || artifact.driver_time_stamp;
-        
-        case 'shimcache':
-          // Shimcache: last_modified (primary field)
-          return artifact.last_modified;
-        
-        case 'recyclebin':
-          // RecycleBin: deletion_time (primary field)
-          return artifact.deletion_time;
-        
-        case 'registry':
-          // Registry: access_date (primary), fallback to accessed_date, modified_date
-          return artifact.access_date || artifact.accessed_date || artifact.modified_date;
-        
-        case 'sessions':
-          // Sessions: timestamp or start (for session events)
-          return artifact.timestamp || artifact.start;
-        
-        default:
-          // Fallback: try common timestamp fields
-          return artifact.timestamp || artifact.start;
-      }
-    };
-
-    // Extract displayable artifact name
-    const getArtifactName = (item) => {
-      const raw = item.executable_name || item.fn_filename || item.filename || 
-                  item.app_name || item.name || item.Source_Name || item.target_path || 
-                  item.path || item.file_path || item.original_filename || item.driver_name ||
-                  item.process_path || item.file_name || null;
-      if (!raw) return null;
-      // Extract just the filename from full paths
-      return raw.split('\\').pop().split('/').pop();
-    };
-
     // Task 5.5.2: Count function uses UTC-based date bucketing with artifact-type-specific timestamp extraction
     const count = (arr, type) => {
-      if (!arr || !Array.isArray(arr)) return;
-      arr.forEach(item => {
-        const ts = getTimestampForArtifact(item, type);
-        if (!ts) return;
-        try {
-          const tsMs = new Date(ts).getTime();
-          if (isNaN(tsMs)) return;
-          // Task 5.5.2: toISOString() returns UTC format for day matching
-          const d = new Date(ts).toISOString().split('T')[0];
-          const day = dayArray.find(da => da.iso === d);
-          if (day) {
-            // Task 5.5.3: Avoid double-counting if aggregated stats are already present
-            if (!data.aggregated) {
-              day[type]++;
-            }
-            // Always track detailed counts for local breakdown if needed
-            const detailKey = `_${type}Detail`;
-            if (day[detailKey] !== undefined) day[detailKey]++;
-            
-            // Track artifact name frequency and time range
-            const name = getArtifactName(item);
-            if (name) {
-              if (!day._artifactNames[name]) {
-                day._artifactNames[name] = { count: 0, first: tsMs, last: tsMs };
+      heuristicFlatten(arr).forEach(item => {
+        const name = getForensicName(item);
+        const times = getForensicTimestamps(item);
+        
+        times.forEach(tsInfo => {
+          try {
+            const tsMs = new Date(cleanForensicDate(tsInfo.time)).getTime();
+            if (isNaN(tsMs)) return;
+            const d = new Date(cleanForensicDate(tsInfo.time)).toISOString().split('T')[0];
+            const day = dayArray.find(da => da.iso === d);
+            if (day) {
+              if (!data.aggregated) {
+                day[type]++;
               }
-              const entry = day._artifactNames[name];
-              entry.count++;
-              if (tsMs < entry.first) entry.first = tsMs;
-              if (tsMs > entry.last) entry.last = tsMs;
+              const detailKey = `_${type}Detail`;
+              if (day[detailKey] !== undefined) day[detailKey]++;
+              
+              if (name && name !== 'Unknown') {
+                if (!day._artifactNames[name]) {
+                  day._artifactNames[name] = { count: 0, first: tsMs, last: tsMs };
+                }
+                const entry = day._artifactNames[name];
+                entry.count++;
+                if (tsMs < entry.first) entry.first = tsMs;
+                if (tsMs > entry.last) entry.last = tsMs;
+              }
             }
-          }
-        } catch (e) {
-          // Ignore invalid dates
-        }
+          } catch (e) {}
+        });
       });
     };
 
@@ -188,6 +107,7 @@ function WeekView({ data, state }) {
     count(data.mft_usn, 'mft');
     count(data.prefetch, 'exec');
     count(data.bam, 'exec');
+    count(data.dam, 'exec');
     count(data.lnk, 'exec');
     
     if (data.srum_net) {
@@ -205,11 +125,7 @@ function WeekView({ data, state }) {
     count(data.recyclebin, 'recyclebin');
     
     if (data.registry) {
-      count(data.registry.open_save_mru, 'registry');
-      count(data.registry.last_save_mru, 'registry');
-      count(data.registry.shellbags, 'registry');
-      count(data.registry.recent_docs, 'registry');
-      count(data.registry.user_assist, 'registry');
+      Object.values(data.registry).forEach(table => count(table, 'registry'));
     }
     
     if (data.sessions) {
