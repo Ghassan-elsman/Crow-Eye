@@ -103,6 +103,7 @@ The project focuses on:
 ### Requirements
 These will be installed automatically when you run Crow Eye:
 - Python 3.12.4
+- **Node.js & npm** (Required for **Timeline Visualization**; please ensure they are installed on your machine)
 - Required packages:
   - PyQt5
   - python-registry
@@ -141,13 +142,10 @@ Crow-Claw is our specialized acquisition engine designed to collect and preserve
 ### 🔍 Offline Analysis (Offline Importer)
 The Offline Importer allows investigators to analyze artifacts collected from any source without needing a live connection to the target system.
 
-
-
 - **Universal Input**: Input a complete directory of artifacts or select individual files for analysis.
 - **Smart Identification (SCAN)**: Hit **SCAN** to walk through the source data; Crow-Eye automatically identifies and indexes every supported artifact type using forensic signatures. This updates the case's **Scan Index** metadata without moving any files.
 - **Forensic Preservation (COLLECT)**: After scanning, you can hit **📦 Collect Artifacts** to physically copy the identified files into your Case's `live_acquisition` folder, organizing them by type (e.g., Registry, Prefetch, Event Logs).
 - **Granular Control (PARSE)**: Use the **Parse Artifact** window to review identified items. Every tab displays all files of a specific type (e.g., AMCACHE, EVTX, PREFETCH), allowing you to select specific files or the entire set for parsing into the forensic database.
-
 
 #### ❓ What is the difference between SCAN and COLLECT?
 
