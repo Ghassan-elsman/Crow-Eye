@@ -129,9 +129,25 @@ class TimelineDialog(QDialog):
         react_build_path = os.path.join(base_dir, 'react-timeline', 'dist', 'index.html')
         
         if not os.path.exists(react_build_path):
-            QMessageBox.critical(self, "Error", 
-                                 f"React timeline build not found at:\n{react_build_path}\n\n"
-                                 f"Please run 'npm run build' inside timeline/react-timeline/")
+            if hasattr(self, 'loading_overlay') and self.loading_overlay:
+                self.loading_overlay.hide()
+            
+            err_msg = f"React timeline build not found at:\n{react_build_path}\n\nPlease run 'npm run build' inside timeline/react-timeline/"
+            QMessageBox.critical(self, "Build Missing", err_msg)
+            
+            # Load fallback HTML instead of leaving it blank
+            fallback_html = f"""
+            <html><body style="background-color: #0A0E1A; color: #E2E8F0; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center;">
+                <div>
+                    <h2 style="color: #ff5555;">Timeline Interface Missing</h2>
+                    <p>The React timeline application build was not found.</p>
+                    <code style="background: #1E293B; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-top: 10px; display: inline-block;">{react_build_path}</code>
+                    <p style="margin-top: 20px; color: #94A3B8;">Please ensure Node.js is installed and restart the app, or manually build the timeline.</p>
+                </div>
+            </body></html>
+            """
+            self.web_view.setHtml(fallback_html)
+            self.web_view.show()
             return
             
         url = QUrl.fromLocalFile(react_build_path)

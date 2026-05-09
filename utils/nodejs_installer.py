@@ -124,17 +124,31 @@ class NodeJSInstaller:
             print(f"  -> URL: {url}")
             print(f"  -> This may take a few minutes depending on your internet speed...")
             
-            def progress_hook(block_num, block_size, total_size):
-                """Show download progress."""
-                downloaded = block_num * block_size
-                if total_size > 0:
-                    percent = min(100, (downloaded * 100) // total_size)
-                    bar_length = 40
-                    filled = int(bar_length * percent / 100)
-                    bar = '█' * filled + '░' * (bar_length - filled)
-                    print(f"\r  -> Progress: [{bar}] {percent}%", end='', flush=True)
+            # Using Request to add a standard User-Agent, bypassing some restrictive firewalls/proxies
+            req = urllib.request.Request(
+                url, 
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+            )
             
-            urllib.request.urlretrieve(url, dest_path, reporthook=progress_hook)
+            with urllib.request.urlopen(req, timeout=30) as response, open(dest_path, 'wb') as out_file:
+                total_size = int(response.info().get('Content-Length', 0))
+                block_size = 8192
+                downloaded = 0
+                
+                while True:
+                    buffer = response.read(block_size)
+                    if not buffer:
+                        break
+                    out_file.write(buffer)
+                    downloaded += len(buffer)
+                    
+                    if total_size > 0:
+                        percent = min(100, (downloaded * 100) // total_size)
+                        bar_length = 40
+                        filled = int(bar_length * percent / 100)
+                        bar = '█' * filled + '░' * (bar_length - filled)
+                        print(f"\r  -> Progress: [{bar}] {percent}%", end='', flush=True)
+                        
             print()  # New line after progress bar
             print(f"  -> Download completed: {dest_path}")
             return True
