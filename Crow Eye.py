@@ -416,7 +416,9 @@ def ensure_timeline_built():
     timeline_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'timeline', 'react-timeline')
     dist_dir = os.path.join(timeline_dir, 'dist')
     
-    if not os.path.exists(dist_dir):
+    index_html = os.path.join(dist_dir, 'index.html')
+    
+    if not os.path.exists(index_html):
         print('\n' + '='*60)
         print('[INFO] Building Timeline React Application (First time setup)...')
         print('='*60)
@@ -455,7 +457,9 @@ def ensure_eye_ui_built():
     eye_ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eye', 'ui', 'react')
     dist_dir = os.path.join(eye_ui_dir, 'dist')
     
-    if not os.path.exists(dist_dir):
+    index_html = os.path.join(dist_dir, 'index.html')
+    
+    if not os.path.exists(index_html):
         print('\n' + '='*60)
         print('[INFO] Building Eye AI React Application (First time setup)...')
         print('='*60)
