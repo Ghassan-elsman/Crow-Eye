@@ -417,8 +417,23 @@ def ensure_timeline_built():
     dist_dir = os.path.join(timeline_dir, 'dist')
     
     index_html = os.path.join(dist_dir, 'index.html')
+    src_dir = os.path.join(timeline_dir, 'src')
     
-    if not os.path.exists(index_html):
+    # Check if we need to rebuild (if index.html is missing OR older than source files)
+    should_rebuild = not os.path.exists(index_html)
+    
+    if not should_rebuild and os.path.exists(src_dir):
+        # Check if any file in src/ is newer than index.html
+        build_mtime = os.path.getmtime(index_html)
+        for root_dir, _, files in os.walk(src_dir):
+            for f in files:
+                if os.path.getmtime(os.path.join(root_dir, f)) > build_mtime:
+                    should_rebuild = True
+                    print(f"  -> Detected change in {f}, triggering rebuild...")
+                    break
+            if should_rebuild: break
+            
+    if should_rebuild:
         print('\n' + '='*60)
         print('[INFO] Building Timeline React Application (First time setup)...')
         print('='*60)
@@ -433,20 +448,33 @@ def ensure_timeline_built():
                 print(Fore.YELLOW + "  -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
                 return
         except ImportError as e:
-            print(Fore.RED + f"  -> Failed to import Node.js installer: {e}" + Fore.RESET)
-            print(Fore.YELLOW + "  -> Please manually install Node.js from https://nodejs.org/" + Fore.RESET)
+            print(Fore.RED + f"  -> [ERROR] Failed to import Node.js installer: {e}" + Fore.RESET)
+            print(Fore.YELLOW + "  -> Please verify that 'utils/nodejs_installer.py' exists." + Fore.RESET)
+            return
+        except Exception as e:
+            print(Fore.RED + f"  -> [ERROR] Unexpected error during Node.js check: {e}" + Fore.RESET)
             return
         
         # Now build the timeline with npm
         try:
-            print("  -> Installing NPM dependencies...")
+            node_path = "N/A"
+            try:
+                node_path = subprocess.check_output(['where', 'node'] if IS_WINDOWS else ['which', 'node'], shell=IS_WINDOWS, text=True).strip().split('\n')[0]
+            except:
+                pass
+                
+            print(f"  -> Environment: Using Node.js from {node_path}")
+            print("  -> Installing NPM dependencies (this may take a minute)...")
+            # Running without capture_output to show real-time progress to the user
             subprocess.run(['npm', 'install'], cwd=timeline_dir, check=True, shell=IS_WINDOWS)
+            
             print("  -> Building React application...")
             subprocess.run(['npm', 'run', 'build'], cwd=timeline_dir, check=True, shell=IS_WINDOWS)
             print(Fore.GREEN + "  -> Timeline built successfully!" + Fore.RESET)
         except subprocess.CalledProcessError as e:
-            print(Fore.RED + f"  -> Failed to build Timeline: {e}" + Fore.RESET)
-            print(Fore.YELLOW + "  -> Please make sure Node.js and NPM are installed to use the Timeline feature." + Fore.RESET)
+            print(Fore.RED + f"  -> Failed to build Timeline. Exit code: {e.returncode}" + Fore.RESET)
+            print(Fore.YELLOW + "  -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
+            print(Fore.YELLOW + f"     {timeline_dir}" + Fore.RESET)
         except FileNotFoundError:
             print(Fore.RED + "  -> NPM not found. Please install Node.js to use the Timeline feature." + Fore.RESET)
     else:
@@ -458,8 +486,23 @@ def ensure_eye_ui_built():
     dist_dir = os.path.join(eye_ui_dir, 'dist')
     
     index_html = os.path.join(dist_dir, 'index.html')
+    src_dir = os.path.join(eye_ui_dir, 'src')
     
-    if not os.path.exists(index_html):
+    # Check if we need to rebuild (if index.html is missing OR older than source files)
+    should_rebuild = not os.path.exists(index_html)
+    
+    if not should_rebuild and os.path.exists(src_dir):
+        # Check if any file in src/ is newer than index.html
+        build_mtime = os.path.getmtime(index_html)
+        for root_dir, _, files in os.walk(src_dir):
+            for f in files:
+                if os.path.getmtime(os.path.join(root_dir, f)) > build_mtime:
+                    should_rebuild = True
+                    print(f"  -> Detected change in {f}, triggering rebuild...")
+                    break
+            if should_rebuild: break
+            
+    if should_rebuild:
         print('\n' + '='*60)
         print('[INFO] Building Eye AI React Application (First time setup)...')
         print('='*60)
@@ -486,8 +529,9 @@ def ensure_eye_ui_built():
             subprocess.run(['npm', 'run', 'build'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS)
             print(Fore.GREEN + "  -> Eye AI built successfully!" + Fore.RESET)
         except subprocess.CalledProcessError as e:
-            print(Fore.RED + f"  -> Failed to build Eye AI: {e}" + Fore.RESET)
-            print(Fore.YELLOW + "  -> Please make sure Node.js and NPM are installed to use the Eye AI feature." + Fore.RESET)
+            print(Fore.RED + f"  -> Failed to build Eye AI. Exit code: {e.returncode}" + Fore.RESET)
+            print(Fore.YELLOW + "  -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
+            print(Fore.YELLOW + f"     {eye_ui_dir}" + Fore.RESET)
         except FileNotFoundError:
             print(Fore.RED + "  -> NPM not found. Please install Node.js to use the Eye AI feature." + Fore.RESET)
     else:
