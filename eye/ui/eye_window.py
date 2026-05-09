@@ -324,8 +324,30 @@ class EYEAssistantWindow(QWidget):
     def _load_react_apps(self):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         react_build_path = os.path.join(base_dir, 'ui', 'react', 'dist', 'index.html')
+        
         if not os.path.exists(react_build_path):
-            raise FileNotFoundError("React build missing.")
+            from PyQt5.QtWidgets import QMessageBox
+            err_msg = "The EYE AI React interface could not be found.\n\nPlease ensure Node.js is installed and the React app is built successfully."
+            print(f"[Error] {err_msg}")
+            
+            # Show a warning dialog but don't crash
+            QMessageBox.warning(self, "EYE AI Build Missing", err_msg)
+            
+            # Load fallback HTML instead of raising an exception
+            fallback_html = f"""
+            <html><body style="background-color: #0B1220; color: #E2E8F0; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center;">
+                <div>
+                    <h2 style="color: #ff5555;">EYE AI Interface Missing</h2>
+                    <p>The React application build was not found at:</p>
+                    <code style="background: #1E293B; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-top: 10px; display: inline-block;">{react_build_path}</code>
+                    <p style="margin-top: 20px; color: #94A3B8;">Please restart Crow-Eye with an active internet connection to automatically download Node.js and build the GUI, or build it manually.</p>
+                </div>
+            </body></html>
+            """
+            self.chat_view.setHtml(fallback_html)
+            self.report_view.setHtml(fallback_html)
+            return
+
         url = QUrl.fromLocalFile(react_build_path)
         self.chat_view.load(QUrl(url.toString() + "?view=chat"))
         self.report_view.load(QUrl(url.toString() + "?view=report"))

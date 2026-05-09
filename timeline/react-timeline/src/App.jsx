@@ -19,7 +19,6 @@ import WeekView from './components/WeekView';
 import HeatmapView from './components/HeatmapView';
 import DetailPanel from './components/DetailPanel';
 import EventDetailModal from './components/EventDetailModal';
-import { DEV_CONFIG } from './utils/devConfig';
 import { heuristicFlatten } from './utils/dataUtils';
 import { getPrimaryTimestamp, getForensicName, cleanForensicDate, getName, normalizeForensicName } from './utils/formatters';
 
