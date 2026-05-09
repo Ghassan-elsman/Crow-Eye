@@ -85,7 +85,7 @@ class QueryWorker(QThread):
             self.result = self.context_manager.process_query(self.query, **params)
         except Exception as e:
             self.error = e
-            self.result = {"success": False, "error": str(e)}
+            self.result = {"success": False, "data": None, "error": str(e)}
         finally:
             if hasattr(self.context_manager, 'hitl_callback'):
                 del self.context_manager.hitl_callback
@@ -1488,9 +1488,25 @@ class EYEBridge(QObject):
         if hasattr(self, '_active_workers') and worker in self._active_workers:
             self._active_workers.remove(worker)
             worker.deleteLater()
-            
+
+        # Normalize the result into the standard {success, data, error} envelope.
+        # query_processor.process_query() returns the data dict directly (not wrapped),
+        # but _handle_generation_failure() returns {success, error, data} already wrapped.
+        # We unify both cases here so the React onQueryComplete handler is unambiguous.
+        if "success" in result and "data" in result:
+            # Already wrapped (e.g. from _handle_generation_failure)
+            envelope = result
+        else:
+            # Raw data dict from query_processor — wrap it
+            error = result.get("error")
+            envelope = {
+                "success": not bool(error),
+                "data": result,
+                "error": error
+            }
+
         # Emit signal for the frontend
-        self.query_complete.emit(json.dumps(result))
+        self.query_complete.emit(json.dumps(envelope))
         
     def _show_hitl_dialog(self, key, data, case_context, loop):
         """

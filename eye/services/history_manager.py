@@ -154,80 +154,84 @@ class HistoryManager:
         - Reconstructs history: first + preserved + summary + last 5 messages
         - Logs summarization events to audit trail
         """
+        # --- Phase 1: Read state under lock ---
         with self._lock:
             total_tokens = sum(m.get("token_count", 0) for m in self.history)
 
             # If we exceed budget and have enough messages to summarize
-            if total_tokens > self.cm.token_budget["conversation_history"] and len(self.history) > 3:
-                # Separate preserved messages from summarizable messages
-                # We always keep: first message + last 5 messages
-                # Everything in between is evaluated for preservation
-                preserved_msgs = []
-                summarizable_msgs = []
+            if not (total_tokens > self.cm.token_budget["conversation_history"] and len(self.history) > 3):
+                return  # Nothing to do
 
-                # Identify static boundaries to prevent fragmentation
-                first_msg = self.history[0]
-                last_msgs = self.history[-5:] if len(self.history) > 6 else self.history[1:]
-                mid_msgs = self.history[1:-5] if len(self.history) > 6 else []
+            # Identify static boundaries to prevent fragmentation
+            first_msg = self.history[0]
+            last_msgs = self.history[-5:] if len(self.history) > 6 else self.history[1:]
+            mid_msgs  = self.history[1:-5] if len(self.history) > 6 else []
 
-                for msg in mid_msgs:
-                    metadata = msg.get("metadata", {})
+            preserved_msgs    = []
+            summarizable_msgs = []
+            for msg in mid_msgs:
+                metadata = msg.get("metadata", {})
+                if metadata.get("preserve_evidence") or metadata.get("pinned"):
+                    preserved_msgs.append(msg)
+                else:
+                    summarizable_msgs.append(msg)
 
-                    # Check if message should be preserved
-                    if metadata.get("preserve_evidence") or metadata.get("pinned"):
-                        preserved_msgs.append(msg)
-                    else:
-                        summarizable_msgs.append(msg)
+        # If nothing to summarize, exit early (lock already released)
+        if not summarizable_msgs:
+            return
 
-                # Only summarize if we have non-preserved messages in the middle
-                if summarizable_msgs:
-                    summary_text = self._summarize_chunk(summarizable_msgs)
+        # --- Phase 2: LLM call OUTSIDE the lock ---
+        # _summarize_chunk() calls the model router which can take 10-60s.
+        # Holding the lock here would block all concurrent add_message() calls
+        # (e.g. status callback messages from the QueryWorker thread).
+        summary_text = self._summarize_chunk(summarizable_msgs)
 
-                    # Create summary message with metadata
-                    summary_msg = {
-                        "id": self._generate_message_id(),
-                        "role": "system",
-                        "content": summary_text,
-                        "timestamp": datetime.now().isoformat(),
-                        "token_count": self.cm.token_counter.count_tokens(summary_text),
-                        "metadata": {
-                            "is_summary": True,
-                            "summarized_count": len(summarizable_msgs)
+        # --- Phase 3: Write new history under lock ---
+        with self._lock:
+            summary_msg = {
+                "id": self._generate_message_id(),
+                "role": "system",
+                "content": summary_text,
+                "timestamp": datetime.now().isoformat(),
+                "token_count": self.cm.token_counter.count_tokens(summary_text),
+                "metadata": {
+                    "is_summary": True,
+                    "summarized_count": len(summarizable_msgs)
+                }
+            }
+
+            # Reconstruct history: first + preserved + summary + last messages
+            preserved_ids   = {m.get("id") for m in preserved_msgs}
+            deduped_last    = [m for m in last_msgs if m.get("id") not in preserved_ids]
+            self.history    = [first_msg] + preserved_msgs + [summary_msg] + deduped_last
+
+            # Log summarization events to audit trail for each summarized message
+            if hasattr(self.cm, 'truncation_auditor') and self.cm.truncation_auditor:
+                for msg in summarizable_msgs:
+                    message_hash = self._hash_message(msg.get("content", ""))
+                    self.cm.truncation_auditor.log_event(
+                        action="SUMMARIZED",
+                        message_id=msg.get("id", "unknown"),
+                        token_count=msg.get("token_count", 0),
+                        reason="budget_exceeded",
+                        message_hash=message_hash,
+                        metadata={
+                            "summary_msg_id": summary_msg["id"],
+                            "total_summarized": len(summarizable_msgs)
                         }
-                    }
-
-                    # Reconstruct history: first + preserved + summary + last messages
-                    # Deduplicate: remove any messages from last_msgs that are already in preserved_msgs
-                    preserved_ids = {m.get("id") for m in preserved_msgs}
-                    deduped_last_msgs = [m for m in last_msgs if m.get("id") not in preserved_ids]
-                    self.history = [first_msg] + preserved_msgs + [summary_msg] + deduped_last_msgs
-
-                    # Log summarization events to audit trail for each summarized message
-                    if hasattr(self.cm, 'truncation_auditor') and self.cm.truncation_auditor:
-                        for msg in summarizable_msgs:
-                            message_hash = self._hash_message(msg.get("content", ""))
-                            self.cm.truncation_auditor.log_event(
-                                action="SUMMARIZED",
-                                message_id=msg.get("id", "unknown"),
-                                token_count=msg.get("token_count", 0),
-                                reason="budget_exceeded",
-                                message_hash=message_hash,
-                                metadata={
-                                    "summary_msg_id": summary_msg["id"],
-                                    "total_summarized": len(summarizable_msgs)
-                                }
-                            )
-                        # Pillar 7: Auto-export JSON for machine readability
-                        self.cm.truncation_auditor.auto_export_json()
-
-                    # Track truncation count in context manager
-                    self.cm.truncation_count += len(summarizable_msgs)
-
-                    self.logger.info(
-                        f"Conversation history summarized due to token budget. "
-                        f"Summarized: {len(summarizable_msgs)} messages, "
-                        f"Preserved: {len(preserved_msgs)} messages"
                     )
+                # Pillar 7: Auto-export JSON for machine readability
+                self.cm.truncation_auditor.auto_export_json()
+
+            # Track truncation count in context manager
+            self.cm.truncation_count += len(summarizable_msgs)
+
+            self.logger.info(
+                f"Conversation history summarized due to token budget. "
+                f"Summarized: {len(summarizable_msgs)} messages, "
+                f"Preserved: {len(preserved_msgs)} messages"
+            )
+
 
     def _summarize_chunk(self, messages: List[Dict]) -> str:
         """Use the LLM to summarize a block of conversation."""

@@ -28,6 +28,55 @@ class VirtualTableWidget(QTableWidget, EnrichmentMixin):
     loading_finished = pyqtSignal()
     data_loaded = pyqtSignal()  # Emitted when data is loaded and ready for styling
     
+    # Enrichment Target Columns: Set of column names that should be enriched
+    # If empty, the heuristic in _initialize_intelligence will try to pick the best ones.
+    ENRICHMENT_TARGET_COLUMNS = {
+        # --- File & Path Identifiers ---
+        'target_path', 'Local_Path', 'Source_Name', 'Source_Path', 'executable_path', 
+        'key_path', 'program_path', 'app_path', 'file_path', 'folder_path', 'root_dir_path',
+        'lower_case_long_path', 'process_path', 'image_path', 'ShortcutPath', 
+        'ShortcutTargetPath', 'mare_path', 'install_location', 'original_path',
+        'recycle_bin_path', 'r_file_path', 'reconstructed_path', 'registry_path',
+        'parent_path', 'Relative_Path', 'Working_Directory', 'Icon_Location',
+        'Common_Path', 'manifest_path', 'package_full_name', 'bundle_manifest_path',
+        'srudb_path', 'uninstall_string', 'path', 'folder_path', 'icon', 'ShortcutAumid',
+
+        # --- User & System Identifiers ---
+        'SID', 'user_sid', 'sid', 'User', 'username', 'user_name', 'Owner_UID', 
+        'registered_owner', 'ComputerName', 'computer_name', 'ComputerNameInfo',
+        'Tracker_NetBIOS', 'ComputerName', 'registered_organization', 'product_id',
+        'Owner_GID', 'owner_id', 'security_id', 'profile_image_path',
+
+        # --- Network Identifiers ---
+        'MAC_Address', 'gateway_mac', 'mac_address', 'dhcp_server', 'dns_servers',
+        'network_name', 'server_name', 'share_name', 'interface_id', 'Tracker_MAC',
+        'ip_address', 'network_share', 'interface_luid', 'l2_profile_id',
+        'Birth_Object_ID_MAC', 'dhcp_server',
+
+        # --- Hardware & Device Identifiers ---
+        'device_id', 'instance_id', 'parent_id', 'serial_number', 'vendor_id', 
+        'product_id', 'volume_guid', 'model_id', 'class_guid', 'Device_ID',
+        'Volume_Serial', 'Volume_Label', 'volume_name', 'Known_Folder_GUID',
+        'Birth_Volume_ID', 'Birth_Object_ID', 'DestList_New_Volume_ID', 
+        'DestList_New_Object_ID', 'LNK_Class_ID', 'class_id', 'interface_luid',
+
+        # --- Forensic & Process Identifiers ---
+        'Value', 'Name', 'Filename', 'file_name', 'executable_name', 'fn_filename',
+        'original_file_name', 'file_id', 'program_id', 'program_instance_id',
+        'Process Name', 'app_name', 'program_name', 'service_name', 'display_name',
+        'friendly_name', 'model_name', 'mare_name', 'search_term', 'command',
+        'EventID', 'Source', 'TaskCategory', 'AppID', 'record_number', 
+        'mft_record_number', 'mft_record_number', 'frn', 'parent_frn', 
+        'parent_record', 'usn_event_id', 'entry_hash', 'original_filename',
+        'random_i_filename', 'random_r_filename', 'ShortcutAumid', 'ShortcutProgramId',
+        'driver_name', 'driver_id', 'mare_id', 'uup_id', 'uup_name', 'subkey_name',
+        'folder_name', 'short_name',
+        
+        # --- Generic but Pattern-Heavy Columns ---
+        'row_data', 'subkey', 'data', 'id', 'version', 'bin_file_version', 
+        'bin_product_version', 'display_version', 'driver_version', 'product_version'
+    }
+
     def __init__(
         self,
         data_loader,
@@ -623,6 +672,30 @@ class VirtualTableWidget(QTableWidget, EnrichmentMixin):
         except Exception as e:
             self.logger.error(f"Error applying styles: {e}")
     
+    def set_intelligence_db_path(self, case_directory: str):
+        """
+        Manually set the path to the intelligence database.
+        
+        Args:
+            case_directory: Root directory of the case
+        """
+        intel_db = os.path.join(case_directory, "Crow_Intelligence.db")
+        if os.path.exists(intel_db):
+            # Update the mixin state
+            super().set_intelligence_db_path(case_directory)
+            self._intelligence_initialized = True
+            
+            # Re-attach if we have a connection
+            if self.data_loader and self.data_loader.connection:
+                try:
+                    cursor = self.data_loader.connection.cursor()
+                    self.attach_intelligence_db(cursor)
+                    self.logger.info(f"Attached intelligence brain from {intel_db}")
+                except Exception as e:
+                    self.logger.error(f"Failed to attach intelligence: {e}")
+        else:
+            self.logger.warning(f"Intelligence database not found at {intel_db}")
+
     def _on_item_double_clicked(self, item: QTableWidgetItem):
         """
         Handle double-click on table item to show row details.
@@ -713,17 +786,28 @@ class VirtualTableWidget(QTableWidget, EnrichmentMixin):
                     self.logger.info(f"Found the secret sauce at: {intel_db}")
                     
                     # Heuristic: Pick the best column to enrich
-                    # We look for path-like columns or common identifiers
-                    target_candidates = [
-                        'target_path', 'Local_Path', 'Source_Name', 'executable_path', 
-                        'key_path', 'SID', 'MAC_Address', 'Value', 'Name', 'Filename'
-                    ]
-                    
-                    for candidate in target_candidates:
-                        if candidate in self.columns:
+                    # We look for common identifiers defined in ENRICHMENT_TARGET_COLUMNS
+                    found_target = False
+                    for candidate in self.columns:
+                        if candidate in self.ENRICHMENT_TARGET_COLUMNS:
                             self.enrichment_column = candidate
                             self.logger.info(f"Choosing '{candidate}' as the enrichment target. Good choice!")
+                            found_target = True
                             break
+                    
+                    # If still not found, try common patterns
+                    if not found_target:
+                        pattern_candidates = [
+                            'path', 'name', 'sid', 'mac', 'hash', 'user', 'id'
+                        ]
+                        for pattern in pattern_candidates:
+                            for col in self.columns:
+                                if pattern in col.lower():
+                                    self.enrichment_column = col
+                                    self.logger.info(f"Pattern match: Choosing '{col}' for enrichment.")
+                                    found_target = True
+                                    break
+                            if found_target: break
                     
                     # If still None, pick the first one (usually Name/Date)
                     if not self.enrichment_column and self.columns:

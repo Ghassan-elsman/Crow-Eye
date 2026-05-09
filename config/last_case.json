@@ -1,0 +1,42 @@
+{
+    "case_name": "7.5.2026",
+    "opened_date": "2026-05-08T11:01:03.354070",
+    "paths": {
+        "case_root": "C:/Users/Ghass/Downloads\\7.5.2026",
+        "artifacts_dir": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts",
+        "live_acquisition_dir": "C:/Users/Ghass/Downloads\\7.5.2026\\live_acquisition",
+        "c_ajl_lnk_dir": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\C_AJL_Lnk",
+        "registry_dir": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\Registry_Hives",
+        "prefetch_dir": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\Prefetch",
+        "mft_dir": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\MFT",
+        "usn_dir": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\USN_Journal",
+        "databases": {
+            "registry": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\registry_data.db",
+            "lnk": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\LnkDB.db",
+            "logs": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\Log_Claw.db",
+            "prefetch": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\prefetch_data.db",
+            "shimcache": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\shimcache.db",
+            "amcache": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\amcache.db",
+            "recyclebin": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\recyclebin_analysis.db",
+            "srum": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\srum_data.db",
+            "mft": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\mft_claw_analysis.db",
+            "usn": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\USN_journal.db",
+            "mft_usn_correlated": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\mft_usn_correlated_analysis.db"
+        }
+    },
+    "databases": {
+        "registry": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\registry_data.db",
+        "lnk": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\LnkDB.db",
+        "logs": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\Log_Claw.db",
+        "prefetch": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\prefetch_data.db",
+        "shimcache": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\shimcache.db",
+        "amcache": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\amcache.db",
+        "recyclebin": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\recyclebin_analysis.db",
+        "srum": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\srum_data.db",
+        "mft": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\mft_claw_analysis.db",
+        "usn": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\USN_journal.db",
+        "mft_usn_correlated": "C:/Users/Ghass/Downloads\\7.5.2026\\Target_Artifacts\\mft_usn_correlated_analysis.db"
+    },
+    "windows_partition": "C:",
+    "partition_detection_timestamp": "2026-05-08T11:01:03.379035"
+}

@@ -76,17 +76,28 @@ const ChatInterface: React.FC = () => {
         unsubQC = onQueryComplete((json: string) => {
           try {
             const result = JSON.parse(json);
-            if (result.error && !(result.data?.action_chips)) {
+            const data = result.data || result;
+
+            // Show a plain error message only if there is no recoverable data at all
+            if (result.error && !data?.response && !data?.content && !data?.action_chips) {
               appendAssistantMessage(`Error: ${result.error}`);
               setIsLoading(false);
               setThinkingSteps([]);
               return;
             }
-            const data = result.data || result;
+
+            // Resolve the text content — fall back to a placeholder so the bubble
+            // is never blank even when the cloud API returns an empty text part
+            // alongside action chips (e.g. Gemini function-call-only responses).
+            const responseText =
+              data.response ||
+              data.content ||
+              (result.error ? `⚠️ ${result.error}` : '');
+
             const msg: Message = {
               id: `assistant-${Date.now()}`,
               role: 'assistant',
-              content: data.response || data.content || (result.error ? `Connection Failed: ${result.error}` : ''),
+              content: responseText,
               timestamp: new Date().toISOString(),
               data_viewer:  data.data_viewer  || undefined,
               action_chips: data.action_chips || undefined,

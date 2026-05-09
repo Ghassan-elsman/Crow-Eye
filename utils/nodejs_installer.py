@@ -48,13 +48,30 @@ class NodeJSInstaller:
     
     def is_nodejs_installed(self) -> bool:
         """Check if Node.js and npm are already installed and accessible."""
+        # First, try to see if it's already in the PATH
+        if self._check_node_in_path():
+            return True
+            
+        # Second, try to bootstrap from local installation directory
+        if self.install_dir.exists():
+            print(f"  -> Found local Node.js directory at {self.install_dir}")
+            if self._setup_environment():
+                # Re-check after adding to PATH
+                if self._check_node_in_path():
+                    return True
+        
+        return False
+
+    def _check_node_in_path(self) -> bool:
+        """Check if 'node' and 'npm' are currently in the PATH and working."""
         try:
             # Check node version
             node_result = subprocess.run(
                 ['node', '--version'],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                shell=platform.system().lower() == 'windows'
             )
             
             # Check npm version
@@ -62,13 +79,14 @@ class NodeJSInstaller:
                 ['npm', '--version'],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                shell=platform.system().lower() == 'windows'
             )
             
             if node_result.returncode == 0 and npm_result.returncode == 0:
                 node_version = node_result.stdout.strip()
                 npm_version = npm_result.stdout.strip()
-                print(f"  -> Node.js {node_version} and npm {npm_version} already installed")
+                print(f"  -> Node.js {node_version} and npm {npm_version} detected")
                 return True
                 
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):

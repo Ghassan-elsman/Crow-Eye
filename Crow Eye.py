@@ -450,8 +450,50 @@ def ensure_timeline_built():
     else:
         print("  -> Timeline React application already built")
 
+def ensure_eye_ui_built():
+    """Ensure the Eye AI React frontend is built and ready."""
+    eye_ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eye', 'ui', 'react')
+    dist_dir = os.path.join(eye_ui_dir, 'dist')
+    
+    if not os.path.exists(dist_dir):
+        print('\n' + '='*60)
+        print('[INFO] Building Eye AI React Application (First time setup)...')
+        print('='*60)
+        
+        # First, ensure Node.js and npm are installed
+        try:
+            from utils.nodejs_installer import ensure_nodejs_installed
+            
+            if not ensure_nodejs_installed():
+                print(Fore.YELLOW + "  -> Node.js installation failed or incomplete" + Fore.RESET)
+                print(Fore.YELLOW + "  -> Eye AI Assistant features will not be available" + Fore.RESET)
+                print(Fore.YELLOW + "  -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
+                return
+        except ImportError as e:
+            print(Fore.RED + f"  -> Failed to import Node.js installer: {e}" + Fore.RESET)
+            print(Fore.YELLOW + "  -> Please manually install Node.js from https://nodejs.org/" + Fore.RESET)
+            return
+        
+        # Now build the Eye UI with npm
+        try:
+            print("  -> Installing NPM dependencies for Eye AI...")
+            subprocess.run(['npm', 'install'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS)
+            print("  -> Building Eye AI React application...")
+            subprocess.run(['npm', 'run', 'build'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS)
+            print(Fore.GREEN + "  -> Eye AI built successfully!" + Fore.RESET)
+        except subprocess.CalledProcessError as e:
+            print(Fore.RED + f"  -> Failed to build Eye AI: {e}" + Fore.RESET)
+            print(Fore.YELLOW + "  -> Please make sure Node.js and NPM are installed to use the Eye AI feature." + Fore.RESET)
+        except FileNotFoundError:
+            print(Fore.RED + "  -> NPM not found. Please install Node.js to use the Eye AI feature." + Fore.RESET)
+    else:
+        print("  -> Eye AI React application already built")
+
 # Build the Timeline if necessary
 ensure_timeline_built()
+
+# Build the Eye AI if necessary
+ensure_eye_ui_built()
 
 # Handle pywin32 post-install if needed (Windows only)
 def handle_pywin32_postinstall():
@@ -11109,13 +11151,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     
                     print(f"[Info] Refreshed {count} virtual tables with new intelligence mappings.")
                     
-                    # Also refresh regular tables
-                    self.refresh_all_tables()
+                    # Also refresh regular tables with new data
+                    self.load_all_data()
                     
                 except Exception as e:
                     print(f"[Error] Failed to refresh tables after dynamic linking: {str(e)}")
                     # Fallback to general refresh
-                    self.refresh_all_tables()
+                    self.load_all_data()
                 
         except Exception as e:
             print(f"[Error] Failed to open Dynamic Linking window: {str(e)}")

@@ -102,29 +102,58 @@ class GeminiBackend(LLMBackend):
                     })
             raw_messages.append({"role": "user", "content": user_message})
             
-            # Sanitize messages to ensure alternating user/model roles (Gemini is strict)
-            # Also merges any system messages found in history.
+            # Extract and collect all system-role messages from raw history BEFORE sanitization.
+            # The base _sanitize_messages converts system→user, so we must grab them first.
+            extra_system_parts = []
+            for msg in (history or []):
+                if msg.get("role") == "system":
+                    extra = msg.get("content", "").strip()
+                    if extra and extra != system_prompt:
+                        extra_system_parts.append(extra)
+
+            # Sanitize the remaining (non-system) messages for strict role alternation
             sanitized = self._sanitize_messages(raw_messages)
-            
-            # Extract system messages for config, and map others to user/model roles
+
+            # Build the final system instruction (base prompt + any system history messages)
             final_system = system_prompt
+            if extra_system_parts:
+                final_system += "\n\n" + "\n\n".join(extra_system_parts)
+
+            # Convert sanitized messages to Gemini's contents format (skip system role,
+            # which _sanitize_messages may preserve as the first item)
             contents = []
             for msg in sanitized:
                 if msg["role"] == "system":
-                    if msg["content"] != system_prompt:
-                        final_system += "\n\n" + msg["content"]
+                    # Merge any remaining system content into final_system
+                    extra = msg.get("content", "").strip()
+                    if extra and extra != system_prompt:
+                        final_system += "\n\n" + extra
                 else:
                     contents.append({
-                        "role": "user" if msg["role"] == "user" else "model", 
+                        "role": "user" if msg["role"] == "user" else "model",
                         "parts": [{"text": msg["content"]}]
                     })
-            
-            # Update config with merged system instructions
+
+            # Guard: Gemini raises InvalidArgument if contents is empty.
+            # This can happen when history is None/empty and all messages were stripped.
+            if not contents:
+                contents = [{"role": "user", "parts": [{"text": user_message}]}]
+
+            # Update config with the fully merged system instruction
             config["system_instruction"] = final_system
 
             # Send the request to Gemini and get the response
             resp = self.client.models.generate_content(model=self.model_name, contents=contents, config=config)
-            content = resp.text or ""
+            
+            # Safely extract text — the SDK raises ValueError when the response contains
+            # only function calls and no text part. We guard against that here.
+            try:
+                content = resp.text or ""
+            except Exception as text_err:
+                # This is expected when Gemini returns pure tool calls with no text
+                self.logger.debug(f"resp.text unavailable (likely pure function-call response): {text_err}")
+                content = ""
+            
             tool_calls = []
             
             # Extract function calls from response parts
