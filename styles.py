@@ -97,6 +97,67 @@ class CrowEyeStyles:
     # STYLE CONSTANTS - Using Colors class values for consistency
     # ============================================================================
     
+    # Dynamic Linking Window Main Container Style
+    DYNAMIC_LINKING_WINDOW_STYLE = f"""
+        QDialog {{
+            background-color: {Colors.BG_PRIMARY};
+            color: {Colors.TEXT_PRIMARY};
+        }}
+        QLabel {{
+            color: {Colors.TEXT_PRIMARY};
+            font-family: 'Segoe UI', sans-serif;
+        }}
+        QFrame {{
+            background-color: {Colors.BG_PANELS};
+            border: 1px solid {Colors.BORDER_SUBTLE};
+            border-radius: 8px;
+        }}
+        QTextEdit, QLineEdit, QComboBox {{
+            background-color: {Colors.BG_TABLES};
+            color: {Colors.TEXT_PRIMARY};
+            border: 1px solid {Colors.BORDER_SUBTLE};
+            border-radius: 4px;
+            padding: 5px;
+        }}
+        QTextEdit:focus, QLineEdit:focus, QComboBox:focus {{
+            border: 1px solid {Colors.ACCENT_CYAN};
+        }}
+        QProgressBar {{
+            background-color: {Colors.BG_TABLES};
+            border: 1px solid {Colors.BORDER_SUBTLE};
+            border-radius: 5px;
+            text-align: center;
+            color: {Colors.TEXT_PRIMARY};
+        }}
+        QProgressBar::chunk {{
+            background-color: {Colors.ACCENT_CYAN};
+            border-radius: 4px;
+        }}
+    """
+
+    # Cascading Select Button (Hierarchical Dropdown)
+    CASCADING_SELECT_BUTTON = f"""
+        QPushButton {{
+            background-color: {Colors.BG_TABLES};
+            color: {Colors.TEXT_PRIMARY};
+            border: 1px solid {Colors.BORDER_SUBTLE};
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-family: 'Segoe UI', sans-serif;
+            text-align: left;
+        }}
+        QPushButton:hover {{
+            border-color: {Colors.ACCENT_CYAN};
+            background-color: {Colors.BG_PANELS};
+        }}
+        QPushButton::menu-indicator {{
+            subcontrol-origin: padding;
+            subcontrol-position: center right;
+            right: 10px;
+        }}
+    """
+
     # Additional UI-specific colors
     ACCENT_GLOW = "rgba(0, 255, 255, 0.3)"  # Neon cyan glow for hover effects
     ACCENT_GLOW_STRONG = "rgba(0, 255, 255, 0.5)"  # Stronger glow for active elements
@@ -1884,6 +1945,32 @@ class CrowEyeStyles:
         }
     """
 
+    # Dynamic Linking Button Style (Cyan/Teal - Intelligence & Mapping)
+    DYNAMIC_LINK_BUTTON = """
+        QPushButton {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                      stop:0 #0891B2, stop:1 #0E7490);
+            color: #FFFFFF;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 8px 15px;
+            font-weight: 600;
+            font-size: 11px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 120px;
+        }
+        QPushButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                      stop:0 #22D3EE, stop:1 #0891B2);
+            border: 1px solid #00FFFF;
+        }
+        QPushButton:pressed {
+            background: #155E75;
+        }
+    """
+
     # Correlation Button Style (Purple/Violet - Analysis & Data Science)
     CORRELATION_BUTTON = """
         QPushButton {
@@ -1970,6 +2057,32 @@ class CrowEyeStyles:
         }
         QPushButton:pressed {
             background: #B45309;
+        }
+    """
+
+    # EYE AI Assistant Button Style (Dark Blue)
+    EYE_BUTTON = """
+        QPushButton {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #1E3A8A, stop:1 #1E40AF);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 600;
+            font-size: 13px;
+            font-family: 'Segoe UI', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 120px;
+        }
+        QPushButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                                      stop:0 #2563EB, stop:1 #3B82F6);
+            border: 1px solid #FFFFFF;
+        }
+        QPushButton:pressed {
+            background: #1E3A8A;
         }
     """
 

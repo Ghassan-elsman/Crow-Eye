@@ -20,7 +20,7 @@ class ArtifactType(Enum):
     REGISTRY_HIVES = "Registry"
     PREFETCH = "Prefetch"
     AMCACHE = "AmCache"
-    JUMPLISTS_LNK = "JumpLists"
+    JUMPLISTS_LNK = "link_jumplist"
     MFT = "MFT"
     USN_JOURNAL = "USN"
     RECYCLE_BIN = "RecycleBin"
@@ -112,7 +112,7 @@ class Artifact:
 
             if "*" in expanded_path or "?" in expanded_path:
                 # Expand wildcards
-                matches = glob.glob(expanded_path)
+                matches = glob.glob(expanded_path, recursive=True)
                 expanded.extend(matches)
             else:
                 expanded.append(expanded_path)
@@ -212,15 +212,9 @@ def create_jumplists_lnk_artifact() -> Artifact:
         name="Jump Lists & LNK Files",
         artifact_type=ArtifactType.JUMPLISTS_LNK,
         default_paths=[
-            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent\*",
+            r"{PARTITION}\Users\*\**\*.lnk",
             r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations\*",
             r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations\*",
-            r"{PARTITION}\Users\*\Desktop\*",
-            r"{PARTITION}\Users\Public\Desktop\*",
-            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Recent\*",
-            r"{PARTITION}\Users\*\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\**",
-            r"{PARTITION}\Users\*\AppData\Local\Microsoft\Windows\ApplicationShortcuts\*",
-            r"{PARTITION}\Users\*\AppData\Local\Microsoft\Windows\Explorer\*.db",
         ],
         description="Shortcut files (.lnk) and Jump Lists tracking recently accessed files, shortcuts, and application usage patterns",
         required_admin=False,

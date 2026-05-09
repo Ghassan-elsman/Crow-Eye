@@ -8,6 +8,7 @@ automatic remediation attempts.
 
 import ctypes
 import logging
+import os
 import re
 import subprocess
 import time
@@ -403,7 +404,7 @@ class ShadowCopyManager:
             if os.name == 'nt':
                 is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
             else:
-                is_admin = os.getuid() == 0
+                is_admin = getattr(os, 'getuid', lambda: 1)() == 0
             checks["admin_privileges"] = is_admin
             
             if not is_admin:
@@ -702,7 +703,7 @@ class ShadowCopyManager:
                 stdout="",
                 stderr=f"Unexpected error: {str(e)}",
                 duration_seconds=duration,
-                command=command
+                command="powershell/wmic shadow copy creation"
             )
     
     def _verify_creation_success(self, volume: str, before_count: int) -> bool:

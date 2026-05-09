@@ -1599,7 +1599,7 @@ class OfflineImporterGUI(QMainWindow):
             "All Types",
             "Registry",
             "Prefetch",
-            "JumpLists",
+            "link_jumplist",
             "MFT",
             "USN",
             "RecycleBin",

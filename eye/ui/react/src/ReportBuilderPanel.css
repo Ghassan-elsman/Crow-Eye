@@ -1,0 +1,173 @@
+/**
+ * Report Builder Panel Styles
+ * Cyberpunk dashboard theme matching the unified dissection
+ */
+
+:root {
+  --bg: #0a0c10; --bg1: #0f1218; --bg2: #151a22; --bg3: #1c2330; --border: #1e2a3a; --border2: #2a3a50; --tx: #e8edf5; --tx2: #8899aa; --tx3: #4a5a6a;
+  --accent: #f97316; --accent-dim: rgba(249, 115, 22, 0.1); --header-color: #f97316; --header-dim: #3d1a0a; --identity-color: #06b6d4; --identity-dim: #0a1d2e;
+  --times-color: #ec4899; --times-dim: #2a0a1a; --props-color: #10b981; --props-dim: #0a2a1a; --danger: #ff4d6a;
+}
+
+/* Main container */
+.report-builder-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: var(--bg);
+  color: var(--tx);
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+}
+
+/* Toolbar */
+.report-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: var(--bg1);
+  border-bottom: 2px solid var(--accent);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.toolbar-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.report-title {
+  margin: 0;
+  font-family: 'Syne', sans-serif;
+  font-size: 1.2em;
+  font-weight: 800;
+  color: var(--tx);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.report-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--tx2);
+  font-family: 'Space Mono', monospace;
+  text-transform: uppercase;
+}
+
+.block-count {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.toolbar-right {
+  display: flex;
+  gap: 12px;
+}
+
+/* Export buttons */
+.export-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--tx2);
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.export-button:hover:not(:disabled) {
+  background: var(--bg3);
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.export-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  border-color: var(--border2);
+}
+
+/* Report content area */
+.report-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 30px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) var(--bg);
+}
+
+/* Blocks container */
+.blocks-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Loading state */
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 20px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 100px 40px;
+  text-align: center;
+  background: var(--bg1);
+  border: 1px dashed var(--border2);
+  border-radius: 12px;
+}
+
+.empty-icon {
+  font-size: 3em;
+  margin-bottom: 20px;
+  filter: grayscale(1) opacity(0.3);
+}
+
+.empty-state h3 {
+  margin: 0 0 10px 0;
+  font-size: 1.2em;
+  color: var(--tx2);
+}
+
+.empty-state p {
+  font-size: 0.9em;
+  color: var(--tx3);
+  max-width: 400px;
+}

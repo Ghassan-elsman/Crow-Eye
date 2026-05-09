@@ -7,6 +7,7 @@ and provider/writer status checks.
 """
 
 import logging
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -1619,7 +1620,7 @@ class VSSDiagnostics:
             if os.name == 'nt':
                 is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
             else:
-                is_admin = os.getuid() == 0
+                is_admin = getattr(os, 'getuid', lambda: 1)() == 0
             logger.info(f"[VSSDiagnostics] Administrator privileges: {is_admin}")
         except Exception as e:
             logger.warning(f"[VSSDiagnostics] Could not check admin privileges: {e}")

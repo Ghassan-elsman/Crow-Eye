@@ -1,0 +1,82 @@
+{
+  "parser_mappings": {
+    "prefetch": {
+      "parser_file": "Artifacts_Collectors/Prefetch_claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_PrefetchClaw.py",
+      "database": "prefetch_data.db",
+      "table": "prefetch_data",
+      "description": "Windows Prefetch file parser for program execution evidence"
+    },
+    "mft": {
+      "parser_file": "Artifacts_Collectors/MFT and USN journal/MFT_Claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_MFTClaw.py",
+      "database": "mft_data.db",
+      "table": "mft_data",
+      "description": "Master File Table parser for NTFS file system metadata"
+    },
+    "amcache": {
+      "parser_file": "Artifacts_Collectors/amcacheparser.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_AmCacheClaw.py",
+      "database": "amcache_data.db",
+      "table": "amcache_data",
+      "description": "Amcache.hve parser for application execution tracking"
+    },
+    "shimcache": {
+      "parser_file": "Artifacts_Collectors/shimcache_claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_ShimCacheClaw.py",
+      "database": "shimcache_data.db",
+      "table": "shimcache_data",
+      "description": "ShimCache (Application Compatibility Cache) parser"
+    },
+    "registry": {
+      "parser_file": "Artifacts_Collectors/Regclaw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_RegClaw.py",
+      "database": "registry_data.db",
+      "table": "registry_data",
+      "description": "Windows Registry hive parser"
+    },
+    "usn": {
+      "parser_file": "Artifacts_Collectors/MFT and USN journal/USN_Claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_USNClaw.py",
+      "database": "usn_data.db",
+      "table": "usn_data",
+      "description": "USN Journal parser for NTFS change log"
+    },
+    "jumplist": {
+      "parser_file": "Artifacts_Collectors/A_CJL_LNK_Claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_ACJLClaw.py",
+      "database": "jumplist_data.db",
+      "table": "jumplist_data",
+      "description": "Jump List and LNK file parser"
+    },
+    "recyclebin": {
+      "parser_file": "Artifacts_Collectors/recyclebin_claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_RecycleBinClaw.py",
+      "database": "recyclebin_data.db",
+      "table": "recyclebin_data",
+      "description": "Recycle Bin artifact parser"
+    },
+    "srum": {
+      "parser_file": "Artifacts_Collectors/SRUM_Claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_SRUM_Claw.py",
+      "database": "srum_data.db",
+      "table": "srum_data",
+      "description": "System Resource Usage Monitor parser"
+    },
+    "eventlog": {
+      "parser_file": "Artifacts_Collectors/WinLog_Claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_WinLog_Claw.py",
+      "database": "eventlog_data.db",
+      "table": "eventlog_data",
+      "description": "Windows Event Log (.evtx) parser"
+    }
+  },
+  "consolidated_database": {
+    "name": "Log_Claw.db",
+    "description": "Consolidated database containing all parsed artifacts",
+    "note": "Alternative to querying individual artifact databases"
+  },
+  "github_base_url": "https://github.com/crow-eye/crow-eye",
+  "version": "1.0",
+  "last_updated": "2024"
+}

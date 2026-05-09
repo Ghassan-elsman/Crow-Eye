@@ -48,7 +48,7 @@ class ArtifactValidator:
             'Prefetch': 32,    # Reduced from 84 - some prefetch files can be smaller
             'MFT': 512,        # Reduced from 1024 - allow smaller MFT fragments
             'AmCache': 512,    # Reduced from 4096 - AmCache is a registry hive
-            'JumpLists': 32,   # Minimum jump list size
+            'link_jumplist': 32,   # Minimum jump list size
             'RecycleBin': 24,  # Minimum recycle bin metadata size
         }
         
@@ -58,7 +58,7 @@ class ArtifactValidator:
             'Prefetch': 10 * 1024 * 1024,   # 10 MB max for prefetch
             'MFT': 10 * 1024 * 1024 * 1024, # 10 GB max for MFT
             'AmCache': 500 * 1024 * 1024,   # 500 MB max for AmCache
-            'JumpLists': 50 * 1024 * 1024,  # 50 MB max for jump lists
+            'link_jumplist': 50 * 1024 * 1024,  # 50 MB max for jump lists
             'RecycleBin': 10 * 1024 * 1024, # 10 MB max for recycle bin
         }
     

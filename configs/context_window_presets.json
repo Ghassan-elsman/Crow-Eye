@@ -1,0 +1,111 @@
+{
+  "presets": {
+    "gpt-4": {
+      "max_total_tokens": 8000,
+      "token_budget": {
+        "system_prompt": 1500,
+        "rag_context": 1500,
+        "conversation_history": 4000,
+        "tool_definitions": 500,
+        "response_buffer": 500
+      }
+    },
+    "gpt-4-32k": {
+      "max_total_tokens": 30000,
+      "token_budget": {
+        "system_prompt": 3000,
+        "rag_context": 5000,
+        "conversation_history": 18000,
+        "tool_definitions": 2000,
+        "response_buffer": 2000
+      }
+    },
+    "gpt-4-turbo": {
+      "max_total_tokens": 120000,
+      "token_budget": {
+        "system_prompt": 5000,
+        "rag_context": 10000,
+        "conversation_history": 100000,
+        "tool_definitions": 3000,
+        "response_buffer": 2000
+      }
+    },
+    "claude-2": {
+      "max_total_tokens": 90000,
+      "token_budget": {
+        "system_prompt": 5000,
+        "rag_context": 10000,
+        "conversation_history": 70000,
+        "tool_definitions": 3000,
+        "response_buffer": 2000
+      }
+    },
+    "claude-3": {
+      "max_total_tokens": 180000,
+      "token_budget": {
+        "system_prompt": 5000,
+        "rag_context": 15000,
+        "conversation_history": 155000,
+        "tool_definitions": 3000,
+        "response_buffer": 2000
+      }
+    },
+    "gemini-pro": {
+      "max_total_tokens": 30000,
+      "token_budget": {
+        "system_prompt": 3000,
+        "rag_context": 5000,
+        "conversation_history": 18000,
+        "tool_definitions": 2000,
+        "response_buffer": 2000
+      }
+    },
+    "ollama": {
+      "max_total_tokens": 4000,
+      "token_budget": {
+        "system_prompt": 1000,
+        "rag_context": 1000,
+        "conversation_history": 1500,
+        "tool_definitions": 300,
+        "response_buffer": 200
+      }
+    },
+    "llama": {
+      "max_total_tokens": 4000,
+      "token_budget": {
+        "system_prompt": 1000,
+        "rag_context": 1000,
+        "conversation_history": 1500,
+        "tool_definitions": 300,
+        "response_buffer": 200
+      }
+    },
+    "lm_studio": {
+      "max_total_tokens": 4000,
+      "token_budget": {
+        "system_prompt": 1000,
+        "rag_context": 1000,
+        "conversation_history": 1500,
+        "tool_definitions": 300,
+        "response_buffer": 200
+      }
+    },
+    "vllm": {
+      "max_total_tokens": 4000,
+      "token_budget": {
+        "system_prompt": 1000,
+        "rag_context": 1000,
+        "conversation_history": 1500,
+        "tool_definitions": 300,
+        "response_buffer": 200
+      }
+    }
+  },
+  "history_management_defaults": {
+    "sliding_window_size": 10,
+    "preserve_first_message": true,
+    "preserve_tool_messages": true,
+    "truncation_strategy": "sliding_window",
+    "max_undo_stack_size": 50
+  }
+}

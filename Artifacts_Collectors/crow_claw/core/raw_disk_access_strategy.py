@@ -1,3 +1,4 @@
+# pylint: disable=no-member
 """
 Raw disk access strategy implementation.
 
@@ -78,7 +79,7 @@ class RawDiskAccessStrategy(FileAccessStrategy):
                 return False
         else:
             try:
-                return os.getuid() == 0
+                return getattr(os, 'getuid', lambda: 1)() == 0
             except:
                 return False
     
@@ -114,7 +115,7 @@ class RawDiskAccessStrategy(FileAccessStrategy):
         
         # Check artifact type
         artifact_type_lower = artifact_type.lower()
-        can_handle_result = artifact_type_lower in ["mft", "usn_journal"]
+        can_handle_result = artifact_type_lower in ["mft", "usn", "usn_journal"]
         self._report_progress(f"[RAW_DISK] can_handle result: {can_handle_result} (artifact_type_lower={artifact_type_lower})")
         return can_handle_result
     

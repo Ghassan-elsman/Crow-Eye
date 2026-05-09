@@ -3,6 +3,7 @@ Database Search Dialog for Crow Eye - Unified Database Search System.
 
 Provides comprehensive database-driven search functionality across multiple
 forensic artifact databases with result navigation, export, and real-time search.
+It's like Google, but for people who like computers and suspect everyone.
 
 This implementation follows the Unified Database Search specification.
 """
@@ -61,6 +62,8 @@ class TimePeriodFilterWidget(QtWidgets.QWidget):
     Signals:
         time_filter_changed: Emitted when time range changes (start_datetime, end_datetime)
         filter_enabled_changed: Emitted when filter is enabled/disabled (bool)
+    
+    Now with extra flux capacitor support (just kidding, it just filters by date).
     """
     
     # Signals
@@ -787,8 +790,8 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             # Adjust database tree height based on window height
             # Keep it proportional but within reasonable bounds
             if hasattr(self, 'database_tree'):
-                min_tree_height = 150
-                max_tree_height = 300
+                min_tree_height = 120
+                max_tree_height = 220
                 proportional_height = int(height * 0.15)  # 15% of window height
                 tree_height = max(min_tree_height, min(max_tree_height, proportional_height))
                 self.database_tree.setMaximumHeight(tree_height)
@@ -1038,72 +1041,52 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         Create the database/table selection tree widget with categories.
         
         Includes enhanced controls for selecting databases based on load status.
+        Uses a compact horizontal toolbar above the tree to maximize data space.
         
         Requirements: 10.8
         """
         group = QtWidgets.QGroupBox("Select Databases to Search:")
         layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(6, 14, 6, 6)
+        layout.setSpacing(4)
         
-        # Create horizontal layout for tree and buttons side by side
-        main_layout = QtWidgets.QHBoxLayout()
-        
-        # Database tree widget - increased height for better visibility
-        self.database_tree = QtWidgets.QTreeWidget()
-        self.database_tree.setHeaderLabels(["Database / Table", "Status"])
-        self.database_tree.setAlternatingRowColors(True)
-        self.database_tree.setRootIsDecorated(True)
-        self.database_tree.setColumnWidth(0, 280)
-        self.database_tree.setColumnWidth(1, 220)
-        self.database_tree.setMinimumHeight(200)  # Increased from 100
-        self.database_tree.setMaximumHeight(500)  # Increased from 350 for more space
-        self.database_tree.setIndentation(20)
-        
-        # Set header background color programmatically
-        tree_header = self.database_tree.header()
-        tree_header.setStyleSheet(f"""
-            QHeaderView::section {{
-                background-color: #1E293B;
-                color: #00FFFF;
-                border: none;
-                border-right: 1px solid #334155;
-                border-bottom: 2px solid #00FFFF;
-                padding: 4px 8px;
-                font-weight: 700;
-                font-size: 10px;
-                font-family: 'Segoe UI', sans-serif;
-            }}
-        """)
-        
-        main_layout.addWidget(self.database_tree)
-        
-        # Selection controls - vertical layout on the right side
-        controls_layout = QtWidgets.QVBoxLayout()
+        # Selection controls - horizontal toolbar above tree (saves vertical space)
+        controls_layout = QtWidgets.QHBoxLayout()
+        controls_layout.setSpacing(4)
         
         select_all_btn = QtWidgets.QPushButton("Select All")
-        select_all_btn.setMinimumWidth(100)
-        select_all_btn.setMaximumWidth(100)
+        select_all_btn.setFixedHeight(24)
         select_all_btn.setToolTip("Select all available databases and tables")
         select_all_btn.clicked.connect(self._select_all_databases)
         controls_layout.addWidget(select_all_btn)
         
         deselect_all_btn = QtWidgets.QPushButton("Deselect All")
-        deselect_all_btn.setMinimumWidth(100)
-        deselect_all_btn.setMaximumWidth(100)
+        deselect_all_btn.setFixedHeight(24)
         deselect_all_btn.setToolTip("Deselect all databases and tables")
         deselect_all_btn.clicked.connect(self._deselect_all_databases)
         controls_layout.addWidget(deselect_all_btn)
         
-        # Add "Select Loaded Only" button
         select_loaded_btn = QtWidgets.QPushButton("Select Loaded")
-        select_loaded_btn.setMinimumWidth(100)
-        select_loaded_btn.setMaximumWidth(100)
+        select_loaded_btn.setFixedHeight(24)
         select_loaded_btn.setToolTip("Select only databases with loaded GUI tabs")
         select_loaded_btn.clicked.connect(self._select_loaded_only)
         controls_layout.addWidget(select_loaded_btn)
         
-        main_layout.addLayout(controls_layout)
+        controls_layout.addStretch()
+        layout.addLayout(controls_layout)
         
-        layout.addLayout(main_layout)
+        # Database tree widget - compact to give results table more room
+        self.database_tree = QtWidgets.QTreeWidget()
+        self.database_tree.setHeaderLabels(["Database / Table", "Status"])
+        self.database_tree.setAlternatingRowColors(True)
+        self.database_tree.setRootIsDecorated(True)
+        self.database_tree.setColumnWidth(0, 300)
+        self.database_tree.setColumnWidth(1, 200)
+        self.database_tree.setMinimumHeight(120)
+        self.database_tree.setMaximumHeight(220)
+        self.database_tree.setIndentation(18)
+        
+        layout.addWidget(self.database_tree)
         
         group.setLayout(layout)
         return group
@@ -1158,23 +1141,10 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self.results_table.setColumnWidth(4, 500)  # Preview - wider for more data
         header.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)  # Preview stretches
         
-        # Set row height to be very compact for more data visibility
-        self.results_table.verticalHeader().setDefaultSectionSize(18)
+        # Balanced row height — readable but compact
+        self.results_table.verticalHeader().setDefaultSectionSize(22)
         
-        # Set header background color programmatically (stylesheet sometimes doesn't apply)
-        header.setStyleSheet(f"""
-            QHeaderView::section {{
-                background-color: #1E293B;
-                color: #00FFFF;
-                border: none;
-                border-right: 1px solid #334155;
-                border-bottom: 2px solid #00FFFF;
-                padding: 4px 8px;
-                font-weight: 700;
-                font-size: 10px;
-                font-family: 'Segoe UI', sans-serif;
-            }}
-        """)
+        # Header styled via _apply_styles() — uses canonical blue gradient
         
         # Initially hide timestamp column (shown only when time filtering is active)
         self.results_table.setColumnHidden(3, True)
@@ -1302,78 +1272,69 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
 
     
     def _apply_styles(self):
-        """Apply enhanced cyberpunk styles to the dialog - futuristic and professional."""
+        """Apply professional Crow-Eye styles — matches canonical design system."""
+        # ── Main dialog stylesheet ──
         self.setStyleSheet(f"""
-            /* Main Dialog - Futuristic Dark Theme with Glow */
+            /* Main Dialog — flat dark background, subtle border */
             QDialog {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #0A0E1A, stop:0.5 #0F172A, stop:1 #0A0E1A);
-                border: 3px solid #00FFFF;
-                border-radius: 12px;
+                background-color: {Colors.BG_PRIMARY};
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 8px;
             }}
             
-            /* Labels - Neon Cyan Text */
+            /* Labels — readable light text, not neon */
             QLabel {{
-                color: #00FFFF;
-                font-size: 8pt;
+                color: {Colors.TEXT_PRIMARY};
+                font-size: 10pt;
                 font-family: 'Segoe UI', sans-serif;
                 font-weight: 600;
             }}
             
-            /* Search Input - Futuristic with Glow Effect */
+            /* Search Input — compact, subtle focus glow */
             QLineEdit {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1A1F2E, stop:1 #0F1419);
+                background-color: {Colors.BG_TABLES};
                 color: #FFFFFF;
-                border: 2px solid #334155;
-                border-radius: 10px;
-                padding: 10px 16px;
-                font-size: 14px;
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 11pt;
                 font-family: 'Segoe UI', sans-serif;
-                selection-background-color: #00FFFF;
-                selection-color: #000000;
+                selection-background-color: {Colors.ACCENT_BLUE};
+                selection-color: #FFFFFF;
             }}
             QLineEdit:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1F2937, stop:1 #111827);
-                border: 2px solid #475569;
+                border: 1px solid {Colors.BORDER_ACCENT};
             }}
             QLineEdit:focus {{
-                border: 2px solid #00FFFF;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1F2937, stop:1 #111827);
+                border: 1px solid {Colors.ACCENT_BLUE};
             }}
             
-            /* Group Boxes - Futuristic Panels */
+            /* Group Boxes — subtle panels, cyan title accent */
             QGroupBox {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(30, 41, 59, 0.8), stop:1 rgba(15, 23, 42, 0.9));
-                color: #00FFFF;
-                border: 2px solid #00FFFF;
-                border-radius: 10px;
-                margin-top: 12px;
+                background-color: {Colors.BG_PANELS};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 6px;
+                margin-top: 10px;
                 padding: 6px;
-                font-weight: 700;
+                font-weight: 600;
                 font-size: 9pt;
                 font-family: 'Segoe UI', sans-serif;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 3px 8px;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #0F172A, stop:0.5 #1E293B, stop:1 #0F172A);
-                color: #00FFFF;
-                border: 2px solid #00FFFF;
-                border-radius: 6px;
+                padding: 2px 8px;
+                background-color: {Colors.BG_PRIMARY};
+                color: {Colors.ACCENT_CYAN};
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 3px;
                 font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }}
             
-            /* Checkboxes - Futuristic Glowing Style */
+            /* Checkboxes — blue checked state, subtle hover */
             QCheckBox {{
-                color: #E0E7FF;
+                color: {Colors.TEXT_PRIMARY};
                 spacing: 8px;
                 font-size: 10pt;
                 font-family: 'Segoe UI', sans-serif;
@@ -1382,76 +1343,67 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             QCheckBox::indicator {{
                 width: 18px;
                 height: 18px;
-                border: 2px solid #00FFFF;
+                border: 1px solid {Colors.BORDER_ACCENT};
                 border-radius: 4px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1A1F2E, stop:1 #0F1419);
+                background-color: {Colors.BG_PANELS};
             }}
             QCheckBox::indicator:checked {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #00FFFF, stop:1 #00BFFF);
-                border-color: #00FFFF;
-                image: none;
+                background-color: {Colors.ACCENT_BLUE};
+                border: 1px solid {Colors.ACCENT_BLUE};
             }}
             QCheckBox::indicator:hover {{
-                border-color: #00FF7F;
-                background-color: rgba(0, 255, 127, 0.15);
+                border: 1px solid {Colors.ACCENT_CYAN};
             }}
             
-            /* ComboBox - Futuristic Dropdown */
+            /* ComboBox — clean dropdown */
             QComboBox {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1A1F2E, stop:1 #0F1419);
+                background-color: {Colors.BG_PANELS};
                 color: #FFFFFF;
-                border: 2px solid #334155;
-                border-radius: 8px;
-                padding: 6px 12px;
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 4px 8px;
                 font-size: 10pt;
                 font-family: 'Segoe UI', sans-serif;
-                min-height: 24px;
+                min-height: 22px;
             }}
             QComboBox:hover {{
-                border: 2px solid #00FFFF;
+                border: 1px solid {Colors.ACCENT_BLUE};
             }}
             QComboBox:focus {{
-                border: 2px solid #00FFFF;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1F2937, stop:1 #111827);
+                border: 1px solid {Colors.ACCENT_BLUE};
             }}
             QComboBox::drop-down {{
                 border: none;
-                width: 30px;
+                width: 24px;
                 background: transparent;
             }}
             QComboBox::down-arrow {{
                 image: none;
-                border-left: 6px solid transparent;
-                border-right: 6px solid transparent;
-                border-top: 6px solid #00FFFF;
-                margin-right: 10px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid {Colors.ACCENT_BLUE};
+                margin-right: 8px;
             }}
             QComboBox QAbstractItemView {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1A1F2E, stop:1 #0F1419);
+                background-color: {Colors.BG_PANELS};
                 color: #FFFFFF;
-                border: 2px solid #00FFFF;
-                selection-background-color: #00FFFF;
-                selection-color: #000000;
-                padding: 6px;
+                border: 1px solid {Colors.ACCENT_BLUE};
+                selection-background-color: {Colors.ACCENT_BLUE};
+                selection-color: #FFFFFF;
+                padding: 4px;
                 font-size: 10pt;
                 outline: none;
             }}
             
-            /* Buttons - Futuristic Glowing Style */
+            /* Buttons — canonical blue, flat */
             QPushButton {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #00BFFF, stop:1 #0080FF);
-                color: #000000;
-                border: 2px solid #00FFFF;
+                background-color: {Colors.ACCENT_BLUE};
+                color: #FFFFFF;
+                border: none;
                 border-radius: 6px;
-                padding: 4px 10px;
+                padding: 4px 12px;
                 font-weight: 600;
-                font-size: 9px;
+                font-size: 10px;
                 font-family: 'Segoe UI', sans-serif;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
@@ -1459,179 +1411,136 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 min-height: 24px;
             }}
             QPushButton:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #00FFFF, stop:1 #00BFFF);
-                border: 2px solid #00FF7F;
-                color: #000000;
+                background-color: #60A5FA;
+                border: 1px solid {Colors.ACCENT_CYAN};
             }}
             QPushButton:pressed {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #0080FF, stop:1 #0060BF);
-                border: 2px solid #00BFFF;
+                background-color: #1E40AF;
             }}
             QPushButton:disabled {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #334155, stop:1 #1E293B);
-                color: #64748B;
-                border: 2px solid #334155;
+                background-color: #64748B;
+                color: #94A3B8;
             }}
         """)
         
-        # Tree widget style - Futuristic Database Tree with Glow
+        # ── Database Tree — canonical blue headers, emerald selection ──
         self.database_tree.setStyleSheet(f"""
             QTreeWidget {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(10, 14, 26, 0.98), stop:1 rgba(5, 7, 13, 0.98));
-                color: #E0E7FF;
-                border: 2px solid #00FFFF;
-                border-radius: 10px;
-                alternate-background-color: rgba(30, 41, 59, 0.3);
+                background-color: {Colors.BG_TABLES};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 6px;
+                alternate-background-color: #162032;
                 font-size: 9pt;
                 font-family: 'Segoe UI', sans-serif;
-                padding: 6px;
+                padding: 4px;
                 outline: none;
             }}
             QTreeWidget::item {{
-                padding: 6px 8px;
-                min-height: 24px;
-                border-bottom: 1px solid rgba(0, 255, 255, 0.1);
-                border-left: 3px solid transparent;
+                padding: 4px 6px;
+                min-height: 22px;
+                border-bottom: 1px solid {Colors.BORDER_SUBTLE};
             }}
             QTreeWidget::item:selected {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(0, 255, 255, 0.4), stop:1 rgba(0, 191, 255, 0.2));
+                background-color: {Colors.SUCCESS};
                 color: #FFFFFF;
-                border-left: 4px solid #00FFFF;
                 font-weight: 600;
             }}
-            QTreeWidget::item:selected:active {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(0, 255, 255, 0.5), stop:1 rgba(0, 255, 127, 0.3));
-                color: #FFFFFF;
-                border-left: 4px solid #00FF7F;
-            }}
             QTreeWidget::item:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(0, 255, 255, 0.2), stop:1 rgba(0, 255, 255, 0.1));
-                border-left: 3px solid #00FFFF;
-            }}
-            QTreeView::branch:closed:has-children {{
-                image: none;
-            }}
-            QTreeView::branch:open:has-children {{
-                image: none;
+                background-color: rgba(0, 255, 255, 0.1);
             }}
             QTreeWidget::indicator {{
-                width: 18px;
-                height: 18px;
-                border: 2px solid #00FFFF;
-                border-radius: 4px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1A1F2E, stop:1 #0F1419);
-            }}
-            QTreeWidget::indicator:hover {{
-                border-color: #00FF7F;
-                background-color: rgba(0, 255, 127, 0.15);
+                width: 16px;
+                height: 16px;
+                border: 1px solid {Colors.BORDER_ACCENT};
+                border-radius: 3px;
+                background-color: {Colors.BG_PANELS};
             }}
             QTreeWidget::indicator:checked {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #00FFFF, stop:1 #00BFFF);
-                border-color: #00FFFF;
+                background-color: {Colors.ACCENT_BLUE};
+                border: 1px solid {Colors.ACCENT_BLUE};
+            }}
+            QTreeWidget::indicator:hover {{
+                border: 1px solid {Colors.ACCENT_CYAN};
             }}
             QHeaderView::section {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #1E293B, stop:1 #0F172A);
-                color: #00FFFF;
+                background-color: #1E40AF;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #2563EB, stop:1 #1E40AF);
+                color: #FFFFFF;
                 border: none;
-                border-right: 1px solid #334155;
-                border-bottom: 2px solid #00FFFF;
-                padding: 8px 10px;
-                font-weight: 700;
+                border-right: 1px solid {Colors.BORDER_SUBTLE};
+                padding: 4px 8px;
+                font-weight: 600;
                 font-size: 10px;
                 font-family: 'Segoe UI', sans-serif;
                 text-transform: uppercase;
-                letter-spacing: 1px;
+                letter-spacing: 0.5px;
             }}
             QHeaderView::section:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #334155, stop:1 #1E293B);
-                color: #FFFFFF;
-                border-bottom: 2px solid #00FF7F;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #3B82F6, stop:1 #2563EB);
+                border-bottom: 2px solid {Colors.ACCENT_CYAN};
             }}
         """)
         
-        # Results table style - Futuristic Data Grid with Glow
-        # Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8, 12.10
+        # ── Results Table — matches UNIFIED_TABLE_STYLE from styles.py ──
         self.results_table.setStyleSheet(f"""
             QTableWidget {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(10, 14, 26, 0.98), stop:1 rgba(5, 7, 13, 0.98));
-                color: #E0E7FF;
-                border: 2px solid #00FFFF;
-                border-radius: 10px;
-                gridline-color: rgba(0, 255, 255, 0.15);
-                alternate-background-color: rgba(30, 41, 59, 0.2);
-                font-size: 9pt;
-                font-family: 'Segoe UI', sans-serif;
-                selection-background-color: rgba(0, 255, 255, 0.4);
+                background-color: {Colors.BG_TABLES};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 6px;
+                gridline-color: {Colors.BORDER_SUBTLE};
+                alternate-background-color: #162032;
+                selection-background-color: {Colors.SUCCESS};
                 selection-color: #FFFFFF;
+                font-size: 11px;
+                font-family: 'Segoe UI', sans-serif;
                 outline: none;
             }}
             QTableWidget::item {{
-                padding: 4px 8px;
-                color: #E0E7FF;
-                border: none;
+                padding: 2px 6px;
+                border-bottom: 1px solid {Colors.BORDER_SUBTLE};
+                font-size: 11px;
+                font-weight: 600;
+                font-family: 'Segoe UI', sans-serif;
+                color: #F8FAFC;
             }}
             QTableWidget::item:selected {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(0, 255, 255, 0.5), stop:1 rgba(0, 191, 255, 0.3));
+                background-color: #059669;
                 color: #FFFFFF;
-                border-left: 4px solid #00FFFF;
-                font-weight: 600;
+                font-weight: 800;
             }}
             QTableWidget::item:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(0, 255, 255, 0.2), stop:1 rgba(0, 255, 255, 0.1));
-            }}
-            QTableWidget::item:selected:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(0, 255, 127, 0.4), stop:1 rgba(0, 255, 255, 0.4));
-                color: #FFFFFF;
-                border-left: 4px solid #00FF7F;
+                background-color: rgba(0, 255, 255, 0.12);
+                color: {Colors.ACCENT_CYAN};
             }}
             QHeaderView::section {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #1E293B, stop:1 #0F172A);
-                color: #00FFFF;
+                background-color: #1E40AF;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #2563EB, stop:1 #1E40AF);
+                color: #FFFFFF;
                 border: none;
-                border-right: 1px solid #334155;
-                border-bottom: 2px solid #00FFFF;
-                padding: 8px 10px;
-                font-weight: 700;
-                font-size: 10px;
+                border-right: 1px solid {Colors.BORDER_SUBTLE};
+                padding: 4px 8px;
+                font-weight: 600;
+                font-size: 11px;
                 font-family: 'Segoe UI', sans-serif;
                 text-transform: uppercase;
-                letter-spacing: 1px;
+                letter-spacing: 0.5px;
             }}
             QHeaderView::section:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #334155, stop:1 #1E293B);
-                color: #FFFFFF;
-                border-bottom: 2px solid #00FF7F;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #3B82F6, stop:1 #2563EB);
+                border-bottom: 2px solid {Colors.ACCENT_CYAN};
             }}
             QHeaderView::down-arrow {{
                 image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid {Colors.ACCENT_CYAN};
-                margin-right: 8px;
-            }}
-            QHeaderView::up-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-bottom: 5px solid {Colors.ACCENT_CYAN};
-                margin-right: 8px;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 4px solid {Colors.ACCENT_CYAN};
+                margin-right: 6px;
             }}
             QHeaderView::up-arrow {{
                 image: none;
@@ -1640,33 +1549,104 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 border-bottom: 4px solid {Colors.ACCENT_CYAN};
                 margin-right: 6px;
             }}
+            /* Scrollbar — vertical */
+            QScrollBar:vertical {{
+                border: none;
+                background: {Colors.BG_TABLES};
+                width: 10px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {Colors.BORDER_SUBTLE}, stop:1 {Colors.BG_PANELS});
+                min-height: 30px;
+                border-radius: 5px;
+                border: 1px solid rgba(0, 255, 255, 0.15);
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {Colors.BORDER_ACCENT};
+                border: 1px solid {Colors.ACCENT_CYAN};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+            /* Scrollbar — horizontal */
+            QScrollBar:horizontal {{
+                border: none;
+                background: {Colors.BG_TABLES};
+                height: 10px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {Colors.BORDER_SUBTLE}, stop:1 {Colors.BG_PANELS});
+                min-width: 30px;
+                border-radius: 5px;
+                border: 1px solid rgba(0, 255, 255, 0.15);
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: {Colors.BORDER_ACCENT};
+                border: 1px solid {Colors.ACCENT_CYAN};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
+            }}
         """)
         
-        # Progress bar style - Cyberpunk Loading Animation
+        # ── Progress Bar — blue gradient chunk ──
         self.progress_bar.setStyleSheet(f"""
             QProgressBar {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(18, 18, 24, 0.9), stop:1 rgba(26, 26, 46, 0.9));
-                border: 2px solid {Colors.ACCENT_BLUE};
-                border-radius: 6px;
+                background-color: {Colors.BG_TABLES};
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: 4px;
                 text-align: center;
-                color: {Colors.ACCENT_CYAN};
+                color: {Colors.TEXT_PRIMARY};
                 font-size: 9pt;
                 font-weight: bold;
                 font-family: 'Consolas', 'Courier New', monospace;
-                min-height: 24px;
+                min-height: 20px;
             }}
             QProgressBar::chunk {{
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {Colors.ACCENT_CYAN},
-                    stop:0.5 {Colors.SUCCESS},
-                    stop:1 {Colors.ACCENT_CYAN}
-                );
-                border-radius: 4px;
-                margin: 2px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {Colors.ACCENT_BLUE}, stop:1 #2563EB);
+                border-radius: 3px;
+                margin: 1px;
             }}
         """)
+        
+        # ── Phase 3: Per-widget button overrides ──
+        self.search_button.setStyleSheet(CrowEyeStyles.SEARCH_BUTTON_STYLE)
+        self.cancel_button.setStyleSheet(CrowEyeStyles.RED_BUTTON.replace(
+            "border-radius: 8px", "border-radius: 6px").replace(
+            "padding: 12px 24px", "padding: 4px 12px").replace(
+            "font-size: 13px", "font-size: 10px"))
+        self.export_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
+        self.clear_button.setStyleSheet(CrowEyeStyles.CLEAR_BUTTON_STYLE)
+        self.close_button.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
+        
+        # ── Force header styles programmatically (Qt gradient fallback) ──
+        _header_style = f"""
+            QHeaderView::section {{
+                background-color: #1E40AF;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #2563EB, stop:1 #1E40AF);
+                color: #FFFFFF;
+                border: none;
+                border-right: 1px solid {Colors.BORDER_SUBTLE};
+                padding: 4px 8px;
+                font-weight: 600;
+                font-size: 10px;
+                font-family: 'Segoe UI', sans-serif;
+            }}
+        """
+        self.database_tree.header().setStyleSheet(_header_style)
+        self.results_table.horizontalHeader().setStyleSheet(_header_style)
     
     # ========================================================================
     # Database Tree Population (Task 4.2)
@@ -3805,403 +3785,607 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                     results_by_db[result.database][result.table] = []
                 results_by_db[result.database][result.table].append(result)
             
-            # Build HTML content
-            html_content = f"""<!DOCTYPE html>
+            # Count total tables
+            total_tables = sum(len(tables) for tables in results_by_db.values())
+            total_results = len(self.current_results)
+            total_databases = len(results_by_db)
+            
+            # Build filter summary for header
+            filters_active = []
+            if case_sensitive:
+                filters_active.append("Case Sensitive")
+            if exact_match:
+                filters_active.append("Exact Match")
+            if use_regex:
+                filters_active.append("Regex")
+            if time_filter_enabled:
+                filters_active.append(f"Time: {time_filter_start or '∞'} → {time_filter_end or '∞'}")
+            filters_str = " · ".join(filters_active) if filters_active else "None"
+
+            # Load and encode logo
+            import base64
+            import os
+            logo_html = '<div class="brand-icon-fallback">🦅</div>'
+            logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'GUI Resources', 'CrowEye.jpg')
+            try:
+                if os.path.exists(logo_path):
+                    with open(logo_path, 'rb') as img_f:
+                        b64_data = base64.b64encode(img_f.read()).decode('utf-8')
+                        logo_html = f'<img src="data:image/jpeg;base64,{b64_data}" class="brand-icon" alt="Crow Eye Logo">'
+            except Exception as img_e:
+                self.logger.warning(f"Failed to load logo for HTML export: {img_e}")
+
+            # Build HTML content — Enterprise Forensic Report
+            # Use list + join for O(n) performance instead of O(n²) string concat
+            parts = []
+            parts.append(f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crow Eye Database Search Results</title>
+    <title>Crow Eye — Forensic Search Report</title>
     <style>
-        * {{
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }}
-        
+        /* ── Reset & Base ── */
+        *, *::before, *::after {{ margin:0; padding:0; box-sizing:border-box; }}
+
         body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #e0e0e0;
-            padding: 20px;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+            background: #f0f2f5;
+            color: #1a1a2e;
+            font-size: 12.5px;
+            line-height: 1.55;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }}
+
+        .page {{
+            max-width: 1100px;
+            margin: 0 auto;
+            background: #ffffff;
+            box-shadow: 0 0 1px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
+        }}
+
+        /* ── Classification Banner ── */
+        .classification {{
+            background: #0f172a;
+            color: #94a3b8;
+            text-align: center;
+            padding: 4px 0;
+            font-size: 9px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }}
+
+        /* ── Report Header ── */
+        .report-header {{
+            background: linear-gradient(160deg, #0f172a 0%, #1e3a5f 60%, #1e40af 100%);
+            color: #ffffff;
+            padding: 32px 40px 28px;
+            position: relative;
+        }}
+        .report-header::after {{
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 50%, #3b82f6 100%);
+        }}
+        .header-top {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }}
+        .brand {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }}
+        .brand-icon {{
+            width: 38px;
+            height: 38px;
+            border-radius: 8px;
+            object-fit: cover;
+            display: block;
+        }}
+        .brand-icon-fallback {{
+            width: 38px;
+            height: 38px;
+            background: rgba(59, 130, 246, 0.25);
+            border: 2px solid rgba(59, 130, 246, 0.5);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }}
+        .brand-text h1 {{
+            font-size: 1.35em;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }}
+        .brand-text .tagline {{
+            font-size: 0.78em;
+            color: #94a3b8;
+            letter-spacing: 0.3px;
+        }}
+        .report-id {{
+            text-align: right;
+            font-size: 0.78em;
+            color: #94a3b8;
             line-height: 1.6;
         }}
-        
-        .container {{
-            max-width: 1400px;
-            margin: 0 auto;
-            background: #0f3460;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            overflow: hidden;
+        .report-id strong {{
+            color: #cbd5e1;
         }}
-        
-        .header {{
-            background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
-            color: #1a1a2e;
-            padding: 30px;
+
+        /* ── Metadata Bar ── */
+        .meta-bar {{
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1px;
+            background: #e2e8f0;
+            border-bottom: 1px solid #e2e8f0;
+        }}
+        .meta-cell {{
+            background: #f8fafc;
+            padding: 12px 16px;
+        }}
+        .meta-cell .label {{
+            font-size: 0.7em;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }}
+        .meta-cell .value {{
+            font-size: 0.92em;
+            color: #0f172a;
+            font-weight: 600;
+        }}
+
+        /* ── Executive Summary ── */
+        .exec-summary {{
+            padding: 24px 40px;
+            border-bottom: 1px solid #e2e8f0;
+        }}
+        .section-title {{
+            font-size: 0.85em;
+            font-weight: 700;
+            color: #1e3a5f;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .section-title .num {{
+            background: #1e3a5f;
+            color: #ffffff;
+            width: 22px;
+            height: 22px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75em;
+            font-weight: 700;
+        }}
+        .kpi-row {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }}
+        .kpi-card {{
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 16px 20px;
             text-align: center;
         }}
-        
-        .header h1 {{
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            font-weight: 700;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+        .kpi-card .kpi-value {{
+            font-size: 2em;
+            font-weight: 800;
+            color: #1e40af;
+            line-height: 1.2;
         }}
-        
-        .header .subtitle {{
-            font-size: 1.1em;
-            opacity: 0.9;
-        }}
-        
-        .search-params {{
-            background: #16213e;
-            padding: 25px;
-            margin: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #00d4ff;
-        }}
-        
-        .search-params h2 {{
-            color: #00d4ff;
-            margin-bottom: 15px;
-            font-size: 1.5em;
-        }}
-        
-        .param-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
-        }}
-        
-        .param-item {{
-            background: #0f3460;
-            padding: 12px;
-            border-radius: 6px;
-            border: 1px solid #1e4976;
-        }}
-        
-        .param-label {{
-            color: #00d4ff;
+        .kpi-card .kpi-label {{
+            font-size: 0.75em;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            margin-top: 4px;
             font-weight: 600;
-            font-size: 0.9em;
-            margin-bottom: 5px;
         }}
-        
-        .param-value {{
-            color: #e0e0e0;
-            font-size: 1.1em;
+
+        /* ── Search Parameters ── */
+        .params-section {{
+            padding: 24px 40px;
+            border-bottom: 1px solid #e2e8f0;
+        }}
+        .params-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 12px;
+        }}
+        .param {{
+            padding: 10px 14px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+        }}
+        .param .p-label {{
+            font-size: 0.7em;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            font-weight: 600;
+        }}
+        .param .p-value {{
+            font-size: 0.9em;
+            color: #0f172a;
+            font-weight: 600;
+            margin-top: 2px;
             word-break: break-word;
         }}
-        
-        .results-section {{
-            padding: 20px;
+        .param .p-value.highlight {{
+            color: #1e40af;
         }}
-        
-        .database-section {{
-            margin-bottom: 30px;
-            background: #16213e;
-            border-radius: 8px;
+
+        /* ── Results ── */
+        .results-body {{
+            padding: 24px 40px;
+        }}
+        .db-group {{
+            margin-bottom: 24px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
             overflow: hidden;
+            page-break-inside: avoid;
         }}
-        
-        .database-header {{
-            background: linear-gradient(135deg, #533483 0%, #7b2cbf 100%);
-            color: white;
-            padding: 15px 20px;
-            font-size: 1.3em;
-            font-weight: 600;
+        .db-bar {{
+            background: linear-gradient(135deg, #0f172a, #1e3a5f);
+            color: #ffffff;
+            padding: 10px 18px;
+            font-weight: 700;
+            font-size: 0.95em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            letter-spacing: 0.3px;
         }}
-        
-        .table-section {{
-            margin: 15px;
+        .db-bar .db-icon {{
+            opacity: 0.7;
         }}
-        
-        .table-header {{
-            background: #0f3460;
-            color: #00d4ff;
-            padding: 12px 15px;
-            font-size: 1.1em;
-            font-weight: 600;
-            border-radius: 6px;
-            margin-bottom: 10px;
-            border-left: 3px solid #00d4ff;
+        .tbl-group {{
+            border-top: 1px solid #e2e8f0;
         }}
-        
-        .result-card {{
-            background: #0f3460;
-            border: 1px solid #1e4976;
-            border-radius: 6px;
-            padding: 15px;
-            margin-bottom: 12px;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }}
-        
-        .result-card:hover {{
-            /* Removed transform: translateY(-2px) - not supported by Qt */
-            box-shadow: 0 4px 12px rgba(0, 212, 255, 0.2);
-            border-color: #00d4ff;
-        }}
-        
-        .result-header {{
+        .tbl-bar {{
+            background: #f1f5f9;
+            padding: 8px 18px;
+            font-weight: 700;
+            font-size: 0.85em;
+            color: #334155;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 10px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #1e4976;
+            border-bottom: 1px solid #e2e8f0;
         }}
-        
-        .row-id {{
-            background: #00d4ff;
-            color: #1a1a2e;
-            padding: 4px 12px;
-            border-radius: 4px;
-            font-weight: 600;
-            font-size: 0.9em;
-        }}
-        
-        .matched-columns {{
-            color: #7b2cbf;
-            font-size: 0.9em;
+        .tbl-bar .badge {{
+            background: #1e40af;
+            color: #ffffff;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-size: 0.78em;
             font-weight: 600;
         }}
-        
-        .match-preview {{
-            background: #16213e;
-            padding: 10px;
-            border-radius: 4px;
-            margin: 10px 0;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9em;
-            color: #00d4ff;
-            border-left: 3px solid #7b2cbf;
+
+        /* ── Result Row ── */
+        .match-row {{
+            padding: 14px 18px;
+            border-bottom: 1px solid #f1f5f9;
+            page-break-inside: avoid;
         }}
-        
-        .record-data {{
-            margin-top: 10px;
+        .match-row:last-child {{
+            border-bottom: none;
         }}
-        
-        .data-table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9em;
-        }}
-        
-        .data-table td {{
-            padding: 6px 10px;
-            border-bottom: 1px solid #1e4976;
-        }}
-        
-        .data-table td:first-child {{
-            color: #00d4ff;
-            font-weight: 600;
-            width: 200px;
-            vertical-align: top;
-        }}
-        
-        .data-table td:last-child {{
-            color: #e0e0e0;
-            word-break: break-word;
-        }}
-        
-        .footer {{
-            background: #16213e;
-            padding: 20px;
-            text-align: center;
-            color: #888;
-            font-size: 0.9em;
-            margin-top: 20px;
-        }}
-        
-        .summary-stats {{
+        .match-meta {{
             display: flex;
-            justify-content: space-around;
-            padding: 20px;
-            background: #16213e;
-            margin: 20px;
-            border-radius: 8px;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
         }}
-        
-        .stat-item {{
-            text-align: center;
-        }}
-        
-        .stat-value {{
-            font-size: 2em;
-            color: #00d4ff;
+        .match-meta .rid {{
+            background: #e0e7ff;
+            color: #1e40af;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 0.78em;
             font-weight: 700;
         }}
-        
-        .stat-label {{
-            color: #888;
-            font-size: 0.9em;
-            margin-top: 5px;
+        .match-meta .mcols {{
+            font-size: 0.78em;
+            color: #6366f1;
+            font-weight: 600;
+        }}
+        .match-preview-box {{
+            background: #f8fafc;
+            border-left: 3px solid #3b82f6;
+            padding: 8px 12px;
+            margin: 6px 0 10px;
+            font-family: 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
+            font-size: 0.82em;
+            color: #1e293b;
+            border-radius: 0 4px 4px 0;
+            word-break: break-all;
+        }}
+        .ts-box {{
+            background: #eff6ff;
+            border-left: 3px solid #6366f1;
+            padding: 6px 12px;
+            margin-bottom: 10px;
+            font-size: 0.8em;
+            color: #334155;
+            border-radius: 0 4px 4px 0;
+        }}
+        .ts-box strong {{
+            color: #4338ca;
+        }}
+
+        /* ── Field Table ── */
+        .field-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82em;
+        }}
+        .field-table tr {{
+            border-bottom: 1px solid #f1f5f9;
+        }}
+        .field-table tr:nth-child(even) {{
+            background: #fafbfc;
+        }}
+        .field-table td {{
+            padding: 3px 10px;
+            vertical-align: top;
+        }}
+        .field-table .fk {{
+            color: #475569;
+            font-weight: 600;
+            width: 170px;
+            white-space: nowrap;
+        }}
+        .field-table .fv {{
+            color: #1e293b;
+            word-break: break-word;
+        }}
+
+        /* ── Footer ── */
+        .report-footer {{
+            background: #f8fafc;
+            border-top: 1px solid #e2e8f0;
+            padding: 16px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.75em;
+            color: #94a3b8;
+        }}
+        .report-footer .brand-mark {{
+            font-weight: 700;
+            color: #64748b;
+            letter-spacing: 0.5px;
+        }}
+
+        /* ── Print ── */
+        @media print {{
+            body {{ background: #fff; padding: 0; font-size: 11px; }}
+            .page {{ box-shadow: none; max-width: 100%; }}
+            .db-group {{ break-inside: avoid; }}
+            .match-row {{ break-inside: avoid; }}
         }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🔍 Crow Eye Database Search Results</h1>
-            <div class="subtitle">Forensic Artifact Database Search Report</div>
+    <div class="page">
+        <div class="classification">Law Enforcement Sensitive — Forensic Work Product</div>
+
+        <div class="report-header">
+            <div class="header-top">
+                <div class="brand">
+                    {logo_html}
+                    <div class="brand-text">
+                        <h1>CROW EYE</h1>
+                        <div class="tagline">Forensic Artifact Search Report</div>
+                    </div>
+                </div>
+                <div class="report-id">
+                    <strong>Report Generated</strong><br>
+                    {export_time}<br>
+                    <strong>Search Term</strong><br>
+                    &quot;{self._html_escape(search_term)}&quot;
+                </div>
+            </div>
         </div>
-        
-        <div class="search-params">
-            <h2>Search Parameters</h2>
-            <div class="param-grid">
-                <div class="param-item">
-                    <div class="param-label">Search Term</div>
-                    <div class="param-value">"{self._html_escape(search_term)}"</div>
+
+        <div class="meta-bar">
+            <div class="meta-cell">
+                <div class="label">Total Hits</div>
+                <div class="value">{total_results:,}</div>
+            </div>
+            <div class="meta-cell">
+                <div class="label">Databases</div>
+                <div class="value">{total_databases}</div>
+            </div>
+            <div class="meta-cell">
+                <div class="label">Tables</div>
+                <div class="value">{total_tables}</div>
+            </div>
+            <div class="meta-cell">
+                <div class="label">Active Filters</div>
+                <div class="value">{len(filters_active) if filters_active else 0}</div>
+            </div>
+        </div>
+
+        <div class="exec-summary">
+            <div class="section-title"><span class="num">1</span> Executive Summary</div>
+            <div class="kpi-row">
+                <div class="kpi-card">
+                    <div class="kpi-value">{total_results:,}</div>
+                    <div class="kpi-label">Matching Records</div>
                 </div>
-                <div class="param-item">
-                    <div class="param-label">Case Sensitive</div>
-                    <div class="param-value">{"Yes" if case_sensitive else "No"}</div>
+                <div class="kpi-card">
+                    <div class="kpi-value">{total_databases}</div>
+                    <div class="kpi-label">Databases Searched</div>
                 </div>
-                <div class="param-item">
-                    <div class="param-label">Exact Match</div>
-                    <div class="param-value">{"Yes" if exact_match else "No"}</div>
+                <div class="kpi-card">
+                    <div class="kpi-value">{total_tables}</div>
+                    <div class="kpi-label">Tables with Hits</div>
                 </div>
-                <div class="param-item">
-                    <div class="param-label">Regular Expression</div>
-                    <div class="param-value">{"Yes" if use_regex else "No"}</div>
+            </div>
+        </div>
+
+        <div class="params-section">
+            <div class="section-title"><span class="num">2</span> Search Parameters</div>
+            <div class="params-grid">
+                <div class="param">
+                    <div class="p-label">Search Term</div>
+                    <div class="p-value highlight">&quot;{self._html_escape(search_term)}&quot;</div>
                 </div>
-                <div class="param-item">
-                    <div class="param-label">Time Filter</div>
-                    <div class="param-value">{"Enabled" if time_filter_enabled else "Disabled"}</div>
+                <div class="param">
+                    <div class="p-label">Case Sensitive</div>
+                    <div class="p-value">{"Yes" if case_sensitive else "No"}</div>
+                </div>
+                <div class="param">
+                    <div class="p-label">Exact Match</div>
+                    <div class="p-value">{"Yes" if exact_match else "No"}</div>
+                </div>
+                <div class="param">
+                    <div class="p-label">Regex</div>
+                    <div class="p-value">{"Yes" if use_regex else "No"}</div>
+                </div>
+                <div class="param">
+                    <div class="p-label">Time Filter</div>
+                    <div class="p-value">{"Enabled" if time_filter_enabled else "Disabled"}</div>
                 </div>
                 {"" if not time_filter_enabled else f'''
-                <div class="param-item">
-                    <div class="param-label">Time Filter Start</div>
-                    <div class="param-value">{self._html_escape(time_filter_start) if time_filter_start else "N/A"}</div>
+                <div class="param">
+                    <div class="p-label">From</div>
+                    <div class="p-value">{self._html_escape(time_filter_start) if time_filter_start else "—"}</div>
                 </div>
-                <div class="param-item">
-                    <div class="param-label">Time Filter End</div>
-                    <div class="param-value">{self._html_escape(time_filter_end) if time_filter_end else "N/A"}</div>
-                </div>
-                <div class="param-item">
-                    <div class="param-label">Time Filter Preset</div>
-                    <div class="param-value">{self._html_escape(time_filter_preset) if time_filter_preset else "N/A"}</div>
+                <div class="param">
+                    <div class="p-label">To</div>
+                    <div class="p-value">{self._html_escape(time_filter_end) if time_filter_end else "—"}</div>
                 </div>
                 '''}
-                <div class="param-item">
-                    <div class="param-label">Export Time</div>
-                    <div class="param-value">{export_time}</div>
-                </div>
-                <div class="param-item">
-                    <div class="param-label">Total Results</div>
-                    <div class="param-value">{len(self.current_results)}</div>
+                <div class="param">
+                    <div class="p-label">Export Time</div>
+                    <div class="p-value">{export_time}</div>
                 </div>
             </div>
         </div>
-        
-        <div class="summary-stats">
-            <div class="stat-item">
-                <div class="stat-value">{len(self.current_results)}</div>
-                <div class="stat-label">Total Results</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value">{len(results_by_db)}</div>
-                <div class="stat-label">Databases</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value">{sum(len(tables) for tables in results_by_db.values())}</div>
-                <div class="stat-label">Tables</div>
-            </div>
-        </div>
-        
-        <div class="results-section">
-"""
-            
+
+        <div class="results-body">
+            <div class="section-title"><span class="num">3</span> Detailed Results</div>
+""")
+
             # Add results organized by database and table
             for database, tables in sorted(results_by_db.items()):
-                html_content += f"""
-            <div class="database-section">
-                <div class="database-header">📁 {self._html_escape(database)}</div>
-"""
-                
+                parts.append(f"""
+            <div class="db-group">
+                <div class="db-bar"><span class="db-icon">📁</span> {self._html_escape(database)}</div>
+""")
+
                 for table, results in sorted(tables.items()):
-                    html_content += f"""
-                <div class="table-section">
-                    <div class="table-header">📊 {self._html_escape(table)} ({len(results)} results)</div>
-"""
-                    
+                    parts.append(f"""
+                <div class="tbl-group">
+                    <div class="tbl-bar">
+                        <span>📊 {self._html_escape(table)}</span>
+                        <span class="badge">{len(results)} hit{"s" if len(results) != 1 else ""}</span>
+                    </div>
+""")
+
                     for result in results:
-                        html_content += f"""
-                    <div class="result-card">
-                        <div class="result-header">
-                            <span class="row-id">Row ID: {result.row_id if result.row_id is not None else 'N/A'}</span>
-                            <span class="matched-columns">Matched: {self._html_escape(', '.join(result.matched_columns))}</span>
+                        parts.append(f"""
+                    <div class="match-row">
+                        <div class="match-meta">
+                            <span class="rid">Row {result.row_id if result.row_id is not None else '—'}</span>
+                            <span class="mcols">Matched: {self._html_escape(', '.join(result.matched_columns))}</span>
                         </div>
-                        <div class="match-preview">{self._html_escape(result.match_preview)}</div>
-"""
-                        
+                        <div class="match-preview-box">{self._html_escape(result.match_preview)}</div>
+""")
+
                         # Add matched timestamps if present
                         if result.matched_timestamps:
-                            html_content += """
-                        <div class="match-preview" style="border-left-color: #00d4ff;">
-                            <strong>🕐 Matched Timestamps:</strong><br>
-"""
+                            parts.append("""
+                        <div class="ts-box">
+                            <strong>🕐 Timestamps:</strong><br>
+""")
                             for ts_match in result.matched_timestamps:
-                                html_content += f"""
+                                parts.append(f"""
                             {self._html_escape(ts_match.column_name)}: {self._html_escape(ts_match.formatted_display)}<br>
-"""
-                            html_content += """
+""")
+                            parts.append("""
                         </div>
-"""
-                        
-                        html_content += """
-                        <div class="record-data">
-                            <table class="data-table">
-"""
-                        
+""")
+
+                        parts.append("""
+                        <table class="field-table">
+""")
+
                         # Add record data fields
                         for key, value in sorted(result.row_data.items()):
                             value_str = '' if value is None else str(value)
                             # Truncate very long values
                             if len(value_str) > 500:
                                 value_str = value_str[:497] + '...'
-                            
-                            html_content += f"""
-                                <tr>
-                                    <td>{self._html_escape(key)}</td>
-                                    <td>{self._html_escape(value_str)}</td>
-                                </tr>
-"""
-                        
-                        html_content += """
-                            </table>
-                        </div>
+
+                            parts.append(f"""
+                            <tr>
+                                <td class="fk">{self._html_escape(key)}</td>
+                                <td class="fv">{self._html_escape(value_str)}</td>
+                            </tr>
+""")
+
+                        parts.append("""
+                        </table>
                     </div>
-"""
-                    
-                    html_content += """
+""")
+
+                    parts.append("""
                 </div>
-"""
-                
-                html_content += """
+""")
+
+                parts.append("""
             </div>
-"""
-            
+""")
+
             # Add footer
-            html_content += f"""
+            parts.append(f"""
         </div>
-        
-        <div class="footer">
-            <p>Generated by Crow Eye Forensic Analysis Tool</p>
-            <p>Report generated on {export_time}</p>
+
+        <div class="report-footer">
+            <span class="brand-mark">CROW EYE &mdash; Forensic Analysis Platform</span>
+            <span>Generated {export_time} &middot; {total_results:,} results across {total_databases} database(s)</span>
         </div>
     </div>
 </body>
 </html>
-"""
+""")
+
+            # Join all parts (O(n) vs O(n²) string concat)
+            html_content = ''.join(parts)
             
             # Write to file
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(html_content)
-            
+
             self.logger.info(f"Successfully exported {len(self.current_results)} results to HTML")
             
         except Exception as e:

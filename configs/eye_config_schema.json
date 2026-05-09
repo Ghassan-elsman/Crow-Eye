@@ -1,0 +1,214 @@
+{
+  "title": "EYE Configuration Schema",
+  "description": "JSON Schema for EYE AI Forensic Assistant configuration file",
+  "type": "object",
+  "required": [
+    "integration_type",
+    "backend",
+    "model_name"
+  ],
+  "properties": {
+    "integration_type": {
+      "type": "string",
+      "enum": ["local_cli", "local_api", "cloud_api"],
+      "description": "Type of LLM backend integration"
+    },
+    "backend": {
+      "type": "string",
+      "enum": [
+        "ollama",
+        "llama",
+        "gemini_cli",
+        "lm_studio",
+        "vllm",
+        "openai",
+        "anthropic",
+        "gemini"
+      ],
+      "description": "Specific LLM backend to use"
+    },
+    "model_name": {
+      "type": "string",
+      "description": "Name of the model to use (e.g., 'gpt-4', 'llama2', 'claude-3')",
+      "minLength": 1
+    },
+    "executable_path": {
+      "type": "string",
+      "description": "Path to executable for CLI agents (required for local_cli integration_type)"
+    },
+    "api_endpoint": {
+      "type": "string",
+      "description": "API endpoint URL for local API servers (required for local_api integration_type)",
+      "format": "uri"
+    },
+    "last_validated": {
+      "type": "string",
+      "description": "ISO 8601 timestamp of last successful connectivity validation",
+      "format": "date-time"
+    },
+    "context_window": {
+      "type": "object",
+      "description": "Context window and token budget configuration",
+      "required": [
+        "max_total_tokens",
+        "token_budget",
+        "history_management"
+      ],
+      "properties": {
+        "max_total_tokens": {
+          "type": "integer",
+          "description": "Maximum total tokens for the context window",
+          "minimum": 1000
+        },
+        "token_budget": {
+          "type": "object",
+          "description": "Token allocation across context components",
+          "required": [
+            "system_prompt",
+            "rag_context",
+            "conversation_history",
+            "tool_definitions",
+            "response_buffer"
+          ],
+          "properties": {
+            "system_prompt": {
+              "type": "integer",
+              "description": "Tokens allocated for system prompt",
+              "minimum": 0
+            },
+            "rag_context": {
+              "type": "integer",
+              "description": "Tokens allocated for RAG context",
+              "minimum": 0
+            },
+            "conversation_history": {
+              "type": "integer",
+              "description": "Tokens allocated for conversation history",
+              "minimum": 0
+            },
+            "tool_definitions": {
+              "type": "integer",
+              "description": "Tokens allocated for tool definitions",
+              "minimum": 0
+            },
+            "response_buffer": {
+              "type": "integer",
+              "description": "Tokens reserved for LLM response",
+              "minimum": 0
+            }
+          }
+        },
+        "history_management": {
+          "type": "object",
+          "description": "Conversation history management settings",
+          "required": [
+            "sliding_window_size",
+            "preserve_first_message",
+            "preserve_tool_messages",
+            "truncation_strategy"
+          ],
+          "properties": {
+            "sliding_window_size": {
+              "type": "integer",
+              "description": "Number of recent messages to preserve",
+              "minimum": 1
+            },
+            "preserve_first_message": {
+              "type": "boolean",
+              "description": "Whether to always preserve the first message"
+            },
+            "preserve_tool_messages": {
+              "type": "boolean",
+              "description": "Whether to preserve messages containing tool calls"
+            },
+            "truncation_strategy": {
+              "type": "string",
+              "enum": ["sliding_window"],
+              "description": "Strategy for truncating conversation history"
+            }
+          }
+        },
+        "evidence_preservation": {
+          "type": "object",
+          "description": "Evidence preservation and detection settings",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable automatic evidence detection and preservation",
+              "default": true
+            },
+            "confidence_threshold": {
+              "type": "number",
+              "description": "Minimum confidence score (0.0-1.0) to preserve evidence",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.7
+            },
+            "max_pinned_messages": {
+              "type": "integer",
+              "description": "Maximum number of messages that can be manually pinned",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10
+            },
+            "auto_detect_evidence": {
+              "type": "boolean",
+              "description": "Automatically detect forensic evidence patterns in messages",
+              "default": true
+            }
+          }
+        },
+        "audit_trail": {
+          "type": "object",
+          "description": "Audit trail configuration for chain of custody",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable audit trail logging",
+              "default": true
+            },
+            "buffer_size": {
+              "type": "integer",
+              "description": "Number of entries to buffer before flushing to disk",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            },
+            "export_format": {
+              "type": "string",
+              "enum": ["text", "json", "csv"],
+              "description": "Default format for audit trail exports",
+              "default": "text"
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "integration_type": {
+            "const": "local_cli"
+          }
+        }
+      },
+      "then": {
+        "required": ["executable_path"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "integration_type": {
+            "const": "local_api"
+          }
+        }
+      },
+      "then": {
+        "required": ["api_endpoint"]
+      }
+    }
+  ]
+}

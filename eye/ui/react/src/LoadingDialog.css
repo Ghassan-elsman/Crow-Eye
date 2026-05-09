@@ -1,0 +1,244 @@
+/* ===== LoadingDialog ===== */
+
+/* ── Backdrop ── */
+.ld-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 8, 12, 0.65);
+  z-index: 9999;
+  -webkit-animation: ld-fade-in 0.25s ease both;
+  animation: ld-fade-in 0.25s ease both;
+}
+
+.ld-backdrop--out {
+  -webkit-animation: ld-fade-out 0.3s ease both;
+  animation: ld-fade-out 0.3s ease both;
+}
+
+/* ── Card ── */
+.ld-card {
+  width: 300px;
+  background: #0f1017;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  border-radius: 16px;
+  padding: 28px 24px 22px;
+  box-shadow:
+    0 0 0 1px rgba(168, 85, 247, 0.08),
+    0 24px 60px rgba(0, 0, 0, 0.7),
+    0 0 40px rgba(168, 85, 247, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  position: relative;
+  overflow: hidden;
+  -webkit-animation: ld-slide-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation: ld-slide-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.ld-card--out {
+  -webkit-animation: ld-slide-out 0.28s ease both;
+  animation: ld-slide-out 0.28s ease both;
+}
+
+/* Top gradient line */
+.ld-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #4f46e5, #a855f7, #22d3ee);
+  pointer-events: none;
+}
+
+/* ── Header row ── */
+.ld-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ld-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ld-title {
+  font-family: var(--font-sans);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #e2e8f0;
+}
+
+.ld-subtitle {
+  font-size: 11px;
+  color: #475569;
+  letter-spacing: 0.04em;
+  font-weight: 400;
+}
+
+/* ── Spinner wrapper: stacks icon + rotating border ── */
+.ld-spinner-wrap {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Rotating gradient ring */
+.ld-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: #a855f7;
+  border-right-color: #22d3ee;
+  -webkit-animation: ld-spin 1.2s linear infinite;
+  animation: ld-spin 1.2s linear infinite;
+}
+
+/* Real EYE icon */
+.ld-eye-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  -webkit-animation: ld-pulse 2.5s ease-in-out infinite;
+  animation: ld-pulse 2.5s ease-in-out infinite;
+}
+
+/* ── Status line ── */
+.ld-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ld-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a855f7;
+  flex-shrink: 0;
+  -webkit-animation: ld-dot-pulse 1s ease-in-out infinite;
+  animation: ld-dot-pulse 1s ease-in-out infinite;
+}
+
+.ld-status-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-animation: ld-fade-in 0.3s ease;
+  animation: ld-fade-in 0.3s ease;
+}
+
+/* ── Progress bar ── */
+.ld-progress-track {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.ld-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4f46e5, #a855f7, #22d3ee);
+  border-radius: 1px;
+  -webkit-animation: ld-indeterminate 1.6s ease-in-out infinite;
+  animation: ld-indeterminate 1.6s ease-in-out infinite;
+}
+
+/* ══════════════════════════════════════
+   Keyframes — all webkit-prefixed
+══════════════════════════════════════ */
+
+@-webkit-keyframes ld-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes ld-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@-webkit-keyframes ld-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes ld-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@-webkit-keyframes ld-slide-in {
+  from { opacity: 0; -webkit-transform: scale(0.88) translateY(12px); transform: scale(0.88) translateY(12px); }
+  to   { opacity: 1; -webkit-transform: scale(1) translateY(0); transform: scale(1) translateY(0); }
+}
+@keyframes ld-slide-in {
+  from { opacity: 0; -webkit-transform: scale(0.88) translateY(12px); transform: scale(0.88) translateY(12px); }
+  to   { opacity: 1; -webkit-transform: scale(1) translateY(0); transform: scale(1) translateY(0); }
+}
+
+@-webkit-keyframes ld-slide-out {
+  from { opacity: 1; -webkit-transform: scale(1) translateY(0); transform: scale(1) translateY(0); }
+  to   { opacity: 0; -webkit-transform: scale(0.92) translateY(-8px); transform: scale(0.92) translateY(-8px); }
+}
+@keyframes ld-slide-out {
+  from { opacity: 1; -webkit-transform: scale(1) translateY(0); transform: scale(1) translateY(0); }
+  to   { opacity: 0; -webkit-transform: scale(0.92) translateY(-8px); transform: scale(0.92) translateY(-8px); }
+}
+
+@-webkit-keyframes ld-spin {
+  to { -webkit-transform: rotate(360deg); transform: rotate(360deg); }
+}
+@keyframes ld-spin {
+  to { -webkit-transform: rotate(360deg); transform: rotate(360deg); }
+}
+
+@-webkit-keyframes ld-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+@keyframes ld-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+@-webkit-keyframes ld-blink {
+  0%, 90%, 100% { opacity: 1; }
+  94%            { opacity: 0.1; }
+}
+@keyframes ld-blink {
+  0%, 90%, 100% { opacity: 1; }
+  94%            { opacity: 0.1; }
+}
+
+@-webkit-keyframes ld-dot-pulse {
+  0%, 100% { opacity: 1; -webkit-transform: scale(1); transform: scale(1); }
+  50%       { opacity: 0.4; -webkit-transform: scale(0.75); transform: scale(0.75); }
+}
+@keyframes ld-dot-pulse {
+  0%, 100% { opacity: 1; -webkit-transform: scale(1); transform: scale(1); }
+  50%       { opacity: 0.4; -webkit-transform: scale(0.75); transform: scale(0.75); }
+}
+
+@-webkit-keyframes ld-indeterminate {
+  0%   { margin-left: -100%; width: 60%; }
+  50%  { margin-left: 60%; width: 40%; }
+  100% { margin-left: 120%; width: 60%; }
+}
+@keyframes ld-indeterminate {
+  0%   { margin-left: -100%; width: 60%; }
+  50%  { margin-left: 60%; width: 40%; }
+  100% { margin-left: 120%; width: 60%; }
+}

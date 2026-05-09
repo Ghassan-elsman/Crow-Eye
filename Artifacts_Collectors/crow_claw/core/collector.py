@@ -199,7 +199,7 @@ class ArtifactCollector:
                 return False
         else:
             try:
-                return os.getuid() == 0
+                return getattr(os, 'getuid', lambda: 1)() == 0
             except:
                 return False
     
@@ -495,7 +495,7 @@ class ArtifactCollector:
         )
         
         # Special handling for partition info artifact
-        if hasattr(artifact, 'artifact_type') and artifact.artifact_type.value == "partition_info":
+        if hasattr(artifact, 'artifact_type') and artifact.artifact_type.value == "PartitionInfo":
             return self._collect_partition_info(artifact, output_directory, result, start_time)
         
         # DEBUG: Log source paths
@@ -769,7 +769,7 @@ class ArtifactCollector:
                 # Handle wildcards
                 if "*" in expanded_path or "?" in expanded_path:
                     try:
-                        matches = glob.glob(expanded_path, recursive=False)
+                        matches = glob.glob(expanded_path, recursive=True)
                         self.log(f"[COLLECTOR] Wildcard matches: {len(matches)} files")
                         
                         # Warning for very large collections instead of hard truncation
@@ -836,7 +836,7 @@ class ArtifactCollector:
             # Create output directory for partition info
             artifact_dir = os.path.join(
                 output_directory,
-                "partition_info"
+                "PartitionInfo"
             )
             Path(artifact_dir).mkdir(parents=True, exist_ok=True)
             result.dest_path = artifact_dir

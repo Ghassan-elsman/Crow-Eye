@@ -471,7 +471,8 @@ class CrowClawMainWindow(QMainWindow):
                 sys.path.append(str(main_app_dir))
 
             from styles import CrowEyeStyles
-            self.setStyleSheet(CrowEyeStyles.BODY)
+            style = getattr(CrowEyeStyles, 'MAIN_WINDOW', getattr(CrowEyeStyles, 'BODY', self.get_default_styles()))
+            self.setStyleSheet(style)
             
         except Exception as e:
             print(f"Warning: Could not load Crow-Eye styles, using fallback: {e}")
@@ -788,6 +789,12 @@ class CrowClawMainWindow(QMainWindow):
         left_layout.addWidget(left_label)
 
         self.artifact_list = QListWidget()
+        self.artifact_list.setStyleSheet(
+            "QListWidget { background-color: #1E293B; color: #FFFFFF; border: 1px solid #334155; border-radius: 4px; padding: 5px; font-weight: bold; } "
+            "QListWidget::item { border-bottom: 1px solid #0F172A; padding: 4px; } "
+            "QListWidget::item:selected { background-color: #334155; color: #00FFFF; border-left: 3px solid #00FFFF; } "
+            "QListWidget::item:hover { background-color: #0F172A; }"
+        )
         for artifact in self.artifacts:
             # Add visual indicator for admin-required artifacts
             display_name = artifact.name
@@ -811,8 +818,9 @@ class CrowClawMainWindow(QMainWindow):
         from PyQt5.QtWidgets import QTabWidget
         right_tabs = QTabWidget()
         right_tabs.setStyleSheet(
-            "QTabBar::tab { background-color: #1E293B; color: #FFFFFF; padding: 5px; } "
-            "QTabBar::tab:selected { background-color: #334155; color: #00FFFF; border-bottom: 2px solid #00FFFF; }"
+            "QTabWidget::pane { border: 1px solid #334155; background: #0F1419; border-radius: 4px; } "
+            "QTabBar::tab { background-color: #1E293B; color: #FFFFFF; padding: 8px 16px; border: 1px solid #334155; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; } "
+            "QTabBar::tab:selected { background-color: #0F1419; color: #00FFFF; border-bottom: 2px solid #00FFFF; }"
         )
 
         # Tab 1: Artifact Details
@@ -832,8 +840,7 @@ class CrowClawMainWindow(QMainWindow):
             "QTextEdit { "
             "background-color: #0F1419; "
             "color: #E0E0E0; "
-            "border: 2px solid #00FFFF; "
-            "border-radius: 6px; "
+            "border: none; "
             "padding: 12px; "
             "font-family: Consolas, monospace; "
             "font-size: 10pt; "
@@ -877,7 +884,7 @@ class CrowClawMainWindow(QMainWindow):
 
         self.path_text = QTextEdit()
         self.path_text.setStyleSheet(
-            "background-color: #1E293B; color: #E0E0E0; border: 1px solid #00FFFF; border-radius: 4px;"
+            "background-color: #0F1419; color: #E0E0E0; border: none; padding: 12px; font-family: Consolas, monospace; font-size: 10pt;"
         )
         self.refresh_path_display()  # Initialize with all paths
         paths_layout.addWidget(self.path_text)

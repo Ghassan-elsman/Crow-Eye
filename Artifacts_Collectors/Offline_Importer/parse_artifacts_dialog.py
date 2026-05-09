@@ -1112,7 +1112,7 @@ class ParseArtifactsDialog(QDialog):
             
             # Requirement 2: Group and order steps by artifact type (same as live parsers)
             canonical_order = [
-                'JumpLists', 'Registry', 'Prefetch', 'EVTX', 'ShimCache', 
+                'link_jumplist', 'Registry', 'Prefetch', 'EVTX', 'ShimCache', 
                 'AmCache', 'RecycleBin', 'SRUM', 'MFT', 'USN'
             ]
             

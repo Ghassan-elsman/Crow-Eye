@@ -72,7 +72,7 @@ class VSSAccessStrategy(FileAccessStrategy):
                 return False
         else:
             try:
-                return os.getuid() == 0
+                return getattr(os, 'getuid', lambda: 1)() == 0
             except:
                 return False
     

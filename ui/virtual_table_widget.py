@@ -7,9 +7,11 @@ from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QAbstra
 from PyQt5.QtCore import pyqtSignal, Qt, QTimer
 from typing import Optional, List, Dict, Any, Callable
 import logging
+import os
+from dynamic_mapping.enrichment.enrichment_mixin import EnrichmentMixin
 
 
-class VirtualTableWidget(QTableWidget):
+class VirtualTableWidget(QTableWidget, EnrichmentMixin):
     """
     A table widget that loads data on-demand using virtual scrolling.
     
@@ -46,7 +48,9 @@ class VirtualTableWidget(QTableWidget):
             buffer_size: Total rows to keep in memory
             parent: Parent widget
         """
-        super().__init__(parent)
+        # Call multiple inheritance constructors because we are fancy like that
+        QTableWidget.__init__(self, parent)
+        EnrichmentMixin.__init__(self)
         
         self.logger = logging.getLogger(self.__class__.__name__)
         
@@ -54,6 +58,10 @@ class VirtualTableWidget(QTableWidget):
         self.data_loader = data_loader
         self.table_name = table_name
         self.columns = columns
+        
+        # Enrichment configuration - where the magic happens
+        self.enrichment_column = None  # Will be auto-detected if None
+        self._intelligence_initialized = False
         
         # Pagination configuration
         self.page_size = page_size
@@ -140,8 +148,19 @@ class VirtualTableWidget(QTableWidget):
             stats = self.data_loader.get_table_statistics(self.table_name)
             
             if not stats.get('table_exists', False):
-                self.logger.error(f"Table '{self.table_name}' does not exist")
+                self.logger.error(f"Table '{self.table_name}' does not exist. It's ghosting us.")
                 return False
+            
+            # --- Intelligence Integration: Time to wake up the brain! ---
+            if not self._intelligence_initialized:
+                self._initialize_intelligence()
+            
+            # Re-attach if already initialized but new connection (just in case)
+            if self.get_intelligence_db_path():
+                # We use the cursor from our data_loader because it knows the way
+                cursor = self.data_loader.connection.cursor()
+                self.attach_intelligence_db(cursor)
+                self.logger.info(f"Attached intelligence brain to {self.table_name} view.")
             
             # Get total row count (with filter if applied)
             if self.where_clause:
@@ -204,6 +223,40 @@ class VirtualTableWidget(QTableWidget):
             
             if self.order_by:
                 query += f" ORDER BY {self.order_by}"
+            
+            # Check if we should sprinkle some intelligence on this query
+            if self.get_intelligence_db_path() and self.enrichment_column:
+                # Build enriched query
+                # Enforce Source Exclusion explicitly in the ON clause
+                # We use a unique alias to avoid naming collisions with existing identifiers.
+                alias = "base_tbl"
+                
+                # To avoid ambiguous columns (like 'Source'), we must ensure columns are prefixed
+                select_part = ", ".join(self.columns)
+                
+                select_cols = select_part
+                if "*" in select_part:
+                    select_cols = f"{alias}.*"
+                elif "," in select_part and not any(f"{alias}." in col for col in select_part.split(",")):
+                    # Try a simple prefixing for common columns if no alias is present
+                    if "(" not in select_part: # Avoid complex expressions
+                        cols = [c.strip() for c in select_part.split(",")]
+                        select_cols = ", ".join([f"{alias}.{c}" for c in cols])
+                
+                enriched_query = (
+                    f"SELECT {select_cols}, Intel.Mapping.Key AS Dynamic_Key "
+                    f"FROM {self.table_name} AS {alias} "
+                    f"LEFT JOIN Intel.Mapping ON {alias}.{self.enrichment_column} = Intel.Mapping.Value "
+                    f"AND Intel.Mapping.source != '{self.table_name}'"
+                )
+                
+                query = enriched_query
+                if self.where_clause:
+                    # We need to make sure the where clause uses the alias if needed.
+                    # For now, we hope the user didn't use ambiguous names in their filters.
+                    query += f" WHERE {self.where_clause}"
+                if self.order_by:
+                    query += f" ORDER BY {self.order_by}"
             
             query += f" LIMIT {limit} OFFSET {offset}"
             
@@ -286,8 +339,23 @@ class VirtualTableWidget(QTableWidget):
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.setItem(row_index, col_index, item)
             
-            # Set item value
-            item.setText(str(value) if value is not None else "")
+            # Get item value
+            raw_text = str(value) if value is not None else ""
+            
+            # Apply inline enrichment if this column is the chosen one
+            if column_name == self.enrichment_column:
+                dynamic_key = record.get('Dynamic_Key')
+                if dynamic_key:
+                    # Apply formatting: "Value [Key]"
+                    enriched_text = self.format_enriched_value(raw_text, dynamic_key)
+                    item.setText(enriched_text)
+                    
+                    # --- Verification Print: Confirming enrichment status ---
+                    print(f"[Verification] Enrichment Applied | Table: {self.table_name} | Row: {row_index} | Column: {column_name} | Result: {raw_text} -> [{dynamic_key}]")
+                else:
+                    item.setText(raw_text)
+            else:
+                item.setText(raw_text)
     
     def _get_item_from_pool(self) -> QTableWidgetItem:
         """
@@ -627,3 +695,44 @@ class VirtualTableWidget(QTableWidget):
             self.logger.error(f"Error showing row detail dialog: {e}")
             import traceback
             traceback.print_exc()
+
+    def _initialize_intelligence(self):
+        """
+        Detect Crow_Intelligence.db and set up enrichment targets.
+        Because we want our tables to be smarter than the average bear.
+        """
+        try:
+            # Try to find case directory from data_loader
+            if hasattr(self.data_loader, 'db_path') and self.data_loader.db_path:
+                db_path_str = str(self.data_loader.db_path)
+                case_dir = os.path.dirname(db_path_str)
+                intel_db = os.path.join(case_dir, "Crow_Intelligence.db")
+                
+                if os.path.exists(intel_db):
+                    self.set_intelligence_db_path(case_dir)
+                    self.logger.info(f"Found the secret sauce at: {intel_db}")
+                    
+                    # Heuristic: Pick the best column to enrich
+                    # We look for path-like columns or common identifiers
+                    target_candidates = [
+                        'target_path', 'Local_Path', 'Source_Name', 'executable_path', 
+                        'key_path', 'SID', 'MAC_Address', 'Value', 'Name', 'Filename'
+                    ]
+                    
+                    for candidate in target_candidates:
+                        if candidate in self.columns:
+                            self.enrichment_column = candidate
+                            self.logger.info(f"Choosing '{candidate}' as the enrichment target. Good choice!")
+                            break
+                    
+                    # If still None, pick the first one (usually Name/Date)
+                    if not self.enrichment_column and self.columns:
+                        self.enrichment_column = self.columns[0]
+                else:
+                    self.logger.debug("No Crow_Intelligence.db found. Table remains blissfully ignorant.")
+            
+            self._intelligence_initialized = True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize intelligence brain: {e}")
+            self._intelligence_initialized = True  # Don't keep trying if it's broken

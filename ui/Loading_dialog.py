@@ -541,9 +541,6 @@ class LoadingDialog(QtWidgets.QDialog):
         scrollbar = self.log_display.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
         
-        # Process events to ensure UI updates
-        QApplication.processEvents()
-        
     def format_log_message(self, message):
         """Format log messages with cyberpunk styling"""
         timestamp = QtCore.QTime.currentTime().toString("hh:mm:ss.zzz")

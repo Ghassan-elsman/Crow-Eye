@@ -529,7 +529,7 @@ class TimelineBridge(QObject):
             ("prefetch_data.db", "SELECT MIN(last_executed) as mn, MAX(last_executed) as mx FROM prefetch_data"),
             ("shimcache.db", "SELECT MIN(last_modified) as mn, MAX(last_modified) as mx FROM shimcache_entries"),
             ("recyclebin_analysis.db", "SELECT MIN(deletion_time) as mn, MAX(deletion_time) as mx FROM recycle_bin_entries"),
-            ("LnkDB.db", "SELECT MIN(Time_Access) as mn, MAX(Time_Access) as mx FROM Custom_JLCE"),
+            ("LnkDB.db", "SELECT MIN(Time_Access) as mn, MAX(Time_Access) as mx FROM (SELECT Time_Access FROM LNK_Files UNION ALL SELECT Time_Access FROM Automatic_JumpLists UNION ALL SELECT Time_Access FROM Custom_JumpLists)"),
         ]
         
         for db_name, sql in queries:
@@ -923,42 +923,59 @@ class TimelineBridge(QObject):
     
     @pyqtSlot(str, str, result=str)
     def getLnkData(self, start: str, end: str) -> str:
-        """Get LNK/Jump List data from both JLCE and Custom_JLCE tables."""
+        """Get LNK/Jump List data from all three tables (LNK_Files, Automatic_JumpLists, Custom_JumpLists)."""
         results = []
         
-        # JLCE table
-        jlce_sql = """
+        # LNK_Files table
+        lnk_sql = """
+            SELECT rowid as id, Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
+                   Local_Path, Common_Path, File_Attributes_Flags AS File_Attributes, 
+                   FileSize, Artifact, LNK_Class_ID, Hot_Key_Value, IconIndex, Description
+            FROM LNK_Files
+            WHERE (datetime(Time_Access) BETWEEN datetime(?) AND datetime(?))
+               OR (datetime(Time_Creation) BETWEEN datetime(?) AND datetime(?))
+               OR (datetime(Time_Modification) BETWEEN datetime(?) AND datetime(?))
+            ORDER BY COALESCE(Time_Access, Time_Creation, Time_Modification)
+        """
+        lnk_rows = self._query_db("LnkDB.db", lnk_sql,
+                                    (start, end, start, end, start, end))
+        for row in lnk_rows:
+            row['table_source'] = 'LNK_Files'
+        
+        # Automatic_JumpLists table
+        ajl_sql = """
             SELECT rowid as id, Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
                    AppType, AppID, Artifact, Local_Path, Common_Path, 
-                   File_Attributes_Flags AS File_Attributes, 
-                   PARSABLE_NUM(File_Size) AS FileSize, File_Size AS Formatted_Size
-            FROM JLCE
+                   File_Attributes_Flags AS File_Attributes, FileSize,
+                   DestList_Access_Counter, DestList_Pin_Status, Birth_Volume_ID, Birth_Object_ID,
+                   DestList_Total_Current_Entries, DestList_Total_Pinned_Entries
+            FROM Automatic_JumpLists
             WHERE (datetime(Time_Access) BETWEEN datetime(?) AND datetime(?))
                OR (datetime(Time_Creation) BETWEEN datetime(?) AND datetime(?))
                OR (datetime(Time_Modification) BETWEEN datetime(?) AND datetime(?))
-            ORDER BY COALESCE(Time_Access, Time_Creation)
+            ORDER BY COALESCE(Time_Access, Time_Creation, Time_Modification)
         """
-        jlce_rows = self._query_db("LnkDB.db", jlce_sql,
+        ajl_rows = self._query_db("LnkDB.db", ajl_sql,
                                     (start, end, start, end, start, end))
-        for row in jlce_rows:
-            row['table_source'] = 'JLCE'
+        for row in ajl_rows:
+            row['table_source'] = 'Automatic_JumpLists'
         
-        # Custom_JLCE table 
-        custom_sql = """
+        # Custom_JumpLists table 
+        cjl_sql = """
             SELECT rowid as id, Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
-                   PARSABLE_NUM(FileSize) AS FileSize, FileSize AS Formatted_Size, Artifact
-            FROM Custom_JLCE
+                   AppType, AppID, Artifact, Local_Path, FileSize, Category, Footer_Signature_Valid
+            FROM Custom_JumpLists
             WHERE (datetime(Time_Access) BETWEEN datetime(?) AND datetime(?))
                OR (datetime(Time_Creation) BETWEEN datetime(?) AND datetime(?))
                OR (datetime(Time_Modification) BETWEEN datetime(?) AND datetime(?))
-            ORDER BY COALESCE(Time_Access, Time_Creation)
+            ORDER BY COALESCE(Time_Access, Time_Creation, Time_Modification)
         """
-        custom_rows = self._query_db("LnkDB.db", custom_sql,
+        cjl_rows = self._query_db("LnkDB.db", cjl_sql,
                                       (start, end, start, end, start, end))
-        for row in custom_rows:
-            row['table_source'] = 'Custom_JLCE'
+        for row in cjl_rows:
+            row['table_source'] = 'Custom_JumpLists'
         
-        all_rows = jlce_rows + custom_rows
+        all_rows = lnk_rows + ajl_rows + cjl_rows
         all_rows = self._parse_timestamps_in_rows(all_rows, 
                                                     ['Time_Access', 'Time_Creation', 'Time_Modification'])
         return json.dumps(all_rows)
@@ -1298,7 +1315,7 @@ class TimelineBridge(QObject):
             'SystemLogs', 'ApplicationLogs', 'SecurityLogs',
             'srum_application_usage', 'srum_network_connectivity',
             'srum_network_data_usage', 'srum_energy_usage',
-            'mft_usn_correlated', 'prefetch_data', 'JLCE', 'Custom_JLCE',
+            'mft_usn_correlated', 'prefetch_data', 'LNK_Files', 'Automatic_JumpLists', 'Custom_JumpLists',
             'BAM', 'DAM', 'Shellbags', 'OpenSaveMRU', 'LastSaveMRU', 'RecentDocs', 'RunMRU',
             'WordWheelQuery', 'Network_list', 'NetworkListProfiles', 'NetworkInterfacesInfo',
             'USBStorageDevices', 'ShutdownInfo', 'InstalledSoftware', 'WindowsUpdateInfo',
@@ -1313,7 +1330,7 @@ class TimelineBridge(QObject):
         id_col = 'id'
         if table_name in ('SystemLogs', 'ApplicationLogs', 'SecurityLogs'):
             id_col = 'rowid'
-        elif table_name in ('JLCE', 'Custom_JLCE'):
+        elif table_name in ('LNK_Files', 'Automatic_JumpLists', 'Custom_JumpLists'):
             id_col = 'rowid'
         
         sql = f"SELECT * FROM [{table_name}] WHERE {id_col} = ? LIMIT 1"
@@ -1416,14 +1433,18 @@ class TimelineBridge(QObject):
         def fetch_lnk():
             # Robust dynamic union to skip missing tables
             query_parts = []
-            if self._table_exists("LnkDB.db", "JLCE"):
-                query_parts.append("SELECT DATE(Time_Access) as day, STRFTIME('%H', Time_Access) as hour, COUNT(*) as c FROM JLCE GROUP BY day, hour")
-                query_parts.append("SELECT DATE(Time_Creation) as day, STRFTIME('%H', Time_Creation) as hour, COUNT(*) as c FROM JLCE GROUP BY day, hour")
-                query_parts.append("SELECT DATE(Time_Modification) as day, STRFTIME('%H', Time_Modification) as hour, COUNT(*) as c FROM JLCE GROUP BY day, hour")
-            if self._table_exists("LnkDB.db", "Custom_JLCE"):
-                query_parts.append("SELECT DATE(Time_Access) as day, STRFTIME('%H', Time_Access) as hour, COUNT(*) as c FROM Custom_JLCE GROUP BY day, hour")
-                query_parts.append("SELECT DATE(Time_Creation) as day, STRFTIME('%H', Time_Creation) as hour, COUNT(*) as c FROM Custom_JLCE GROUP BY day, hour")
-                query_parts.append("SELECT DATE(Time_Modification) as day, STRFTIME('%H', Time_Modification) as hour, COUNT(*) as c FROM Custom_JLCE GROUP BY day, hour")
+            if self._table_exists("LnkDB.db", "LNK_Files"):
+                query_parts.append("SELECT DATE(Time_Access) as day, STRFTIME('%H', Time_Access) as hour, COUNT(*) as c FROM LNK_Files GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Creation) as day, STRFTIME('%H', Time_Creation) as hour, COUNT(*) as c FROM LNK_Files GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Modification) as day, STRFTIME('%H', Time_Modification) as hour, COUNT(*) as c FROM LNK_Files GROUP BY day, hour")
+            if self._table_exists("LnkDB.db", "Automatic_JumpLists"):
+                query_parts.append("SELECT DATE(Time_Access) as day, STRFTIME('%H', Time_Access) as hour, COUNT(*) as c FROM Automatic_JumpLists GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Creation) as day, STRFTIME('%H', Time_Creation) as hour, COUNT(*) as c FROM Automatic_JumpLists GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Modification) as day, STRFTIME('%H', Time_Modification) as hour, COUNT(*) as c FROM Automatic_JumpLists GROUP BY day, hour")
+            if self._table_exists("LnkDB.db", "Custom_JumpLists"):
+                query_parts.append("SELECT DATE(Time_Access) as day, STRFTIME('%H', Time_Access) as hour, COUNT(*) as c FROM Custom_JumpLists GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Creation) as day, STRFTIME('%H', Time_Creation) as hour, COUNT(*) as c FROM Custom_JumpLists GROUP BY day, hour")
+                query_parts.append("SELECT DATE(Time_Modification) as day, STRFTIME('%H', Time_Modification) as hour, COUNT(*) as c FROM Custom_JumpLists GROUP BY day, hour")
             
             if not query_parts: return []
             union_sql = f"SELECT day, hour, SUM(c) as count FROM ({' UNION ALL '.join(query_parts)}) WHERE day BETWEEN DATE(?) AND DATE(?) GROUP BY day, hour ORDER BY day"

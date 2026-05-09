@@ -493,7 +493,7 @@ class ParserInvoker:
             elif artifact_type == 'AmCache':
                 logger.info(f"[PARSER ROUTING] → Invoking AmCache parser")
                 return self._invoke_amcache_parser(start_time, **kwargs)
-            elif artifact_type == 'JumpLists':
+            elif artifact_type == 'link_jumplist':
                 logger.info(f"[PARSER ROUTING] → Invoking JumpLists parser")
                 return self._invoke_jumplists_parser(start_time, **kwargs)
             elif artifact_type == 'RecycleBin':
@@ -735,7 +735,7 @@ class ParserInvoker:
             # Create initial ParserResult
             parser_result = ParserResult(
                 success=result.get('success', True),
-                artifact_type='JumpLists',
+                artifact_type='link_jumplist',
                 records_parsed=result.get('records', 0),
                 output_path=output_path,
                 errors=[result.get('error')] if result.get('error') else [],
@@ -765,7 +765,7 @@ class ParserInvoker:
             # Sanitize error for user display with context
             sanitized_error = self._sanitize_dependency_error(error_message, error_type, str(artifact_path))
             
-            return ParserResult(success=False, artifact_type='JumpLists', records_parsed=0, output_path="", errors=[sanitized_error], execution_time=time.time() - start_time)
+            return ParserResult(success=False, artifact_type='link_jumplist', records_parsed=0, output_path="", errors=[sanitized_error], execution_time=time.time() - start_time)
 
     def _invoke_recyclebin_parser(self, start_time: float, **kwargs) -> ParserResult:
         """Invoke Recycle Bin parser using offline_RecycleBinClaw."""
@@ -1199,7 +1199,7 @@ class ParserInvoker:
         # Define the canonical order for artifact types (same as live parsers)
         # Requirement 2: Ensure parsers run in the same order as live parsers
         canonical_order = [
-            'JumpLists',
+            'link_jumplist',
             'Registry',
             'Prefetch',
             'EVTX',
@@ -1247,7 +1247,7 @@ class ParserInvoker:
             
             # Determine if this is a directory-based parser (scans entire directory)
             # or file-based parser (processes individual files)
-            is_directory_parser = artifact_type in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'JumpLists', 'RecycleBin']
+            is_directory_parser = artifact_type in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin']
             
             if is_directory_parser:
                 # For directory-based parsers, call once with the directory containing the files

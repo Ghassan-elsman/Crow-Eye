@@ -1,0 +1,299 @@
+.data-viewer {
+  margin-top: 12px;
+  background: #1a1c24;
+  border: 1px solid #2e303a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.data-viewer-header {
+  padding: 12px 16px;
+  background: #16171d;
+  border-bottom: 1px solid #2e303a;
+}
+
+.query-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.query-label {
+  font-size: 12px;
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+.query-text {
+  font-size: 12px;
+  color: #fbbf24;
+  background: #1f2937;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  flex: 1;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.data-viewer-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.database-info {
+  font-weight: 500;
+}
+
+.row-count {
+  color: #9ca3af;
+}
+
+.data-viewer-controls {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #1a1c24;
+  border-bottom: 1px solid #2e303a;
+}
+
+.filter-input {
+  flex: 1;
+  background: #2a2d3a;
+  border: 1px solid #3a3d4a;
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #e5e7eb;
+  font-size: 13px;
+  transition: border-color 0.2s;
+}
+
+.filter-input:focus {
+  outline: none;
+  border-color: #c084fc;
+}
+
+.filter-input::placeholder {
+  color: #6b7280;
+}
+
+.export-button {
+  background: #374151;
+  border: 1px solid #4b5563;
+  border-radius: 6px;
+  padding: 8px 16px;
+  color: #e5e7eb;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.export-button:hover {
+  background: #4b5563;
+}
+
+.table-container {
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table thead {
+  position: sticky;
+  top: 0;
+  background: #1f2028;
+  z-index: 10;
+}
+
+.data-table th {
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #c084fc;
+  border-bottom: 2px solid #2e303a;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.data-table th:hover {
+  background: #2a2d3a;
+}
+
+.th-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sort-indicator {
+  color: #c084fc;
+  font-size: 14px;
+}
+
+.data-table td {
+  padding: 10px 12px;
+  color: #e5e7eb;
+  border-bottom: 1px solid #2e303a;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-table tbody tr:hover {
+  background: #1f2028;
+}
+
+.null-value {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: #16171d;
+  border-top: 1px solid #2e303a;
+}
+
+.pagination button {
+  background: #374151;
+  border: 1px solid #4b5563;
+  border-radius: 6px;
+  padding: 6px 12px;
+  color: #e5e7eb;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.pagination button:hover:not(:disabled) {
+  background: #4b5563;
+}
+
+.pagination button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-info {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+/* Scrollbar styling */
+.table-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.table-container::-webkit-scrollbar-track {
+  background: #1a1c24;
+}
+
+.table-container::-webkit-scrollbar-thumb {
+  background: #3a3d4a;
+  border-radius: 4px;
+}
+
+.table-container::-webkit-scrollbar-thumb:hover {
+  background: #4a4d5a;
+}
+
+.table-container::-webkit-scrollbar-corner {
+  background: #1a1c24;
+}
+
+/* File path link styling */
+.file-path-link {
+  color: #60a5fa;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  transition: color 0.2s;
+}
+
+.file-path-link:hover {
+  color: #93c5fd;
+  text-decoration-style: solid;
+}
+
+/* Timestamp value styling */
+.timestamp-value {
+  color: #a78bfa;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+}
+
+/* Suspicious value highlighting */
+.suspicious-value {
+  background: rgba(239, 68, 68, 0.1);
+  border-left: 3px solid #ef4444;
+  font-weight: 500;
+}
+
+.suspicious-value:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.bucket-button {
+  background: #047857;
+  border: 1px solid #065f46;
+  border-radius: 6px;
+  padding: 8px 16px;
+  color: #ecfdf5;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bucket-button:hover {
+  background: #065f46;
+}
+
+.actions-column {
+  width: 60px;
+  text-align: center !important;
+}
+
+.actions-cell {
+  text-align: center;
+  width: 60px;
+}
+
+.row-bucket-btn {
+  background: transparent;
+  border: 1px solid #374151;
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #9ca3af;
+  transition: all 0.2s;
+}
+
+.row-bucket-btn:hover {
+  background: #047857;
+  border-color: #059669;
+  color: white;
+  transform: scale(1.1);
+}

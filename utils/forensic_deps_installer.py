@@ -54,6 +54,13 @@ class ForensicDepsInstaller:
             'install_method': 'pip',
             'required': True,
             'fallback': None
+        },
+        'google-genai': {
+            'description': 'Google Gemini AI SDK for EYE Assistant',
+            'platforms': ['Windows', 'Linux', 'Darwin'],
+            'install_method': 'pip',
+            'required': True,
+            'fallback': None
         }
     }
     
@@ -106,7 +113,13 @@ class ForensicDepsInstaller:
                 # special handling for namespace packages
                 __import__(package)
                 return True
+            
             import importlib.util
+            
+            # Special handling for google-genai (package name != import name)
+            if package == 'google-genai':
+                return importlib.util.find_spec('google.genai') is not None
+                
             return importlib.util.find_spec(package) is not None
         except ImportError:
             return False

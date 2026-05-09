@@ -255,28 +255,32 @@ FEATHER_MAPPINGS: List[Dict] = [
     {
         'name': 'LNK_CrowEyeFeather',
         'source_db': 'LnkDB.db',
-        'source_table': 'JLCE',
+        'source_table': 'LNK_Files',
         'artifact_type': 'LNK',
         'parent_type': 'LNK',
         'exclude_last_column': False,
-        'filter': "Artifact = 'lnk'"
+        'filter': None,  # No filter needed - dedicated table
+        'column_mapping': {'Local_Path': 'target_path'}  # Standardize for correlation
     },
     {
         'name': 'AutomaticJumplist_CrowEyeFeather',
         'source_db': 'LnkDB.db',
-        'source_table': 'JLCE',
+        'source_table': 'Automatic_JumpLists',
         'artifact_type': 'AutomaticJumplist',  # Enhanced: specific subtype
         'parent_type': 'Jumplists',
         'exclude_last_column': False,
-        'filter': "Artifact = 'Automatic JumpList'"
+        'filter': None,  # No filter needed - dedicated table
+        'column_mapping': {'Local_Path': 'path'}  # Standardize for correlation
     },
     {
         'name': 'CustomJumplist_CrowEyeFeather',
         'source_db': 'LnkDB.db',
-        'source_table': 'Custom_JLCE',
+        'source_table': 'Custom_JumpLists',
         'artifact_type': 'CustomJumplist',  # Enhanced: specific subtype
         'parent_type': 'Jumplists',
-        'exclude_last_column': False
+        'exclude_last_column': False,
+        'filter': None,  # No filter needed - dedicated table
+        'column_mapping': {'Local_Path': 'path'}  # Standardize for correlation
     },
     
     # ========== Event Logs (3 Feathers) ==========

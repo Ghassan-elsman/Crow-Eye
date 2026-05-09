@@ -1,0 +1,139 @@
+/* TruncationWarningBanner Styles */
+
+.truncation-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  margin: 12px 16px;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.15);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.warning-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.warning-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.warning-title {
+  font-size: 14px;
+  line-height: 1.4;
+  color: #92400e;
+  margin-bottom: 4px;
+}
+
+.warning-title strong {
+  font-weight: 600;
+}
+
+.warning-details {
+  font-size: 13px;
+  line-height: 1.4;
+  color: #b45309;
+}
+
+.warning-time {
+  opacity: 0.8;
+}
+
+.warning-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.warning-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.warning-btn--primary {
+  background: #f59e0b;
+  color: white;
+}
+
+.warning-btn--primary:hover {
+  background: #d97706;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(245, 158, 11, 0.3);
+}
+
+.warning-btn--primary:active {
+  transform: translateY(0);
+}
+
+.warning-btn--secondary {
+  background: white;
+  color: #f59e0b;
+  border: 1px solid #f59e0b;
+}
+
+.warning-btn--secondary:hover {
+  background: #fffbeb;
+  border-color: #d97706;
+  color: #d97706;
+}
+
+.warning-btn--dismiss {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  color: #92400e;
+  font-size: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.warning-btn--dismiss:hover {
+  background: rgba(146, 64, 14, 0.1);
+  color: #78350f;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .truncation-warning-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .warning-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .warning-btn {
+    font-size: 12px;
+    padding: 5px 10px;
+  }
+}

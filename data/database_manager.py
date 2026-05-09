@@ -65,12 +65,25 @@ class SearchResult:
             for col in self.matched_columns[:3]:  # Limit to first 3 columns
                 if col in self.row_data and self.row_data[col] is not None:
                     value = str(self.row_data[col])
-                    # Truncate long values
+                    
+                    # --- Intelligence Integration: Checking for the secret key ---
+                    # If this column has a dynamic mapping, let's show it off!
+                    dynamic_key = self.row_data.get('Dynamic_Key')
+                    # Heuristic: only show if the value is what we enriched
+                    # (In search results, we don't know for sure which column was enriched, 
+                    # but usually it's one of the matched ones)
+                    # For simplicity, we'll just show it if it exists.
+                    if dynamic_key:
+                        value = f"{value} [{dynamic_key}]"
+                    
+                    # Truncate long values so they don't go on forever like a bad movie
                     if len(value) > 100:
                         value = value[:97] + "..."
                     preview_parts.append(f"{col}: {value}")
             
             self.match_preview = " | ".join(preview_parts)
+            if "Dynamic_Key" in self.row_data and self.row_data["Dynamic_Key"]:
+                 self.match_preview += f" (Intelligence: {self.row_data['Dynamic_Key']})"
 
 
 @dataclass
@@ -269,13 +282,12 @@ class DatabaseManager:
         discovered = []
         
         # Pre-scan the directory for any candidate SQLite databases to support
-        # consolidated storage (e.g., Log_Claw.db). We scan shallow and avoid
-        # assumptions about fixed filenames.
+        # consolidated storage (e.g., Log_Claw.db). We scan recursively to support
+        # artifacts in subdirectories like Target_Artifacts or Correlation.
         candidate_dbs: List[Path] = []
         try:
-            # Search within the provided case directory only; users often point
-            # this directly to the Target_Artifacts directory.
-            candidate_dbs = list(self.case_directory.glob("*.db"))
+            # Search within the provided case directory recursively
+            candidate_dbs = list(self.case_directory.rglob("*.db"))
         except Exception:
             candidate_dbs = []
 
@@ -297,12 +309,28 @@ class DatabaseManager:
             # as tables in a consolidated DB and prevents false "Missing".
             if not db_info.exists:
                 resolved_path: Optional[Path] = None
-                # Try alternative filenames first
+                # Try alternative filenames first (recursively via candidate_dbs if exact path fails)
                 for alt_name in self.ALT_NAME_MAP.get(db_name, []):
+                    # Check exact root path first
                     alt_path = self.case_directory / alt_name
                     if alt_path.exists():
                         resolved_path = alt_path
                         break
+                    # If not in root, check candidates for the filename
+                    for cand in candidate_dbs:
+                        if cand.name == alt_name:
+                            resolved_path = cand
+                            break
+                    if resolved_path:
+                        break
+                        
+                # Also check if the primary name exists anywhere in subdirectories
+                if resolved_path is None:
+                    for cand in candidate_dbs:
+                        if cand.name == db_name:
+                            resolved_path = cand
+                            break
+
                 # If still unresolved, inspect candidate DBs and match by table signatures
                 if resolved_path is None and candidate_dbs:
                     signatures = self.TABLE_SIGNATURES.get(db_name, [])
@@ -513,11 +541,18 @@ class DatabaseManager:
             try:
                 cursor.execute(query, params)
 
-                # Convert Row objects to dictionaries
+                # Convert Row objects to dictionaries and handle binary data
                 columns = [column[0] for column in cursor.description] if cursor.description else []
                 results = []
                 for row in cursor.fetchall():
-                    results.append(dict(zip(columns, row)))
+
+                    row_dict = {}
+                    for col, val in zip(columns, row):
+                        if isinstance(val, bytes):
+                            row_dict[col] = f"<BINARY_DATA: {len(val)} bytes, hex: {val[:32].hex()}...>"
+                        else:
+                            row_dict[col] = val
+                    results.append(row_dict)
 
                 return results
             finally:

@@ -1,0 +1,105 @@
+.thinking-trace {
+  margin-top: 10px;
+  background: rgba(13,14,20,0.7);
+  border: 1px solid var(--color-border-accent);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  -webkit-animation: fade-in-up 0.2s ease;
+  animation: fade-in-up 0.2s ease;
+}
+
+.trace-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(168,85,247,0.06);
+  border-bottom: 1px solid var(--color-border-accent);
+}
+
+.trace-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.trace-steps { padding: 8px 0; }
+
+.trace-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 5px 12px;
+  -webkit-transition: background 0.15s ease;
+  transition: background 0.15s ease;
+}
+
+.trace-step--active { background: rgba(168,85,247,0.05); }
+
+.trace-step-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trace-step-body { flex: 1; min-width: 0; }
+
+.trace-step-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  display: block;
+  line-height: 1.5;
+}
+
+.trace-step--active .trace-step-label { color: var(--color-text-primary); }
+.trace-step--done  .trace-step-label  { color: var(--color-text-muted); }
+.trace-step--error .trace-step-label  { color: var(--color-error); }
+
+.trace-step-params {
+  margin-top: 4px;
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+
+.trace-tool-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-accent-bright);
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.trace-param-row {
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.trace-param-key { color: var(--color-cyan); flex-shrink: 0; }
+
+.trace-param-val {
+  color: var(--color-text-secondary);
+  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.trace-step-detail {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--color-error);
+  font-family: var(--font-mono);
+}

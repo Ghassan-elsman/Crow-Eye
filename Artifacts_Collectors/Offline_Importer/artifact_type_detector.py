@@ -265,13 +265,13 @@ class ArtifactTypeDetector:
         # Check Jump Lists patterns
         for pattern in self.jumplist_patterns:
             if re.search(pattern, filename, re.IGNORECASE):
-                return 'JumpLists', 0.9
+                return 'link_jumplist', 0.9
         
         # Check LNK/Shortcut patterns (enhanced detection)
         # Map to JumpLists for parser compatibility
         for pattern in self.lnk_patterns:
             if re.search(pattern, filename, re.IGNORECASE):
-                return 'JumpLists', 0.9
+                return 'link_jumplist', 0.9
         
         # Check MFT patterns
         for pattern in self.mft_patterns:
@@ -307,7 +307,7 @@ class ArtifactTypeDetector:
         # Check for LNK/Shortcut variations
         # Map to JumpLists for parser compatibility
         if any(ext in filename_upper for ext in ['.LNK', '.URL', '.PIF', '.SCF']):
-            return 'JumpLists', 0.8
+            return 'link_jumplist', 0.8
         
         # Check for registry variations
         registry_keywords = ['NTUSER', 'SYSTEM', 'SOFTWARE', 'SAM', 'SECURITY', 'DEFAULT', 'COMPONENTS', 'BCD']

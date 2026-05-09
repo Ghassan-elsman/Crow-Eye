@@ -40,8 +40,11 @@ class SearchResult:
     
     def __post_init__(self):
         """Extract row_id from record_data if not provided."""
-        if self.row_id is None and 'id' in self.record_data:
-            self.row_id = self.record_data['id']
+        if self.row_id is None:
+            for id_col in ['id', '_rowid_', 'rowid', 'ID', 'ROWID']:
+                if id_col in self.record_data:
+                    self.row_id = self.record_data[id_col]
+                    break
 
 
 @dataclass

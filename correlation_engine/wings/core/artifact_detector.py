@@ -147,7 +147,7 @@ class ArtifactDetector:
             'partial': ['shimcache', 'shim']
         },
         'LNK': {
-            'exact': ['lnk', 'shortcut', 'link_files', 'jlce'],
+            'exact': ['lnk', 'shortcut', 'link_files', 'lnk_files'],
             'partial': ['lnk', 'shortcut']
         },
         'Jumplists': {
@@ -155,11 +155,11 @@ class ArtifactDetector:
             'partial': ['jumplist', 'jump']
         },
         'AutomaticJumplist': {
-            'exact': ['automaticjumplist', 'automatic_jumplist', 'automatic_destinations'],
+            'exact': ['automaticjumplist', 'automatic_jumplist', 'automatic_jumplists', 'automatic_destinations'],
             'partial': ['automaticjumplist', 'automatic_jump']
         },
         'CustomJumplist': {
-            'exact': ['customjumplist', 'custom_jumplist', 'custom_jlce'],
+            'exact': ['customjumplist', 'custom_jumplist', 'custom_jumplists'],
             'partial': ['customjumplist', 'custom_jump']
         },
     }

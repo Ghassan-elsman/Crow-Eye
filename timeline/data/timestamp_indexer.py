@@ -47,12 +47,15 @@ class TimestampIndexer:
             ('prefetch_data', 'accessed_on', 'accessed', 'File access time'),
         ],
         'LNK': [
-            ('JLCE', 'Time_Creation', 'created', 'Link file creation time'),
-            ('JLCE', 'Time_Modification', 'modified', 'Link file modification time'),
-            ('JLCE', 'Time_Access', 'accessed', 'Link file access time'),
-            ('Custom_JLCE', 'Time_Creation', 'created', 'Custom link creation time'),
-            ('Custom_JLCE', 'Time_Modification', 'modified', 'Custom link modification time'),
-            ('Custom_JLCE', 'Time_Access', 'accessed', 'Custom link access time'),
+            ('LNK_Files', 'Time_Creation', 'created', 'Link file creation time'),
+            ('LNK_Files', 'Time_Modification', 'modified', 'Link file modification time'),
+            ('LNK_Files', 'Time_Access', 'accessed', 'Link file access time'),
+            ('Automatic_JumpLists', 'Time_Creation', 'created', 'Automatic JumpList creation time'),
+            ('Automatic_JumpLists', 'Time_Modification', 'modified', 'Automatic JumpList modification time'),
+            ('Automatic_JumpLists', 'Time_Access', 'accessed', 'Automatic JumpList access time'),
+            ('Custom_JumpLists', 'Time_Creation', 'created', 'Custom JumpList creation time'),
+            ('Custom_JumpLists', 'Time_Modification', 'modified', 'Custom JumpList modification time'),
+            ('Custom_JumpLists', 'Time_Access', 'accessed', 'Custom JumpList access time'),
         ],
         'Registry': [
             ('UserAssist', 'last_execution', 'executed', 'UserAssist last execution time'),
@@ -114,7 +117,7 @@ class TimestampIndexer:
     # Updated to match actual database schemas
     PRIMARY_TIMESTAMPS = {
         'Prefetch': ('prefetch_data', 'last_executed'),
-        'LNK': ('JLCE', 'Time_Modification'),
+        'LNK': ('LNK_Files', 'Time_Modification'),
         'Registry': ('UserAssist', 'timestamp'),
         'BAM': ('BAM', 'timestamp'),
         'ShellBag': ('Shellbags', 'modified_date'),

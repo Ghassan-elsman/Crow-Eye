@@ -37,7 +37,7 @@ def run_offline_acjl(case_path, registry_hive_paths=None, direct_parse=False):
         direct_parse (bool, optional): Whether to parse artifacts directly.
     
     Note:
-        JumpLists/LNK parser operates on file artifacts (.lnk, .automaticDestinations-ms)
+        link_jumplist/LNK parser operates on file artifacts (.lnk, .automaticDestinations-ms)
         and does not require registry context. The registry_hive_paths parameter is ignored.
         
     Returns:

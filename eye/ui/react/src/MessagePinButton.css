@@ -1,0 +1,83 @@
+/* MessagePinButton Styles */
+
+.message-pin-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.message-pin-button:hover {
+  background: #f9fafb;
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.message-pin-button:active {
+  transform: scale(0.98);
+}
+
+.message-pin-button--pinned {
+  background: #fef3c7;
+  border-color: #fbbf24;
+  color: #92400e;
+}
+
+.message-pin-button--pinned:hover {
+  background: #fde68a;
+  border-color: #f59e0b;
+}
+
+.message-pin-button--processing {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.message-pin-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.pin-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.pin-label {
+  line-height: 1;
+}
+
+/* Animation for pin state change */
+@keyframes pinPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+.message-pin-button--pinned .pin-icon {
+  animation: pinPulse 0.3s ease-out;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .message-pin-button {
+    padding: 3px 6px;
+    font-size: 11px;
+  }
+
+  .pin-icon {
+    font-size: 12px;
+  }
+}

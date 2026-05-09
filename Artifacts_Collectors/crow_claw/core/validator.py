@@ -156,7 +156,7 @@ class PathValidator:
                 return False
         else:
             try:
-                return os.getuid() == 0
+                return getattr(os, 'getuid', lambda: 1)() == 0
             except (AttributeError, OSError):
                 return False
 
@@ -314,7 +314,7 @@ class PathExpander:
         """
         import glob
         expanded = os.path.expandvars(path)
-        matches = glob.glob(expanded, recursive=False)
+        matches = glob.glob(expanded, recursive=True)
         return matches if matches else [path]  # Return original if no matches
 
 

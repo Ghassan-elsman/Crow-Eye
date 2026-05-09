@@ -208,14 +208,35 @@ class AutoFeatherGenerator:
                 columns = columns[:-1]
                 logger.debug(f"Excluded last column from {mapping['source_table']}")
             
+            # Sanitize column names and filter out None/empty (Fixes "no such column: None")
+            valid_columns = []
+            for col in columns:
+                name = col[1]
+                if name and isinstance(name, str):
+                    valid_columns.append(col)
+                else:
+                    logger.warning(f"Skipped invalid column definition in {mapping['source_table']}: {col}")
+            
+            columns = valid_columns
             column_names = [col[1] for col in columns]
             
-            # Build SELECT query
-            select_cols = ', '.join([f'"{col}"' for col in column_names])
+            # Support column mapping for standardization
+            column_mapping = mapping.get('column_mapping', {})
+            
+            # Build SELECT query with aliasing if mapping exists
+            select_cols_list = []
+            for col_name in column_names:
+                if col_name in column_mapping:
+                    alias = column_mapping[col_name]
+                    select_cols_list.append(f'"{col_name}" AS "{alias}"')
+                else:
+                    select_cols_list.append(f'"{col_name}"')
+            
+            select_cols = ', '.join(select_cols_list)
             query = f"SELECT {select_cols} FROM {mapping['source_table']}"
             
             # Add filter if specified
-            if 'filter' in mapping:
+            if mapping.get('filter'):
                 query += f" WHERE {mapping['filter']}"
                 logger.debug(f"Applied filter: {mapping['filter']}")
             
@@ -270,24 +291,42 @@ class AutoFeatherGenerator:
                         VALUES (?, ?)
                     ''', (key, value))
                 
-                # Create data table with same structure as source
-                col_defs = ', '.join([f'"{col[1]}" {col[2]}' for col in columns])
+                # Create data table with mapped column names
+                mapped_columns = []
+                for col in columns:
+                    name = col[1]
+                    col_type = col[2]
+                    # Use alias if mapped
+                    if name in column_mapping:
+                        mapped_columns.append(f'"{column_mapping[name]}" {col_type}')
+                    else:
+                        mapped_columns.append(f'"{name}" {col_type}')
+                
+                col_defs = ', '.join(mapped_columns)
                 feather_cursor.execute(f'''
                     CREATE TABLE IF NOT EXISTS {mapping['source_table']} (
                         {col_defs}
                     )
                 ''')
                 
+                # Update column names for insertion (use aliases if mapped)
+                target_column_names = []
+                for name in column_names:
+                    if name in column_mapping:
+                        target_column_names.append(column_mapping[name])
+                    else:
+                        target_column_names.append(name)
+                
                 # Insert data
                 if rows:
-                    placeholders = ', '.join(['?' for _ in column_names])
+                    placeholders = ', '.join(['?' for _ in target_column_names])
                     feather_cursor.executemany(
                         f'INSERT INTO {mapping["source_table"]} VALUES ({placeholders})',
                         rows
                     )
                 
-                # Create indexes for common columns
-                self._create_indexes(feather_cursor, mapping['source_table'], column_names)
+                # Create indexes for common columns (use target names)
+                self._create_indexes(feather_cursor, mapping['source_table'], target_column_names)
                 
                 # Commit and close feather database
                 feather_conn.commit()
@@ -301,7 +340,7 @@ class AutoFeatherGenerator:
             feather_config = self._create_feather_config(
                 mapping=mapping,
                 feather_path=feather_path,
-                column_names=column_names,
+                column_names=target_column_names,
                 row_count=len(rows),
                 source_db_path=source_db_path
             )

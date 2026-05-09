@@ -5,6 +5,7 @@ This module provides the FileAccessor class that orchestrates multiple
 file access strategies with automatic retry for transient failures.
 """
 
+import os
 import time
 from typing import List, Optional
 from .access_strategy import FileAccessStrategy
@@ -405,11 +406,11 @@ class FileAccessor:
                 
                 # Try to get lock info
                 try:
-                    lock_info = get_lock_info(file_path)
-                    if lock_info and lock_info.get("process_name"):
-                        error_parts.append(f"Locked by: {lock_info['process_name']} (PID: {lock_info.get('pid', 'unknown')})")
-                        error_parts.append(f"Try closing {lock_info['process_name']} and retry collection")
-                except:
+                    lock_info = get_lock_info(file_path, OSError("File locked"))
+                    if lock_info and lock_info.process_name:
+                        error_parts.append(f"Locked by: {lock_info.process_name} (PID: {getattr(lock_info, 'process_id', 'unknown')})")
+                        error_parts.append(f"Try closing {lock_info.process_name} and retry collection")
+                except Exception:
                     pass
                 
                 if self.is_admin and not vss_attempted:

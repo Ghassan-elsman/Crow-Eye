@@ -1,0 +1,174 @@
+/* ===== EYE Forensic Assistant — Global Design System ===== */
+
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+/* ===== Design Tokens ===== */
+:root {
+  --color-bg-base:       #0d0e14;
+  --color-bg-surface:    #13141c;
+  --color-bg-elevated:   #1a1b26;
+  --color-bg-overlay:    #1e2030;
+
+  --color-border-subtle: rgba(255,255,255,0.06);
+  --color-border-muted:  rgba(255,255,255,0.1);
+  --color-border-accent: rgba(168,85,247,0.35);
+
+  --color-accent:        #a855f7;
+  --color-accent-dim:    rgba(168,85,247,0.15);
+  --color-accent-bright: #c084fc;
+
+  --color-cyan:          #22d3ee;
+  --color-cyan-dim:      rgba(34,211,238,0.12);
+
+  --color-success:       #10b981;
+  --color-warning:       #f59e0b;
+  --color-error:         #f43f5e;
+  --color-info:          #60a5fa;
+
+  --color-text-primary:  #e2e8f0;
+  --color-text-secondary:#94a3b8;
+  --color-text-muted:    #475569;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
+
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   20px;
+  --radius-full: 9999px;
+
+  --shadow-sm:   0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md:   0 4px 16px rgba(0,0,0,0.5);
+  --shadow-lg:   0 8px 32px rgba(0,0,0,0.6);
+
+  --header-height:    56px;
+  --statsbar-height:  32px;
+
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color-scheme: dark;
+  color: var(--color-text-primary);
+  background: var(--color-bg-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* ===== Reset ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* CRITICAL: Make html/body/root fill the QWebEngineView exactly */
+html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  background: var(--color-bg-base);
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ===== Typography ===== */
+h1, h2, h3, h4 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.3;
+}
+
+p { margin: 0; }
+
+code, pre, .monospace { font-family: var(--font-mono); font-size: 13px; }
+
+code {
+  background: var(--color-bg-overlay);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  color: var(--color-accent-bright);
+}
+
+pre {
+  background: var(--color-bg-overlay);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  overflow-x: auto;
+  color: var(--color-text-primary);
+}
+
+pre code { background: none; border: none; padding: 0; color: inherit; }
+
+/* ===== Scrollbars — Optimized for Visibility in Desktop UI ===== */
+::-webkit-scrollbar { 
+  width: 12px; 
+  height: 12px; 
+}
+
+::-webkit-scrollbar-track { 
+  background: rgba(0, 0, 0, 0.15);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #7c3aed; 
+  border-radius: 6px;
+  border: 2px solid #13141c; /* Contrast border */
+}
+
+::-webkit-scrollbar-thumb:hover { 
+  background: #a855f7; 
+}
+
+/* ===== Utility animations — webkit-prefixed for QWebEngine ===== */
+@-webkit-keyframes pulse-dot {
+  0%, 100% { opacity: 1; -webkit-transform: scale(1); transform: scale(1); }
+  50%       { opacity: 0.5; -webkit-transform: scale(0.85); transform: scale(0.85); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; -webkit-transform: scale(1); transform: scale(1); }
+  50%       { opacity: 0.5; -webkit-transform: scale(0.85); transform: scale(0.85); }
+}
+
+@-webkit-keyframes spin {
+  to { -webkit-transform: rotate(360deg); transform: rotate(360deg); }
+}
+@keyframes spin {
+  to { -webkit-transform: rotate(360deg); transform: rotate(360deg); }
+}
+
+@-webkit-keyframes fade-in-up {
+  from { opacity: 0; -webkit-transform: translateY(8px); transform: translateY(8px); }
+  to   { opacity: 1; -webkit-transform: translateY(0); transform: translateY(0); }
+}
+@keyframes fade-in-up {
+  from { opacity: 0; -webkit-transform: translateY(8px); transform: translateY(8px); }
+  to   { opacity: 1; -webkit-transform: translateY(0); transform: translateY(0); }
+}
+
+@-webkit-keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

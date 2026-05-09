@@ -1,0 +1,1688 @@
+# EYE Assistant: Deep Technical Analysis (v1.5)
+
+This analysis evaluates the technical efficiency, architectural design, and security posture of the EYE (Evidence Yield Engine) based on its current implementation of configuration, validation, and execution pipelines.
+
+---
+
+## Executive Architecture Overview
+
+### Complete System Architecture
+
+```mermaid
+graph TB
+    subgraph "Presentation Layer"
+        User((Forensic<br/>Investigator))
+        React[React Chat Interface<br/>Modern Web UI]
+        DataView[Data Viewers<br/>Tables, Charts, Timeline]
+    end
+    
+    subgraph "Application Layer"
+        subgraph "UI Components (PyQt5)"
+            EyeWindow[EYE Assistant Window]
+            CaseSummary[Case Summary Dialog]
+            Settings[Settings Dialog]
+            HITL[Human-in-the-Loop Dialogs]
+        end
+        
+        subgraph "Bridge Layer (QWebChannel)"
+            Bridge[EYE Bridge<br/>Python ↔ JavaScript]
+        end
+    end
+    
+    subgraph "Business Logic Layer"
+        subgraph "Core Brain"
+            CM[Context Manager<br/>Central Orchestrator]
+            QP[Query Processor<br/>8-Stage Pipeline]
+        end
+        
+        subgraph "Service Layer"
+            MR[Model Router<br/>AI Backend Manager]
+            DBS[Database Service<br/>Read-Only SQL]
+            SS[Search Service<br/>Cross-Artifact]
+            RAGS[RAG Service<br/>Knowledge Base]
+            RE[Report Engine<br/>Living Report]
+            HM[History Manager<br/>Conversation State]
+            IE[Intent Engine<br/>Keyword Detection]
+            CS[Correlation Service<br/>Event Correlation]
+            CCM[Case Context Manager<br/>Case Metadata]
+            ISS[Internet Search<br/>Web Research]
+            CredMgr[Credential Manager<br/>Secure Keys]
+        end
+    end
+    
+    subgraph "Integration Layer"
+        subgraph "AI Backends (Strategy Pattern)"
+            CloudAPI[Cloud API<br/>OpenAI, Anthropic, Gemini]
+            LocalServer[Local Server<br/>Ollama, LM Studio]
+            LocalCLI[Local CLI<br/>Llama.cpp, Gemini CLI]
+        end
+    end
+    
+    subgraph "Data Layer"
+        subgraph "Forensic Data"
+            SQLite[(SQLite Databases<br/>Prefetch, MFT, Registry, etc.)]
+            Files[File System<br/>Artifacts, Reports, Images]
+        end
+        
+        subgraph "Configuration"
+            Config[Config Files<br/>JSON Schema Validated]
+            Keychain[OS Keychain<br/>Encrypted Credentials]
+        end
+        
+        subgraph "Knowledge Base"
+            KB[(RAG Knowledge Base<br/>Forensic Documentation)]
+        end
+    end
+    
+    User -->|Natural Language| React
+    React <-->|QWebChannel| Bridge
+    DataView <-->|QWebChannel| Bridge
+    
+    Bridge <--> CM
+    Bridge <--> DBS
+    Bridge <--> SS
+    Bridge <--> RE
+    
+    EyeWindow --> Bridge
+    CaseSummary --> RE
+    Settings --> CredMgr
+    HITL --> CM
+    
+    CM --> QP
+    CM --> MR
+    CM --> DBS
+    CM --> SS
+    CM --> RAGS
+    CM --> RE
+    CM --> HM
+    CM --> IE
+    CM --> CS
+    CM --> CCM
+    CM --> ISS
+    
+    QP --> MR
+    QP --> IE
+    QP --> RAGS
+    
+    MR --> CloudAPI
+    MR --> LocalServer
+    MR --> LocalCLI
+    
+    DBS --> SQLite
+    SS --> SQLite
+    RAGS --> KB
+    RE --> Files
+    HM --> Files
+    CCM --> Config
+    CredMgr --> Keychain
+    
+    CloudAPI -.->|HTTPS| Internet((Internet))
+    ISS -.->|HTTPS| Internet
+    
+    style User fill:#8b5cf6,stroke:#7c3aed,stroke-width:3px,color:#fff
+    style CM fill:#f97316,stroke:#ea580c,stroke-width:3px,color:#fff
+    style QP fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+    style MR fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#fff
+    style RE fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+    style Bridge fill:#ec4899,stroke:#db2777,stroke-width:2px,color:#fff
+    style SQLite fill:#475569,stroke:#cbd5e1,stroke-width:2px,color:#fff
+    style Keychain fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#fff
+```
+
+### Technology Stack
+
+```mermaid
+graph LR
+    subgraph "Frontend"
+        F1[React<br/>UI Framework]
+        F2[DataTables.js<br/>Table Rendering]
+        F3[Chart.js<br/>Visualizations]
+        F4[Markdown<br/>Content Rendering]
+    end
+    
+    subgraph "Backend"
+        B1[Python 3.8+<br/>Core Language]
+        B2[PyQt5<br/>Desktop Framework]
+        B3[QWebEngine<br/>Web Integration]
+        B4[QWebChannel<br/>Bridge Protocol]
+    end
+    
+    subgraph "AI Integration"
+        A1[OpenAI SDK<br/>GPT Models]
+        A2[Anthropic SDK<br/>Claude Models]
+        A3[Google GenAI<br/>Gemini Models]
+        A4[Requests<br/>HTTP Client]
+    end
+    
+    subgraph "Data Processing"
+        D1[SQLite3<br/>Database Engine]
+        D2[BeautifulSoup4<br/>HTML Parsing]
+        D3[tiktoken<br/>Token Counting]
+        D4[Hypothesis<br/>Property Testing]
+    end
+    
+    subgraph "Security"
+        S1[keyring<br/>Credential Storage]
+        S2[JSON Schema<br/>Config Validation]
+        S3[PRAGMA query_only<br/>Read-Only DB]
+    end
+    
+    subgraph "Export"
+        E1[Weasyprint<br/>PDF Generation]
+        E2[Markdown<br/>HTML Conversion]
+    end
+    
+    style F1 fill:#61dafb,stroke:#0088cc,color:#000
+    style B1 fill:#3776ab,stroke:#ffd43b,color:#fff
+    style A1 fill:#10a37f,stroke:#1a7f64,color:#fff
+    style D1 fill:#003b57,stroke:#0f80cc,color:#fff
+    style S1 fill:#ef4444,stroke:#dc2626,color:#fff
+```
+
+---
+
+## 1. Architectural Overview & The Nervous System
+
+The EYE module is structured around robust design patterns to ensure modularity and security during forensic investigations. Below is the detailed system architecture illustrating the data flow, the core pipeline, and the three distinct AI backend integration strategies.
+
+```mermaid
+graph TD
+    %% Styling
+    classDef ui fill:#1E293B,stroke:#3B82F6,stroke-width:2px,color:#fff
+    classDef bridge fill:#64748B,stroke:#94A3B8,stroke-width:2px,color:#fff
+    classDef brain fill:#0F172A,stroke:#F59E0B,stroke-width:2px,color:#fff
+    classDef service fill:#334155,stroke:#10B981,stroke-width:2px,color:#fff
+    classDef backend_cloud fill:#0284C7,stroke:#67E8F9,stroke-width:2px,color:#fff
+    classDef backend_server fill:#059669,stroke:#6EE7B7,stroke-width:2px,color:#fff
+    classDef backend_cli fill:#B45309,stroke:#FCD34D,stroke-width:2px,color:#fff
+    classDef db fill:#475569,stroke:#CBD5E1,stroke-width:2px,color:#fff
+
+    %% User Interaction
+    User((Investigator)) -->|Natural Language| ReactUI
+
+    %% UI Layer
+    subgraph UI_Layer [UI Layer]
+        ReactUI[React Chat Interface]:::ui
+        DataViewer[DataTables / Charts]:::ui
+    end
+
+    %% Bridge
+    ReactUI <-->|QWebChannel JSON| EYEBridge(EYE Bridge):::bridge
+
+    %% Brain Layer
+    subgraph Brain_Layer [Core Brain Layer]
+        ContextMgr{Context Manager}:::brain
+        QueryProc[Query Processor<br/>8-Stage Pipeline]:::brain
+        ContextMgr <--> QueryProc
+    end
+
+    EYEBridge <--> ContextMgr
+
+    %% Services
+    subgraph Services_Layer [Services Layer]
+        IntentEng[Intent Engine]:::service
+        RAGSvc[RAG Service<br/>Knowledge Base]:::service
+        DBService[Forensic Database<br/>Service Read-Only]:::service
+        ReportEng[Report Engine<br/>Ghassan Protocol]:::service
+        
+        QueryProc -->|1. Extract Keywords| IntentEng
+        QueryProc -->|2. Retrieve Context| RAGSvc
+        ContextMgr -->|Execute Tools| DBService
+        ContextMgr -->|Render Output| ReportEng
+    end
+
+    %% Model Routing & Backends
+    ModelRouter{Model Router<br/>Strategy Pattern}:::service
+    QueryProc -->|Generate Response| ModelRouter
+
+    subgraph Backend_Strategies [Backend Integration Strategies]
+        
+        %% Type 1: Cloud API
+        subgraph Cloud [Type 1: Cloud API]
+            CloudAPI[Native SDKs<br/>HTTPS / REST]:::backend_cloud
+            CloudModels>OpenAI, Anthropic, Gemini]
+            CloudAPI -.-> CloudModels
+        end
+        
+        %% Type 2: Local Server
+        subgraph Server [Type 2: Local Server]
+            LocalServer[REST API Client<br/>HTTP localhost]:::backend_server
+            ServerModels>Ollama, LM Studio]
+            LocalServer -.-> ServerModels
+        end
+        
+        %% Type 3: Local CLI
+        subgraph CLI [Type 3: Local CLI]
+            LocalCLI[Subprocess Wrapper<br/>stdin / stdout]:::backend_cli
+            CLIModels>Llama.cpp, Gemini CLI]
+            LocalCLI -.-> CLIModels
+        end
+    end
+
+    ModelRouter --> CloudAPI
+    ModelRouter --> LocalServer
+    ModelRouter --> LocalCLI
+
+    %% Databases
+    subgraph Forensic_Data [Forensic Data]
+        SQLite[(SQLite DBs<br/>Prefetch, MFT, etc.)]:::db
+        TOON[TOON Engine<br/>Data Compression]:::db
+        
+        DBService -->|PRAGMA query_only| SQLite
+        SQLite --> TOON
+        TOON -->|Formatted Evidence| ContextMgr
+    end
+
+    %% Notes
+    class Cloud,Server,CLI fill:none,stroke-width:1px,stroke-dasharray: 5 5
+```
+
+### A. The Mediator Pattern (`ContextManager`)
+- **Analysis**: The `ContextManager` acts as the "Heart" of the application, utilizing a strict Mediator pattern. Services (`DatabaseService`, `RAGService`, `ReportEngine`) do not communicate with each other directly; they only interact through the `ContextManager`.
+- **Benefit**: This isolates state and ensures that forensic context (history, active databases) remains synchronized. Tool execution is safely dispatched via an explicit handler map (`self.tool_handlers`).
+
+### B. The Investigative Pipeline (`QueryProcessor`)
+- **Analysis**: The `QueryProcessor` operates as the "Central Nervous System", executing a strict 8-stage pipeline:
+  1. Intent Interception
+  2. Data Ingestion
+  3. Forensic Keyword Analysis (via `IntentEngine`)
+  4. Knowledge Base Lookup (via `RAGService`)
+  5. Prompt Engineering
+  6. AI Reasoning
+  7. Verification via Forensic Tools
+  8. Final Forensic Synthesis
+- **Resilience Feature**: The implementation of `_run_python_triage` allows for a hardcoded, AI-independent execution path. This guarantees an initial comprehensive system report without relying on multi-turn LLM tool calls or API quotas.
+
+---
+
+## 1.5 Detailed Component Architecture
+
+### Backend Strategy Pattern Implementation
+
+```mermaid
+classDiagram
+    class LLMBackend {
+        <<abstract>>
+        +generate(system_prompt, user_message, tools, history) Dict
+        +validate_connectivity() bool
+        +list_models() List[str]
+        +get_models_with_quota() List[Dict]
+    }
+    
+    class OpenAIBackend {
+        -api_key: str
+        -client: OpenAI
+        +generate() Dict
+        +validate_connectivity() bool
+        +list_models() List[str]
+    }
+    
+    class AnthropicBackend {
+        -api_key: str
+        -client: Anthropic
+        +generate() Dict
+        +validate_connectivity() bool
+        +list_models() List[str]
+    }
+    
+    class GeminiBackend {
+        -api_key: str
+        -client: GenerativeModel
+        +generate() Dict
+        +validate_connectivity() bool
+        +list_models() List[str]
+    }
+    
+    class OllamaBackend {
+        -base_url: str
+        +generate() Dict
+        +validate_connectivity() bool
+        +list_models() List[str]
+    }
+    
+    class LMStudioBackend {
+        -base_url: str
+        +generate() Dict
+        +validate_connectivity() bool
+        +list_models() List[str]
+    }
+    
+    class GenericCLIBackend {
+        -executable_path: str
+        -profile: CLIProfile
+        +generate() Dict
+        +validate_connectivity() bool
+        +list_models() List[str]
+    }
+    
+    class ModelRouter {
+        -config: Dict
+        -backend: LLMBackend
+        +generate() Dict
+        +switch_model(model_name) bool
+        +validate_connectivity() bool
+        +get_models_with_quota() List[Dict]
+    }
+    
+    LLMBackend <|-- OpenAIBackend : implements
+    LLMBackend <|-- AnthropicBackend : implements
+    LLMBackend <|-- GeminiBackend : implements
+    LLMBackend <|-- OllamaBackend : implements
+    LLMBackend <|-- LMStudioBackend : implements
+    LLMBackend <|-- GenericCLIBackend : implements
+    ModelRouter o-- LLMBackend : uses
+```
+
+### Service Layer Architecture
+
+```mermaid
+graph TB
+    subgraph "Context Manager (Orchestrator)"
+        CM[ContextManager<br/>Central Coordinator]
+        
+        subgraph "Embedded Components"
+            HM[HistoryManager<br/>Conversation State]
+            IE[IntentEngine<br/>Keyword Detection]
+            FH[ForensicHandlers<br/>Tool Execution]
+            RH[ReportHandlers<br/>Report Tools]
+            QP[QueryProcessor<br/>8-Stage Pipeline]
+        end
+        
+        CM --> HM
+        CM --> IE
+        CM --> FH
+        CM --> RH
+        CM --> QP
+    end
+    
+    subgraph "External Services"
+        MR[ModelRouter<br/>AI Backend Manager]
+        DBS[DatabaseService<br/>Read-Only SQL]
+        SS[SearchService<br/>Cross-Artifact Search]
+        RAGS[RAGService<br/>Knowledge Retrieval]
+        RE[ReportEngine<br/>Living Report]
+        CS[CorrelationService<br/>Event Correlation]
+        CCM[CaseContextManager<br/>Case Metadata]
+        ISS[InternetSearchService<br/>Web Search]
+    end
+    
+    CM --> MR
+    CM --> DBS
+    CM --> SS
+    CM --> RAGS
+    CM --> RE
+    CM --> CS
+    CM --> CCM
+    CM --> ISS
+    
+    QP --> MR
+    QP --> IE
+    QP --> RAGS
+    
+    FH --> DBS
+    FH --> SS
+    FH --> CS
+    FH --> ISS
+    
+    RH --> RE
+    
+    style CM fill:#f97316,stroke:#ea580c,stroke-width:3px,color:#fff
+    style QP fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+    style MR fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#fff
+    style RE fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+### Query Processing Pipeline (8 Stages)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User
+    participant Bridge as EYEBridge
+    participant CM as ContextManager
+    participant QP as QueryProcessor
+    participant IE as IntentEngine
+    participant RAG as RAGService
+    participant MR as ModelRouter
+    participant Backend as LLM Backend
+    participant FH as ForensicHandlers
+    participant DBS as DatabaseService
+    participant RE as ReportEngine
+    
+    User->>Bridge: process_query("Show prefetch from yesterday")
+    Bridge->>CM: process_query(query)
+    CM->>QP: process_query(query)
+    
+    Note over QP: Stage 1: Intent Interception
+    QP->>IE: detect_keywords(query)
+    IE-->>QP: ["prefetch", "yesterday"]
+    
+    Note over QP: Stage 2-3: Data Ingestion & Analysis
+    QP->>RAG: retrieve_context(keywords)
+    RAG-->>QP: prefetch_documentation
+    
+    Note over QP: Stage 4-5: Prompt Engineering
+    QP->>QP: _build_system_prompt(rag_context)
+    QP->>QP: _build_user_prompt(query)
+    
+    Note over QP: Stage 6: AI Reasoning
+    QP->>MR: generate(system, user, tools, history)
+    MR->>Backend: API call with tools
+    Backend-->>MR: response + tool_calls
+    MR-->>QP: {content, tool_calls}
+    
+    Note over QP: Stage 7: Verification via Tools
+    loop For each tool_call
+        QP->>FH: execute_tool(tool_call)
+        FH->>DBS: query_database(sql)
+        DBS-->>FH: results
+        FH-->>QP: tool_result
+    end
+    
+    Note over QP: Stage 8: Final Synthesis
+    QP->>MR: generate(synthesis_prompt + tool_results)
+    MR->>Backend: API call
+    Backend-->>MR: final_response
+    MR-->>QP: synthesis
+    
+    QP->>RE: add_data_table(results)
+    RE-->>QP: block_id
+    
+    QP-->>CM: {response, action_chips, data_viewer}
+    CM-->>Bridge: JSON result
+    Bridge-->>User: Display response + data
+```
+
+### Database Service Security Architecture
+
+```mermaid
+graph LR
+    subgraph "Request Flow"
+        AI[AI Generated SQL]
+        Val[SQL Validator<br/>Regex Whitelist]
+        Conn[SQLite Connection<br/>PRAGMA query_only=ON]
+        DB[(Forensic Database<br/>Read-Only)]
+    end
+    
+    subgraph "Security Layers"
+        L1[Layer 1: Keyword Blacklist<br/>DROP, UPDATE, INSERT, ALTER]
+        L2[Layer 2: Connection-Level<br/>PRAGMA query_only]
+        L3[Layer 3: File System<br/>Read-Only Permissions]
+    end
+    
+    AI -->|SQL Query| Val
+    Val -->|Rejected| Err[Error: Forbidden SQL]
+    Val -->|Approved| L1
+    L1 -->|Pass| Conn
+    Conn --> L2
+    L2 --> DB
+    DB --> L3
+    
+    style Val fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#fff
+    style L1 fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
+    style L2 fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+    style L3 fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#fff
+    style Err fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#fff
+```
+
+### Report Engine Block System
+
+```mermaid
+classDiagram
+    class ReportBlock {
+        <<abstract>>
+        +block_id: str
+        +block_type: str
+        +metadata: Dict
+        +created_at: datetime
+        +to_dict() Dict
+        +to_html() str
+    }
+    
+    class TextBlock {
+        +title: str
+        +markdown_content: str
+        +to_html() str
+    }
+    
+    class TableBlock {
+        +sql_query: str
+        +columns: List[str]
+        +rows: List[Dict]
+        +caption: str
+        +to_html() str
+    }
+    
+    class ImageBlock {
+        +image_path: str
+        +caption: str
+        +to_html() str
+    }
+    
+    class ChartBlock {
+        +chart_type: str
+        +title: str
+        +labels: List
+        +datasets: List[Dict]
+        +to_html() str
+    }
+    
+    class ChatBlock {
+        +messages: List[Dict]
+        +to_html() str
+    }
+    
+    class ReferenceBlock {
+        +reference_text: str
+        +source_link: str
+        +to_html() str
+    }
+    
+    class ReportEngine {
+        -blocks: List[ReportBlock]
+        -case_directory: str
+        +append_section(title, content) str
+        +add_data_table(sql, columns, rows) str
+        +add_image(path, caption) str
+        +add_chart(type, title, data) str
+        +add_chat_transcript(messages) str
+        +import_blocks(blocks, source) Dict
+        +get_blocks_by_source(source) List
+        +render_html() str
+        +export_pdf(output_path) bool
+    }
+    
+    ReportBlock <|-- TextBlock
+    ReportBlock <|-- TableBlock
+    ReportBlock <|-- ImageBlock
+    ReportBlock <|-- ChartBlock
+    ReportBlock <|-- ChatBlock
+    ReportBlock <|-- ReferenceBlock
+    ReportEngine o-- ReportBlock : manages
+```
+
+### UI Layer Communication Architecture
+
+```mermaid
+graph TB
+    subgraph "Frontend (React)"
+        Chat[Chat Interface]
+        DataTable[DataTables Viewer]
+        Charts[Chart.js Visualizations]
+        Timeline[Investigation Timeline]
+    end
+    
+    subgraph "QWebChannel Bridge"
+        Bridge[EYEBridge<br/>QObject with @pyqtSlot]
+        
+        subgraph "Exposed Methods"
+            PQ[process_query]
+            QDB[query_database]
+            SA[search_artifacts]
+            GS[get_schema]
+            IR[import_reports]
+            SM[switch_active_model]
+        end
+        
+        subgraph "Signals"
+            QC[query_complete]
+            RU[report_updated]
+            SU[status_updated]
+            EO[error_occurred]
+        end
+    end
+    
+    subgraph "Backend (Python)"
+        CM[ContextManager]
+        DBS[DatabaseService]
+        SS[SearchService]
+        RE[ReportEngine]
+        MR[ModelRouter]
+    end
+    
+    Chat -->|JavaScript Call| PQ
+    DataTable -->|JavaScript Call| QDB
+    Charts -->|JavaScript Call| SA
+    
+    PQ --> CM
+    QDB --> DBS
+    SA --> SS
+    IR --> RE
+    SM --> MR
+    
+    CM -.->|emit| QC
+    RE -.->|emit| RU
+    CM -.->|emit| SU
+    CM -.->|emit| EO
+    
+    QC -.->|Signal| Chat
+    RU -.->|Signal| DataTable
+    SU -.->|Signal| Timeline
+    EO -.->|Signal| Chat
+    
+    style Bridge fill:#ec4899,stroke:#db2777,stroke-width:3px,color:#fff
+    style CM fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+```
+
+### Configuration and Credential Management
+
+```mermaid
+graph TB
+    subgraph "Configuration Files"
+        UC[~/.kiro/eye/config.json<br/>User Config]
+        CC[case_directory/case_context.json<br/>Case Context]
+        LC[configs/llm_config.json<br/>LLM Prompts & Tools]
+        Schema[eye_config_schema.json<br/>JSON Schema Validation]
+    end
+    
+    subgraph "Configuration Managers"
+        CM[ConfigManager<br/>Load & Validate]
+        CCM[CaseContextManager<br/>Case Metadata]
+        CWCM[ContextWindowConfigManager<br/>Token Budgets]
+    end
+    
+    subgraph "Credential Storage"
+        WinCred[Windows Credential Manager]
+        MacKey[macOS Keychain]
+        LinuxSS[Linux Secret Service]
+        CredMgr[CredentialManager<br/>OS-Native Keychain]
+    end
+    
+    UC --> CM
+    CC --> CCM
+    LC --> CM
+    Schema --> CM
+    
+    CM -->|Validate| Schema
+    
+    CredMgr --> WinCred
+    CredMgr --> MacKey
+    CredMgr --> LinuxSS
+    
+    CM -.->|Retrieve API Keys| CredMgr
+    
+    style CM fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#fff
+    style CredMgr fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#fff
+    style Schema fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+### Tool Execution Dispatch System
+
+```mermaid
+graph TB
+    AI[AI Response with tool_calls]
+    
+    subgraph "ContextManager Tool Dispatch"
+        TH[tool_handlers Map]
+        
+        subgraph "Forensic Tools"
+            QD[query_database]
+            GS[get_schema]
+            SA[search_artifacts]
+            QC[query_correlation_results]
+            LCF[list_case_files]
+            IS[internet_search]
+            SM[switch_model]
+            QLI[query_live_forensic_intel]
+        end
+        
+        subgraph "Report Tools"
+            RAS[report_append_section]
+            RADT[report_add_data_table]
+            RAI[report_add_image]
+            RES[report_edit_section]
+            RDS[report_delete_section]
+            RACT[report_add_chat_transcript]
+            RAC[report_add_chart]
+        end
+    end
+    
+    subgraph "Handlers"
+        FH[ForensicHandlers]
+        RH[ReportHandlers]
+    end
+    
+    AI --> TH
+    
+    TH --> QD
+    TH --> GS
+    TH --> SA
+    TH --> QC
+    TH --> LCF
+    TH --> IS
+    TH --> SM
+    TH --> QLI
+    
+    TH --> RAS
+    TH --> RADT
+    TH --> RAI
+    TH --> RES
+    TH --> RDS
+    TH --> RACT
+    TH --> RAC
+    
+    QD --> FH
+    GS --> FH
+    SA --> FH
+    QC --> FH
+    LCF --> FH
+    IS --> FH
+    SM --> FH
+    QLI --> FH
+    
+    RAS --> RH
+    RADT --> RH
+    RAI --> RH
+    RES --> RH
+    RDS --> RH
+    RACT --> RH
+    RAC --> RH
+    
+    style TH fill:#f97316,stroke:#ea580c,stroke-width:3px,color:#fff
+    style FH fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#fff
+    style RH fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+---
+
+## 2. Security Posture: The "Ghassan Elsman Boundary"
+
+EYE enforces strict boundaries to protect digital evidence integrity.
+
+### A. Data Integrity (Strict Read-Only Enforcement)
+The engine's safety is rooted in its **unidirectional data flow** and multi-layered database protection in the `ForensicDatabaseService`:
+1.  **Connection Level**: `PRAGMA query_only = ON` is enforced immediately upon connection.
+2.  **Application Level**: A rigorous regex-based SQL keyword validator actively rejects modifying commands (`DROP`, `UPDATE`, `INSERT`, `ALTER`, etc.) before they reach the SQLite driver.
+- **Verdict**: There is no path for the AI to "inject" malicious code into the system or tamper with parsed forensic artifacts.
+
+### B. The Reporting Mandate
+- **Analysis**: The `_build_synthesis_prompt` enforces the **'Ghassan Elsman Protocol'**. It explicitly instructs the AI to never summarize out crucial details (timestamps, PIDs, exact paths) and to always provide a chronological timeline. This prevents the AI from generating "fluff" and forces it to act as a technical forensic reporter.
+
+### C. Credential Management
+- **Security**: EYE utilizes OS-native keychains (Windows Credential Manager). API keys are never stored in plain text in the `eye_config.json`.
+
+### RAG Service Architecture
+
+```mermaid
+graph TB
+    subgraph "RAG Pipeline"
+        Query[User Query]
+        KE[Keyword Extraction<br/>IntentEngine]
+        KB[(Knowledge Base<br/>Forensic Docs)]
+        Embed[Embedding Generation<br/>Ollama/Cloud API]
+        Search[Semantic Search<br/>Cosine Similarity]
+        Rank[Ranking & Filtering<br/>Top-K Results]
+        Context[RAG Context<br/>Injected into Prompt]
+    end
+    
+    Query --> KE
+    KE --> Embed
+    Embed --> Search
+    KB --> Search
+    Search --> Rank
+    Rank --> Context
+    
+    subgraph "Knowledge Base Structure"
+        Prefetch[Prefetch Documentation]
+        MFT[MFT Documentation]
+        Registry[Registry Documentation]
+        EventLog[Event Log Documentation]
+        Browser[Browser History Documentation]
+        
+        KB --> Prefetch
+        KB --> MFT
+        KB --> Registry
+        KB --> EventLog
+        KB --> Browser
+    end
+    
+    style Context fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+    style KB fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#fff
+```
+
+### TOON Engine (Token-Oriented Object Notation)
+
+```mermaid
+graph LR
+    subgraph "Data Compression Pipeline"
+        Raw[Raw SQL Results<br/>Large Dataset]
+        Analyze[Analyze Columns<br/>Detect Patterns]
+        Compress[Apply Compression<br/>TOON Format]
+        Optimized[Optimized Output<br/>Reduced Tokens]
+    end
+    
+    subgraph "Compression Strategies"
+        S1[Strategy 1: Column Abbreviation<br/>timestamp → ts]
+        S2[Strategy 2: Value Deduplication<br/>Repeated values → refs]
+        S3[Strategy 3: Numeric Encoding<br/>Large numbers → scientific]
+        S4[Strategy 4: Path Compression<br/>Common prefixes → variables]
+    end
+    
+    Raw --> Analyze
+    Analyze --> Compress
+    Compress --> Optimized
+    
+    Compress --> S1
+    Compress --> S2
+    Compress --> S3
+    Compress --> S4
+    
+    style Compress fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+    style Optimized fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+### Error Handling and Recovery Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> ProcessQuery
+    ProcessQuery --> IntentDetection
+    IntentDetection --> RAGRetrieval
+    RAGRetrieval --> AIGeneration
+    
+    AIGeneration --> ToolExecution : tool_calls present
+    AIGeneration --> Synthesis : no tool_calls
+    
+    ToolExecution --> ToolSuccess : success
+    ToolExecution --> ToolError : error
+    
+    ToolError --> ErrorHandler
+    ErrorHandler --> RetryTool : retryable
+    ErrorHandler --> UserNotification : fatal
+    RetryTool --> ToolExecution
+    
+    ToolSuccess --> Synthesis
+    
+    Synthesis --> AIGenerationFinal
+    AIGenerationFinal --> Success : response ready
+    AIGenerationFinal --> GenerationError : API error
+    
+    GenerationError --> QuotaCheck
+    QuotaCheck --> ModelSwitch : quota exceeded
+    QuotaCheck --> UserNotification : other error
+    
+    ModelSwitch --> AIGeneration
+    
+    Success --> [*]
+    UserNotification --> [*]
+```
+
+### History Management and Token Budgeting
+
+```mermaid
+graph TB
+    subgraph "Conversation History"
+        Msg1[Message 1<br/>User Query]
+        Msg2[Message 2<br/>AI Response]
+        Msg3[Message 3<br/>User Query]
+        Msg4[Message 4<br/>AI Response]
+        MsgN[Message N<br/>...]
+    end
+    
+    subgraph "Token Budget Manager"
+        Counter[Token Counter<br/>tiktoken]
+        Budget[Token Budget<br/>conversation: 8000<br/>system: 4000<br/>rag: variable]
+        Truncate[Truncation Strategy<br/>Keep recent + summarize old]
+    end
+    
+    subgraph "Context Window"
+        System[System Prompt<br/>4000 tokens]
+        RAG[RAG Context<br/>variable tokens]
+        History[Conversation History<br/>8000 tokens]
+        Current[Current Query<br/>variable tokens]
+    end
+    
+    Msg1 --> Counter
+    Msg2 --> Counter
+    Msg3 --> Counter
+    Msg4 --> Counter
+    MsgN --> Counter
+    
+    Counter --> Budget
+    Budget --> Truncate
+    
+    Truncate --> History
+    System --> Context[Final Context<br/>Max 32000 tokens]
+    RAG --> Context
+    History --> Context
+    Current --> Context
+    
+    Context --> LLM[LLM Backend]
+    
+    style Budget fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+    style Context fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+### Case Directory Structure
+
+```mermaid
+graph TB
+    subgraph "Case Directory Layout"
+        Root[case_directory/]
+        
+        subgraph "Databases"
+            Prefetch[prefetch.db]
+            MFT[mft.db]
+            Registry[registry.db]
+            EventLog[eventlog.db]
+            Browser[browser_history.db]
+        end
+        
+        subgraph "Reports"
+            HTML[forensic_report_*.html]
+            PDF[investigation_report.pdf]
+        end
+        
+        subgraph "Context"
+            CaseCtx[case_context.json]
+            History[conversation_history.json]
+        end
+        
+        subgraph "Artifacts"
+            Images[images/]
+            Exports[exports/]
+            Correlation[correlation_results/]
+        end
+        
+        Root --> Prefetch
+        Root --> MFT
+        Root --> Registry
+        Root --> EventLog
+        Root --> Browser
+        Root --> HTML
+        Root --> PDF
+        Root --> CaseCtx
+        Root --> History
+        Root --> Images
+        Root --> Exports
+        Root --> Correlation
+    end
+    
+    subgraph "Services Access"
+        DBS[DatabaseService<br/>Read-Only Access]
+        RE[ReportEngine<br/>Write Reports]
+        CCM[CaseContextManager<br/>Metadata]
+        HM[HistoryManager<br/>Conversation State]
+    end
+    
+    Prefetch -.-> DBS
+    MFT -.-> DBS
+    Registry -.-> DBS
+    EventLog -.-> DBS
+    Browser -.-> DBS
+    
+    HTML -.-> RE
+    PDF -.-> RE
+    
+    CaseCtx -.-> CCM
+    History -.-> HM
+    
+    style Root fill:#06b6d4,stroke:#0891b2,stroke-width:3px,color:#fff
+```
+
+---
+
+## 3. Model Backend Strategy (The Strategy Pattern)
+
+The `ModelRouter` implements a clean Strategy pattern, categorizing AI communication into three distinct integration types:
+
+1. **`cloud_api`**: Native SDKs talking to cloud services over HTTPS (OpenAI, Anthropic, Gemini).
+2. **`local_server`**: REST API clients for local network AI services (Ollama, LM Studio).
+3. **`local_cli`**: Subprocess wrappers for command-line AI tools.
+
+### A. `local_cli` vs. `cloud_api`
+| Factor | `local_cli` (e.g., Llama.cpp) | `cloud_api` (e.g., OpenAI) |
+| :--- | :--- | :--- |
+| **Privacy** | High (Data stays on disk*) | Low (Metadata leaves machine) |
+| **Speed** | Variable (Subprocess overhead) | High (Fast inference) |
+| **Control** | Full (User controls executable) | Low (Dependent on provider) |
+| **Stability** | Medium (Shell environment deps) | High (Standardized HTTP) |
+
+*\*Note: Even with local_cli, if the CLI agent itself calls a cloud API, data is still egressed.*
+
+### B. The `GenericCLIBackend` Bottleneck
+- **Analysis**: Spawning a shell process (`subprocess.run`) for every query introduces significant I/O and process overhead compared to maintaining a persistent socket or HTTP keep-alive (like the `local_server` approach).
+- **Recommendation**: Transition `local_cli` to a "Long-Running Agent" mode where the process stays alive in the background, communicating via standard input/output streams continuously.
+
+---
+
+## 4. The Validation Layer: Performance vs. Integrity
+
+### A. JSON Schema Overhead
+- **Analysis**: EYE performs full schema validation on every configuration load. 
+- **Impact**: While validation adds marginal latency (5-10ms), it prevents "Dead Ends" where the engine might start but crash mid-query due to a missing path.
+- **Verdict**: A necessary trade-off that ensures forensic reliability over raw startup speed.
+
+### B. AI Error Recovery Loop
+- **Analysis**: The `QueryProcessor` implements a graceful degradation path (`_handle_generation_failure`). If an API quota is exhausted (e.g., HTTP 429), it catches the error and dynamically presents the user with UI Action Chips to instantly switch to an alternative local or cloud model.
+
+---
+
+## 5. Token Economy & State Management
+
+- **RAG vs. History**: Currently, EYE allocates token budgets (e.g., `conversation_history`: 8000, `system_prompt`: 4000). 
+- **Problem**: If the `rag_context` budget is too small, complex artifacts (like massive MFT records or Event Logs) are truncated before the AI can see the full timeline.
+- **Security Implication**: Truncated data can lead to "Blind Spots" in the final report, where the AI misses a crucial event.
+- **Mitigation strategy**: EYE relies on the TOON (Token-Oriented Object Notation) Engine to compress database query results, but dynamic compression based on remaining context window size is required to fully eliminate blind spots.
+
+---
+
+## 8. Testing Architecture
+
+### Test Suite Structure
+
+```mermaid
+graph TB
+    subgraph "Test Categories"
+        Unit[Unit Tests<br/>pytest]
+        Integration[Integration Tests<br/>pytest-qt]
+        Property[Property-Based Tests<br/>Hypothesis]
+        E2E[End-to-End Tests<br/>Full Pipeline]
+    end
+    
+    subgraph "Unit Test Coverage"
+        U1[test_report_parser.py<br/>HTML Parsing]
+        U2[test_report_engine.py<br/>Block Management]
+        U3[test_database_service.py<br/>SQL Validation]
+        U4[test_model_router.py<br/>Backend Switching]
+        U5[test_rag_service.py<br/>Embedding & Search]
+    end
+    
+    subgraph "Integration Test Coverage"
+        I1[test_eye_bridge_import.py<br/>Bridge Communication]
+        I2[test_eye_window_manager.py<br/>Window Lifecycle]
+        I3[test_case_summary_dialog.py<br/>UI Components]
+        I4[test_query_processor.py<br/>Full Pipeline]
+    end
+    
+    subgraph "Property-Based Tests"
+        P1[test_report_parser_properties.py<br/>HTML Parsing Invariants]
+        P2[test_sql_validator_properties.py<br/>SQL Security Properties]
+        P3[test_token_counter_properties.py<br/>Token Budget Properties]
+    end
+    
+    Unit --> U1
+    Unit --> U2
+    Unit --> U3
+    Unit --> U4
+    Unit --> U5
+    
+    Integration --> I1
+    Integration --> I2
+    Integration --> I3
+    Integration --> I4
+    
+    Property --> P1
+    Property --> P2
+    Property --> P3
+    
+    style Property fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+```
+
+### Property-Based Testing Strategy
+
+```mermaid
+graph LR
+    subgraph "Hypothesis Framework"
+        Gen[Test Data Generator<br/>Random HTML, SQL, JSON]
+        Prop[Property Definitions<br/>Invariants & Postconditions]
+        Shrink[Shrinking Algorithm<br/>Minimal Failing Example]
+    end
+    
+    subgraph "Properties Tested"
+        P1[Parse-Render Roundtrip<br/>parse(render(x)) ≈ x]
+        P2[SQL Injection Prevention<br/>∀ malicious SQL → rejected]
+        P3[Token Budget Enforcement<br/>∀ context → tokens ≤ max]
+        P4[Report Block Integrity<br/>∀ block → valid schema]
+    end
+    
+    Gen --> Prop
+    Prop --> Test{Test Passes?}
+    Test -->|Fail| Shrink
+    Test -->|Pass| Success[Property Verified]
+    Shrink --> MinExample[Minimal Counterexample]
+    
+    Prop --> P1
+    Prop --> P2
+    Prop --> P3
+    Prop --> P4
+    
+    style Shrink fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#fff
+    style Success fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+### Continuous Integration Pipeline
+
+```mermaid
+graph LR
+    subgraph "CI/CD Pipeline"
+        Commit[Git Commit]
+        Lint[Linting<br/>black, pylint, mypy]
+        UnitTest[Unit Tests<br/>pytest]
+        PropTest[Property Tests<br/>Hypothesis]
+        IntTest[Integration Tests<br/>pytest-qt]
+        Coverage[Coverage Report<br/>pytest-cov]
+        Build[Build Artifacts<br/>PyInstaller]
+        Deploy[Deploy/Release]
+    end
+    
+    Commit --> Lint
+    Lint --> UnitTest
+    UnitTest --> PropTest
+    PropTest --> IntTest
+    IntTest --> Coverage
+    Coverage --> Build
+    Build --> Deploy
+    
+    Lint -.->|Fail| Reject[Reject Commit]
+    UnitTest -.->|Fail| Reject
+    PropTest -.->|Fail| Reject
+    IntTest -.->|Fail| Reject
+    Coverage -.->|< 80%| Warn[Warning]
+    
+    style Reject fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#fff
+    style Deploy fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+---
+
+## 9. Deployment Architecture
+
+### Application Packaging Structure
+
+```mermaid
+graph TB
+    subgraph "Crow-Eye Application"
+        Main[main.py<br/>Application Entry]
+        
+        subgraph "Core Modules"
+            AC[Artifacts_Collectors/<br/>Forensic Parsers]
+            Eye[eye/<br/>AI Assistant]
+            UI[UI/<br/>Main Interface]
+        end
+        
+        subgraph "EYE Module"
+            Backends[backends/<br/>AI Integrations]
+            Services[services/<br/>Business Logic]
+            Bridge[bridge/<br/>QWebChannel]
+            Models[models/<br/>Data Structures]
+            UIComp[ui/<br/>Dialogs & Windows]
+        end
+        
+        Main --> AC
+        Main --> Eye
+        Main --> UI
+        
+        Eye --> Backends
+        Eye --> Services
+        Eye --> Bridge
+        Eye --> Models
+        Eye --> UIComp
+    end
+    
+    subgraph "External Dependencies"
+        PyQt5[PyQt5<br/>GUI Framework]
+        OpenAI[OpenAI SDK]
+        Anthropic[Anthropic SDK]
+        Requests[Requests<br/>HTTP Client]
+        Markdown[Markdown<br/>Rendering]
+        Weasyprint[Weasyprint<br/>PDF Export]
+    end
+    
+    Eye --> PyQt5
+    Backends --> OpenAI
+    Backends --> Anthropic
+    Services --> Requests
+    Services --> Markdown
+    Services --> Weasyprint
+    
+    style Main fill:#f97316,stroke:#ea580c,stroke-width:3px,color:#fff
+    style Eye fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#fff
+```
+
+### Runtime Environment Configuration
+
+```mermaid
+graph TB
+    subgraph "User Environment"
+        Home[~/.kiro/]
+        
+        subgraph "Global Config"
+            EyeConfig[eye/config.json<br/>Backend Settings]
+            Steering[steering/<br/>Investigation Templates]
+            Skills[skills/<br/>Custom Tools]
+        end
+        
+        Home --> EyeConfig
+        Home --> Steering
+        Home --> Skills
+    end
+    
+    subgraph "Case Environment"
+        CaseDir[case_directory/]
+        
+        subgraph "Case-Specific"
+            CaseCtx[case_context.json<br/>Case Metadata]
+            History[conversation_history.json<br/>Chat State]
+            DBs[*.db<br/>Forensic Databases]
+            Reports[forensic_report_*.html<br/>Generated Reports]
+        end
+        
+        CaseDir --> CaseCtx
+        CaseDir --> History
+        CaseDir --> DBs
+        CaseDir --> Reports
+    end
+    
+    subgraph "OS Keychain"
+        WinCred[Windows Credential Manager]
+        MacKey[macOS Keychain]
+        LinuxSS[Linux Secret Service]
+    end
+    
+    subgraph "Application Runtime"
+        App[EYE Application]
+        CM[ConfigManager]
+        CredMgr[CredentialManager]
+    end
+    
+    App --> CM
+    CM --> EyeConfig
+    CM --> CaseCtx
+    
+    App --> CredMgr
+    CredMgr --> WinCred
+    CredMgr --> MacKey
+    CredMgr --> LinuxSS
+    
+    style App fill:#f97316,stroke:#ea580c,stroke-width:3px,color:#fff
+    style EyeConfig fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#fff
+    style CaseCtx fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+### Multi-Backend Deployment Scenarios
+
+```mermaid
+graph TB
+    subgraph "Scenario 1: Cloud-Only"
+        C1[Investigator Workstation]
+        C1API[Internet Connection]
+        C1Cloud[OpenAI/Anthropic/Gemini<br/>Cloud APIs]
+        
+        C1 -->|HTTPS| C1API
+        C1API --> C1Cloud
+    end
+    
+    subgraph "Scenario 2: Local Server"
+        L1[Investigator Workstation]
+        L1Local[Ollama/LM Studio<br/>localhost:11434]
+        L1Models[Local Models<br/>Llama3, Mistral]
+        
+        L1 -->|HTTP| L1Local
+        L1Local --> L1Models
+    end
+    
+    subgraph "Scenario 3: Air-Gapped CLI"
+        A1[Secure Workstation<br/>No Network]
+        A1CLI[CLI Executable<br/>llama.cpp]
+        A1Models[Local Model Files<br/>.gguf format]
+        
+        A1 -->|subprocess| A1CLI
+        A1CLI --> A1Models
+    end
+    
+    subgraph "Scenario 4: Hybrid"
+        H1[Investigator Workstation]
+        H1Local[Local Ollama<br/>Fast Queries]
+        H1Cloud[Cloud API<br/>Complex Analysis]
+        H1Router[ModelRouter<br/>Dynamic Switching]
+        
+        H1 --> H1Router
+        H1Router -->|Simple| H1Local
+        H1Router -->|Complex| H1Cloud
+    end
+    
+    style C1Cloud fill:#0284c7,stroke:#0369a1,stroke-width:2px,color:#fff
+    style L1Local fill:#059669,stroke:#047857,stroke-width:2px,color:#fff
+    style A1CLI fill:#b45309,stroke:#92400e,stroke-width:2px,color:#fff
+    style H1Router fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+```
+
+---
+
+## 10. Data Flow Diagrams
+
+### Complete Investigation Workflow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Investigator
+    participant UI as React UI
+    participant Bridge as EYEBridge
+    participant CM as ContextManager
+    participant QP as QueryProcessor
+    participant MR as ModelRouter
+    participant LLM as AI Backend
+    participant DBS as DatabaseService
+    participant RE as ReportEngine
+    participant FS as File System
+    
+    Investigator->>UI: Open Case Directory
+    UI->>Bridge: initialize(case_path)
+    Bridge->>CM: __init__(case_directory)
+    CM->>DBS: discover_databases()
+    DBS->>FS: scan *.db files
+    FS-->>DBS: database list
+    DBS-->>CM: databases ready
+    CM-->>Bridge: initialization complete
+    Bridge-->>UI: ready signal
+    
+    Investigator->>UI: "Show prefetch from yesterday"
+    UI->>Bridge: process_query(query)
+    Bridge->>CM: process_query(query)
+    CM->>QP: process_query(query)
+    
+    QP->>QP: Stage 1-5: Prepare prompt
+    QP->>MR: generate(prompt, tools)
+    MR->>LLM: API call
+    LLM-->>MR: response + tool_calls
+    MR-->>QP: parsed response
+    
+    QP->>CM: execute_tool(query_database)
+    CM->>DBS: query_database(sql)
+    DBS->>FS: execute SQL
+    FS-->>DBS: results
+    DBS-->>CM: formatted results
+    CM-->>QP: tool_result
+    
+    QP->>MR: generate(synthesis_prompt)
+    MR->>LLM: API call
+    LLM-->>MR: final response
+    MR-->>QP: synthesis
+    
+    QP->>RE: add_data_table(results)
+    RE->>FS: save report block
+    FS-->>RE: block_id
+    RE-->>QP: success
+    
+    QP-->>CM: complete response
+    CM-->>Bridge: JSON result
+    Bridge-->>UI: query_complete signal
+    UI-->>Investigator: Display findings
+```
+
+### Report Import and Parsing Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Investigator
+    participant UI as EYE Window
+    participant Bridge as EYEBridge
+    participant Parser as ForensicReportParser
+    participant RE as ReportEngine
+    participant FS as File System
+    
+    Investigator->>UI: Click "Import Reports"
+    UI->>Investigator: Show file dialog
+    Investigator->>UI: Select HTML files
+    
+    UI->>Bridge: import_reports([file1, file2])
+    
+    loop For each file
+        Bridge->>Parser: parse_report_file(path)
+        Parser->>FS: read HTML
+        FS-->>Parser: HTML content
+        
+        Parser->>Parser: BeautifulSoup parsing
+        Parser->>Parser: Extract text blocks
+        Parser->>Parser: Extract table blocks
+        Parser->>Parser: Extract image blocks
+        Parser->>Parser: Decode base64 images
+        
+        Parser->>FS: Save decoded images
+        FS-->>Parser: image paths
+        
+        Parser-->>Bridge: parsed_blocks
+        
+        Bridge->>RE: import_blocks(blocks, source)
+        RE->>RE: Add source metadata
+        RE->>RE: Check duplicate IDs
+        RE->>RE: Merge into report
+        RE->>FS: Save updated report
+        FS-->>RE: success
+        RE-->>Bridge: import_result
+    end
+    
+    Bridge-->>UI: Import complete
+    UI-->>Investigator: Show summary dialog
+```
+
+### Model Switching and Fallback Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> ActiveModel
+    
+    ActiveModel --> GenerateRequest : user query
+    GenerateRequest --> APICall : send request
+    
+    APICall --> Success : 200 OK
+    APICall --> QuotaError : 429 Too Many Requests
+    APICall --> AuthError : 401 Unauthorized
+    APICall --> NetworkError : Connection Failed
+    
+    Success --> [*]
+    
+    QuotaError --> ShowModelPicker : present alternatives
+    AuthError --> ShowError : credential issue
+    NetworkError --> RetryLogic : temporary failure
+    
+    ShowModelPicker --> UserSelection : user chooses model
+    UserSelection --> SwitchModel : switch_active_model()
+    SwitchModel --> ActiveModel : new model active
+    
+    RetryLogic --> APICall : retry (max 3)
+    RetryLogic --> ShowError : max retries exceeded
+    
+    ShowError --> [*]
+```
+
+---
+
+## 11. Security and Compliance Architecture
+
+### Data Protection Layers
+
+```mermaid
+graph TB
+    subgraph "Evidence Integrity Protection"
+        L1[Layer 1: File System<br/>Read-Only Permissions]
+        L2[Layer 2: SQLite Connection<br/>PRAGMA query_only=ON]
+        L3[Layer 3: SQL Validator<br/>Keyword Blacklist]
+        L4[Layer 4: Application Logic<br/>No Write Operations]
+        L5[Layer 5: Audit Trail<br/>All Queries Logged]
+    end
+    
+    subgraph "Credential Security"
+        C1[OS-Native Keychain<br/>Encrypted Storage]
+        C2[No Plain Text Keys<br/>In Config Files]
+        C3[API Key Rotation<br/>Support]
+    end
+    
+    subgraph "Network Security"
+        N1[HTTPS Only<br/>Cloud APIs]
+        N2[localhost Only<br/>Local Servers]
+        N3[No External Calls<br/>CLI Backends]
+    end
+    
+    subgraph "Audit and Compliance"
+        A1[Conversation History<br/>Full Transcript]
+        A2[Tool Execution Log<br/>All SQL Queries]
+        A3[Report Generation<br/>Timestamped Blocks]
+        A4[Case Context<br/>Investigator Attribution]
+    end
+    
+    Evidence[Forensic Evidence] --> L1
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4
+    L4 --> L5
+    L5 --> Protected[Protected Evidence]
+    
+    APIKeys[API Keys] --> C1
+    C1 --> C2
+    C2 --> C3
+    
+    CloudAPI[Cloud API Calls] --> N1
+    LocalServer[Local Server] --> N2
+    CLIBackend[CLI Backend] --> N3
+    
+    Investigation[Investigation Session] --> A1
+    Investigation --> A2
+    Investigation --> A3
+    Investigation --> A4
+    
+    style L3 fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#fff
+    style C1 fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
+    style Protected fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+### Ghassan Elsman Protocol Enforcement
+
+```mermaid
+graph LR
+    subgraph "Protocol Rules"
+        R1[Rule 1: Never Summarize<br/>Preserve All Details]
+        R2[Rule 2: Chronological Order<br/>Timeline Integrity]
+        R3[Rule 3: Exact Values<br/>No Approximations]
+        R4[Rule 4: Source Attribution<br/>Database + Table]
+        R5[Rule 5: Technical Language<br/>Forensic Terminology]
+    end
+    
+    subgraph "Enforcement Mechanisms"
+        E1[System Prompt<br/>Explicit Instructions]
+        E2[Synthesis Prompt<br/>Verification Step]
+        E3[Report Engine<br/>Structured Blocks]
+        E4[Human Review<br/>HITL Dialogs]
+    end
+    
+    R1 --> E1
+    R2 --> E1
+    R3 --> E1
+    R4 --> E1
+    R5 --> E1
+    
+    E1 --> E2
+    E2 --> E3
+    E3 --> E4
+    
+    E4 --> Report[Compliant Forensic Report]
+    
+    style E1 fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#fff
+    style Report fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+---
+
+## 12. Performance Optimization Architecture
+
+### Token Budget Optimization
+
+```mermaid
+graph TB
+    subgraph "Context Window Management"
+        Total[Total Budget: 32000 tokens]
+        
+        subgraph "Static Allocations"
+            System[System Prompt<br/>4000 tokens]
+            Tools[Tool Definitions<br/>2000 tokens]
+        end
+        
+        subgraph "Dynamic Allocations"
+            History[Conversation History<br/>8000 tokens max]
+            RAG[RAG Context<br/>Variable]
+            Query[Current Query<br/>Variable]
+        end
+        
+        subgraph "Optimization Strategies"
+            Truncate[History Truncation<br/>Keep Recent]
+            Summarize[Old Message Summarization<br/>Compress Context]
+            TOON[TOON Compression<br/>Reduce Data Size]
+            Selective[Selective RAG<br/>Top-K Only]
+        end
+    end
+    
+    Total --> System
+    Total --> Tools
+    Total --> History
+    Total --> RAG
+    Total --> Query
+    
+    History --> Truncate
+    History --> Summarize
+    RAG --> Selective
+    Query --> TOON
+    
+    Truncate --> Optimized[Optimized Context<br/>Fits Budget]
+    Summarize --> Optimized
+    TOON --> Optimized
+    Selective --> Optimized
+    
+    style Total fill:#f97316,stroke:#ea580c,stroke-width:3px,color:#fff
+    style Optimized fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+```
+
+### Caching and Performance Layers
+
+```mermaid
+graph TB
+    subgraph "Caching Strategy"
+        L1[L1: Database Schema Cache<br/>In-Memory]
+        L2[L2: RAG Embedding Cache<br/>Disk]
+        L3[L3: Tool Result Cache<br/>Session]
+        L4[L4: Model Response Cache<br/>Optional]
+    end
+    
+    subgraph "Performance Optimizations"
+        P1[Parallel Database Discovery<br/>Background Thread]
+        P2[Lazy RAG Initialization<br/>On-Demand]
+        P3[Connection Pooling<br/>SQLite Connections]
+        P4[Async Tool Execution<br/>Independent Tools]
+    end
+    
+    Query[User Query] --> L1
+    L1 -->|Hit| Fast[Fast Response]
+    L1 -->|Miss| L2
+    L2 -->|Hit| Fast
+    L2 -->|Miss| L3
+    L3 -->|Hit| Fast
+    L3 -->|Miss| Compute[Compute Result]
+    
+    Compute --> P1
+    Compute --> P2
+    Compute --> P3
+    Compute --> P4
+    
+    P1 --> Result[Final Result]
+    P2 --> Result
+    P3 --> Result
+    P4 --> Result
+    
+    Result --> L3
+    Result --> L2
+    Result --> L1
+    
+    style Fast fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+    style Compute fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
+```
+
+---
+
+## 6. Conclusion & v2.0 Enhancement Roadmap
+
+The EYE engine is architecturally sound with a **strong validation backbone** and excellent separation of concerns. To evolve into a faster and smarter agent, the following enhancements are recommended:
+
+### Enhancements for Speed
+1. **Direct UI Streaming**: Upgrade the `EYEBridge` to stream LLM tokens to the Rea

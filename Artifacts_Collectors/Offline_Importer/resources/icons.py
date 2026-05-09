@@ -16,7 +16,7 @@ License: MIT
 ARTIFACT_ICONS = {
     'Registry': '📋',  # Registry hives
     'Prefetch': '📄',  # Prefetch files
-    'JumpLists': '📎',  # Jump Lists
+    'link_jumplist': '📎',  # Jump Lists
     'MFT': '📁',  # MFT files
     'USN': '📝',  # USN Journal
     'RecycleBin': '🗑️',  # Recycle Bin
@@ -29,7 +29,7 @@ ARTIFACT_ICONS = {
 ARTIFACT_ICONS_TEXT = {
     'Registry': '[REG]',
     'Prefetch': '[PF]',
-    'JumpLists': '[JL]',
+    'link_jumplist': '[JL]',
     'MFT': '[MFT]',
     'USN': '[USN]',
     'RecycleBin': '[RB]',
@@ -138,7 +138,7 @@ def get_artifact_color(artifact_type: str) -> str:
     color_map = {
         'Registry': IconColors.REGISTRY,
         'Prefetch': IconColors.PREFETCH,
-        'JumpLists': IconColors.JUMPLISTS,
+        'link_jumplist': IconColors.JUMPLISTS,
         'MFT': IconColors.MFT,
         'USN': IconColors.USN,
         'RecycleBin': IconColors.RECYCLEBIN,

@@ -1,0 +1,110 @@
+.model-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-bg-elevated);
+  cursor: default;
+  -webkit-transition: border-color 0.2s, background 0.2s;
+  transition: border-color 0.2s, background 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.model-badge:hover {
+  border-color: var(--color-border-accent);
+  background: var(--color-bg-overlay);
+}
+
+.model-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.model-badge--online::before  { background: var(--color-success); }
+.model-badge--warn::before    {
+  background: var(--color-warning);
+  -webkit-animation: pulse-dot 1.5s infinite;
+  animation: pulse-dot 1.5s infinite;
+}
+.model-badge--offline::before { background: var(--color-error); }
+
+.model-badge-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+}
+
+/* Tooltip */
+.model-badge-tooltip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  min-width: 240px;
+  background: var(--color-bg-overlay);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  -webkit-animation: fade-in-up 0.15s ease;
+  animation: fade-in-up 0.15s ease;
+}
+
+.tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.tooltip-key {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.tooltip-val {
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tooltip-row--warn .tooltip-key,
+.tooltip-row--warn .tooltip-val { color: var(--color-warning); }
+
+.tooltip-usage-bar {
+  margin-top: 10px;
+  height: 4px;
+  background: var(--color-border-muted);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.tooltip-usage-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-accent-bright) 100%);
+  border-radius: var(--radius-full);
+  -webkit-transition: width 0.4s ease;
+  transition: width 0.4s ease;
+}
+
+.tooltip-usage-label {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-align: right;
+}

@@ -105,7 +105,7 @@ class ArtifactCollector:
         self.artifact_directories = {
             'Registry': 'Registry_Hives',
             'Prefetch': 'Prefetch',
-            'JumpLists': 'C_AJL_Lnk',
+            'link_jumplist': 'C_AJL_Lnk',
             'MFT': 'MFT_USN',
             'USN': 'MFT_USN',
             'AmCache': 'AmCache',

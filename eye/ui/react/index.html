@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EYE Forensic Assistant</title>
+    <script>
+      // LEGACY POLYFILLS FOR QT WEBENGINE
+      // Fix for: TypeError: Object.hasOwn is not a function
+      if (!Object.hasOwn) {
+        Object.hasOwn = function(obj, prop) {
+          return Object.prototype.hasOwnProperty.call(obj, prop);
+        };
+        console.log("Applied Object.hasOwn polyfill");
+      }
+    </script>
+    <!-- Load Qt WebChannel Bridge -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <style>
+      /* Rigid Reset for Qt WebEngine */
+      html, body, #root {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #111119;
+        font-family: sans-serif;
+      }
+      .chat-interface {
+        position: relative;
+        height: 100%;
+        width: 100%;
+      }
+    </style>
+  
+    <script>
+      // Object.hasOwn polyfill for older QWebEngine versions
+      if (!Object.hasOwn) {
+        Object.defineProperty(Object, "hasOwn", {
+          value: function(object, property) {
+            return Object.prototype.hasOwnProperty.call(object, property);
+          },
+          configurable: true,
+          enumerable: false,
+          writable: true
+        });
+      }
+    </script>
+    <style>
+      html, body, #root {
+        height: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+      }
+    </style>
+    </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

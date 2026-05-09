@@ -1,13 +1,16 @@
 import sqlite3
 import logging
+import os
 from typing import Any, Dict, List, Optional, Tuple, Union, Iterator
 from pathlib import Path
 import json
+from dynamic_mapping.enrichment.enrichment_mixin import EnrichmentMixin
 
-class BaseDataLoader:
+class BaseDataLoader(EnrichmentMixin):
     """
     Base class for data loading operations with common database functionality.
     Handles database connections, query execution, and error handling.
+    Now with 20% more intelligence thanks to EnrichmentMixin!
     """
     
     def __init__(self, db_path: Optional[Union[str, Path]] = None):
@@ -17,9 +20,13 @@ class BaseDataLoader:
         Args:
             db_path: Path to the SQLite database file. If None, must be set later.
         """
+        EnrichmentMixin.__init__(self)
         self.db_path = Path(db_path) if db_path else None
         self.connection = None
         self.logger = logging.getLogger(self.__class__.__name__)
+        
+        # Check if we have a brain nearby
+        self._detect_intelligence()
         
     def connect(self, db_path: Optional[Union[str, Path]] = None, *, read_only: bool = True, timeout: float = 30.0, pragmas: Optional[Dict[str, Union[str, int]]] = None) -> bool:
         """
@@ -51,6 +58,12 @@ class BaseDataLoader:
 
             # Return rows as dictionaries
             self.connection.row_factory = sqlite3.Row
+
+            # If we found a brain, hook it up!
+            if self.get_intelligence_db_path():
+                cursor = self.connection.cursor()
+                self.attach_intelligence_db(cursor)
+                self.logger.info("BaseDataLoader: Intelligence attached. We are now self-aware.")
 
             # Apply PRAGMAs for performance with large datasets
             self.apply_pragmas(pragmas)
@@ -575,12 +588,42 @@ class BaseDataLoader:
             has_prev = page > 1
             
             # Build data query
+            # We use quotes for table names to handle identifiers with spaces
             select_cols = ", ".join(columns) if columns else "*"
-            data_query = f"SELECT {select_cols} FROM {table_name}"
-            if where:
-                data_query += f" WHERE {where}"
-            if order_by:
-                data_query += f" ORDER BY {order_by}"
+            
+            # Ensure we have the intelligence DB path detected
+            if not self.get_intelligence_db_path():
+                self._detect_intelligence()
+            
+            # --- Enrichment Step: Check for mappings ---
+            enrichment_col = self._get_best_enrichment_column(table_name, columns)
+            
+            if self.get_intelligence_db_path() and enrichment_col:
+                # Ensure the database is attached to the current connection
+                # (It might have been created after we first connected)
+                cursor = self.connection.cursor()
+                self.attach_intelligence_db(cursor)
+                
+                # Use the magic query from EnrichmentMixin
+                base_select = f'SELECT rowid as _rowid_, {select_cols} FROM "{table_name}"'
+                data_query = self.get_enrichment_query(base_select, table_name, enrichment_col)
+                
+                # Diagnostic: Let the user know we're looking
+                # (This will be followed by the verification log if anything is found)
+                print(f"[Verification] Data Layer | Table: {table_name} | Checking for intelligence on column: {enrichment_col}")
+                
+                # Append WHERE and ORDER BY to the enriched query
+                if where:
+                    data_query += f" WHERE {where}"
+                if order_by:
+                    data_query += f" ORDER BY {order_by}"
+            else:
+                # Default data retrieval query
+                data_query = f'SELECT rowid as _rowid_, {select_cols} FROM "{table_name}"'
+                if where:
+                    data_query += f" WHERE {where}"
+                if order_by:
+                    data_query += f" ORDER BY {order_by}"
             
             # Calculate offset
             offset = (page - 1) * page_size
@@ -588,6 +631,16 @@ class BaseDataLoader:
             
             # Execute data query
             data = self.execute_query(data_query, where_params)
+            
+            # --- Verification Logging: Report exactly what was enriched ---
+            if data:
+                enriched_count = 0
+                for row in data:
+                    if row.get('Dynamic_Key'):
+                        enriched_count += 1
+                
+                if enriched_count > 0:
+                    print(f"[Verification] Data Layer | Table: {table_name} | Enriched Records: {enriched_count}/{len(data)}")
             
             return {
                 'data': data,
@@ -918,3 +971,44 @@ class BaseDataLoader:
             'tables_searched': len(table_names),
             'tables_with_results': tables_with_results
         }
+
+    def _detect_intelligence(self):
+        """
+        Try to find the intelligence database in the same directory.
+        Because every data loader deserves a brain.
+        """
+        try:
+            if not self.db_path:
+                return
+            case_dir = os.path.dirname(str(self.db_path))
+            if os.path.exists(os.path.join(case_dir, "Crow_Intelligence.db")):
+                self.set_intelligence_db_path(case_dir)
+                self.logger.debug(f"BaseDataLoader: Detected intelligence at {case_dir}")
+        except Exception:
+            pass
+
+    def _get_best_enrichment_column(self, table_name: str, current_columns: Optional[List[str]] = None) -> Optional[str]:
+        """
+        Select the optimal column for intelligence enrichment based on forensic priority.
+        """
+        # Get actual columns if not provided
+        cols = current_columns if current_columns else self.get_columns(table_name)
+        
+        # Forensic column candidates ordered by relevance
+        target_candidates = [
+            'user_sid', 'SID', 'profile_path', 'target_path', 'Local_Path', 
+            'mac_address', 'MAC_Address', 'gateway_mac', 'ip_address', 'IP_Address',
+            'Source_Name', 'executable_path', 'key_path', 'Value', 'Name', 
+            'Filename', 'filename', 'path', 'service_name', 'process_id', 'volume_guid',
+            'event_id', 'clsid', 'appid', 'serial_number'
+        ]
+        
+        for candidate in target_candidates:
+            if candidate in cols:
+                return candidate
+                
+        # If no candidates, but we have columns, pick the first text one
+        if cols:
+            return cols[0]
+            
+        return None

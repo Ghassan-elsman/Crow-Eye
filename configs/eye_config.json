@@ -1,0 +1,8 @@
+{
+  "integration_type": "local_api",
+  "backend": "lm_studio",
+  "model_name": "Gama 4",
+  "executable_path": "",
+  "api_endpoint": "http://192.168.100.16:1234",
+  "last_validated": "2026-05-07T14:48:36.196325"
+}

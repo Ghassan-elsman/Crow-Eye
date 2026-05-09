@@ -1,0 +1,33 @@
+{
+  "integration_type": "cloud_api",
+  "backend": "openai",
+  "model_name": "gpt-4",
+  "last_validated": "2025-01-15T10:30:45.123Z",
+  "context_window": {
+    "max_total_tokens": 32000,
+    "token_budget": {
+      "system_prompt": 4000,
+      "rag_context": 2000,
+      "conversation_history": 8000,
+      "tool_definitions": 2000,
+      "response_buffer": 4000
+    },
+    "history_management": {
+      "sliding_window_size": 5,
+      "preserve_first_message": true,
+      "preserve_tool_messages": true,
+      "truncation_strategy": "sliding_window"
+    },
+    "evidence_preservation": {
+      "enabled": true,
+      "confidence_threshold": 0.7,
+      "max_pinned_messages": 10,
+      "auto_detect_evidence": true
+    },
+    "audit_trail": {
+      "enabled": true,
+      "buffer_size": 10,
+      "export_format": "text"
+    }
+  }
+}

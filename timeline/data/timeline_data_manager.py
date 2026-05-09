@@ -147,12 +147,15 @@ class TimelineDataManager:
             ('prefetch_data', 'accessed_on', 'accessed', 'File access time'),
         ],
         'LNK': [
-            ('JLCE', 'Time_Creation', 'created'),
-            ('JLCE', 'Time_Modification', 'modified'),
-            ('JLCE', 'Time_Access', 'accessed'),
-            ('Custom_JLCE', 'Time_Creation', 'created'),
-            ('Custom_JLCE', 'Time_Modification', 'modified'),
-            ('Custom_JLCE', 'Time_Access', 'accessed'),
+            ('LNK_Files', 'Time_Creation', 'created'),
+            ('LNK_Files', 'Time_Modification', 'modified'),
+            ('LNK_Files', 'Time_Access', 'accessed'),
+            ('Automatic_JumpLists', 'Time_Creation', 'created'),
+            ('Automatic_JumpLists', 'Time_Modification', 'modified'),
+            ('Automatic_JumpLists', 'Time_Access', 'accessed'),
+            ('Custom_JumpLists', 'Time_Creation', 'created'),
+            ('Custom_JumpLists', 'Time_Modification', 'modified'),
+            ('Custom_JumpLists', 'Time_Access', 'accessed'),
         ],
         'Registry': [
             ('UserAssist', 'last_execution', 'executed'),
@@ -1092,8 +1095,8 @@ class TimelineDataManager:
         cursor = conn.cursor()
         
         try:
-            # Query both JLCE and Custom_JLCE tables
-            for table_name in ['JLCE', 'Custom_JLCE']:
+            # Query all three LNK tables: LNK_Files, Automatic_JumpLists, Custom_JumpLists
+            for table_name in ['LNK_Files', 'Automatic_JumpLists', 'Custom_JumpLists']:
                 query = f"""
                     SELECT rowid, *
                     FROM {table_name}

@@ -468,7 +468,7 @@ class UnifiedDatabaseSearchEngine:
                     self.logger.info("Search was cancelled.")
                     break
 
-                # Progress indicator with percentage (Requirements: 14.3)
+                # Progress indicator with percentage 
                 progress_pct = int((i / len(enhanced_db_infos)) * 100)
                 if progress_callback:
                     progress_callback(
@@ -504,7 +504,7 @@ class UnifiedDatabaseSearchEngine:
                     self.logger.info("Search was cancelled.")
                     break
 
-                # Progress indicator with percentage (Requirements: 14.3)
+                # Progress indicator with percentage 
                 progress_pct = int((i / len(db_infos)) * 100)
                 if progress_callback:
                     progress_callback(
@@ -750,7 +750,7 @@ class UnifiedDatabaseSearchEngine:
                     )
 
                     if not filtered_results:
-                        fallback_query = f"SELECT * FROM \"{table_name}\" LIMIT {max_results * 10}"
+                        fallback_query = f"SELECT rowid as _rowid_, * FROM \"{table_name}\" LIMIT {max_results * 10}"
                         fallback_rows = table_loader.execute_query(
                             fallback_query,
                             params=(),
@@ -770,7 +770,7 @@ class UnifiedDatabaseSearchEngine:
                     
                     all_table_results.extend(filtered_results)
                     
-                    # Log performance metrics (Requirements: 14.5)
+                    # Log performance metrics 
                     table_elapsed = time.time() - table_start_time
                     self.logger.info(
                         f"Searched {table_name} in {table_elapsed:.2f}s: "
@@ -791,7 +791,7 @@ class UnifiedDatabaseSearchEngine:
             # Create SearchResults object (imported at top of file)
             total_search_time = time.time() - search_start_time
             
-            # Log overall performance metrics (Requirements: 14.5)
+            # Log overall performance metrics 
             self.logger.info(
                 f"Time-filtered search in {enhanced_db_info.name} completed in {total_search_time:.2f}s: "
                 f"{len(all_table_results)} total results from {len(time_filterable_tables)} tables"
@@ -949,7 +949,7 @@ class UnifiedDatabaseSearchEngine:
         # Simpler approach: Just filter by time and let the post-processing handle search term matching
         # This is more reliable and works with all column types
         query = f"""
-            SELECT * FROM "{table_name}"
+            SELECT rowid as _rowid_, * FROM "{table_name}"
             WHERE ({time_filter})
             LIMIT {max_results * 10}
         """

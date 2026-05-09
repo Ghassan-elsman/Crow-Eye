@@ -1,44 +1,59 @@
-# Dependencies
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Build outputs
-dist/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
-*.log
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Environment files
-.env
-.env.*
-!.env.example
+# Virtual environments
+venv/
+ENV/
+env/
 
-# IDE files
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# OS files
+# Testing
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+*.cover
+
+# Dev directory - exclude test data contents but preserve structure
+Dev/test_data/*
+!Dev/test_data/.gitkeep
+!Dev/test_data/sample_case_001/
+
+# Keep sample case structure but exclude large binary files
+Dev/test_data/sample_case_001/*.bin
+Dev/test_data/sample_case_001/*.dat
+Dev/test_data/sample_case_001/**/*.bin
+Dev/test_data/sample_case_001/**/*.dat
+
+# Keep generated reports but exclude temporary files
+Dev/test_reports/*_parsed.json
+Dev/test_reports/forensic_report_generated_*.html
+
+# OS
 .DS_Store
 Thumbs.db
-
-# Temporary files
-*.tmp
-*.temp
-.cache/
-
-# Sensitive files (auto-detected)
-regclaw_errors.log
-edb.log
-edbtmp.log
-
-
-
-# Development artifacts (added by reorganization script)
-dev/*.db
-dev/*.log
-dev/.pytest_cache/
-dev/.hypothesis/
-dev/reorganization.log
