@@ -805,7 +805,7 @@ class OnboardingWizard(QDialog):
             from eye.services.model_router import ModelRouter
             temp_router = ModelRouter(self.config, self.credential_manager)
             
-            available_models = backend.list_models()
+            available_models = temp_router.backend.list_models()
 
             if not available_models:
                 backend_title = backend.title()

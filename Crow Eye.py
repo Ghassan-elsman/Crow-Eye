@@ -109,7 +109,7 @@ def install_initial_requirements():
         bool: True if all packages installed successfully, False otherwise
     """
     print('\n' + '='*60)
-    print('[STEP 1/4] Installing initial requirements...')
+    print('[STEP 1/5] Installing initial requirements...')
     print('='*60)
     
     initial_requirements = ['colorama', 'setuptools']
@@ -123,21 +123,22 @@ def install_initial_requirements():
             print(f'  -> Failed to install {package}. Please run: python -m pip install {package}')
             return False
     
-    print('[STEP 1/4] Initial requirements installed successfully!\n')
+    print('[STEP 1/5] Initial requirements installed successfully!\n')
     return True
 
-# Only install initial requirements if NOT already in virtual environment
-# This avoids redundant installations and speeds up startup
-in_venv = hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)
+# Check if initial requirements are met
+try:
+    import colorama
+    import setuptools
+    initial_reqs_met = True
+except ImportError:
+    initial_reqs_met = False
 
-if not in_venv:
-    # We're in system Python, need to install initial requirements before creating venv
+if not initial_reqs_met:
+    # Need to install initial requirements in the current environment (system or venv)
     if not install_initial_requirements():
         print('Failed to install initial requirements. Exiting...')
         sys.exit(1)
-else:
-    # Skip STEP 1 when already in venv
-    pass
 
 # Import will happen after virtual environment setup
 import importlib.metadata
@@ -169,6 +170,9 @@ def safe_import_initial_modules():
         init = lambda: None
         return False
 
+# Ensure colorama is initialized as early as possible
+safe_import_initial_modules()
+
 def setup_virtual_environment():
     """Create and activate a virtual environment for Crow Eye.
     
@@ -193,10 +197,10 @@ def setup_virtual_environment():
     # Check if already in virtual environment
     if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
         print('\n' + '='*60)
-        print('[STEP 2/4] Virtual environment check')
+        print('[STEP 2/5] Virtual environment check')
         print('='*60)
         print('  -> Already running in virtual environment')
-        print('[STEP 2/4] Complete!\n')
+        print('[STEP 2/5] Complete!\n')
         # Import colorama now that we're in the venv
         safe_import_initial_modules()
         return
@@ -204,7 +208,7 @@ def setup_virtual_environment():
     venv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crow_eye_venv')
     
     print('\n' + '='*60)
-    print('[STEP 2/4] Setting up virtual environment...')
+    print('[STEP 2/5] Setting up virtual environment...')
     print('='*60)
     
     # Create virtual environment if it doesn't exist
@@ -235,7 +239,7 @@ def setup_virtual_environment():
         
         if os.path.exists(venv_python):
             print('\n  -> Restarting with virtual environment...')
-            print('[STEP 2/4] Complete!\n')
+            print('[STEP 2/5] Complete!\n')
             # Restart the script using the virtual environment's Python
             # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
 
@@ -314,7 +318,7 @@ else:
 def check_and_install_requirements():
     """Check and install required packages for Crow Eye application."""
     print('\n' + '='*60)
-    print('[STEP 3/4] Checking dependencies...')
+    print('[STEP 3/5] Checking Python dependencies...')
     print('='*60)
     
     # Show which requirements are being checked based on OS
@@ -341,7 +345,7 @@ def check_and_install_requirements():
     if missing_packages:
         print(Fore.YELLOW + f'  -> {len(missing_packages)} packages need to be installed: {", ".join(missing_packages)}' + Fore.RESET)
         print('\n' + '='*60)
-        print('[STEP 4/4] Installing missing packages...')
+        print('[STEP 3/5] Installing missing Python packages...')
         print('='*60)
         print('  -> This may take 2-5 minutes depending on your internet speed')
         print('  -> Please wait while packages are being downloaded and installed...\n')
@@ -350,7 +354,7 @@ def check_and_install_requirements():
             print('\n  -> Installing packages, please wait...\n')
             subprocess.check_call([sys.executable, '-m', 'pip', 'install'] + missing_packages)
             print(Fore.GREEN + '\n  -> Successfully installed all missing packages!' + Fore.RESET)
-            print('[STEP 4/4] Complete!\n')
+            print('[STEP 3/5] Complete!\n')
             
             # Restart the application to ensure proper loading
             print('='*60)
@@ -384,7 +388,7 @@ def check_and_install_requirements():
             if success_count > 0:
                 # Restart after individual installation
                 print(Fore.YELLOW + f'\n  -> {success_count}/{len(missing_packages)} packages installed successfully' + Fore.RESET)
-                print('[STEP 4/4] Complete!\n')
+                print('[STEP 3/5] Complete!\n')
                 print('='*60)
                 print('[INFO] Packages installed successfully!')
                 print('[INFO] Restarting Crow Eye to load new packages...')
@@ -401,18 +405,11 @@ def check_and_install_requirements():
                     os.execv(sys.executable, [sys.executable] + sys.argv)
     else:
         print(Fore.GREEN + '  -> All required packages are installed!' + Fore.RESET)
-        print('[STEP 3/4] Complete!')
-        print('[STEP 4/4] No packages to install - skipping\n')
-        print('='*60)
-        print('[INFO] Crow Eye is ready to start!')
-        print('='*60 + '\n')
+        print('[STEP 3/5] Complete!\n')
 
 # Check and install required packages
 check_and_install_requirements()
 
-print('='*60)
-print('[STEP 4/4] Initializing Crow Eye...')
-print('='*60)
 
 def ensure_timeline_built():
     """Ensure the React timeline frontend is built and ready."""
@@ -423,23 +420,28 @@ def ensure_timeline_built():
     src_dir = os.path.join(timeline_dir, 'src')
     
     # Check if we need to rebuild (if index.html is missing OR older than source files)
-    should_rebuild = not os.path.exists(index_html)
+    node_modules_dir = os.path.join(timeline_dir, 'node_modules')
+    should_rebuild = not os.path.exists(index_html) or not os.path.exists(node_modules_dir)
     
     if not should_rebuild and os.path.exists(src_dir):
         # Check if any file in src/ is newer than index.html
         build_mtime = os.path.getmtime(index_html)
         for root_dir, _, files in os.walk(src_dir):
             for f in files:
-                if os.path.getmtime(os.path.join(root_dir, f)) > build_mtime:
-                    should_rebuild = True
-                    print(f"  -> Detected change in {f}, triggering rebuild...")
-                    break
+                f_path = os.path.join(root_dir, f)
+                try:
+                    if os.path.getmtime(f_path) > build_mtime:
+                        should_rebuild = True
+                        print(f"  -> Detected change in {f}, triggering rebuild...")
+                        break
+                except OSError:
+                    continue
             if should_rebuild: break
             
     if should_rebuild:
-        print('\n' + '='*60)
-        print('[INFO] Building Timeline React Application (First time setup)...')
-        print('='*60)
+        print('\n' + '-'*40)
+        print('[STARTING] Building Timeline React Application...')
+        print('-'*40)
         
         # First, ensure Node.js and npm are installed
         try:
@@ -467,8 +469,6 @@ def ensure_timeline_built():
             
             print("  -> Building React application...")
             subprocess.run([npm_cmd, 'run', 'build'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            print(Fore.GREEN + "  -> Timeline built successfully!" + Fore.RESET)
-            
             # Apply patches for compatibility
             try:
                 from eye.ui.react.patch_eye_ui import patch_file
@@ -476,6 +476,9 @@ def ensure_timeline_built():
                 print("  -> Applied browser compatibility patches to Timeline")
             except:
                 pass
+                
+            print(Fore.GREEN + "  -> [FINISHED] Timeline built successfully!" + Fore.RESET)
+            print('-'*40 + '\n')
                 
         except subprocess.CalledProcessError as e:
             print(Fore.RED + f"  -> Failed to build Timeline. Exit code: {e.returncode}" + Fore.RESET)
@@ -495,23 +498,28 @@ def ensure_eye_ui_built():
     src_dir = os.path.join(eye_ui_dir, 'src')
     
     # Check if we need to rebuild (if index.html is missing OR older than source files)
-    should_rebuild = not os.path.exists(index_html)
+    node_modules_dir = os.path.join(eye_ui_dir, 'node_modules')
+    should_rebuild = not os.path.exists(index_html) or not os.path.exists(node_modules_dir)
     
     if not should_rebuild and os.path.exists(src_dir):
         # Check if any file in src/ is newer than index.html
         build_mtime = os.path.getmtime(index_html)
         for root_dir, _, files in os.walk(src_dir):
             for f in files:
-                if os.path.getmtime(os.path.join(root_dir, f)) > build_mtime:
-                    should_rebuild = True
-                    print(f"  -> Detected change in {f}, triggering rebuild...")
-                    break
+                f_path = os.path.join(root_dir, f)
+                try:
+                    if os.path.getmtime(f_path) > build_mtime:
+                        should_rebuild = True
+                        print(f"  -> Detected change in {f}, triggering rebuild...")
+                        break
+                except OSError:
+                    continue
             if should_rebuild: break
             
     if should_rebuild:
-        print('\n' + '='*60)
-        print('[INFO] Building Eye AI React Application (First time setup)...')
-        print('='*60)
+        print('\n' + '-'*40)
+        print('[STARTING] Building Eye AI React Application...')
+        print('-'*40)
         
         # First, ensure Node.js and npm are installed
         try:
@@ -544,7 +552,8 @@ def ensure_eye_ui_built():
             except Exception as e:
                 print(f"  -> Patching failed: {e}")
                 
-            print(Fore.GREEN + "  -> Eye AI built successfully!" + Fore.RESET)
+            print(Fore.GREEN + "  -> [FINISHED] Eye AI built successfully!" + Fore.RESET)
+            print('-'*40 + '\n')
         except subprocess.CalledProcessError as e:
             print(Fore.RED + f"  -> Failed to build Eye AI. Exit code: {e.returncode}" + Fore.RESET)
             print(Fore.YELLOW + "  -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
@@ -554,11 +563,6 @@ def ensure_eye_ui_built():
     else:
         print("  -> Eye AI React application already built")
 
-# Build the Timeline if necessary
-ensure_timeline_built()
-
-# Build the Eye AI if necessary
-ensure_eye_ui_built()
 
 # Handle pywin32 post-install if needed (Windows only)
 def handle_pywin32_postinstall():
@@ -627,7 +631,7 @@ try:
     from utils.forensic_deps_installer import install_forensic_dependencies, get_installation_status
     
     print('\n' + '='*60)
-    print('[STEP 4.5/4] Installing forensic & AI dependencies...')
+    print('[STEP 4/5] Installing forensic & AI dependencies...')
     print('='*60)
     
     # Install dependencies with automatic retry logic and status tracking
@@ -646,6 +650,19 @@ except ImportError as e:
     print(Fore.YELLOW + f'[FORENSIC DEPENDENCIES] Could not load installer: {str(e)}' + Fore.RESET)
 except Exception as e:
     print(Fore.YELLOW + f'[FORENSIC DEPENDENCIES] Installation error: {str(e)}' + Fore.RESET)
+print('[STEP 4/5] Complete!\n')
+
+print('='*60)
+print('[STEP 5/5] Node.js and React Build Pipeline...')
+print('='*60)
+
+# Build the Timeline if necessary
+ensure_timeline_built()
+
+# Build the Eye AI if necessary
+ensure_eye_ui_built()
+
+print('[STEP 5/5] Complete!\n')
 
 # Robust import handling with better error messages
 def safe_import(module_name, import_path=None, alias=None):

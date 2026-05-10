@@ -1,0 +1,101 @@
+{
+  "templates": [
+    {
+      "template_name": "default_semantic_mappings",
+      "template_type": "semantic_mappings",
+      "description": "Default semantic mappings template with common forensic artifacts",
+      "template_data": {
+        "case_id": "{case_id}",
+        "enabled": true,
+        "mappings": [
+          {
+            "source": "SecurityLogs",
+            "field": "EventID",
+            "technical_value": "4624",
+            "semantic_value": "User Login",
+            "description": "Successful user logon",
+            "artifact_type": "Logs",
+            "category": "authentication",
+            "severity": "info"
+          },
+          {
+            "source": "SecurityLogs",
+            "field": "EventID",
+            "technical_value": "4688",
+            "semantic_value": "Process Creation",
+            "description": "A new process was created",
+            "artifact_type": "Logs",
+            "category": "process_execution",
+            "severity": "info"
+          }
+        ],
+        "inherit_global": true,
+        "override_global": false,
+        "description": "Default semantic mappings for case: {case_name}",
+        "version": "1.0"
+      },
+      "created_date": "2026-05-09T19:28:19.797158",
+      "version": "1.0"
+    },
+    {
+      "template_name": "default_scoring_weights",
+      "template_type": "scoring_weights",
+      "description": "Default scoring weights template with balanced artifact weights",
+      "template_data": {
+        "case_id": "{case_id}",
+        "enabled": true,
+        "default_weights": {
+          "Logs": 0.4,
+          "Prefetch": 0.3,
+          "SRUM": 0.2,
+          "AmCache": 0.15,
+          "ShimCache": 0.15,
+          "Jumplists": 0.1,
+          "LNK": 0.1,
+          "MFT": 0.05,
+          "USN": 0.05
+        },
+        "score_interpretation": {
+          "confirmed": {
+            "min": 0.8,
+            "label": "Confirmed Execution"
+          },
+          "probable": {
+            "min": 0.5,
+            "label": "Probable Match"
+          },
+          "weak": {
+            "min": 0.2,
+            "label": "Weak Evidence"
+          },
+          "minimal": {
+            "min": 0.0,
+            "label": "Minimal Evidence"
+          }
+        },
+        "tier_definitions": {
+          "1": "Primary Evidence",
+          "2": "Supporting Evidence",
+          "3": "Contextual Evidence",
+          "4": "Background Evidence"
+        },
+        "validation_rules": {
+          "max_weight": 1.0,
+          "min_weight": 0.0,
+          "max_tier": 4,
+          "min_tier": 1,
+          "require_positive_weights": true,
+          "allow_zero_weights": true
+        },
+        "inherit_global": true,
+        "override_global": false,
+        "description": "Default scoring weights for case: {case_name}",
+        "version": "1.0"
+      },
+      "created_date": "2026-05-09T19:28:19.797158",
+      "version": "1.0"
+    }
+  ],
+  "last_updated": "2026-05-09T19:28:19.797158",
+  "version": "1.0"
+}
