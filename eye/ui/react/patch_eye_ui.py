@@ -50,8 +50,19 @@ def patch_file(file_path):
         return False
 
 if __name__ == "__main__":
-    dist_path = os.path.join(os.path.dirname(__file__), "dist", "index.html")
-    patch_file(dist_path)
-    
-    template_path = os.path.join(os.path.dirname(__file__), "index.html")
-    patch_file(template_path)
+    import sys
+    if len(sys.argv) > 1:
+        # Use provided path
+        target = sys.argv[1]
+        if os.path.isdir(target):
+            index_path = os.path.join(target, "index.html")
+            patch_file(index_path)
+        else:
+            patch_file(target)
+    else:
+        # Default behavior: patch own dist and root index.html
+        dist_path = os.path.join(os.path.dirname(__file__), "dist", "index.html")
+        patch_file(dist_path)
+        
+        template_path = os.path.join(os.path.dirname(__file__), "index.html")
+        patch_file(template_path)

@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -19,41 +20,62 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual environments
+# Virtual Environment
 venv/
-ENV/
 env/
+ENV/
+crow_eye_venv/
 
-# IDE
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+nodejs/
+
+# UI Build Artifacts
+eye/ui/react/dist/
+
+# Logs
+*.log
+regclaw_errors.log
+
+# Databases & Forensic Data
+cases/*
+!cases/templates/
+!cases/archive/
+Target_Artifacts/*
+!Target_Artifacts/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# Local Configuration
+configs/eye_config.json
+config/last_case.json
+config/case_*.json
+.env
+.venv
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# Testing
-.pytest_cache/
-.hypothesis/
-.coverage
-htmlcov/
-*.cover
-
-# Dev directory - exclude test data contents but preserve structure
-Dev/test_data/*
-!Dev/test_data/.gitkeep
-!Dev/test_data/sample_case_001/
-
-# Keep sample case structure but exclude large binary files
-Dev/test_data/sample_case_001/*.bin
-Dev/test_data/sample_case_001/*.dat
-Dev/test_data/sample_case_001/**/*.bin
-Dev/test_data/sample_case_001/**/*.dat
-
-# Keep generated reports but exclude temporary files
-Dev/test_reports/*_parsed.json
-Dev/test_reports/forensic_report_generated_*.html
-
-# OS
-.DS_Store
-Thumbs.db
+# Temporary files
+scratch/
+temp_scripts/

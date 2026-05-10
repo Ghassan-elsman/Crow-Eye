@@ -177,13 +177,19 @@ class ForensicDatabaseService:
             }
             
         except Exception as e:
-            error_msg = f"Query execution failed: {str(e)}"
+            error_msg = str(e)
+            # Detect common schema errors
+            if "no such column" in error_msg.lower():
+                self.logger.warning(f"Schema mismatch on {database_name}: {error_msg}")
+            elif "no such table" in error_msg.lower():
+                self.logger.warning(f"Table missing in {database_name}: {error_msg}")
+            
             self.logger.error(f"Error executing query on {database_name}: {e}")
             return {
                 "success": False,
                 "data": [],
                 "row_count": 0,
-                "error": error_msg
+                "error": f"Database Error: {error_msg}"
             }
     
     def get_schema(

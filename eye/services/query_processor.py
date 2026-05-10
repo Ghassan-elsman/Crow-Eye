@@ -100,6 +100,16 @@ class QueryProcessor:
             """Helper to execute query and only add to report if data exists."""
             if not db: return False
             res = self.cm.database_service.execute_query(db, f"{query} LIMIT {limit}")
+            
+            # Fallback for schema mismatches (e.g. missing columns in older/newer collectors)
+            if not res.get("success") and "no such column" in str(res.get("error", "")).lower():
+                # Extract table name from query: "SELECT ... FROM TableName ..."
+                table_match = re.search(r"FROM\s+[\"']?(\w+)[\"']?", query, re.IGNORECASE)
+                if table_match:
+                    table_name = table_match.group(1)
+                    self.logger.warning(f"Schema mismatch for {table_name} in {db}. Falling back to SELECT *")
+                    res = self.cm.database_service.execute_query(db, f"SELECT * FROM {table_name} LIMIT {limit}")
+            
             if res.get("success") and res.get("data"):
                 # Use compact spacing for triage tables to avoid 'collapsed' look
                 self.cm.report_engine.add_data_table(query, list(res["data"][0].keys()), res["data"], title, compact_spacing=True)
@@ -113,16 +123,20 @@ class QueryProcessor:
         # Hostname
         comp_name = "Unknown"
         if reg_db:
-             name_res = self.cm.database_service.execute_query(reg_db, "SELECT computer_name FROM ComputerNameInfo LIMIT 1")
+             name_res = self.cm.database_service.execute_query(reg_db, "SELECT * FROM ComputerNameInfo LIMIT 1")
              if name_res.get("success") and name_res.get("data"):
-                  comp_name = name_res["data"][0].get("computer_name", "Unknown")
+                  row = name_res["data"][0]
+                  comp_name = row.get("computer_name") or row.get("hostname") or next(iter(row.values()), "Unknown")
         sys_info_md += f"- **Computer Name:** {comp_name}\n"
         
         # Users
         users = []
         if reg_db:
-            users_res = self.cm.database_service.execute_query(reg_db, "SELECT username FROM UserProfiles")
-            users = [u.get("username", "Unknown") for u in users_res.get("data", []) if u.get("username")]
+            users_res = self.cm.database_service.execute_query(reg_db, "SELECT * FROM UserProfiles")
+            if users_res.get("success") and users_res.get("data"):
+                for u in users_res["data"]:
+                    val = u.get("username") or u.get("user") or u.get("Name")
+                    if val: users.append(str(val))
         
         if users:
             sys_info_md += f"- **Identified Users:** {', '.join(users[:10])}{'...' if len(users) > 10 else ''}\n"
@@ -130,9 +144,10 @@ class QueryProcessor:
         # Timezone
         timezone = "N/A"
         if reg_db:
-            tz_res = self.cm.database_service.execute_query(reg_db, "SELECT time_zone_name FROM TimeZoneInfo LIMIT 1")
+            tz_res = self.cm.database_service.execute_query(reg_db, "SELECT * FROM TimeZoneInfo LIMIT 1")
             if tz_res.get("success") and tz_res.get("data"):
-                timezone = tz_res["data"][0].get("time_zone_name", "N/A")
+                row = tz_res["data"][0]
+                timezone = row.get("time_zone_name") or row.get("TimeZone") or "N/A"
         sys_info_md += f"- **Timezone Info:** {timezone}\n"
 
         self.cm.report_engine.append_section("System Identity", sys_info_md)

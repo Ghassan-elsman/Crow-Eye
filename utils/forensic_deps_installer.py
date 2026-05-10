@@ -61,6 +61,20 @@ class ForensicDepsInstaller:
             'install_method': 'pip',
             'required': True,
             'fallback': None
+        },
+        'openai': {
+            'description': 'OpenAI SDK for EYE Assistant',
+            'platforms': ['Windows', 'Linux', 'Darwin'],
+            'install_method': 'pip',
+            'required': True,
+            'fallback': None
+        },
+        'anthropic': {
+            'description': 'Anthropic SDK for EYE Assistant',
+            'platforms': ['Windows', 'Linux', 'Darwin'],
+            'install_method': 'pip',
+            'required': True,
+            'fallback': None
         }
     }
     

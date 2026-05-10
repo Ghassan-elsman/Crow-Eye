@@ -54,63 +54,47 @@ class ModelRouter:
     def _initialize_backend(self):
         """
         Factory method to create the appropriate LLM strategy based on connection type.
-        
-        This explicitly identifies the approach based on 'integration_type':
-        - local_cli: Uses GenericCLIBackend (e.g., Gemini CLI, Llama.cpp) - located in eye/backends/local_cli/
-        - cloud_api: Uses native CloudBackends (e.g., OpenAI, Anthropic, Gemini Cloud) - located in eye/backends/cloud_api/
-        - local_server: Uses direct API backends (e.g., Ollama, LM Studio) - located in eye/backends/local_server/
         """
         bt = self.config.get("backend")
         mn = self.config.get("model_name")
         it = self.config.get("integration_type")
         
-        # Infer integration_type if not explicitly provided
-        # This makes configuration easier - users only need to specify backend_type
-        if not it:
-            # If the backend name is in our CLI profiles list, it's obviously a CLI tool
-            if bt in list_supported_backends():
-                it = "local_cli"
-                self.logger.info(f"Inferred integration_type='local_cli' for backend '{bt}'")
-            # If it's ollama or lm_studio, those are local servers we talk to via HTTP
-            elif bt in ["ollama", "lm_studio"]:
-                it = "local_server"
-                self.logger.info(f"Inferred integration_type='local_server' for backend '{bt}'")
-            # Otherwise, assume it's a cloud API service
-            else:
-                it = "cloud_api"
-                self.logger.info(f"Inferred integration_type='cloud_api' for backend '{bt}'")
+        try:
+            # Infer integration_type if not explicitly provided
+            if not it:
+                if bt in list_supported_backends():
+                    it = "local_cli"
+                elif bt in ["ollama", "lm_studio"]:
+                    it = "local_server"
+                else:
+                    it = "cloud_api"
+                self.config["integration_type"] = it
             
-            # Store the inferred integration_type back in config for future reference
-            self.config["integration_type"] = it
-        
-        # --- APPROACH 1: LOCAL CLI BACKENDS (eye/backends/local_cli/) ---
-        # This is the "letter under the door" approach - we write text, slide it to a CLI program,
-        # and read what it writes back. Communication happens via subprocess stdin/stdout.
-        if it == "local_cli" or bt in list_supported_backends():
-            profile = get_profile(bt)
-            # Normalize generic model names for CLI profiles
-            if mn in [None, "", "default", "cli-default-model"]:
-                mn = profile.get("display_name", "CLI Agent")
-                self.config["model_name"] = mn
+            # --- APPROACH 1: LOCAL CLI BACKENDS ---
+            if it == "local_cli" or bt in list_supported_backends():
+                profile = get_profile(bt)
+                if mn in [None, "", "default", "cli-default-model"]:
+                    mn = profile.get("display_name", "CLI Agent")
+                    self.config["model_name"] = mn
+                return GenericCLIBackend(self.config.get("executable_path", ""), backend_type=bt, model_name=mn)
+                
+            # --- APPROACH 2: DIRECT LOCAL SERVERS ---
+            if it in ["local_server", "local_api"]:
+                if bt == "ollama": return OllamaBackend(mn, self.config.get("executable_path", ""))
+                if bt == "lm_studio": return LMStudioBackend(self.config.get("api_endpoint", ""), mn)
             
-            return GenericCLIBackend(self.config.get("executable_path", ""), backend_type=bt, model_name=mn)
+            # --- APPROACH 3: CLOUD API AGENTS ---
+            if bt == "openai": return OpenAIBackend(mn, self.credential_manager)
+            if bt == "anthropic": return AnthropicBackend(mn, self.credential_manager)
+            if bt == "gemini": return GeminiBackend(mn, self.credential_manager)
             
-        # --- APPROACH 2: DIRECT LOCAL SERVERS (eye/backends/local_server/) ---
-        # This is the "hybrid" approach - we talk to a local AI server via HTTP REST API,
-        # combining Cloud API's structured communication with local network privacy.
-        # Can run on same machine (localhost) or different machine on LAN.
-        if it in ["local_server", "local_api"]:
-            if bt == "ollama": return OllamaBackend(mn, self.config.get("executable_path", ""))
-            if bt == "lm_studio": return LMStudioBackend(self.config.get("api_endpoint", ""), mn)
-        
-        # --- APPROACH 3: CLOUD API AGENTS (eye/backends/cloud_api/) ---
-        # This is the "phone call" approach - we send our forensic questions over the internet
-        # to powerful cloud AI services using their official SDKs.
-        if bt == "openai": return OpenAIBackend(mn, self.credential_manager)
-        if bt == "anthropic": return AnthropicBackend(mn, self.credential_manager)
-        if bt == "gemini": return GeminiBackend(mn, self.credential_manager)
-        
-        raise ValueError(f"Unsupported forensic AI backend: {bt} (Type: {it})")
+            raise ValueError(f"Unsupported forensic AI backend: {bt} (Type: {it})")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize backend {bt}: {e}", exc_info=True)
+            if "ModuleNotFoundError" in str(e) or "ImportError" in str(e):
+                raise RuntimeError(f"EYE Assistant is missing a required dependency for the '{bt}' agent. Please check the 'Diagnostics' tool in the setup wizard. Error: {str(e)}")
+            raise RuntimeError(f"EYE Assistant could not initialize the '{bt}' agent. Details: {str(e)}")
 
     def generate(self, system_prompt, user_message, tools=None, history=None):
         """Delegates generation to the active backend."""

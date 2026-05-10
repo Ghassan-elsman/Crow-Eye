@@ -39,8 +39,18 @@ class OpenAIBackend(LLMBackend):
     def client(self):
         """Lazy-loaded OpenAI client."""
         if self._client is None:
-            import openai
-            self._client = openai.OpenAI(api_key=self.credential_manager.get_credential("openai_api_key"))
+            try:
+                import openai
+            except ImportError as e:
+                self.logger.error(f"Critical: Failed to import 'openai' SDK: {e}")
+                raise ImportError("The 'openai' SDK is missing. "
+                                 "Please run 'pip install openai' in the Crow-Eye venv.") from e
+            
+            api_key = self.credential_manager.get_credential("openai_api_key")
+            if not api_key:
+                raise ValueError("OpenAI API key not found. Please configure it in the Setup Wizard.")
+                
+            self._client = openai.OpenAI(api_key=api_key)
         return self._client
 
     def generate(self, system_prompt, user_message, tools=None, history=None):

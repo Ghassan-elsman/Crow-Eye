@@ -353,7 +353,11 @@ class EYEAssistantWindow(QWidget):
         self.report_view.load(QUrl(url.toString() + "?view=report"))
 
     def _show_onboarding_wizard(self):
-        wizard = OnboardingWizard(self.config_manager, CredentialManager(), None, self)
+        # Ensure we have a credential manager instance
+        if self.credential_manager is None:
+            self.credential_manager = CredentialManager()
+            
+        wizard = OnboardingWizard(self.config_manager, self.credential_manager, None, self)
         wizard.configuration_complete.connect(self._on_configuration_complete)
         wizard.exec_()
 

@@ -169,9 +169,26 @@ class LMStudioBackend(LLMBackend):
                 self.logger.error(f"LM Studio HTTP error: {e}")
                 error_detail = ""
                 try:
-                    error_detail = e.response.text
+                    error_json = e.response.json()
+                    error_msg = error_json.get("error", {}).get("message", "")
+                    
+                    # Specific handling for LM Studio "No models loaded" error
+                    if "No models loaded" in error_msg:
+                        raise RuntimeError(
+                            "LM Studio Error: No AI model is currently loaded in the server.\n\n"
+                            "To fix this:\n"
+                            "1. Open LM Studio on the host machine.\n"
+                            "2. Go to the 'AI Chat' or 'Local Server' tab.\n"
+                            "3. Select and LOAD a model into memory at the top of the window.\n"
+                            "4. Ensure the server is STARTED on port 1234."
+                        )
+                    error_detail = error_msg or e.response.text
                 except:
-                    pass
+                    try:
+                        error_detail = e.response.text
+                    except:
+                        pass
+                
                 raise RuntimeError(
                     f"LM Studio returned error: {e.response.status_code} - {error_detail or str(e)}"
                 )
@@ -189,11 +206,38 @@ class LMStudioBackend(LLMBackend):
         Note: Per Ghassan Protocol v2.0, we perform a 'Pre-Flight Ping' 
         to ensure the backend is alive before sending forensic data.
         """
+        # Ensure we have a model name. If not, try to pick one from the server.
+        target_model = self.model_name
+        if not target_model or target_model in ["", "default", "auto"]:
+            loaded_models = self.list_models()
+            if loaded_models:
+                target_model = loaded_models[0]
+                self.logger.info(f"LM Studio: No model configured. Auto-selecting first loaded: {target_model}")
+            else:
+                self.logger.error("LM Studio: No models are currently loaded in the server.")
+                raise RuntimeError(
+                    "LM Studio Error: No models are loaded. "
+                    "Please open LM Studio and load a model into memory before starting the investigation."
+                )
+
         if not self.validate_connectivity():
+            # Distinguish between 'Server Offline' and 'Server Online but No Models Loaded'
+            try:
+                check_resp = self.session.get(f"{self.api_endpoint}/v1/models", timeout=2)
+                if check_resp.status_code == 200:
+                    data = check_resp.json()
+                    if "data" not in data or not data["data"]:
+                        raise RuntimeError(
+                            "LM Studio Server is ONLINE, but NO MODELS ARE LOADED.\n\n"
+                            "Please go to LM Studio and LOAD a model (e.g., Llama 3) into memory before continuing."
+                        )
+            except (RuntimeError, requests.exceptions.RequestException) as e:
+                if isinstance(e, RuntimeError): raise e
+            
             self.logger.error(f"Pre-flight ping failed for LM Studio at {self.api_endpoint}")
             raise ConnectionError(
                 f"Cannot reach LM Studio at {self.api_endpoint}. "
-                f"Forensic investigation halted to prevent data loss or silent failure."
+                f"Ensure LM Studio is running and the Local Server is STARTED on port 1234."
             )
             
         try:
@@ -210,20 +254,16 @@ class LMStudioBackend(LLMBackend):
             raw_messages.append({"role": "user", "content": user_message})
             
             # Sanitize messages to ensure alternating user/assistant roles
-            # This is critical for LM Studio's Jinja templates which often fail
-            # if roles don't alternate or if system messages appear in the middle.
             messages = self._sanitize_messages(raw_messages)
             
             # Build the request payload (OpenAI-compatible format)
             payload = {
-                "model": self.model_name, 
+                "model": target_model, 
                 "messages": messages
             }
             
             if tools:
-                # LM Studio uses OpenAI-compatible format - we pass tools directly
-                # The model needs to support function calling for this to work
-                # Format tools to strict OpenAI specification: {"type": "function", "function": {...}}
+                # Format tools to strict OpenAI specification
                 formatted_tools = []
                 for tool in tools:
                     if "type" in tool and tool["type"] == "function" and "function" in tool:
@@ -245,7 +285,6 @@ class LMStudioBackend(LLMBackend):
             data = response.json()
             
             # Extract content and tool calls from the response
-            # OpenAI format: data["choices"][0]["message"]
             if "choices" not in data or len(data["choices"]) == 0:
                 self.logger.error(f"LM Studio returned unexpected response format: {data}")
                 raise RuntimeError(
@@ -265,13 +304,6 @@ class LMStudioBackend(LLMBackend):
         except (ConnectionError, TimeoutError, RuntimeError):
             # Re-raise our custom errors as-is
             raise
-        except requests.exceptions.InvalidURL as e:
-            # Invalid URL (e.g., invalid port number)
-            self.logger.error(f"LM Studio invalid URL: {e}")
-            raise ConnectionError(
-                f"Invalid LM Studio endpoint URL: {self.api_endpoint}. "
-                f"Please check the URL format and port number."
-            )
         except Exception as e:
             # Catch any other unexpected errors
             self.logger.error(f"LM Studio generation failed with unexpected error: {e}")
@@ -279,18 +311,12 @@ class LMStudioBackend(LLMBackend):
     
     def validate_connectivity(self) -> bool:
         """
-        Checks the model list endpoint for server availability.
-        
-        We ping the /v1/models endpoint to see if LM Studio is alive and responding.
-        This is like knocking on the door to see if anyone's home.
-        
-        Also validates that the server supports OpenAI-compatible endpoints.
+        Checks the model list endpoint for server availability and loaded models.
         
         Returns:
-            bool: True if LM Studio is reachable and OpenAI-compatible, False otherwise
+            bool: True if LM Studio is reachable and has at least one model loaded.
         """
         try:
-            # Use a short timeout for health checks (5 seconds)
             response = self.session.get(
                 f"{self.api_endpoint}/v1/models",
                 timeout=self.connect_timeout
@@ -300,18 +326,11 @@ class LMStudioBackend(LLMBackend):
                 self.logger.debug(f"LM Studio health check failed: HTTP {response.status_code}")
                 return False
             
-            # Validate OpenAI compatibility by checking response format
-            # OpenAI-compatible servers return {"data": [...], "object": "list"}
-            try:
-                data = response.json()
-                if "data" not in data:
-                    self.logger.warning(
-                        f"LM Studio server at {self.api_endpoint} doesn't appear to be OpenAI-compatible. "
-                        f"Expected 'data' field in /v1/models response."
-                    )
-                    return False
-            except Exception as e:
-                self.logger.warning(f"Failed to parse LM Studio /v1/models response: {e}")
+            data = response.json()
+            # Validates that 'data' exists and is not empty (at least one model loaded)
+            if "data" not in data or not data["data"]:
+                self.logger.warning(f"LM Studio at {self.api_endpoint} is online, but no models are loaded.")
+                # We return False here, but generate() will provide the detailed instructions
                 return False
             
             return True

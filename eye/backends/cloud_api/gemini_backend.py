@@ -60,8 +60,22 @@ class GeminiBackend(LLMBackend):
         reused for all subsequent requests.
         """
         if self._client is None:
-            from google import genai
-            self._client = genai.Client(api_key=self.credential_manager.get_credential("gemini_api_key"))
+            try:
+                from google import genai
+            except ImportError as e:
+                self.logger.error(f"Critical: Failed to import 'google-genai' SDK. "
+                                 f"Ensure it is installed in the virtual environment: {e}")
+                raise ImportError("The 'google-genai' SDK is missing or broken. "
+                                 "Please run 'pip install google-genai' in the Crow-Eye venv.") from e
+            except Exception as e:
+                self.logger.error(f"Unexpected error importing 'google-genai': {e}")
+                raise
+
+            api_key = self.credential_manager.get_credential("gemini_api_key")
+            if not api_key:
+                raise ValueError("Gemini API key not found. Please configure it in the Setup Wizard.")
+                
+            self._client = genai.Client(api_key=api_key)
         return self._client
 
     def generate(self, system_prompt, user_message, tools=None, history=None):
@@ -199,11 +213,19 @@ class GeminiBackend(LLMBackend):
         The model list is cached so Eye can still show options even if you go offline.
         """
         try:
-            models = [
-                m.name.replace("models/", "")  # Remove the "models/" prefix for cleaner display
-                for m in self.client.models.list() 
-                if "generateContent" in (getattr(m, "supported_actions", []) or [])
-            ]
+            # Detect models using both modern (supported_generation_methods) and legacy (supported_actions) properties
+            # This ensures compatibility across different versions of the Google GenAI SDKs
+            models = []
+            for m in self.client.models.list():
+                # Check for modern SDK property
+                methods = getattr(m, "supported_generation_methods", []) or []
+                # Check for legacy SDK property
+                actions = getattr(m, "supported_actions", []) or []
+                
+                # If either contains "generateContent", it's a chat-capable model
+                if "generateContent" in methods or "generateContent" in actions:
+                    models.append(m.name.replace("models/", ""))
+            
             if models: self._model_cache = models  # Cache for offline use
             return models
         except Exception as e: 

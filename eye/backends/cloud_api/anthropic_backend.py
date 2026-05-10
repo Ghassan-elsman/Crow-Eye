@@ -120,9 +120,23 @@ class AnthropicBackend(LLMBackend):
             raise
 
     def validate_connectivity(self):
-        """Performs a minimal 1-token generation to verify API health."""
+        """
+        Checks if the Anthropic API is reachable and key is valid.
+        
+        Attempts a minimal request. If no model name is configured, it tries
+        to list models instead to verify the API key's validity.
+        """
         try:
-            self.client.messages.create(model=self.model_name, max_tokens=1, messages=[{"role": "user", "content": "t"}])
+            if self.model_name and self.model_name not in ["", "default"]:
+                # If we have a model name, try a 1-token generation (cheapest check)
+                self.client.messages.create(
+                    model=self.model_name, 
+                    max_tokens=1, 
+                    messages=[{"role": "user", "content": "t"}]
+                )
+            else:
+                # If no model name yet, just try to list models
+                self.list_models()
             return True
         except Exception as e:
             self.logger.error(f"Anthropic connectivity check failed: {e}")

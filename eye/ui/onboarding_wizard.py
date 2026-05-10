@@ -185,6 +185,18 @@ class OnboardingWizard(QDialog):
             "last_validated": None
         }
         
+        # Load existing configuration if available
+        try:
+            existing_config = self.config_manager.load_config()
+            if existing_config:
+                self.config.update(existing_config)
+                # Ensure integration_type is preserved even if it was inferred previously
+                if "integration_type" in existing_config:
+                    self.config["integration_type"] = existing_config["integration_type"]
+        except Exception as e:
+            # If config is invalid or fails to load, start fresh
+            print(f"[Warning] Failed to load existing EYE config: {e}")
+        
         # Current page index
         self.current_page = 0
         
@@ -211,6 +223,26 @@ class OnboardingWizard(QDialog):
         nav_layout = QHBoxLayout()
         nav_layout.setContentsMargins(16, 12, 16, 16)
         nav_layout.setSpacing(12)
+        
+        self.diag_button = QPushButton("Diagnostics")
+        self.diag_button.setFixedHeight(40)
+        self.diag_button.setMinimumWidth(120)
+        self.diag_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4B5563;
+                color: #E5E7EB;
+                border: 1px solid #6B7280;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #374151;
+                border-color: #9CA3AF;
+            }
+        """)
+        self.diag_button.clicked.connect(self._on_run_diagnostics)
+        nav_layout.addWidget(self.diag_button)
         
         nav_layout.addStretch()
         
@@ -750,6 +782,20 @@ class OnboardingWizard(QDialog):
             )
             return
 
+        # Heuristic validation for API key format
+        if backend == "openai" and not api_key.startswith("sk-"):
+            QMessageBox.warning(self, "Invalid API Key Format", 
+                               "OpenAI API keys usually start with 'sk-'.\n\nPlease check your key.")
+            return
+        elif backend == "gemini" and not api_key.startswith("AIza"):
+            QMessageBox.warning(self, "Invalid API Key Format", 
+                               "Gemini API keys usually start with 'AIza'.\n\nPlease check your key.")
+            return
+        elif backend == "anthropic" and not api_key.startswith("sk-ant-"):
+            QMessageBox.warning(self, "Invalid API Key Format", 
+                               "Anthropic API keys usually start with 'sk-ant-'.\n\nPlease check your key.")
+            return
+
         try:
             # Temporarily store key for validation
             key_name = f"{backend}_api_key"
@@ -759,16 +805,27 @@ class OnboardingWizard(QDialog):
             from eye.services.model_router import ModelRouter
             temp_router = ModelRouter(self.config, self.credential_manager)
             
-            available_models = temp_router.list_models()
-            
+            available_models = backend.list_models()
+
             if not available_models:
-                QMessageBox.warning(
-                    self,
-                    "No Models Found",
-                    f"No supported models were found for {backend.title()}.\n\n"
-                    "Please check your API key and internet connection."
-                )
+                backend_title = backend.title()
+                if "LM Studio" in backend_title or "Ollama" in backend_title:
+                    help_text = (
+                        f"No models were found for {backend_title}.\n\n"
+                        "Please ensure:\n"
+                        "1. The local server is running.\n"
+                        "2. At least one model is loaded into memory (RAM/VRAM).\n"
+                        "3. The API endpoint address is correct."
+                    )
+                else:
+                    help_text = (
+                        f"No supported models were found for {backend_title}.\n\n"
+                        "Please check your API key and internet connection."
+                    )
+
+                QMessageBox.warning(self, "No Models Found", help_text)
                 return
+
             
             self._show_model_selection_dialog(
                 available_models,
@@ -777,11 +834,20 @@ class OnboardingWizard(QDialog):
             )
             
         except Exception as e:
+            # Provide more detailed error information to help with troubleshooting
+            error_details = str(e)
+            if "401" in error_details or "Unauthorized" in error_details:
+                error_msg = "Authentication failed (401). Please verify your API key is correct and active."
+            elif "dns" in error_details.lower() or "connection" in error_details.lower():
+                error_msg = "Network error. Please check your internet connection and DNS settings."
+            else:
+                error_msg = f"Failed to detect available models:\n\n{error_details}"
+
             QMessageBox.critical(
                 self,
                 "Detection Failed",
-                f"Failed to detect available models:\n\n{str(e)}\n\n"
-                "Please check your network and API key."
+                f"{error_msg}\n\n"
+                "Tip: Ensure you are using the correct key for the selected backend."
             )
 
     # Remove the old specific detection methods as they are now redundant
@@ -960,6 +1026,87 @@ class OnboardingWizard(QDialog):
             )
             return False
     
+    def _on_run_diagnostics(self):
+        """Perform system diagnostics and show results."""
+        from eye.services.diagnostics import SystemDiagnostics
+        from PyQt5.QtWidgets import QProgressDialog
+        
+        progress = QProgressDialog("Running System Integrity Check...", None, 0, 0, self)
+        progress.setWindowTitle("Diagnostics")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+        
+        try:
+            diagnostics = SystemDiagnostics(self.config_manager, self.credential_manager)
+            results = diagnostics.run_full_check()
+            progress.close()
+            self._show_diagnostics_results(results)
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "Diagnostics Error", f"Failed to run diagnostics: {str(e)}")
+
+    def _show_diagnostics_results(self, results):
+        """Show diagnostic results in a styled dialog."""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("System Integrity Report")
+        dialog.setMinimumSize(600, 500)
+        dialog.setStyleSheet("background-color: #0B1220; color: #E5E7EB;")
+        
+        layout = QVBoxLayout(dialog)
+        
+        title = QLabel("EYE System Diagnostics")
+        title.setStyleSheet("font-size: 14pt; font-weight: bold; color: #00FFFF; margin-bottom: 10px;")
+        layout.addWidget(title)
+        
+        report = QTextEdit()
+        report.setReadOnly(True)
+        report.setStyleSheet("""
+            QTextEdit {
+                background-color: #1E293B;
+                color: #E5E7EB;
+                border: 1px solid #334155;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 10pt;
+                padding: 10px;
+            }
+        """)
+        
+        # Build the report text
+        text = "<h2>INTEGRITY CHECK RESULTS</h2><hr>"
+        
+        # UI
+        ui = results["ui"]
+        color = "#10B981" if ui["status"] == "PASS" else "#EF4444"
+        text += f"<p><b style='color:{color}'>[{ui['status']}] {ui['name']}</b><br>{ui['message']}</p>"
+        
+        # SDKs
+        text += "<h3>Backend SDKs</h3><ul>"
+        for sdk in results["sdks"]:
+            color = "#10B981" if sdk["status"] == "PASS" else "#F59E0B"
+            text += f"<li><span style='color:{color}'>{sdk['name']}</span>: {sdk['message']}</li>"
+        text += "</ul>"
+        
+        # Config
+        cfg = results["config"]
+        color = "#10B981" if cfg["status"] == "PASS" else "#F59E0B"
+        text += f"<h3>Configuration</h3><p><b style='color:{color}'>[{cfg['status']}]</b> {cfg['message']}</p>"
+        
+        # Env
+        env = results["environment"]
+        text += f"<h3>Environment</h3><p>Python: {env['python_version']}<br>Platform: {env['platform']}<br>CWD: {env['cwd']}</p>"
+        
+        report.setHtml(text)
+        layout.addWidget(report)
+        
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("background-color: #334155; color: white; padding: 8px; border-radius: 4px;")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec_()
+
     def save_configuration(self, config):
         """
         Save configuration using ConfigManager and CredentialManager.

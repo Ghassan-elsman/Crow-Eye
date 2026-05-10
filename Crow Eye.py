@@ -289,6 +289,9 @@ General_Requirements = [
     'markdown',  # Markdown processing for reports
     'tiktoken',  # Token counting for context management
     'jsonschema',  # JSON schema validation
+    'openai',  # OpenAI API backend
+    'anthropic',  # Anthropic API backend
+    'google-genai',  # Google Gemini API backend
 ]
 
 # Optional forensic image parsing requirements
@@ -457,20 +460,23 @@ def ensure_timeline_built():
         
         # Now build the timeline with npm
         try:
-            node_path = "N/A"
+            print("  -> Installing NPM dependencies (this may take a minute)...")
+            # Explicitly pass current environment to ensure Node.js is in PATH
+            npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
+            subprocess.run([npm_cmd, 'install'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
+            
+            print("  -> Building React application...")
+            subprocess.run([npm_cmd, 'run', 'build'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
+            print(Fore.GREEN + "  -> Timeline built successfully!" + Fore.RESET)
+            
+            # Apply patches for compatibility
             try:
-                node_path = subprocess.check_output(['where', 'node'] if IS_WINDOWS else ['which', 'node'], shell=IS_WINDOWS, text=True).strip().split('\n')[0]
+                from eye.ui.react.patch_eye_ui import patch_file
+                patch_file(os.path.join(dist_dir, 'index.html'))
+                print("  -> Applied browser compatibility patches to Timeline")
             except:
                 pass
                 
-            print(f"  -> Environment: Using Node.js from {node_path}")
-            print("  -> Installing NPM dependencies (this may take a minute)...")
-            # Running without capture_output to show real-time progress to the user
-            subprocess.run(['npm', 'install'], cwd=timeline_dir, check=True, shell=IS_WINDOWS)
-            
-            print("  -> Building React application...")
-            subprocess.run(['npm', 'run', 'build'], cwd=timeline_dir, check=True, shell=IS_WINDOWS)
-            print(Fore.GREEN + "  -> Timeline built successfully!" + Fore.RESET)
         except subprocess.CalledProcessError as e:
             print(Fore.RED + f"  -> Failed to build Timeline. Exit code: {e.returncode}" + Fore.RESET)
             print(Fore.YELLOW + "  -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
@@ -524,9 +530,20 @@ def ensure_eye_ui_built():
         # Now build the Eye UI with npm
         try:
             print("  -> Installing NPM dependencies for Eye AI...")
-            subprocess.run(['npm', 'install'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS)
+            npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
+            subprocess.run([npm_cmd, 'install'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
+            
             print("  -> Building Eye AI React application...")
-            subprocess.run(['npm', 'run', 'build'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS)
+            subprocess.run([npm_cmd, 'run', 'build'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
+            
+            # Apply patches for compatibility
+            try:
+                from eye.ui.react.patch_eye_ui import patch_file
+                patch_file(os.path.join(dist_dir, 'index.html'))
+                print("  -> Applied browser compatibility patches to Eye UI")
+            except Exception as e:
+                print(f"  -> Patching failed: {e}")
+                
             print(Fore.GREEN + "  -> Eye AI built successfully!" + Fore.RESET)
         except subprocess.CalledProcessError as e:
             print(Fore.RED + f"  -> Failed to build Eye AI. Exit code: {e.returncode}" + Fore.RESET)
@@ -605,17 +622,15 @@ def handle_pywin32_postinstall():
 handle_pywin32_postinstall()
 
 # Install forensic image parsing dependencies with status tracking
-# DISABLED: pytsk3 cannot compile on Python 3.12 - use external mounting tools instead
-# See PYTSK3_WINDOWS_SOLUTION.md for alternatives
-"""
+# This includes pure-python dissect libraries and AI SDKs (Google, OpenAI, Anthropic)
 try:
     from utils.forensic_deps_installer import install_forensic_dependencies, get_installation_status
     
     print('\n' + '='*60)
-    print('[FORENSIC DEPENDENCIES] Installing forensic image parsing libraries...')
+    print('[STEP 4.5/4] Installing forensic & AI dependencies...')
     print('='*60)
     
-    # Install dependencies with automatic retry logic
+    # Install dependencies with automatic retry logic and status tracking
     results = install_forensic_dependencies(verbose=True)
     
     # Check if any critical failures occurred
@@ -623,17 +638,14 @@ try:
     total_count = len(results)
     
     if success_count > 0:
-        print(Fore.GREEN + f'[FORENSIC DEPENDENCIES] {success_count}/{total_count} packages installed successfully' + Fore.RESET)
+        print(Fore.GREEN + f'[FORENSIC DEPENDENCIES] {success_count}/{total_count} packages ready' + Fore.RESET)
     else:
-        print(Fore.YELLOW + '[FORENSIC DEPENDENCIES] No packages installed - forensic image parsing will use fallback methods' + Fore.RESET)
+        print(Fore.YELLOW + '[FORENSIC DEPENDENCIES] Use Diagnostics in EYE Assistant to resolve issues' + Fore.RESET)
     
 except ImportError as e:
     print(Fore.YELLOW + f'[FORENSIC DEPENDENCIES] Could not load installer: {str(e)}' + Fore.RESET)
-    print(Fore.YELLOW + '[FORENSIC DEPENDENCIES] Forensic image parsing will use fallback methods' + Fore.RESET)
 except Exception as e:
     print(Fore.YELLOW + f'[FORENSIC DEPENDENCIES] Installation error: {str(e)}' + Fore.RESET)
-    print(Fore.YELLOW + '[FORENSIC DEPENDENCIES] Continuing with available dependencies...' + Fore.RESET)
-"""
 
 # Robust import handling with better error messages
 def safe_import(module_name, import_path=None, alias=None):
@@ -11794,6 +11806,16 @@ if __name__ == "__main__":
             if '--no-sandbox' not in sys.argv:
                 sys.argv.append('--no-sandbox')
     # ---------------------------------------------------------
+    # SHARED OPENGL CONTEXT FIX
+    # Fixes: Attribute Qt::AA_ShareOpenGLContexts must be set before QCoreApplication is created.
+    # Required for QWebEngineView to function correctly across multiple windows.
+    # ---------------------------------------------------------
+    try:
+        from PyQt5 import QtCore
+        QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_ShareOpenGLContexts)
+        print("[GUI] Enabled shared OpenGL contexts for WebEngine compatibility")
+    except Exception as e:
+        print(f"[Warning] Failed to set AA_ShareOpenGLContexts: {e}")
 
     app = QtWidgets.QApplication(sys.argv)
     

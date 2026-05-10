@@ -11,5 +11,10 @@ dissect.evidence>=3.13
 # Alternative ISO support
 pycdlib>=1.12.0
 
+# LLM Backend Support for EYE Assistant
+openai>=1.0.0
+anthropic>=0.3.0
+google-genai>=0.1.0
+
 # GUI framework (already in main requirements)
 # PyQt5>=5.15.0

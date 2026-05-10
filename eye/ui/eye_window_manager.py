@@ -48,6 +48,13 @@ class EYEWindowManager:
     @classmethod
     def show_assistant(cls, main_window, artifacts_dir):
         try:
+            # Mandatory: Set WebEngine sharing attribute before ANY WebEngine-related imports
+            # This prevents crashes when launching the Eye from an existing QApplication
+            from PyQt5.QtCore import Qt
+            from PyQt5.QtWidgets import QApplication
+            # AA_ShareOpenGLContexts moved to main entry point (Crow Eye.py) 
+            # to ensure it is set before QCoreApplication is created.
+            
             # Safety Check
             if not artifacts_dir or not os.path.exists(artifacts_dir):
                 QtWidgets.QMessageBox.warning(main_window, "Eye AI", "Open a case first.")
@@ -110,7 +117,25 @@ class EYEWindowManager:
                 
             import traceback
             traceback.print_exc()
-            QtWidgets.QMessageBox.critical(main_window, "Eye AI Error", f"Failed to load: {str(e)}")
+            
+            # Run a quick diagnostic to provide better error info
+            try:
+                from eye.services.diagnostics import SystemDiagnostics
+                diag = SystemDiagnostics()
+                ui_res = diag.check_ui_artifacts()
+                sdk_res = diag.check_backend_sdks()
+                
+                diag_info = f"\n\nDiagnostics:\n- UI Interface: {ui_res['status']}\n"
+                for sdk in sdk_res:
+                    diag_info += f"- {sdk['name']}: {sdk['status']}\n"
+            except:
+                diag_info = ""
+
+            QtWidgets.QMessageBox.critical(
+                main_window, 
+                "Eye AI Error", 
+                f"Failed to load: {str(e)}{diag_info}\n\nPlease run 'Diagnostics' in the Setup Wizard for more details."
+            )
             
     @classmethod
     def _is_window_valid(cls):
