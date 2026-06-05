@@ -52,7 +52,7 @@ class FeatherConfigGenerator:
                     config_path = FeatherConfigGenerator.generate_config_for_db(db_path)
                     if config_path:
                         generated_configs.append(config_path)
-                        logger.info(f"✓ Generated config: {config_path.name}")
+                        logger.info(f"[OK] Generated config: {config_path.name}")
                 except Exception as e:
                     logger.error(f"Failed to generate config for {db_path.name}: {e}")
             else:
@@ -131,7 +131,7 @@ class FeatherConfigGenerator:
                     # Save to JSON file
                     json_path = db_path.with_suffix('.json')
                     feather_config.save_to_file(str(json_path))
-                    logger.info(f"✓ Saved config to: {json_path.name}")
+                    logger.info(f"[OK] Saved config to: {json_path.name}")
                     return json_path
                 
             except Exception as e:
@@ -145,7 +145,7 @@ class FeatherConfigGenerator:
             if feather_config:
                 json_path = db_path.with_suffix('.json')
                 feather_config.save_to_file(str(json_path))
-                logger.info(f"✓ Saved basic config to: {json_path.name}")
+                logger.info(f"[OK] Saved basic config to: {json_path.name}")
                 return json_path
             
         except Exception as e:
@@ -206,7 +206,7 @@ class FeatherConfigGenerator:
                 for pattern, artifact_type in artifact_patterns.items():
                     if pattern in table_lower:
                         return artifact_type
-        except:
+        except Exception as e:
             pass
         
         return None
@@ -224,13 +224,14 @@ class FeatherConfigGenerator:
         """
         try:
             conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            
-            # Get list of tables
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = cursor.fetchall()
-            
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                
+                # Get list of tables
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = cursor.fetchall()
+            finally:
+                conn.close()
             
             if tables:
                 # Return first non-system table
@@ -266,10 +267,12 @@ class FeatherConfigGenerator:
         try:
             # Get column names from database
             conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns_info = cursor.fetchall()
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns_info = cursor.fetchall()
+            finally:
+                conn.close()
             
             columns = [col[1] for col in columns_info]
             

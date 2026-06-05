@@ -209,8 +209,8 @@ class SkipStatistics:
     total_windows_checked: int = 0
     empty_windows_found: int = 0
     time_saved_seconds: float = 0.0
-    quick_check_failures: int = 0  # Requirement 1.5, 10.5
-    index_verification_failures: int = 0  # Requirement 1.5, 10.5
+    quick_check_failures: int = 0 # Requirement 1.5, 10.5
+    index_verification_failures: int = 0 # Requirement 1.5, 10.5
 
     @property
     def skip_rate_percentage(self) -> float:
@@ -261,10 +261,10 @@ class EmptyWindowDetector:
         
         # Verify indexes exist before quick check (Requirements 1.3, 7.1, 7.4)
         if not self._verify_indexes():
-            self.statistics.index_verification_failures += 1  # Requirement 1.5, 10.5
+            self.statistics.index_verification_failures += 1 # Requirement 1.5, 10.5
             if self.debug_mode:
-                print(f"[EmptyWindowDetector] Indexes missing, skipping quick check for window {window.window_id}")
-            return False  # Assume non-empty if can't verify
+                logger.info(f"[EmptyWindowDetector] Indexes missing, skipping quick check for window {window.window_id}")
+            return False # Assume non-empty if can't verify
         
         # Wrap quick check in try-except for error handling (Requirement 1.5)
         try:
@@ -274,16 +274,16 @@ class EmptyWindowDetector:
                 self.statistics.empty_windows_found += 1
                 
                 if self.debug_mode:
-                    print(f"[EmptyWindowDetector] Window {window.window_id} is empty - skipping")
+                    logger.info(f"[EmptyWindowDetector] Window {window.window_id} is empty - skipping")
                 
                 return True
             
             return False
         except Exception as e:
             # On error, assume window has data (safe fallback) (Requirement 1.5)
-            self.statistics.quick_check_failures += 1  # Requirement 1.5, 10.5
+            self.statistics.quick_check_failures += 1 # Requirement 1.5, 10.5
             if self.debug_mode:
-                print(f"[EmptyWindowDetector] Quick check failed for window {window.window_id}: {e}, assuming non-empty")
+                logger.info(f"[EmptyWindowDetector] Quick check failed for window {window.window_id}: {e}, assuming non-empty")
             return False
     
     def record_time_saved(self, seconds: float) -> None:
@@ -322,7 +322,7 @@ class EmptyWindowDetector:
             if not has_timestamps:
                 feathers_without_timestamps += 1
                 if self.debug_mode:
-                    print(f"[EmptyWindowDetector] Skipping {feather_id} - no timestamp columns detected")
+                    logger.info(f"[EmptyWindowDetector] Skipping {feather_id} - no timestamp columns detected")
                 continue
             
             feathers_checked += 1
@@ -330,17 +330,17 @@ class EmptyWindowDetector:
                 feathers_with_indexes += 1
             else:
                 if self.debug_mode:
-                    print(f"[EmptyWindowDetector] Missing timestamp index on {feather_id}")
+                    logger.info(f"[EmptyWindowDetector] Missing timestamp index on {feather_id}")
                 return False
         
         # If no feathers have timestamps, we can't do quick checks
         if feathers_checked == 0:
             if self.debug_mode:
-                print(f"[EmptyWindowDetector] No feathers with timestamp columns found ({feathers_without_timestamps} feathers total)")
+                logger.info(f"[EmptyWindowDetector] No feathers with timestamp columns found ({feathers_without_timestamps} feathers total)")
             return False
         
         if self.debug_mode and feathers_without_timestamps > 0:
-            print(f"[EmptyWindowDetector] Verified {feathers_with_indexes}/{feathers_checked} feathers with timestamps have indexes ({feathers_without_timestamps} feathers skipped - no timestamps)")
+            logger.info(f"[EmptyWindowDetector] Verified {feathers_with_indexes}/{feathers_checked} feathers with timestamps have indexes ({feathers_without_timestamps} feathers skipped - no timestamps)")
         
         return True
 

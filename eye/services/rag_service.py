@@ -144,10 +144,32 @@ class RAGService:
             "rdp": "remote_access_knowledge.md",
             "teamviewer": "remote_access_knowledge.md",
             "anydesk": "remote_access_knowledge.md",
+            # Eye-Describe Anatomy & technical guides
+            "anatomy": "eye_describe_anatomy_index.md",
+            "structure": "eye_describe_anatomy_index.md",
+            "layout": "eye_describe_anatomy_index.md",
+            "offset": "eye_describe_anatomy_index.md",
+            "byte": "eye_describe_anatomy_index.md",
+            "binary": "eye_describe_anatomy_index.md",
+            "header": "eye_describe_anatomy_index.md",
+            "guide": "eye_describe_anatomy_index.md",
+            "describe": "eye_describe_anatomy_index.md",
             # Intelligence & Reasoning Mappings
             "forensic_methodology": "forensic_methodology.md",
             "evidence_intelligence": "evidence_intelligence.md",
-            "global_schema_databse_refrence": "Global_schema_databse_Refrence.md",
+            # IntentEngine emits the file-stem token "eye_describe_anatomy_index"
+            # for anatomy/byte/offset/header/describe/guide queries. Without a
+            # self-mapping key here, that token never resolves to a file and the
+            # Eye-Describe anatomy hub (with the crow-eye.com/eye-describe URLs)
+            # is never injected into the prompt. Map the stem to its file.
+            "eye_describe_anatomy_index": "eye_describe_anatomy_index.md",
+            # Key is the lowercased form of IntentEngine's emitted token
+            # ("Global_schema_database_Reference".lower()); the VALUE points at
+            # the real on-disk filename.
+            "global_schema_database_reference": "Global_schema_database_Reference.md",
+            # Correlation Engine — wings, semantic mappings, engine
+            # diagnostics, multi-timestamp fan-out, GEP authoring rules.
+            "correlation_engine_knowledge": "correlation_engine_knowledge.md",
             "app runs": "evidence_intelligence.md",
             "app execution": "evidence_intelligence.md",
             "system browsing": "evidence_intelligence.md",
@@ -193,13 +215,34 @@ class RAGService:
         Returns:
             Concatenated knowledge base content with section headers
         """
-        # Try semantic search if we have a query and an embedding client
+        # Precedence (deterministic first, semantic fills the remainder):
+        #  1. KEYWORD-MAPPED docs — driven by IntentEngine + any force-added
+        #     keyword (e.g. the global schema reference). These are explicit
+        #     intent, so they MUST be reliably present and are added first.
+        #  2. SEMANTIC top matches — fuzzy relevance for whatever the keyword
+        #     map didn't already cover.
+        # Dedup is by FILENAME (not a fragile keyword-substring check), so a file
+        # pulled in by a keyword is never duplicated by a semantic chunk.
         context_parts = []
-        
+        seen_files = set()
+
+        # ---- 1. Deterministic keyword-mapped docs (highest priority) ----
+        if keywords:
+            for keyword in keywords:
+                fname = self.keyword_mapping.get(keyword.lower())
+                if not fname or fname in seen_files:
+                    continue
+                content = self._load_knowledge_file(fname)
+                if content:
+                    seen_files.add(fname)
+                    context_parts.append(f"## {keyword.title()} Knowledge\n{content}")
+                    self.logger.debug(f"Retrieved knowledge for keyword: {keyword} ({fname})")
+
+        # ---- 2. Semantic matches for files not already included ----
         if user_query and self.embedding_client:
             if not self.index_built:
                 self._build_vector_index()
-                
+
             if self.vector_index:
                 query_emb = self.embedding_client.embed_text(user_query)
                 if query_emb:
@@ -208,35 +251,21 @@ class RAGService:
                         score = cosine_similarity(query_emb, item["embedding"])
                         if score > 0.4:  # Threshold for relevance
                             results.append((score, item))
-                    
+
                     if results:
                         results.sort(key=lambda x: x[0], reverse=True)
-                        top_results = results[:3]  # Get top 3 chunks
-                        
-                        for score, item in top_results:
+                        added = 0
+                        for score, item in results:
+                            if added >= 3:  # cap semantic chunks
+                                break
+                            if item["filename"] in seen_files:
+                                continue  # already pulled in deterministically
                             filename = item["filename"].replace("_knowledge.md", "").title()
                             context_parts.append(f"## {filename} Knowledge (Semantic Match)\n{item['content']}")
-                        
-                        self.logger.info(f"Retrieved {len(top_results)} semantic knowledge sections.")
-        
-        # Fallback to legacy keyword retrieval (only if we need more or have no semantic matches)
-        if keywords:
-            for keyword in keywords:
-                # Avoid duplicates if semantic search already found it
-                if any(keyword.title() in p for p in context_parts):
-                    continue
-                    
-                keyword_lower = keyword.lower()
-                if keyword_lower in self.keyword_mapping:
-                    content = self._load_knowledge_file(
-                        self.keyword_mapping[keyword_lower]
-                    )
-                    if content:
-                        context_parts.append(
-                            f"## {keyword.title()} Knowledge\n{content}"
-                        )
-                        self.logger.debug(f"Retrieved knowledge for keyword: {keyword}")
-        
+                            added += 1
+                        if added:
+                            self.logger.info(f"Retrieved {added} semantic knowledge sections.")
+
         if not context_parts:
             return ""
             

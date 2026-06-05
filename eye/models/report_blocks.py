@@ -43,13 +43,15 @@ class ReportBlock:
     Base class for all report blocks.
     
     Attributes:
-        block_id: Unique identifier for the block (auto-generated UUID)
+        block_id: GEP Rule 4 (Non-Repudiation) hash-chained identifier. Filled in
+            by ReportEngine._stamp_and_append() at insertion time. Falls back to
+            a UUID only if a block is constructed outside of ReportEngine.
         block_type: Type of block (text/table/image/reference)
         metadata: Dictionary containing timestamps, author, and other metadata
-    
     """
     block_id: str = field(default_factory=lambda: str(uuid4()))
     block_type: str = ""
+    category: str = "" # e.g., "security", "execution", "persistence"
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
@@ -146,11 +148,15 @@ class ReferenceBlock(ReportBlock):
     Attributes:
         reference_text: Summary or description of the reference
         source_link: Link to the source (database query, file path, etc.)
+        columns: List of column names to display (optional, inferred if missing)
+        evidence_data: List of dictionaries representing the evidence rows
         block_type: Set to "reference"
     
     """
     reference_text: str = ""
     source_link: str = ""
+    columns: List[str] = field(default_factory=list)
+    evidence_data: List[Dict[str, Any]] = field(default_factory=list)
     block_type: str = "reference"
 
 

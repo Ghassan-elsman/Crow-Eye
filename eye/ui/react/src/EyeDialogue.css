@@ -1,0 +1,116 @@
+/* EyeDialogue — Eye <-> LLM conversation transcript.
+   Forensic dark palette, aligned with ReportBlockComponent.css. */
+
+.eye-dialogue {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.eye-dialogue--live {
+  opacity: 0.97;
+}
+
+.eyed-entry {
+  border: 1px solid #1f2530;
+  border-left: 3px solid #4a90e2;
+  border-radius: 8px;
+  background: #0e131c;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: #e6edf3;
+}
+
+/* Direction accents: Eye (cyan/blue), LLM (violet), Tool (green). */
+.eyed-entry--eye  { border-left-color: #4a90e2; }
+.eyed-entry--llm  { border-left-color: #a78bfa; }
+.eyed-entry--tool { border-left-color: #10b981; }
+
+.eyed-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.eyed-entry-label {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-size: 11.5px;
+  color: #cbd5e1;
+}
+
+.eyed-entry--eye  .eyed-entry-label { color: #60a5fa; }
+.eyed-entry--llm  .eyed-entry-label { color: #c4b5fd; }
+.eyed-entry--tool .eyed-entry-label { color: #34d399; }
+
+.eyed-entry-iter {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  border: 1px solid #1f2530;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.eyed-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.eyed-badge--ok   { color: #10b981; background: rgba(16,185,129,0.12);  border: 1px solid rgba(16,185,129,0.45); }
+.eyed-badge--fail { color: #f43f5e; background: rgba(244,63,94,0.14);    border: 1px solid rgba(244,63,94,0.5); }
+
+.eyed-entry-body { display: flex; flex-direction: column; gap: 6px; }
+
+.eyed-meta-label { color: #94a3b8; font-size: 11px; }
+.eyed-meta-line  { color: #94a3b8; font-size: 11.5px; }
+.eyed-muted      { color: #64748b; font-style: italic; font-size: 11.5px; }
+
+.eyed-tools-offered { color: #cbd5e1; font-size: 11.5px; }
+
+.eyed-markdown { color: #e6edf3; line-height: 1.5; }
+.eyed-markdown p { margin: 4px 0; }
+
+.eyed-toolcalls { display: flex; flex-direction: column; gap: 6px; }
+.eyed-toolcall-name {
+  font-family: 'Space Mono', ui-monospace, monospace;
+  color: #60a5fa;
+  font-size: 12px;
+}
+
+.eyed-pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: #07090e;
+  border: 1px solid #1f2530;
+  border-radius: 6px;
+  color: #cbd5e1;
+  font-family: 'Space Mono', ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+.eyed-pre--args { color: #a7b6c8; }
+
+/* Collapsible sub-sections (system prompt, params, result). */
+.eyed-collapsible { margin-top: 2px; }
+.eyed-collapsible-toggle {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+}
+.eyed-collapsible-toggle:hover { color: #e6edf3; }
+.eyed-caret { color: #64748b; }
+.eyed-collapsible-body { margin-top: 2px; }

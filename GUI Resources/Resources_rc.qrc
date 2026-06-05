@@ -2,6 +2,7 @@
   <qresource prefix="Icons">
     <file>main-menu.png</file>
     <file>CrowEye.ico</file>
+    <file>Crow-Eye.png</file>
     <file>hamburger menu.png</file>
     <file>icons/menu-icon.svg</file>
     <file>icons/new-case-icon.svg</file>

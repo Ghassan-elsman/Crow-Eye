@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 
 class MonitoringLevel(Enum):
     """Monitoring detail levels"""
-    BASIC = "basic"           # Basic performance metrics
-    DETAILED = "detailed"     # Detailed operation tracking
-    VERBOSE = "verbose"       # Verbose logging with full context
-    DEBUG = "debug"          # Debug level with all internal operations
+    BASIC = "basic" # Basic performance metrics
+    DETAILED = "detailed" # Detailed operation tracking
+    VERBOSE = "verbose" # Verbose logging with full context
+    DEBUG = "debug" # Debug level with all internal operations
 
 
 class PerformanceMetric(Enum):
@@ -73,7 +73,7 @@ class DiagnosticResult:
     """Result of a diagnostic check"""
     check_name: str
     component: str
-    status: str  # "healthy", "warning", "error"
+    status: str # "healthy", "warning", "error"
     message: str
     details: Dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.now)
@@ -232,8 +232,8 @@ class IntegrationMonitor:
         if self.enable_performance_monitoring:
             try:
                 process = psutil.Process()
-                memory_before = process.memory_info().rss / (1024 * 1024)  # MB
-            except:
+                memory_before = process.memory_info().rss / (1024 * 1024) # MB
+            except Exception as e:
                 pass
         
         operation_trace = OperationTrace(
@@ -284,10 +284,10 @@ class IntegrationMonitor:
         if self.enable_performance_monitoring:
             try:
                 process = psutil.Process()
-                memory_after = process.memory_info().rss / (1024 * 1024)  # MB
+                memory_after = process.memory_info().rss / (1024 * 1024) # MB
                 memory_before = operation_trace.context.get('memory_before_mb', 0)
                 operation_trace.memory_delta_mb = memory_after - memory_before
-            except:
+            except Exception as e:
                 pass
         
         # Store completed trace
@@ -305,12 +305,12 @@ class IntegrationMonitor:
             logger.debug(f"Completed operation {operation_id}: {status} in {operation_trace.duration_ms:.1f}ms")
         
         # Log warnings for slow operations
-        if operation_trace.duration_ms > 5000:  # 5 seconds
+        if operation_trace.duration_ms > 5000: # 5 seconds
             logger.warning(f"Slow operation detected: {operation_trace.component}.{operation_trace.operation_name} "
                           f"took {operation_trace.duration_ms:.1f}ms")
         
         # Log warnings for high memory usage
-        if operation_trace.memory_delta_mb and operation_trace.memory_delta_mb > 100:  # 100MB
+        if operation_trace.memory_delta_mb and operation_trace.memory_delta_mb > 100: # 100MB
             logger.warning(f"High memory usage: {operation_trace.component}.{operation_trace.operation_name} "
                           f"used {operation_trace.memory_delta_mb:.1f}MB")
     
@@ -366,7 +366,7 @@ class IntegrationMonitor:
         
         # Throughput metric (if input/output sizes available)
         if operation_trace.input_size and operation_trace.duration_ms:
-            throughput = operation_trace.input_size / (operation_trace.duration_ms / 1000)  # items per second
+            throughput = operation_trace.input_size / (operation_trace.duration_ms / 1000) # items per second
             self.performance_data[f"{component}_throughput"].append(
                 PerformanceData(
                     metric=PerformanceMetric.THROUGHPUT,
@@ -616,7 +616,7 @@ class IntegrationMonitor:
         
         error_rate = failed_ops / total_ops if total_ops > 0 else 0
         
-        if error_rate > 0.1:  # More than 10% error rate
+        if error_rate > 0.1: # More than 10% error rate
             return DiagnosticResult(
                 check_name="semantic_mapping_health",
                 component=component,
@@ -629,7 +629,7 @@ class IntegrationMonitor:
                     "Review error logs for specific failure causes"
                 ]
             )
-        elif error_rate > 0.05:  # More than 5% error rate
+        elif error_rate > 0.05: # More than 5% error rate
             return DiagnosticResult(
                 check_name="semantic_mapping_health",
                 component=component,
@@ -669,7 +669,7 @@ class IntegrationMonitor:
         
         error_rate = failed_ops / total_ops if total_ops > 0 else 0
         
-        if error_rate > 0.1:  # More than 10% error rate
+        if error_rate > 0.1: # More than 10% error rate
             return DiagnosticResult(
                 check_name="weighted_scoring_health",
                 component=component,
@@ -682,7 +682,7 @@ class IntegrationMonitor:
                     "Review scoring engine initialization"
                 ]
             )
-        elif error_rate > 0.05:  # More than 5% error rate
+        elif error_rate > 0.05: # More than 5% error rate
             return DiagnosticResult(
                 check_name="weighted_scoring_health",
                 component=component,
@@ -722,7 +722,7 @@ class IntegrationMonitor:
         
         error_rate = failed_ops / total_ops if total_ops > 0 else 0
         
-        if error_rate > 0.05:  # More than 5% error rate (lower threshold for progress tracking)
+        if error_rate > 0.05: # More than 5% error rate (lower threshold for progress tracking)
             return DiagnosticResult(
                 check_name="progress_tracking_health",
                 component=component,
@@ -808,13 +808,13 @@ class IntegrationMonitor:
             recent_ops = [trace for trace in self.operation_traces 
                          if trace.component == component and trace.end_time and trace.end_time > recent_threshold]
             
-            if len(recent_ops) < 3:  # Need at least 3 recent operations
+            if len(recent_ops) < 3: # Need at least 3 recent operations
                 continue
             
             recent_avg = sum(op.duration_ms for op in recent_ops) / len(recent_ops)
             
             # Check if recent average is significantly higher than historical average
-            if recent_avg > avg_time * 2:  # 100% slower
+            if recent_avg > avg_time * 2: # 100% slower
                 performance_issues.append({
                     'component': component,
                     'historical_avg': avg_time,
@@ -861,7 +861,7 @@ class IntegrationMonitor:
         
         error_rate = total_errors / total_ops
         
-        if error_rate > 0.1:  # More than 10% error rate
+        if error_rate > 0.1: # More than 10% error rate
             return DiagnosticResult(
                 check_name="error_rate",
                 component="system",
@@ -874,7 +874,7 @@ class IntegrationMonitor:
                     "Consider running individual component diagnostics"
                 ]
             )
-        elif error_rate > 0.05:  # More than 5% error rate
+        elif error_rate > 0.05: # More than 5% error rate
             return DiagnosticResult(
                 check_name="error_rate",
                 component="system",
@@ -1014,7 +1014,7 @@ class IntegrationMonitor:
                     'success': trace.success,
                     'timestamp': trace.start_time.isoformat()
                 }
-                for trace in list(self.operation_traces)[-20:]  # Last 20 operations
+                for trace in list(self.operation_traces)[-20:] # Last 20 operations
             ]
         }
         
@@ -1060,7 +1060,7 @@ class IntegrationMonitor:
                 recommendations.append(f"High error rate in {component}: Review error logs and configuration")
             
             avg_time = stats.get('average_execution_time', 0)
-            if avg_time > 5000:  # 5 seconds
+            if avg_time > 5000: # 5 seconds
                 recommendations.append(f"Slow performance in {component}: Consider optimization or resource allocation")
         
         # Remove duplicates while preserving order

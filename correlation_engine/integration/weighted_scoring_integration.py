@@ -46,26 +46,20 @@ class ScoringConfiguration:
     validation_rules: Dict[str, Any] = None
     
     def __post_init__(self):
+        from ..config.centralized_score_config import CentralizedScoreConfig
+        from ..config.artifact_type_registry import get_registry
+        central_config = CentralizedScoreConfig.get_default()
+        
         if self.score_interpretation is None:
             self.score_interpretation = {
-                "confirmed": {"min": 0.8, "label": "Confirmed Execution"},
-                "probable": {"min": 0.5, "label": "Probable Match"},
-                "weak": {"min": 0.2, "label": "Weak Evidence"},
-                "minimal": {"min": 0.0, "label": "Minimal Evidence"}
+                "confirmed": {"min": central_config.thresholds.get("critical", 0.9), "label": "Confirmed Execution"},
+                "probable": {"min": central_config.thresholds.get("high", 0.7), "label": "Probable Match"},
+                "weak": {"min": central_config.thresholds.get("medium", 0.5), "label": "Weak Evidence"},
+                "minimal": {"min": central_config.thresholds.get("low", 0.3), "label": "Minimal Evidence"}
             }
         
         if self.default_weights is None:
-            self.default_weights = {
-                "Logs": 0.4,
-                "Prefetch": 0.3,
-                "SRUM": 0.2,
-                "AmCache": 0.15,
-                "ShimCache": 0.15,
-                "Jumplists": 0.1,
-                "LNK": 0.1,
-                "MFT": 0.05,
-                "USN": 0.05
-            }
+            self.default_weights = get_registry().get_default_weights_dict()
         
         if self.tier_definitions is None:
             self.tier_definitions = {
@@ -351,7 +345,16 @@ class WeightedScoringIntegration(IScoringIntegration):
             
             # Enhance result with interpretation
             score = result.get('score', 0.0)
-            interpretation_info = self.interpret_score(score, case_id)
+            
+            # Wing-level scoring interpretation overrides global/case defaults
+            wing_scoring = getattr(wing_config, 'scoring', {})
+            wing_interpretation = wing_scoring.get('score_interpretation')
+            
+            interpretation_info = self.interpret_score(
+                score, 
+                case_id, 
+                interpretation_override=wing_interpretation
+            )
             
             # Update result with enhanced interpretation
             result['interpretation'] = interpretation_info['label']
@@ -826,7 +829,7 @@ class WeightedScoringIntegration(IScoringIntegration):
         if conflicts:
             logger.info(f"Resolved {len(conflicts)} configuration conflicts:")
             for conflict in conflicts:
-                logger.info(f"  {conflict['field']}: {conflict['global_value']} -> {conflict['case_value']}")
+                logger.info(f" {conflict['field']}: {conflict['global_value']} -> {conflict['case_value']}")
         
         return {
             'config': resolved_config,
@@ -851,9 +854,9 @@ class WeightedScoringIntegration(IScoringIntegration):
             
             # Score distribution
             logger.info(f"Score statistics:")
-            logger.info(f"  Average score: {self.stats.average_score:.3f}")
-            logger.info(f"  Highest score: {self.stats.highest_score:.3f}")
-            logger.info(f"  Lowest score: {self.stats.lowest_score:.3f}")
+            logger.info(f" Average score: {self.stats.average_score:.3f}")
+            logger.info(f" Highest score: {self.stats.highest_score:.3f}")
+            logger.info(f" Lowest score: {self.stats.lowest_score:.3f}")
             
             # Configuration usage
             if self.case_specific_enabled:
@@ -863,9 +866,9 @@ class WeightedScoringIntegration(IScoringIntegration):
                     case_percentage = (self.stats.case_specific_configs_used / total_configs) * 100
                     
                     logger.info(f"Configuration usage:")
-                    logger.info(f"  Global configs: {self.stats.global_configs_used} ({global_percentage:.1f}%)")
-                    logger.info(f"  Case-specific configs: {self.stats.case_specific_configs_used} ({case_percentage:.1f}%)")
-                    logger.info(f"  Conflict resolutions: {self.stats.conflict_resolutions}")
+                    logger.info(f" Global configs: {self.stats.global_configs_used} ({global_percentage:.1f}%)")
+                    logger.info(f" Case-specific configs: {self.stats.case_specific_configs_used} ({case_percentage:.1f}%)")
+                    logger.info(f" Conflict resolutions: {self.stats.conflict_resolutions}")
             
             # Score interpretation breakdown
             self._log_score_interpretation_breakdown()
@@ -891,44 +894,58 @@ class WeightedScoringIntegration(IScoringIntegration):
             for level, config in sorted_interpretations:
                 min_score = config.get('min', 0.0)
                 label = config.get('label', level.title())
-                logger.info(f"  {label}: {min_score:.2f}+")
+                logger.info(f" {label}: {min_score:.2f}+")
             
         except Exception as e:
             logger.warning(f"Failed to log score interpretation breakdown: {e}")
     
-    def interpret_score(self, score: float, case_id: Optional[str] = None) -> Dict[str, Any]:
+    def interpret_score(self, score: float, case_id: Optional[str] = None,
+                        interpretation_override: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Interpret a score value using configured thresholds.
-        
+
         Args:
             score: Score value to interpret
             case_id: Optional case ID for case-specific interpretation
-            
+            interpretation_override: Optional override for interpretation levels (e.g. from Wing)
+
         Returns:
             Dictionary with interpretation information
         """
         try:
             effective_config = self.get_scoring_configuration(case_id)
-            
+            score_interpretation = interpretation_override or effective_config.score_interpretation
+
+            # Normalize score_interpretation to handle both dict and flat float values
+            normalized = {}
+            for level, config in score_interpretation.items():
+                if isinstance(config, dict):
+                    normalized[level] = config
+                else:
+                    try:
+                        normalized[level] = {'min': float(config), 'label': level.title()}
+                    except (TypeError, ValueError):
+                        normalized[level] = {'min': 0.0, 'label': level.title()}
+
             # Find the appropriate interpretation level
             best_match = None
             best_min_score = -1
-            
-            for level, config in effective_config.score_interpretation.items():
+
+            for level, config in normalized.items():
                 min_score = config.get('min', 0.0)
                 if score >= min_score and min_score > best_min_score:
                     best_match = level
                     best_min_score = min_score
-            
+
             if best_match:
-                interpretation_config = effective_config.score_interpretation[best_match]
+                interpretation_config = normalized[best_match]
                 return {
                     'level': best_match,
                     'label': interpretation_config.get('label', best_match.title()),
                     'min_threshold': interpretation_config.get('min', 0.0),
                     'score': score,
-                    'confidence_percentage': min(100.0, (score / 1.0) * 100),  # Assuming max score is 1.0
-                    'tier': self._get_score_tier(score, effective_config),
+                    'confidence_percentage': min(100.0, (score / 1.0) * 100), # Assuming max score is 1.0
+                    'tier': self._get_score_tier(score, normalized),
                     'description': self._generate_score_description(score, best_match, interpretation_config)
                 }
             else:
@@ -942,7 +959,7 @@ class WeightedScoringIntegration(IScoringIntegration):
                     'tier': 4,
                     'description': f'Score {score:.3f} does not match any configured interpretation level'
                 }
-                
+
         except Exception as e:
             logger.error(f"Failed to interpret score {score}: {e}")
             return {
@@ -954,51 +971,82 @@ class WeightedScoringIntegration(IScoringIntegration):
                 'tier': 4,
                 'description': f'Error interpreting score: {str(e)}'
             }
-    
-    def _get_score_tier(self, score: float, config: ScoringConfiguration) -> int:
+
+    def _get_score_tier(self, score: float, interpretation: Any) -> int:
         """
         Get tier number for a score based on interpretation levels.
-        
+
         Args:
             score: Score value
-            config: Scoring configuration
-            
+            interpretation: ScoringConfiguration or dictionary of interpretation levels
+
         Returns:
             Tier number (1-4, where 1 is highest)
         """
+        # Extract thresholds from configuration if available
+        thresholds = {}
+        config_dict = {}
+        if hasattr(interpretation, 'score_interpretation') and interpretation.score_interpretation:
+            # It's a ScoringConfiguration object
+            config_dict = interpretation.score_interpretation
+        elif isinstance(interpretation, dict):
+            # It's a raw interpretation dictionary
+            config_dict = interpretation
+        
+        # Normalize config dictionary to handle both dict and flat float values
+        normalized = {}
+        for level, config in config_dict.items():
+            if isinstance(config, dict):
+                normalized[level] = config
+            else:
+                try:
+                    normalized[level] = {'min': float(config), 'label': level.title()}
+                except (TypeError, ValueError):
+                    normalized[level] = {'min': 0.0, 'label': level.title()}
+
+        for level, config in normalized.items():
+            thresholds[level] = config.get('min', 0.0)
+        
+        # Use dynamic thresholds from interpretation if available
+        # Prefer 'critical' for tier 1, 'high' for tier 2, etc.
+        t1 = thresholds.get('critical', thresholds.get('confirmed', 0.8))
+        t2 = thresholds.get('high', thresholds.get('probable', 0.5))
+        t3 = thresholds.get('medium', thresholds.get('weak', 0.2))
+
         # Map score ranges to tiers
-        if score >= 0.8:
-            return 1  # Primary Evidence
-        elif score >= 0.5:
-            return 2  # Supporting Evidence
-        elif score >= 0.2:
-            return 3  # Contextual Evidence
+        if score >= t1:
+            return 1 # Primary Evidence
+        elif score >= t2:
+            return 2 # Supporting Evidence
+        elif score >= t3:
+            return 3 # Contextual Evidence
         else:
-            return 4  # Background Evidence
-    
-    def _generate_score_description(self, 
-                                  score: float, 
-                                  level: str, 
+            return 4 # Background Evidence
+
+    def _generate_score_description(self,
+                                  score: float,
+                                  level: str,
                                   interpretation_config: Dict[str, Any]) -> str:
         """
         Generate a descriptive explanation of the score.
-        
+
         Args:
             score: Score value
             level: Interpretation level
             interpretation_config: Configuration for this level
-            
+
         Returns:
             Descriptive string explaining the score
         """
         label = interpretation_config.get('label', level.title())
         min_threshold = interpretation_config.get('min', 0.0)
-        
-        if score >= 0.8:
+
+        # Dynamic description based on labels and scores
+        if score >= 0.7:
             return f"{label} - High confidence match with score {score:.3f} (threshold: {min_threshold:.2f})"
-        elif score >= 0.5:
+        elif score >= 0.4:
             return f"{label} - Moderate confidence match with score {score:.3f} (threshold: {min_threshold:.2f})"
-        elif score >= 0.2:
+        elif score >= 0.1:
             return f"{label} - Low confidence match with score {score:.3f} (threshold: {min_threshold:.2f})"
         else:
             return f"{label} - Minimal confidence match with score {score:.3f} (threshold: {min_threshold:.2f})"
@@ -1024,27 +1072,27 @@ class WeightedScoringIntegration(IScoringIntegration):
             scoring_mode = score_result.get('scoring_mode', 'weighted')
             
             logger.debug(f"Scoring calculation for match {match_id}:")
-            logger.debug(f"  Final score: {score:.3f}")
-            logger.debug(f"  Interpretation: {interpretation}")
-            logger.debug(f"  Scoring mode: {scoring_mode}")
+            logger.debug(f" Final score: {score:.3f}")
+            logger.debug(f" Interpretation: {interpretation}")
+            logger.debug(f" Scoring mode: {scoring_mode}")
             
             if breakdown:
-                logger.debug(f"  Breakdown details:")
+                logger.debug(f" Breakdown details:")
                 for feather_id, details in breakdown.items():
                     weight = details.get('weight', 0.0)
                     contribution = details.get('contribution', 0.0)
                     matched = details.get('matched', False)
                     tier = details.get('tier', 1)
                     
-                    logger.debug(f"    {feather_id}: weight={weight:.2f}, "
+                    logger.debug(f" {feather_id}: weight={weight:.2f}, "
                                f"contribution={contribution:.3f}, matched={matched}, tier={tier}")
             
             # Log configuration source
             config_source = "case-specific" if self.case_specific_config else "global"
-            logger.debug(f"  Configuration source: {config_source}")
+            logger.debug(f" Configuration source: {config_source}")
             
             if case_id:
-                logger.debug(f"  Case ID: {case_id}")
+                logger.debug(f" Case ID: {case_id}")
                 
         except Exception as e:
             logger.warning(f"Failed to log scoring calculation for match {match_id}: {e}")
@@ -1067,7 +1115,7 @@ class WeightedScoringIntegration(IScoringIntegration):
             logger.info(f"Execution time: {execution_time:.2f} seconds")
             
             if matches_processed > 0:
-                avg_time_per_match = (execution_time / matches_processed) * 1000  # milliseconds
+                avg_time_per_match = (execution_time / matches_processed) * 1000 # milliseconds
                 logger.info(f"Average time per match: {avg_time_per_match:.2f} ms")
             
             # Detailed statistics
@@ -1080,9 +1128,9 @@ class WeightedScoringIntegration(IScoringIntegration):
                             self.stats.total_matches_scored) * 100
                 
                 logger.info(f"Performance metrics:")
-                logger.info(f"  Success rate: {success_rate:.1f}%")
-                logger.info(f"  Error rate: {error_rate:.1f}%")
-                logger.info(f"  Fallback rate: {(self.stats.fallback_to_simple_count / self.stats.total_matches_scored) * 100:.1f}%")
+                logger.info(f" Success rate: {success_rate:.1f}%")
+                logger.info(f" Error rate: {error_rate:.1f}%")
+                logger.info(f" Fallback rate: {(self.stats.fallback_to_simple_count / self.stats.total_matches_scored) * 100:.1f}%")
             
             logger.info("="*50)
             

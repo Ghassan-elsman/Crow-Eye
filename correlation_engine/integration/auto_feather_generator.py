@@ -91,7 +91,7 @@ class AutoFeatherGenerator:
                 feather_path = self._generate_feather(mapping)
                 generated_feathers.append(feather_path)
                 
-                logger.info(f"✓ [{idx}/{total_mappings}] Generated: {feather_name}")
+                logger.info(f"[OK] [{idx}/{total_mappings}] Generated: {feather_name}")
                 
                 # Report success
                 if progress_callback:
@@ -100,7 +100,7 @@ class AutoFeatherGenerator:
             except FileNotFoundError as e:
                 error_msg = f"Source database not found: {e}"
                 failed_feathers.append((feather_name, error_msg))
-                logger.warning(f"✗ [{idx}/{total_mappings}] Skipped {feather_name}: {error_msg}")
+                logger.warning(f"[FAIL] [{idx}/{total_mappings}] Skipped {feather_name}: {error_msg}")
                 
                 # Report failure
                 if progress_callback:
@@ -109,7 +109,7 @@ class AutoFeatherGenerator:
             except Exception as e:
                 error_msg = str(e)
                 failed_feathers.append((feather_name, error_msg))
-                logger.error(f"✗ [{idx}/{total_mappings}] Failed to generate {feather_name}: {error_msg}")
+                logger.error(f"[FAIL] [{idx}/{total_mappings}] Failed to generate {feather_name}: {error_msg}")
                 
                 # Report failure
                 if progress_callback:
@@ -126,7 +126,7 @@ class AutoFeatherGenerator:
         if failed_feathers:
             logger.info("Failed/Skipped Feathers:")
             for name, error in failed_feathers:
-                logger.info(f"  - {name}: {error}")
+                logger.info(f" - {name}: {error}")
         
         return {
             'successful': generated_feathers,
@@ -185,17 +185,18 @@ class AutoFeatherGenerator:
         if not source_db_path:
             raise FileNotFoundError(
                 f"Source database '{mapping['source_db']}' not found in either:\n"
-                f"  - {self.target_artifacts_dir}\n"
-                f"  - {self.live_acquisition_dir}"
+                f" - {self.target_artifacts_dir}\n"
+                f" - {self.live_acquisition_dir}"
             )
         
         logger.debug(f"Generating {mapping['name']} from {source_location}: {source_db_path}")
         
-        # Connect to source database
-        source_conn = sqlite3.connect(str(source_db_path))
-        source_cursor = source_conn.cursor()
-        
+        source_conn = None
         try:
+            # Connect to source database
+            source_conn = sqlite3.connect(str(source_db_path))
+            source_cursor = source_conn.cursor()
+            
             # Get table schema
             source_cursor.execute(f"PRAGMA table_info({mapping['source_table']})")
             columns = source_cursor.fetchall()
@@ -255,9 +256,9 @@ class AutoFeatherGenerator:
                 logger.debug(f"Removed existing feather: {feather_path}")
             
             feather_conn = sqlite3.connect(str(feather_path))
-            feather_cursor = feather_conn.cursor()
-            
             try:
+                feather_cursor = feather_conn.cursor()
+                
                 # Create feather_metadata table with key-value structure (matching FeatherBuilder schema)
                 feather_cursor.execute('''
                     CREATE TABLE IF NOT EXISTS feather_metadata (
@@ -372,7 +373,8 @@ class AutoFeatherGenerator:
             return str(feather_path)
             
         finally:
-            source_conn.close()
+            if source_conn:
+                source_conn.close()
     
     def _create_feather_config(self, mapping: Dict, feather_path: Path,
                               column_names: List[str], row_count: int,
@@ -425,8 +427,11 @@ class AutoFeatherGenerator:
             selected_columns=column_names,
             column_mapping=column_mapping,
             timestamp_column=timestamp_col,
-            timestamp_format='ISO8601',  # Crow-Eye uses ISO format
+            timestamp_format='ISO8601', # Crow-Eye uses ISO format
             output_database=str(feather_path),
+            # Crow-Eye's source DB stores all timestamps in UTC. Override per
+            # feather if a downstream tool ingests local-time exports.
+            source_timezone='UTC',
             application_column=app_col,
             path_column=path_col,
             created_date=datetime.now().isoformat(),

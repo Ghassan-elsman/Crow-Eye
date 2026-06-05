@@ -77,29 +77,45 @@ class Header:
     file_size: int
     executable_filename: str
     hash: str
+    scca_flags: int = 0
+    is_boot_fetch: bool = False
+    is_encrypted: bool = False
+    is_app_launch: bool = False
+    is_gapped: bool = False
 
     @classmethod
     def from_bytes(cls, data: bytes) -> 'Header':
         """Parse prefetch header from binary data.
-        
+
         Args:
             data (bytes): Raw binary data from the prefetch file
-            
+
         Returns:
             Header: Parsed header object with all fields populated
         """
         version = Version(struct.unpack_from("<I", data, 0)[0])
         signature = data[4:8].decode('ascii')  # Should be 'SCCA'
         file_size = struct.unpack_from("<I", data, 12)[0]
-        
+
         # Executable name is stored as UTF-16LE string (60 bytes, null-terminated)
         exe_filename_bytes = data[16:76]
         exe_filename = exe_filename_bytes.decode('utf-16le', errors='replace').split('\x00')[0].strip()
-        
+
         # Hash is a 32-bit value derived from the executable path
         hash_val = hex(struct.unpack_from("<I", data, 76)[0])[2:].upper()
-        
-        return cls(version, signature, file_size, exe_filename, hash_val)
+
+        # SCCA Flags bitmask at offset 0x50 (bit 0 IsBootFetch, bit 1 Encrypted,
+        # bit 2 AppLaunch, bit 3 IsGapped). See Prefetch Anatomy reference.
+        scca_flags = struct.unpack_from("<I", data, 80)[0] if len(data) >= 84 else 0
+
+        return cls(
+            version, signature, file_size, exe_filename, hash_val,
+            scca_flags=scca_flags,
+            is_boot_fetch=bool(scca_flags & 0x1),
+            is_encrypted=bool(scca_flags & 0x2),
+            is_app_launch=bool(scca_flags & 0x4),
+            is_gapped=bool(scca_flags & 0x8),
+        )
 
 @dataclass
 class MFTInformation:
@@ -171,6 +187,9 @@ class FileMetric:
     filename_string_offset: int = 0
     filename_string_size: int = 0
     mft_info: Optional[MFTInformation] = None
+    is_directory: bool = False
+    is_volume_path: bool = False
+    pre_load: bool = False
     
     @classmethod
     def from_bytes(cls, data: bytes, is_version17: bool) -> 'FileMetric':
@@ -188,32 +207,38 @@ class FileMetric:
             FileMetric: Parsed file metric object
         """
         if is_version17:
-            # Windows XP/2003 format (version 17) - 20 bytes, no MFT information
+            # Windows XP/2003 format (version 17) - 20 bytes, no MFT information.
+            # In v17 the flags live at offset 0x10 (read as unknown2 here).
             unknown0 = struct.unpack_from("<I", data, 0)[0]
             unknown1 = struct.unpack_from("<I", data, 4)[0]
             filename_offset = struct.unpack_from("<I", data, 8)[0]
             filename_size = struct.unpack_from("<I", data, 12)[0]
             unknown2 = struct.unpack_from("<I", data, 16)[0]
-            
+
             return cls(
                 unknown0=unknown0,
                 unknown1=unknown1,
                 filename_string_offset=filename_offset,
                 filename_string_size=filename_size,
-                unknown2=unknown2
+                unknown2=unknown2,
+                is_directory=bool(unknown2 & 0x1),
+                is_volume_path=bool(unknown2 & 0x2),
+                pre_load=bool(unknown2 & 0x4),
             )
         else:
-            # Windows Vista and later format - 32 bytes, includes MFT information
+            # Windows Vista and later format - 32 bytes, includes MFT information.
+            # In v23+ the flags live at offset 0x14 (unknown3): bit 0 IsDirectory,
+            # bit 1 IsVolumePath, bit 2 PreLoad. See Prefetch Anatomy.
             unknown0 = struct.unpack_from("<I", data, 0)[0]
             unknown1 = struct.unpack_from("<I", data, 4)[0]
             unknown2 = struct.unpack_from("<I", data, 8)[0]
             filename_offset = struct.unpack_from("<I", data, 12)[0]
             filename_size = struct.unpack_from("<I", data, 16)[0]
             unknown3 = struct.unpack_from("<I", data, 20)[0]
-            
+
             # Parse MFT reference (8 bytes at offset 24)
             mft_info = MFTInformation.from_bytes(data[24:32])
-            
+
             return cls(
                 unknown0=unknown0,
                 unknown1=unknown1,
@@ -221,7 +246,10 @@ class FileMetric:
                 unknown3=unknown3,
                 filename_string_offset=filename_offset,
                 filename_string_size=filename_size,
-                mft_info=mft_info
+                mft_info=mft_info,
+                is_directory=bool(unknown3 & 0x1),
+                is_volume_path=bool(unknown3 & 0x2),
+                pre_load=bool(unknown3 & 0x4),
             )
 
 @dataclass
@@ -353,6 +381,7 @@ class PrefetchFile:
         self.volume_information = []  # Information about accessed volumes
         self.run_count = 0  # Number of times the program was executed
         self.parsing_error = False
+        self.hash_string = None  # v30/v31 specific Hash string (AppId/Package)
         
         # Parsed file and directory references
         self.filenames = []  # List of files accessed during execution
@@ -654,9 +683,11 @@ class PrefetchFile:
         if metrics_offset == 304: # Variant 1
             file_info_size = 220
             run_count_offset = 124
+            hash_string_offset_idx = 136
         else: # Variant 2 or version 31
             file_info_size = 212
             run_count_offset = 116
+            hash_string_offset_idx = 128
             
         file_info_bytes = self.raw_bytes[84:84+file_info_size]
         
@@ -680,6 +711,23 @@ class PrefetchFile:
             run_time_offset += 8
         
         self.run_count = struct.unpack_from("<I", file_info_bytes, run_count_offset)[0]
+        
+        if len(file_info_bytes) >= hash_string_offset_idx + 8:
+            hash_str_offset = struct.unpack_from("<I", file_info_bytes, hash_string_offset_idx)[0]
+            hash_str_size = struct.unpack_from("<I", file_info_bytes, hash_string_offset_idx + 4)[0]
+            if hash_str_offset > 0 and hash_str_size > 0 and hash_str_offset + hash_str_size <= len(self.raw_bytes):
+                hash_str_data = self.raw_bytes[hash_str_offset:hash_str_offset + hash_str_size]
+                # Stop at the first UTF-16LE null pair so trailing pool padding / junk
+                # bytes don't leak into app_id (some files report a size that overruns
+                # the actual string).
+                terminator = -1
+                for i in range(0, len(hash_str_data) - 1, 2):
+                    if hash_str_data[i] == 0 and hash_str_data[i + 1] == 0:
+                        terminator = i
+                        break
+                if terminator >= 0:
+                    hash_str_data = hash_str_data[:terminator]
+                self.hash_string = hash_str_data.decode('utf-16le', errors='replace')
         
         self._parse_file_metrics(False)
         self._parse_filenames()
@@ -733,6 +781,7 @@ class PrefetchFile:
     
     def _parse_filenames(self):
         self.filenames = []
+        self.detailed_file_metrics = []
         
         if self.filename_strings_size == 0:
             return
@@ -745,8 +794,36 @@ class PrefetchFile:
             filenames_data = self.raw_bytes[self.filename_strings_offset:
                                             self.filename_strings_offset + self.filename_strings_size]
             
-            filenames_str = filenames_data.decode('utf-16le')
+            filenames_str = filenames_data.decode('utf-16le', errors='replace')
             self.filenames = [name for name in filenames_str.split('\x00') if name]
+            
+            # Map metrics to filenames using explicit offsets to expose MFT info
+            for metric in self.file_metrics:
+                start_idx = self.filename_strings_offset + metric.filename_string_offset
+                if start_idx < self.filename_strings_offset + self.filename_strings_size:
+                    # Search for null terminator to extract exactly
+                    end_idx = start_idx
+                    while end_idx + 2 <= len(self.raw_bytes):
+                        if self.raw_bytes[end_idx:end_idx+2] == b'\x00\x00':
+                            break
+                        end_idx += 2
+                    name_bytes = self.raw_bytes[start_idx:end_idx]
+                    name = name_bytes.decode('utf-16le', errors='replace')
+                    
+                    flags_set = []
+                    if metric.is_directory:
+                        flags_set.append("IsDirectory")
+                    if metric.is_volume_path:
+                        flags_set.append("IsVolumePath")
+                    if metric.pre_load:
+                        flags_set.append("PreLoad")
+
+                    metric_info = {
+                        "filename": name,
+                        "mft_reference": str(metric.mft_info) if metric.mft_info else None,
+                        "flags": flags_set,
+                    }
+                    self.detailed_file_metrics.append(metric_info)
         except Exception as e:
             print(f"Error parsing filename strings: {e}")
     
@@ -796,7 +873,7 @@ class PrefetchFile:
                         try:
                             dev_name_bytes = self.raw_bytes[self.volumes_info_offset + vol_dev_offset:
                                                         self.volumes_info_offset + vol_dev_offset + (vol_dev_num_char * 2)]
-                            device_name = dev_name_bytes.decode('utf-16le')
+                            device_name = dev_name_bytes.decode('utf-16le', errors='replace')
                             
                             readable_name = self._get_readable_volume_name(device_name, serial_number)
                             if readable_name:
@@ -983,7 +1060,8 @@ class PrefetchFile:
                     "volume_id": vol_id,
                     "device_name": vol.device_name,
                     "creation_time": creation_time_str,
-                    "serial_number": vol.serial_number
+                    "serial_number": vol.serial_number,
+                    "file_references": [str(mft) for mft in vol.file_references]
                 })
             directories_data = []
             for i, vol in enumerate(self.volume_information, 1):
@@ -1001,7 +1079,27 @@ class PrefetchFile:
                 directories_data.extend(formatted_dirs)
 
             formatted_resources = []
-            for name in self.filenames:
+
+            # Sentinel meta entry: SCCA flags + AppID/Package (hash_string) live in
+            # the resources JSON because the table schema is fixed. Consumers that
+            # iterate resources should treat any entry with "_meta" as descriptive
+            # context, not a loaded file path.
+            meta_entry = {
+                "_meta": {
+                    "scca_flags_raw": f"0x{self.header.scca_flags:08X}" if self.header else None,
+                    "scca_flags": {
+                        "IsBootFetch": self.header.is_boot_fetch if self.header else False,
+                        "Encrypted": self.header.is_encrypted if self.header else False,
+                        "AppLaunch": self.header.is_app_launch if self.header else False,
+                        "IsGapped": self.header.is_gapped if self.header else False,
+                    },
+                    "app_id": self.hash_string,
+                }
+            }
+            formatted_resources.append(meta_entry)
+
+            for metric in self.detailed_file_metrics:
+                name = metric["filename"]
                 formatted_name = name
                 volume_match = volume_pattern.search(name)
                 if volume_match:
@@ -1016,7 +1114,13 @@ class PrefetchFile:
                     if drive_letter:
                         rest_of_path = name[volume_match.end():].lstrip("\\")
                         formatted_name = f"{drive_letter}:\\{rest_of_path}"
-                formatted_resources.append(formatted_name)
+
+                res_entry = {"path": formatted_name}
+                if metric.get("mft_reference"):
+                    res_entry["mft"] = metric["mft_reference"]
+                if metric.get("flags"):
+                    res_entry["flags"] = metric["flags"]
+                formatted_resources.append(res_entry)
 
             # Format run times without timezone information and milliseconds
             run_times_data = []
@@ -1074,6 +1178,8 @@ class PrefetchFile:
 
         result.append(f"Executable Name: {self.header.executable_filename}")
         result.append(f"Hash: {self.header.hash}")
+        if self.hash_string:
+            result.append(f"Hash String: {self.hash_string}")
 
         display_run_count = self.run_count
         if display_run_count > 1000000:
@@ -1154,10 +1260,11 @@ class PrefetchFile:
                     for dir_path in formatted_dirs:
                         result.append(f"    {dir_path}")
 
-        if self.filenames:
+        if self.detailed_file_metrics:
             result.append("Resources Loaded:")
             formatted_resources = []
-            for name in self.filenames:
+            for metric in self.detailed_file_metrics:
+                name = metric["filename"]
                 formatted_name = name
                 volume_match = volume_pattern.search(name)
                 if volume_match:
@@ -1172,7 +1279,9 @@ class PrefetchFile:
                     if drive_letter:
                         rest_of_path = name[volume_match.end():].lstrip("\\")
                         formatted_name = f"{drive_letter}:\\{rest_of_path}"
-                formatted_resources.append(formatted_name)
+                
+                mft_str = f" [MFT: {metric['mft_reference']}]" if metric.get('mft_reference') else ""
+                formatted_resources.append(f"{formatted_name}{mft_str}")
         
             for i, name in enumerate(formatted_resources, 1):
                 result.append(f"  {i}. {name}")

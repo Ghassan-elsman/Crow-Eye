@@ -755,14 +755,14 @@ class IdentityAggregator:
                                             original_record=record_data
                                         ))
                         except json.JSONDecodeError:
-                            pass  # Skip if JSON is malformed
+                            pass # Skip if JSON is malformed
                     
                     # Create identity record
                     identity_record = IdentityRecord(
                         identity_value=identity_value,
                         identity_type='application' if matched_application else 'file_path',
                         record_references=record_refs,
-                        semantic_data={}  # Will be populated during semantic enhancement
+                        semantic_data={} # Will be populated during semantic enhancement
                     )
                     
                     # Add to registry

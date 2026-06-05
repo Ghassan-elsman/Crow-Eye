@@ -267,19 +267,19 @@ class SemanticMappingDialog(QDialog):
             QHeaderView::section { background: #1E293B; color: #00FFFF; padding: 3px; border: none; border-bottom: 1px solid #00FFFF; font-size: 9pt; font-weight: bold; }
         """)
         header = self.tbl.horizontalHeader()
-        header.setMinimumSectionSize(14)  # Allow very small columns
+        header.setMinimumSectionSize(14) # Allow very small columns
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.Fixed)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
         header.setSectionResizeMode(4, QHeaderView.Fixed)
         # Set fixed column widths AFTER resize mode
-        header.resizeSection(2, 40)  # Op column - compact
-        header.resizeSection(4, 26)  # Delete button column - fits 20x20 button
+        header.resizeSection(2, 40) # Op column - compact
+        header.resizeSection(4, 26) # Delete button column - fits 20x20 button
         self.tbl.setMinimumHeight(100)
         self.tbl.setMaximumHeight(150)
         self.tbl.verticalHeader().setVisible(False)
-        self.tbl.verticalHeader().setDefaultSectionSize(24)  # Compact row height
+        self.tbl.verticalHeader().setDefaultSectionSize(24) # Compact row height
         cl.addWidget(self.tbl)
         
         # Add button row - visible
@@ -676,7 +676,7 @@ class SemanticMappingDialog(QDialog):
             "_identity",
             # Execution artifacts
             "Prefetch", "ShimCache", "AmCache", "AmCache_App", "AmCache_File", "AmCache_Shortcut",
-            # User activity artifacts  
+            # User activity artifacts 
             "UserAssist", "RecentDocs", "OpenSaveMRU", "LastSaveMRU", "ShellBags", "TypedPaths",
             # Link files
             "LNK", "JumpLists", "AutomaticJumplist", "CustomJumplist",
@@ -718,8 +718,11 @@ class SemanticMappingDialog(QDialog):
         v.textChanged.connect(self._preview)
         self.tbl.setCellWidget(r, 3, v)
         
-        # Delete button - visible red X
-        x = QPushButton("✕")
+        # Delete button — Crow-Eye delete icon, kept compact (no text)
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        x = QPushButton()
+        x.setIcon(CrowEyeIcons.delete())
+        x.setToolTip("Remove condition")
         x.setStyleSheet("background: #EF4444; color: white; border: none; font-size: 10pt; font-weight: bold; border-radius: 3px; padding: 0px;")
         x.setFixedSize(20, 20)
         x.clicked.connect(lambda: self._rm_cond(r))

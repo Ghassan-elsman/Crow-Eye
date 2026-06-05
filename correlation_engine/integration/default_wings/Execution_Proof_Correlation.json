@@ -304,7 +304,7 @@
       "rule_id": "exec_confirmed_run",
       "name": "Confirmed Execution (AND)",
       "semantic_value": "Confirmed Program Execution",
-      "description": "Prefetch AND ShimCache together confirm program execution",
+      "description": "Prefetch AND ShimCache together confirm program execution. Severity is 'info' because confirmed-execution is the baseline forensic finding the wing was built to surface — chrome.exe, notepad.exe, calc.exe etc. all match. Tagging this 'high' would drown the analyst in execution noise; the wing's weighted scoring escalates to 'Confirmed Execution' label via score thresholds (>=0.70), which is the correct surface for analyst attention.",
       "conditions": [
         {
           "feather_id": "prefetch",
@@ -322,7 +322,7 @@
       "logic_operator": "AND",
       "scope": "wing",
       "category": "process_execution",
-      "severity": "high"
+      "severity": "info"
     },
     {
       "rule_id": "exec_runtime_evidence",

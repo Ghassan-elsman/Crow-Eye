@@ -31,8 +31,8 @@ class WindowProcessingTask:
     """Represents a window processing task for parallel execution"""
     window: TimeWindow
     task_id: str
-    priority: int = 0  # Higher priority = processed first
-    estimated_complexity: float = 1.0  # Estimated processing complexity
+    priority: int = 0 # Higher priority = processed first
+    estimated_complexity: float = 1.0 # Estimated processing complexity
 
 
 @dataclass
@@ -84,16 +84,16 @@ class WorkerLoadBalancer:
         self._lock = threading.Lock()
         
         # Enhanced load balancing parameters
-        self.load_balancing_algorithm = "adaptive"  # "round_robin", "least_loaded", "adaptive"
-        self.performance_weight = 0.4  # Weight for historical performance
-        self.load_weight = 0.4  # Weight for current load
-        self.resource_weight = 0.2  # Weight for resource utilization
+        self.load_balancing_algorithm = "adaptive" # "round_robin", "least_loaded", "adaptive"
+        self.performance_weight = 0.4 # Weight for historical performance
+        self.load_weight = 0.4 # Weight for current load
+        self.resource_weight = 0.2 # Weight for resource utilization
         
         # Dynamic adjustment parameters
-        self.load_imbalance_threshold = 0.3  # Threshold for triggering load redistribution
-        self.performance_variance_threshold = 0.5  # Threshold for performance variance
+        self.load_imbalance_threshold = 0.3 # Threshold for triggering load redistribution
+        self.performance_variance_threshold = 0.5 # Threshold for performance variance
         self.last_rebalance_time = time.time()
-        self.rebalance_interval_seconds = 30  # Minimum interval between rebalances
+        self.rebalance_interval_seconds = 30 # Minimum interval between rebalances
     
     def register_worker(self, worker_id: str):
         """Register a new worker thread"""
@@ -128,7 +128,7 @@ class WorkerLoadBalancer:
                 return self._get_round_robin_worker()
             elif self.load_balancing_algorithm == "least_loaded":
                 return self._get_least_loaded_worker()
-            else:  # adaptive algorithm
+            else: # adaptive algorithm
                 return self._get_adaptive_optimal_worker(task_complexity)
     
     def _get_round_robin_worker(self) -> Optional[str]:
@@ -194,12 +194,12 @@ class WorkerLoadBalancer:
         # Performance factor (average processing time)
         perf_history = self.worker_performance.get(worker_id, [])
         if perf_history:
-            recent_perf = perf_history[-10:]  # Last 10 tasks
+            recent_perf = perf_history[-10:] # Last 10 tasks
             avg_performance = sum(recent_perf) / len(recent_perf)
             # Normalize performance (lower is better)
             performance_score = avg_performance * task_complexity * self.performance_weight
         else:
-            performance_score = task_complexity * self.performance_weight  # Default performance
+            performance_score = task_complexity * self.performance_weight # Default performance
         
         # Resource utilization factor
         resource_usage = self.worker_resource_usage.get(worker_id, {})
@@ -212,7 +212,7 @@ class WorkerLoadBalancer:
         
         # Error penalty (workers with more errors get higher scores)
         error_count = self.worker_error_counts.get(worker_id, 0)
-        error_penalty = error_count * 0.1  # Small penalty per error
+        error_penalty = error_count * 0.1 # Small penalty per error
         
         return load_score + performance_score + resource_score + error_penalty
     
@@ -264,7 +264,7 @@ class WorkerLoadBalancer:
         all_performance = []
         for perf_list in self.worker_performance.values():
             if perf_list:
-                all_performance.extend(perf_list[-5:])  # Recent performance
+                all_performance.extend(perf_list[-5:]) # Recent performance
         
         if len(all_performance) < 2:
             return
@@ -647,7 +647,7 @@ class ParallelWindowProcessor:
                     self._adjust_batch_size_based_on_resources(cpu_percent, memory_mb)
                 
                 # Sleep before next monitoring cycle
-                time.sleep(5.0)  # Monitor every 5 seconds
+                time.sleep(5.0) # Monitor every 5 seconds
                 
             except Exception as e:
                 # Continue monitoring even if there are errors
@@ -698,7 +698,7 @@ class ParallelWindowProcessor:
             task = WindowProcessingTask(
                 window=window,
                 task_id=f"task_{i:06d}",
-                priority=0,  # Could be based on window importance
+                priority=0, # Could be based on window importance
                 estimated_complexity=complexity
             )
             tasks.append(task)
@@ -732,7 +732,7 @@ class ParallelWindowProcessor:
             # More feathers = more cross-correlations = higher complexity
             complexity += (feather_count - 2) * 0.2
         
-        return max(0.1, complexity)  # Minimum complexity
+        return max(0.1, complexity) # Minimum complexity
     
     def _process_batch_parallel(self, 
                                tasks: List[WindowProcessingTask],
@@ -945,7 +945,7 @@ class ParallelWindowProcessor:
         cpu_count = os.cpu_count() or 4
         
         # For I/O bound tasks (database queries), can use more workers than CPU cores
-        max_workers = min(cpu_count * 2, 16)  # Cap at 16 workers
+        max_workers = min(cpu_count * 2, 16) # Cap at 16 workers
         
         # Adjust based on workload
         if total_windows < 50:
@@ -1065,7 +1065,7 @@ class ParallelWindowProcessor:
         self.max_workers = min(optimal_workers, self.max_workers)
         
         # Optimize batch size based on memory and workload
-        estimated_memory_per_window = avg_records_per_window * 0.001  # Rough estimate: 1KB per record
+        estimated_memory_per_window = avg_records_per_window * 0.001 # Rough estimate: 1KB per record
         max_windows_in_memory = int(available_memory_mb / estimated_memory_per_window) if estimated_memory_per_window > 0 else 1000
         
         # Set batch size to use about 50% of available memory

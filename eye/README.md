@@ -1,8 +1,8 @@
-# EYE AI Forensic Assistant - Architecture Documentation
+# Eye AI Forensic Assistant - Architecture Documentation
 
 ## System Overview
 
-The **EYE (Evidence Yield Engine) AI Forensic Assistant** is an advanced digital forensics investigation platform that combines artificial intelligence with traditional forensic analysis techniques. EYE provides forensic investigators with a natural language interface to query, analyze, and document findings from Windows forensic artifacts.
+The **Eye AI Forensic Assistant** is an advanced digital forensics investigation platform that combines artificial intelligence with traditional forensic analysis techniques. Eye provides forensic investigators with a natural language interface to query, analyze, and document findings from Windows forensic artifacts.
 
 ### Core Capabilities
 
@@ -94,7 +94,7 @@ eye/
 │   └── ...
 │
 └── ui/                         # User Interface Components
-    ├── eye_manager.py         # EYE window lifecycle manager
+    ├── eye_manager.py         # Eye window lifecycle manager
     ├── case_summary_dialog.py # Investigation timeline dialog
     ├── case_setup_dialog.py  # Case initialization wizard
     └── ...
@@ -234,10 +234,10 @@ The main application window that hosts the React-based chat interface. Uses QWeb
 #### EyeWindowManager
 **File**: `eye/ui/eye_manager.py`
 
-Singleton manager for EYE window lifecycle. Handles window creation, reinitialization on case changes, and splash screen display.
+Singleton manager for Eye window lifecycle. Handles window creation, reinitialization on case changes, and splash screen display.
 
 **Responsibilities**:
-- Manage EYE window singleton instance
+- Manage Eye window singleton instance
 - Display splash screen during initialization (when config exists)
 - Detect case directory changes and reinitialize window
 - Handle window cleanup and resource management
@@ -598,7 +598,7 @@ ForensicReportParser
 ### ConfigManager
 **File**: `eye/services/config_manager.py` (referenced)
 
-Manages EYE configuration stored in `~/.kiro/eye/config.json`.
+Manages Eye configuration stored in `~/.kiro/eye/config.json`.
 
 **Configuration Structure**:
 ```json
@@ -755,7 +755,7 @@ Reports are exported as standalone HTML files with:
 
 4. **Configure AI backend**:
    ```bash
-   # Run EYE and open Settings dialog
+   # Run Eye and open Settings dialog
    # Or manually edit ~/.kiro/eye/config.json
    ```
 
@@ -781,7 +781,7 @@ python -m pytest --cov=eye eye/tests/
 python -m pytest eye/tests/test_report_parser_properties.py
 ```
 
-### Running EYE
+### Running Eye
 
 ```bash
 # From main application
@@ -918,4 +918,4 @@ Contributions are welcome! Please:
 
 **Last Updated**: 2024
 **Version**: 1.0
-**Maintainer**: EYE Development Team
+**Maintainer**: Eye Development Team

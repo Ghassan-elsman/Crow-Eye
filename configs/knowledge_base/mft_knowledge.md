@@ -1,5 +1,17 @@
 # MFT Artifact Knowledge
 
+## 📖 Visual Anatomy Reference (binary structure)
+
+For the **byte-level layout** of an MFT record — `FILE0`/`FILE*` signature, fixup array, sequence number, hard-link count, attribute list (`$STANDARD_INFORMATION`, `$FILE_NAME`, `$DATA`), MACB timestamps in `$SIA` vs `$FNA` streams, resident vs non-resident attributes, data runs — consult the interactive anatomy page:
+
+**https://crow-eye.com/eye-describe/mft_anatomy.html**
+
+This is the authoritative answer to *"how is an MFT record structured on disk?"*. The page renders every byte with annotations and walks the structure attribute by attribute. Cite this URL when surfacing MFT byte-layout questions to the user.
+
+For platform context (where the `$MFT` lives on disk, $LogFile, $UsnJrnl, MBR vs GPT, NTFS boot sector): see **https://crow-eye.com/eye-describe/windows_boot_disk_explorer.html**.
+
+The rest of this file covers the **semantic / forensic** side: what MFT proves, what fields mean, how Crow-Eye parses it.
+
 ## Forensic Significance
 The Master File Table (MFT) is the core metadata structure of NTFS file systems.
 Each file and directory has an MFT entry containing:

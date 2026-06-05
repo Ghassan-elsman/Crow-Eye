@@ -367,7 +367,7 @@ class OptimizedSemanticMappingManager:
             
             # Add field-specific mappings for fields in the record
             for field_name in record.keys():
-                if not field_name.startswith('_'):  # Skip internal fields
+                if not field_name.startswith('_'): # Skip internal fields
                     # Try different source combinations
                     for source in ['SecurityLogs', 'SystemLogs', 'ApplicationLogs', 'Prefetch', 'Registry']:
                         field_key = f"{source}.{field_name}"
@@ -443,7 +443,7 @@ class OptimizedSemanticMappingManager:
             for field_name, field_value in record.items():
                 if not field_name.startswith('_'):
                     field_frequency[field_name] += 1
-                    value_patterns[field_name].add(str(field_value)[:50])  # Limit pattern length
+                    value_patterns[field_name].add(str(field_value)[:50]) # Limit pattern length
         
         # Prioritize indexes for frequent fields
         frequent_fields = sorted(field_frequency.items(), key=lambda x: x[1], reverse=True)[:20]
@@ -519,7 +519,7 @@ class OptimizedSemanticMappingManager:
         """Add mapping and update indexes"""
         self.base_manager.add_mapping(mapping)
         self._rebuild_indexes()
-        self.clear_caches()  # Clear caches to ensure consistency
+        self.clear_caches() # Clear caches to ensure consistency
     
     def get_all_mappings(self, scope: str = "global", wing_id: Optional[str] = None, 
                         pipeline_id: Optional[str] = None) -> List[SemanticMapping]:

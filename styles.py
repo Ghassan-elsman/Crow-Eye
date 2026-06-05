@@ -5,34 +5,29 @@ from PyQt5.QtCore import Qt
 # Unified Color Palette
 class Colors:
     # Modern Dark Dashboard Base Colors
-    BG_PRIMARY = "#0F172A"      # Main background
-    BG_PANELS = "#1E293B"       # Panel background
-    BG_TABLES = "#0B1220"       # Dark slate for tables
-    BG_CARDS = "#1E293B"        # Card backgrounds
+    BG_PRIMARY = "#0F172A" # Main background
+    BG_PANELS = "#1E293B" # Panel background
+    BG_TABLES = "#0B1220" # Dark slate for tables
+    BG_CARDS = "#1E293B" # Card backgrounds
     
     # Text Colors
-    TEXT_PRIMARY = "#E2E8F0"    # Primary text
-    TEXT_SECONDARY = "#94A3B8"  # Secondary text
-    TEXT_MUTED = "#64748B"      # Muted text
+    TEXT_PRIMARY = "#E2E8F0" # Primary text
+    TEXT_SECONDARY = "#94A3B8" # Secondary text
+    TEXT_MUTED = "#64748B" # Muted text
     
     # Accent Colors
-    ACCENT_BLUE = "#3B82F6"     # Primary accent blue
-    ACCENT_CYAN = "#00FFFF"     # Neon cyan for cyberpunk accents
-    ACCENT_PURPLE = "#8B5CF6"   # Subtle purple for secondary highlights
+    ACCENT_BLUE = "#3B82F6" # Primary accent blue
+    ACCENT_CYAN = "#00FFFF" # Neon cyan for cyberpunk accents
+    ACCENT_PURPLE = "#8B5CF6" # Subtle purple for secondary highlights
     
     # Status Colors
-    SUCCESS = "#10B981"         # Success green
-    WARNING = "#F59E0B"         # Warning amber
-    ERROR = "#EF4444"           # Error red
+    SUCCESS = "#10B981" # Success green
+    WARNING = "#F59E0B" # Warning amber
+    ERROR = "#EF4444" # Error red
     
     # Border Colors
-    BORDER_SUBTLE = "#334155"   # Subtle borders
-    BORDER_ACCENT = "#475569"   # Accent borders
-    
-    # Cyberpunk Glow Effects
-    GLOW_CYAN = "rgba(0, 255, 255, 0.3)"     # Neon cyan glow
-    GLOW_BLUE = "rgba(59, 130, 246, 0.3)"    # Blue glow
-    GLOW_PURPLE = "rgba(139, 92, 246, 0.3)"  # Purple glow
+    BORDER_SUBTLE = "#334155" # Subtle borders
+    BORDER_ACCENT = "#475569" # Accent borders
 
 class CrowEyeStyles:
     """Centralized style definitions for the Crow Eye application."""
@@ -40,32 +35,50 @@ class CrowEyeStyles:
     @staticmethod
     def apply_table_styles(table_widget):
         """Apply consistent table styles to a QTableWidget.
-        
+
         Args:
             table_widget: The QTableWidget to style
         """
+        # Lazy-import so styles.py keeps a minimal import surface for callers
+        # that don't actually touch widgets (tests / tooling).
+        from PyQt5.QtWidgets import QHeaderView
+
+        # Use QTableView selectors so the rules match BOTH the classic
+        # QTableWidget tables AND the QTableView-based VirtualTableWidget.
+        # `QTableWidget::item` would not style a QTableView (QTableView is its
+        # parent class), but `QTableView::item` matches QTableWidget too
+        # (it's a subclass) — so this is identical for the old tables and fixes
+        # the virtual tables' cell/selection/background/scrollbar styling.
+        style = CrowEyeStyles.UNIFIED_TABLE_STYLE.replace("QTableWidget", "QTableView")
+
         # Reset any existing styles
         table_widget.setStyleSheet('')
-        
+
         # Apply the complete table style
-        table_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE)
-        
+        table_widget.setStyleSheet(style)
+
         # Configure header
         header = table_widget.horizontalHeader()
         if header:
-            header.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE)
+            header.setStyleSheet(style)
+            # Auto-fit each section to whichever is wider: header label or
+            # cell content. Prevents column titles from getting truncated
+            # to "Run Tim…" or similar. The last section still stretches
+            # to fill any remaining horizontal space.
+            header.setSectionResizeMode(QHeaderView.ResizeToContents)
+            header.setStretchLastSection(True)
             header.setDefaultSectionSize(200)
-            header.setMinimumSectionSize(100)
+            header.setMinimumSectionSize(80)
             header.setSectionsClickable(True)
             header.setHighlightSections(True)
             header.setSortIndicatorShown(True)
             header.setAttribute(Qt.WA_StyledBackground, True)
-            
+
             # Force style update
             header.style().unpolish(header)
             header.style().polish(header)
             header.update()
-        
+
         # Configure vertical header
         vertical = table_widget.verticalHeader()
         if vertical:
@@ -81,18 +94,107 @@ class CrowEyeStyles:
         table_widget.style().unpolish(table_widget)
         table_widget.style().polish(table_widget)
         table_widget.update()
-    
+
     @staticmethod
     def apply_tab_styles(tab_widget, style_name=None):
         # All tab styles now use UNIFIED_TAB_STYLE
         tab_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TAB_STYLE)
-        
+
+        # Stretch tabs to fill any horizontal space available in the bar.
+        # When the bar has more room than the tabs need, each tab grows
+        # equally; when it doesn't, they fall back to their min-width and
+        # Qt re-enables the scroll buttons automatically.
+        try:
+            bar = tab_widget.tabBar()
+            if bar is not None:
+                bar.setExpanding(True)
+                bar.setUsesScrollButtons(True)
+                # Don't elide tab text unless we genuinely run out of room.
+                from PyQt5.QtCore import Qt as _Qt
+                bar.setElideMode(_Qt.ElideNone)
+        except Exception:
+            # Some QTabBar subclasses don't expose these; degrade silently.
+            pass
+
         # Force a style refresh to ensure styles are applied immediately
         tab_widget.style().unpolish(tab_widget)
         tab_widget.style().polish(tab_widget)
         tab_widget.update()
-    
-    
+
+    @staticmethod
+    def apply_tree_styles(tree_widget):
+        """Apply UNIFIED_TREE_STYLE to a QTreeView / QTreeWidget."""
+        tree_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TREE_STYLE)
+        tree_widget.setAlternatingRowColors(True)
+        tree_widget.style().unpolish(tree_widget)
+        tree_widget.style().polish(tree_widget)
+        tree_widget.update()
+
+    @staticmethod
+    def apply_slider_styles(slider):
+        """Apply UNIFIED_SLIDER_STYLE to a QSlider (horizontal or vertical)."""
+        slider.setStyleSheet(CrowEyeStyles.UNIFIED_SLIDER_STYLE)
+        slider.style().unpolish(slider)
+        slider.style().polish(slider)
+        slider.update()
+
+    @staticmethod
+    def apply_scrollarea_styles(area):
+        """Apply UNIFIED_SCROLLAREA_STYLE to a QScrollArea, transparent viewport."""
+        area.setStyleSheet(CrowEyeStyles.UNIFIED_SCROLLAREA_STYLE)
+        # Force the viewport widget itself to be transparent — PyQt5 will
+        # otherwise paint an opaque background on the inner widget.
+        try:
+            area.viewport().setAutoFillBackground(False)
+        except Exception:
+            pass
+        area.style().unpolish(area)
+        area.style().polish(area)
+        area.update()
+
+    @staticmethod
+    def apply_dialog_styles(dialog):
+        """Apply DIALOG_STYLE to a QDialog and propagate the table / tree /
+        slider / scroll-area helpers to any child of those types so the
+        dialog inherits the unified look without per-call wiring.
+
+        Safe to call multiple times. Silently no-ops on import failures so
+        styling never blocks dialog construction.
+        """
+        try:
+            dialog.setStyleSheet(CrowEyeStyles.DIALOG_STYLE)
+        except Exception:
+            return # don't break dialog construction on a styling hiccup
+
+        # Lazy-import the widget classes so styles.py keeps a minimal import
+        # surface for non-GUI consumers.
+        try:
+            from PyQt5.QtWidgets import (
+                QTableWidget, QTableView, QTreeWidget, QTreeView,
+                QSlider, QScrollArea,
+            )
+        except Exception:
+            return
+
+        try:
+            for t in dialog.findChildren(QTableWidget):
+                CrowEyeStyles.apply_table_styles(t)
+            for t in dialog.findChildren(QTableView):
+                # QTableView (not QTableWidget) — apply the same QSS via setStyleSheet
+                t.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE)
+            for t in dialog.findChildren(QTreeWidget):
+                CrowEyeStyles.apply_tree_styles(t)
+            for t in dialog.findChildren(QTreeView):
+                t.setStyleSheet(CrowEyeStyles.UNIFIED_TREE_STYLE)
+            for s in dialog.findChildren(QSlider):
+                CrowEyeStyles.apply_slider_styles(s)
+            for a in dialog.findChildren(QScrollArea):
+                CrowEyeStyles.apply_scrollarea_styles(a)
+        except Exception:
+            # findChildren can fail mid-construction; degrade gracefully.
+            pass
+
+
     # ============================================================================
     # STYLE CONSTANTS - Using Colors class values for consistency
     # ============================================================================
@@ -135,33 +237,12 @@ class CrowEyeStyles:
         }}
     """
 
-    # Cascading Select Button (Hierarchical Dropdown)
-    CASCADING_SELECT_BUTTON = f"""
-        QPushButton {{
-            background-color: {Colors.BG_TABLES};
-            color: {Colors.TEXT_PRIMARY};
-            border: 1px solid {Colors.BORDER_SUBTLE};
-            border-radius: 6px;
-            padding: 8px 12px;
-            font-size: 12px;
-            font-family: 'Segoe UI', sans-serif;
-            text-align: left;
-        }}
-        QPushButton:hover {{
-            border-color: {Colors.ACCENT_CYAN};
-            background-color: {Colors.BG_PANELS};
-        }}
-        QPushButton::menu-indicator {{
-            subcontrol-origin: padding;
-            subcontrol-position: center right;
-            right: 10px;
-        }}
-    """
-
     # Additional UI-specific colors
-    ACCENT_GLOW = "rgba(0, 255, 255, 0.3)"  # Neon cyan glow for hover effects
-    ACCENT_GLOW_STRONG = "rgba(0, 255, 255, 0.5)"  # Stronger glow for active elements
-    PANEL_OVERLAY = "rgba(11, 18, 32, 0.9)"  # Semi-transparent overlay
+    PANEL_OVERLAY = "rgba(11, 18, 32, 0.9)" # Semi-transparent overlay
+
+    # Semantic hover tokens (replace previous neon-cyan over-use)
+    HOVER_TINT = "rgba(148, 163, 184, 0.08)" # subtle slate — default hover for non-primary widgets
+    HOVER_BLUE = "rgba(59, 130, 246, 0.15)" # brand-blue hover for primary CTAs
     
     # ============================================================================
 
@@ -175,7 +256,7 @@ class CrowEyeStyles:
             padding: 6px 12px;
             font-weight: 600;
             font-size: 11px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             min-width: 80px;
         }
         
@@ -203,15 +284,13 @@ class CrowEyeStyles:
             padding: 4px 10px;
             font-weight: 600;
             font-size: 11px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             min-width: 80px;
             max-height: 28px;
         }
         QPushButton:hover {
             background-color: #4ADE80;
-            border: 1px solid rgba(0, 255, 255, 0.4);
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background-color: #16A34A;
@@ -233,15 +312,13 @@ class CrowEyeStyles:
             padding: 8px 16px;
             font-weight: 600;
             font-size: 12px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             min-width: 100px;
             max-height: 32px;
         }
         QPushButton:hover {
             background-color: #3B82F6;
-            border: 1px solid #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background-color: #1D4ED8;
@@ -262,14 +339,12 @@ class CrowEyeStyles:
             padding: 6px 16px;
             font-weight: 600;
             font-size: 11px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
         QPushButton:hover {
             background-color: #60A5FA;
             /* Qt doesn't support box-shadow, using border instead */
-            border: 1px solid rgba(0, 255, 255, 0.4);
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background-color: #1E40AF;
@@ -285,7 +360,7 @@ class CrowEyeStyles:
     CHECKBOX_STYLE = """
         QCheckBox {
             color: #E2E8F0;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             font-size: 13px;
             spacing: 8px;
             padding: 4px;
@@ -300,7 +375,7 @@ class CrowEyeStyles:
         }
         
         QCheckBox::indicator:unchecked:hover {
-            border: 1px solid #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         
         QCheckBox::indicator:checked {
@@ -334,14 +409,12 @@ class CrowEyeStyles:
             padding: 6px 16px;
             font-weight: 600;
             font-size: 11px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
         QPushButton:hover {
             background-color: #94A3B8;
             /* Qt doesn't support box-shadow, using border instead */
-            border: 1px solid rgba(0, 255, 255, 0.4);
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background-color: #334155;
@@ -364,9 +437,7 @@ class CrowEyeStyles:
             padding: 12px 24px;
             font-weight: 600;
             font-size: 13px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
         QPushButton:hover {
             background-color: #F87171;
@@ -390,9 +461,7 @@ class CrowEyeStyles:
             padding: 10px 20px;
             font-weight: 600;
             font-size: 12px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
         QPushButton:hover {
             background-color: #FF8C42;
@@ -427,7 +496,7 @@ class CrowEyeStyles:
             border-radius: 6px;
             margin-top: 10px;
             font-weight: 600;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
@@ -462,7 +531,6 @@ class CrowEyeStyles:
             padding: 15px;
             border-left: 4px solid #00FFFF;
             background-color: rgba(0, 255, 255, 0.08);
-            letter-spacing: 0.5px;
             line-height: 1.4;
         }
         QMessageBox QPushButton {
@@ -473,18 +541,16 @@ class CrowEyeStyles:
             padding: 15px 30px;
             font-weight: 600;
             font-size: 16px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             min-width: 120px;
             min-height: 45px;
             margin: 15px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
         }
         QMessageBox QPushButton:hover {
             background-color: #60A5FA;
-            border: 2px solid #00FFFF;
+            border: 2px solid rgba(148, 163, 184, 0.28);
             /* Qt doesn't support box-shadow, using border instead */
-            border: 3px solid rgba(0, 255, 255, 0.5);
+            border: 3px solid rgba(148, 163, 184, 0.28);
         }
         QMessageBox QPushButton:pressed {
             background-color: #1E40AF;
@@ -500,14 +566,24 @@ class CrowEyeStyles:
     # UNIFIED TAB WIDGET STYLES
     # ============================================================================
     
-    # Modern Flat Tab Style with Cyberpunk Accents - Smaller Size
+    # Unified Tab Style — aligned with the dark-navy table palette.
+    # ------------------------------------------------------------------
+    # pane bg #0e131c (slight lift over canvas #07090e)
+    # pane border #2a3a55 (matches the lifted header band)
+    # tab inactive #11151c (matches row body — neutral)
+    # tab hover #1a2236 (matches the header band)
+    # tab selected #1a2236 + 2px emerald underline (ties to the
+    # new translucent-emerald row selection)
+    # tab border #2a3a55 (visible separator between tabs)
+    # ------------------------------------------------------------------
     UNIFIED_TAB_STYLE = """
         QTabWidget::pane {
-            border: 1px solid #334155;
+            border: 1px solid #2a3a55;
             border-radius: 8px;
-            background: #1E293B;
+            background: #0e131c;
             margin: 0px;
             padding: 0px;
+            top: -1px; /* overlap the selected tab's bottom edge cleanly */
         }
         QTabBar::tab {
             background: #1E293B;
@@ -516,20 +592,18 @@ class CrowEyeStyles:
             border-bottom: none;
             border-top-left-radius: 6px;
             border-top-right-radius: 6px;
-            padding: 6px 14px; 
+            padding: 6px 14px;
             margin: 0px 3px 0px 3px;
-            min-width: 130px;   
-            max-width: 220px;   
+            min-width: 130px;
             min-height: 18px;
+            /* No max-width — paired with QTabBar.setExpanding(True) so tabs
+               grow to fill spare horizontal room in the bar. */
         }
         QTabBar::tab {
             font-weight: 600;
             font-family: 'Segoe UI', sans-serif;
             font-size: 11px;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
             qproperty-wordWrap: false;
-            qproperty-textElideMode: 2;  /* 2 = ElideRight */
             padding-top: 6px;
             padding-bottom: 6px;
         }
@@ -557,7 +631,7 @@ class CrowEyeStyles:
         }
         QTabBar QToolButton:hover {
             background-color: #334155;
-            border: 1px solid #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
     """
 
@@ -575,7 +649,7 @@ class CrowEyeStyles:
             border: none;
         }
         
-        QFrame[frameShape="4"] {  /* HLine */
+        QFrame[frameShape="4"] { /* HLine */
             background-color: #00FFFF;
             color: #00FFFF;
             border: 1px solid rgba(0, 255, 255, 0.3);
@@ -585,7 +659,7 @@ class CrowEyeStyles:
         
         QLabel {
             color: #E2E8F0;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
         
         QPushButton {
@@ -597,16 +671,14 @@ class CrowEyeStyles:
             padding: 10px 20px;
             font-weight: 700;
             font-size: 13px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             min-width: 100px;
         }
         
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                 stop:0 #3B82F6, stop:1 #2563EB);
-            border: 2px solid #00FFFF;
+            border: 2px solid rgba(148, 163, 184, 0.28);
         }
         
         QPushButton:pressed {
@@ -627,9 +699,7 @@ class CrowEyeStyles:
             color: #00FFFF;
             font-size: 28px;
             font-weight: 800;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 2px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             padding: 15px 0;
             background: transparent;
             border: none;
@@ -661,7 +731,7 @@ class CrowEyeStyles:
         QWidget#option_card:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                 stop:0 #1E293B, stop:0.2 #2D3748, stop:0.5 #334155, stop:0.8 #2D3748, stop:1 #1E293B);
-            border: 3px solid #00FFFF;
+            border: 3px solid rgba(148, 163, 184, 0.28);
             margin: 6px 0;
         }
         
@@ -684,14 +754,14 @@ class CrowEyeStyles:
         
         QLabel[objectName^="icon"]:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
-                stop:0 rgba(0, 255, 255, 0.15), stop:1 rgba(0, 255, 255, 0.25));
-            border: 2px solid rgba(0, 255, 255, 0.6);
+                stop:0 rgba(59, 130, 246, 0.15), stop:1 rgba(59, 130, 246, 0.25));
+            border: 2px solid rgba(148, 163, 184, 0.28);
         }
         
         /* Enhanced text styling within cards */
         QWidget#option_card QLabel {
             color: #E2E8F0;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             font-weight: 600;
             background: transparent;
             border: none;
@@ -702,7 +772,6 @@ class CrowEyeStyles:
             color: #00FFFF;
             font-size: 16px;
             font-weight: bold;
-            letter-spacing: 0.5px;
         }
         
         QWidget#option_card QLabel[objectName="description"] {
@@ -718,7 +787,7 @@ class CrowEyeStyles:
             color: #E2E8F0;
             font-size: 14px;
             font-weight: 600;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
         
         QLabel:hover {
@@ -881,7 +950,7 @@ class CrowEyeStyles:
         QCalendarWidget QToolButton#qt_calendar_prevmonth:hover,
         QCalendarWidget QToolButton#qt_calendar_nextmonth:hover {
             background-color: #334155;
-            color: #00FFFF;
+            color: #E2E8F0;
         }
         
         /* Month button dropdown */
@@ -975,183 +1044,414 @@ class CrowEyeStyles:
     
 
     
-    # Unified Modern Table Style with Dark Slate Background and Cyberpunk Elements - Smaller Headers
+    # Unified Modern Table Style — Dark navy/charcoal canvas with subtle slate rows
+    # ------------------------------------------------------------------
+    # canvas #07090e (near-black, hint of navy — app/page background)
+    # row #11151c (slightly lighter dark slate — main row body)
+    # row-alt #141923 (very subtle stripe, ~+1.5% lightness)
+    # header #161b24 (slight elevation over rows)
+    # border #1f2530 (quiet outline)
+    # grid #1a1f29 (dimmer than border — keeps grid readable but soft)
+    # text #e6edf3 (clean light)
+    # muted #94a3b8 (row-number header, secondary text)
+    # accent #58a6ff (sort marker, scrollbar pressed)
+    # select #1f6feb (active selection — GH blue family)
+    # ------------------------------------------------------------------
     UNIFIED_TABLE_STYLE = """
+        /* Horizontal (column) header — distinct lifted slate so the header
+           row reads as a separate band from the data rows. Border colour
+           is also stepped up so the header outline visibly separates from
+           the table border. */
         QHeaderView::section {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563EB, stop:1 #1E40AF);
-            color: #FFFFFF;
-            padding: 4px 8px;
+            background-color: #1a2236;
+            color: #f3f7fb;
+            padding: 8px 14px;
             border: none;
-            border-right: 1px solid #334155;
+            border-right: 1px solid #2a3a55;
+            border-bottom: 2px solid #2a3a55;
             font-weight: 600;
-            font-size: 11px;
-            font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-size: 12px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
         QHeaderView::section:first {
             border-top-left-radius: 6px;
         }
         QHeaderView::section:last {
             border-top-right-radius: 6px;
+            border-right: none;
         }
         QHeaderView::section:hover {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
-            color: #FFFFFF;
-            border-bottom: 2px solid #00FFFF;
+            background-color: #243054;
+            color: #ffffff;
         }
         QHeaderView::section:checked {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1E40AF, stop:1 #1E3A8A);
-            border-bottom: 2px solid #00FFFF;
+            background-color: #1f2a47;
+            color: #58a6ff;
+            border-bottom: 2px solid #58a6ff; /* marks the active sort column */
         }
 
-        /* Vertical header */
+        /* Vertical (row-number) header */
         QHeaderView::section:vertical {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0F172A, stop:1 #020617);
-            color: #94A3B8;
-            padding: 6px 8px;
+            background-color: #07090e;
+            color: #94a3b8;
+            padding: 8px 10px;
             border: none;
-            border-bottom: 1px solid #334155;
-            font-weight: 600;
-            font-size: 11px;
-            font-family: 'Segoe UI', sans-serif;
-            min-width: 30px;
-            text-align: center;
+            border-right: 1px solid #1f2530;
+            border-bottom: 1px solid #141923;
+            font-weight: 500;
+            font-size: 12px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+            min-width: 32px;
         }
         QHeaderView::section:vertical:hover {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #334155, stop:1 #1E293B);
-            color: #E2E8F0;
-            border-right: 2px solid rgba(0, 255, 255, 0.5);
+            background-color: #11151c;
+            color: #e6edf3;
         }
 
-        /* Table core */
+        /* Table core — near-black canvas; rows paint slightly lighter via ::item */
         QTableWidget {
-            background-color: #0B1220;
-            border: 1px solid #334155;
+            background-color: #07090e;
+            border: 1px solid #1f2530;
             border-radius: 8px;
-            gridline-color: #334155;
+            gridline-color: #1a1f29;
             outline: 0;
-            selection-background-color: #10B981;  /* emerald green */
-            selection-color: #FFFFFF;
-            alternate-background-color: #162032;   /* softer alt rows */
-            color: #E2E8F0;
+            selection-background-color: rgba(16, 185, 129, 0.32); /* translucent emerald */
+            selection-color: #ecfdf5;
+            alternate-background-color: #141923; /* subtle stripe */
+            color: #e6edf3;
             show-decoration-selected: 1;
             font-size: 13px;
-            font-family: 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
         }
 
-        /* Table cells - Enhanced for forensic readability */
+        /* Table cells — base row tone slightly lighter than the canvas */
         QTableWidget::item {
-            padding: 2px 6px;
-            border-bottom: 1px solid #334155;
-            border-right: 1px solid #334155;
-            font-size: 11px;
-            font-weight: 600;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            color: #F8FAFC;
-            letter-spacing: 0.2px;
-        }
-        QTableWidget::item:selected {
-            background-color: #059669;  /* enhanced emerald green */
-            color: #FFFFFF;
-            font-weight: 800;
-            border: 2px solid #10B981;
-            border-radius: 3px;
-            padding: 3px;
-        }
-        QTableWidget::item:hover {
-            background-color: rgba(0, 255, 255, 0.15);
-            color: #00FFFF;
-            font-weight: 700;
+            background-color: #11151c;
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: 400;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+            color: #e6edf3;
+            border: none;
         }
         QTableWidget::item:alternate {
-            background-color: #1E293B;
-            color: #F1F5F9;
+            background-color: #141923;
+            color: #e6edf3;
+        }
+        /* Selected row — translucent emerald, weight bump, no border/padding shift */
+        QTableWidget::item:selected {
+            background-color: rgba(16, 185, 129, 0.28);
+            color: #ecfdf5;
+            font-weight: 600;
+        }
+        QTableWidget::item:selected:active {
+            background-color: rgba(16, 185, 129, 0.45);
+            color: #ffffff;
+        }
+        /* Hover: very gentle slate tint */
+        QTableWidget::item:hover {
+            background-color: rgba(148, 163, 184, 0.07);
+        }
+        QTableWidget::item:selected:hover {
+            background-color: rgba(16, 185, 129, 0.55);
+            color: #ffffff;
         }
 
-        /* Corner button */
+        /* Corner button (top-left, between the two headers) — matches header band */
         QTableCornerButton::section {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3B82F6, stop:1 #1E40AF);
-            border: 1px solid #334155;
+            background-color: #1a2236;
+            border: none;
+            border-right: 1px solid #2a3a55;
+            border-bottom: 2px solid #2a3a55;
             border-top-left-radius: 8px;
         }
         QTableCornerButton::section:hover {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #60A5FA, stop:1 #3B82F6);
-            border: 1px solid #00FFFF;
+            background-color: #243054;
         }
-        
-        /* Scrollbar styling - Enhanced Cyberpunk Theme */
+
+        /* Scrollbars — match canvas */
         QScrollBar:vertical {
+            border: none;
+            background: #07090e;
+            width: 12px;
+            margin: 0;
+            border-radius: 6px;
+        }
+        QScrollBar::handle:vertical {
+            background: #1f2530;
+            min-height: 36px;
+            border-radius: 6px;
+            margin: 2px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background: #2a3140;
+        }
+        QScrollBar::handle:vertical:pressed {
+            background: #58a6ff;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
+            background: none;
+        }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: none;
+        }
+
+        QScrollBar:horizontal {
+            border: none;
+            background: #07090e;
+            height: 12px;
+            margin: 0;
+            border-radius: 6px;
+        }
+        QScrollBar::handle:horizontal {
+            background: #1f2530;
+            min-width: 36px;
+            border-radius: 6px;
+            margin: 2px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background: #2a3140;
+        }
+        QScrollBar::handle:horizontal:pressed {
+            background: #58a6ff;
+        }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0px;
+            background: none;
+        }
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+            background: none;
+        }
+    """
+
+    # ========================================================================
+    # GEP-style "missing-widget" coverage — Trees / Frames / Sliders / Scroll
+    # areas. Same tone as UNIFIED_TABLE_STYLE: slate base, no per-cell border
+    # doubling, no layout-shift on selection / hover, system-stack fonts,
+    # cyan reserved for :focus or semantic-active states only.
+    # ========================================================================
+
+    UNIFIED_TREE_STYLE = """
+        QTreeView, QTreeWidget {
+            background-color: #0B1220;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #E2E8F0;
+            font-size: 13px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+            outline: 0;
+            selection-background-color: #10B981;
+            selection-color: #FFFFFF;
+            alternate-background-color: #131C2E;
+            show-decoration-selected: 1;
+        }
+        QTreeView::item, QTreeWidget::item {
+            padding: 6px 10px;
+            border: none;
+        }
+        QTreeView::item:alternate, QTreeWidget::item:alternate {
+            background-color: #131C2E;
+        }
+        QTreeView::item:hover, QTreeWidget::item:hover {
+            background-color: rgba(148, 163, 184, 0.08);
+        }
+        QTreeView::item:selected, QTreeWidget::item:selected {
+            background-color: #059669;
+            color: #FFFFFF;
+            font-weight: 600;
+        }
+        QTreeView::item:selected:active, QTreeWidget::item:selected:active {
+            background-color: #10B981;
+        }
+        QTreeView::item:selected:hover, QTreeWidget::item:selected:hover {
+            background-color: #047857;
+            color: #FFFFFF;
+        }
+        QTreeView::branch:has-siblings:!adjoins-item {
+            border-image: none;
+            background: transparent;
+        }
+        QTreeView::branch:has-siblings:adjoins-item {
+            border-image: none;
+            background: transparent;
+        }
+        QTreeView::branch:!has-children:!has-siblings:adjoins-item {
+            border-image: none;
+            background: transparent;
+        }
+        /* Expand / collapse markers — slate triangles, no neon */
+        QTreeView::branch:has-children:!has-siblings:closed,
+        QTreeView::branch:closed:has-children:has-siblings {
+            border-image: none;
+            image: none;
+            background: transparent;
+        }
+        QTreeView::branch:open:has-children:!has-siblings,
+        QTreeView::branch:open:has-children:has-siblings {
+            border-image: none;
+            image: none;
+            background: transparent;
+        }
+        /* Inherit the same slate scrollbar used in tables */
+        QTreeView QScrollBar:vertical, QTreeWidget QScrollBar:vertical {
             border: none;
             background: #0B1220;
             width: 12px;
             margin: 0;
             border-radius: 6px;
         }
-        
-        QScrollBar::handle:vertical {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #334155, stop:1 #1E293B);
-            min-height: 30px;
+        QTreeView QScrollBar::handle:vertical, QTreeWidget QScrollBar::handle:vertical {
+            background: #334155;
+            min-height: 36px;
             border-radius: 6px;
-            margin: 1px;
-            border: 1px solid rgba(0, 255, 255, 0.2);
+            margin: 2px;
         }
-        
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-            height: 0px;
-            background: none;
+        QTreeView QScrollBar::handle:vertical:hover, QTreeWidget QScrollBar::handle:vertical:hover {
+            background: #475569;
         }
-        
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-            background: none;
+    """
+
+    UNIFIED_FRAME_STYLE = """
+        /* Default non-line QFrame inherits the panel slate so unstyled frames
+         * don't show OS-default white. */
+        QFrame {
+            background-color: transparent;
+            color: #E2E8F0;
         }
-        
-        QScrollBar::handle:vertical:hover {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #475569, stop:1 #334155);
-            border: 1px solid #00FFFF;
+        /* HLine / VLine — frameShape 4 = HLine, 5 = VLine. 1 px slate rule. */
+        QFrame[frameShape="4"] {
+            color: #334155;
+            background-color: #334155;
+            max-height: 1px;
+            border: none;
         }
-        
-        QScrollBar::handle:vertical:pressed {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E293B, stop:1 #0F172A);
-            border: 1px solid #00FFFF;
+        QFrame[frameShape="5"] {
+            color: #334155;
+            background-color: #334155;
+            max-width: 1px;
+            border: none;
         }
-        
-        QScrollBar:horizontal {
+        /* Box-style frames (StyledPanel, Box) get a subtle slate border */
+        QFrame[frameShape="6"], QFrame[frameShape="2"] {
+            border: 1px solid #334155;
+            border-radius: 6px;
+        }
+    """
+
+    UNIFIED_SLIDER_STYLE = """
+        QSlider::groove:horizontal {
+            background: #1E293B;
+            height: 4px;
+            border-radius: 2px;
+        }
+        QSlider::sub-page:horizontal {
+            background: #3B82F6;
+            border-radius: 2px;
+        }
+        QSlider::add-page:horizontal {
+            background: #1E293B;
+            border-radius: 2px;
+        }
+        QSlider::handle:horizontal {
+            background: #3B82F6;
+            border: 2px solid #1E40AF;
+            width: 14px;
+            height: 14px;
+            margin: -6px 0;
+            border-radius: 8px;
+        }
+        QSlider::handle:horizontal:hover {
+            background: #60A5FA;
+            border-color: #3B82F6;
+        }
+        QSlider::handle:horizontal:pressed {
+            background: #1E40AF;
+        }
+        QSlider::groove:vertical {
+            background: #1E293B;
+            width: 4px;
+            border-radius: 2px;
+        }
+        QSlider::sub-page:vertical {
+            background: #1E293B;
+            border-radius: 2px;
+        }
+        QSlider::add-page:vertical {
+            background: #3B82F6;
+            border-radius: 2px;
+        }
+        QSlider::handle:vertical {
+            background: #3B82F6;
+            border: 2px solid #1E40AF;
+            width: 14px;
+            height: 14px;
+            margin: 0 -6px;
+            border-radius: 8px;
+        }
+        QSlider::handle:vertical:hover {
+            background: #60A5FA;
+            border-color: #3B82F6;
+        }
+        QSlider::handle:vertical:pressed {
+            background: #1E40AF;
+        }
+        /* Tick marks (visible only when tickPosition is set) */
+        QSlider::tick-mark {
+            background: #475569;
+            width: 1px;
+            height: 1px;
+        }
+    """
+
+    UNIFIED_SCROLLAREA_STYLE = """
+        QScrollArea {
+            background-color: transparent;
+            border: 1px solid #334155;
+            border-radius: 8px;
+        }
+        /* The intermediate viewport / contents widgets must be transparent so
+         * the parent panel's colour shows through; without this PyQt5 draws
+         * an opaque grey rectangle inside scroll areas. */
+        QScrollArea > QWidget > QWidget {
+            background-color: transparent;
+        }
+        /* Match the table scrollbar so a panel containing tables + scroll
+         * areas reads as one visual surface. */
+        QScrollArea QScrollBar:vertical {
+            border: none;
+            background: #0B1220;
+            width: 12px;
+            margin: 0;
+            border-radius: 6px;
+        }
+        QScrollArea QScrollBar::handle:vertical {
+            background: #334155;
+            min-height: 36px;
+            border-radius: 6px;
+            margin: 2px;
+        }
+        QScrollArea QScrollBar::handle:vertical:hover {
+            background: #475569;
+        }
+        QScrollArea QScrollBar:horizontal {
             border: none;
             background: #0B1220;
             height: 12px;
             margin: 0;
             border-radius: 6px;
         }
-        
-        QScrollBar::handle:horizontal {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #334155, stop:1 #1E293B);
-            min-width: 30px;
+        QScrollArea QScrollBar::handle:horizontal {
+            background: #334155;
+            min-width: 36px;
             border-radius: 6px;
-            margin: 1px;
-            border: 1px solid rgba(0, 255, 255, 0.2);
+            margin: 2px;
         }
-        
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-            width: 0px;
-            background: none;
-        }
-        
-        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-            background: none;
-        }
-        
-        QScrollBar::handle:horizontal:hover {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #475569, stop:1 #334155);
-            border: 1px solid #00FFFF;
-        }
-        
-        QScrollBar::handle:horizontal:pressed {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1E293B, stop:1 #0F172A);
-            border: 1px solid #00FFFF;
+        QScrollArea QScrollBar::handle:horizontal:hover {
+            background: #475569;
         }
     """
-    
+
     # Scrollbar Style - Enhanced Cyberpunk Theme
     SCROLLBAR_STYLE = """
         QScrollBar:vertical {
@@ -1181,7 +1481,7 @@ class CrowEyeStyles:
         
         QScrollBar::handle:vertical:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #475569, stop:1 #334155);
-            border: 1px solid #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         
         QScrollBar::handle:vertical:pressed {
@@ -1216,7 +1516,7 @@ class CrowEyeStyles:
         
         QScrollBar::handle:horizontal:hover {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #475569, stop:1 #334155);
-            border: 1px solid #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         
         QScrollBar::handle:horizontal:pressed {
@@ -1259,11 +1559,25 @@ class CrowEyeStyles:
     # Modern Main Tab Widget Style - Redirects to UNIFIED_TAB_STYLE
     MAIN_TAB_WIDGET = UNIFIED_TAB_STYLE
 
-    # Modern Tab Background
+    # Container shell for tab pages, table panels, and the main info_frame.
+    # Aligned with the new dark-navy palette so tables, tabs, and their
+    # wrapping panels read as one coherent surface.
+    # panel bg #0e131c (slight lift over canvas #07090e)
+    # panel border #2a3a55 (matches the lifted header band)
+    #
+    # The QFrame border + radius rule is scoped to StyledPanel frames
+    # (frameShape == 6) so nested QFrames with other shapes don't pick
+    # up a double border.
     TAB_BACKGROUND = """
         QWidget {
-            background-color: #0B1220;
-            color: #E2E8F0;
+            background-color: #0e131c;
+            color: #e6edf3;
+        }
+        QFrame[frameShape="6"] {
+            background-color: #0e131c;
+            color: #e6edf3;
+            border: 1px solid #2a3a55;
+            border-radius: 10px;
         }
     """
     
@@ -1271,15 +1585,13 @@ class CrowEyeStyles:
     LIVE_ANALYSIS_LABEL = """
         QLabel {
             /* Text Styling */
-            color: #00FF00;                     /* Neon green */
+            color: #00FF00; /* Neon green */
             font-family: 'Arial Black', sans-serif;
             font-size: 14px;
             font-weight: bold;
-            letter-spacing: 1px;
-            text-transform: uppercase;
             
             /* Background */
-            background-color: rgba(0, 20, 0, 0.7);  /* Dark green with transparency */
+            background-color: rgba(0, 20, 0, 0.7); /* Dark green with transparency */
             border: 1px solid #00FF00;
             border-radius: 4px;
             padding: 8px 16px;
@@ -1296,8 +1608,6 @@ class CrowEyeStyles:
             color: white;
             font-weight: bold;
             padding: 10px 20px;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
         }
@@ -1305,7 +1615,7 @@ class CrowEyeStyles:
         QPushButton:hover {
             background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
                                       stop: 0 #34D399, stop: 1 #10B981);
-            border: 1px solid #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         
         QPushButton:pressed {
@@ -1368,194 +1678,6 @@ class CrowEyeStyles:
         }
     """
     
-    # Step Container Style
-    STEP_CONTAINER = """
-        QFrame {
-            background: rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(0, 255, 255, 0.2);
-            border-radius: 8px;
-            padding: 10px;
-            margin: 5px 0;
-        }
-    """
-    
-    # Step Number Style
-    STEP_NUMBER = """
-        QLabel {
-            background-color: #1e88e5;
-            color: white;
-            border-radius: 17px;
-            font-weight: bold;
-            font-size: 16px;
-            min-width: 30px;
-            min-height: 30px;
-            max-width: 30px;
-            max-height: 30px;
-            padding: 0;
-            margin: 0;
-        }
-    """
-    
-    # Step Text Style
-    STEP_TEXT = """
-        color: #b0bec5;
-        font-size: 14px;
-        font-family: 'Segoe UI', sans-serif;
-        padding-left: 12px;
-    """
-    
-    # Progress Bar Style
-    PROGRESS_BAR = """
-        QProgressBar {
-            border: 1px solid #00bcd4;
-            border-radius: 5px;
-            background: rgba(0, 0, 0, 0.3);
-            text-align: center;
-            height: 25px;
-        }
-        
-        QProgressBar::chunk {
-            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                      stop: 0 #00bcd4, stop: 1 #00838f);
-            border-radius: 4px;
-        }
-    """
-    
-    # Status Label Style
-    STATUS_LABEL = """
-        QLabel {
-            color: #b0bec5;
-            font-size: 13px;
-            font-style: italic;
-            padding: 10px 0;
-            min-height: 20px;
-        }
-    """
-    
-    # Active Step Number Style
-    STEP_NUMBER_ACTIVE = """
-        QLabel {
-            background-color: #00bcd4;
-            color: white;
-            border-radius: 17px;
-            font-weight: bold;
-            font-size: 14px;
-            min-width: 30px;
-            min-height: 30px;
-            max-width: 30px;
-            max-height: 30px;
-            padding: 0;
-            margin: 0;
-            border: 2px solid #00ffff;
-        }
-    """
-    
-    # Active Step Text Style
-    STEP_TEXT_ACTIVE = """
-        color: #00ffff;
-        font-size: 14px;
-        font-family: 'Segoe UI', sans-serif;
-        padding-left: 15px;
-        font-weight: bold;
-    """
-    
-    # Active Step Container Style
-    STEP_CONTAINER_ACTIVE = """
-        QFrame {
-            background: rgba(0, 188, 212, 0.1);
-            border: 1px solid #00bcd4;
-            border-radius: 8px;
-            padding: 10px;
-            margin: 5px 0;
-        }
-    """
-    
-    # Completed step styles (used when a step is finished successfully)
-    STEP_NUMBER_COMPLETED = """
-        QLabel {
-            background-color: #00c853;
-            color: white;
-            border: 2px solid #00c853;
-            border-radius: 17px;
-            font-weight: bold;
-            font-size: 14px;
-        }
-    """
-    
-    STEP_TEXT_COMPLETED = """
-        color: #00c853;
-        font-size: 14px;
-        font-family: 'Segoe UI', sans-serif;
-        padding-left: 15px;
-        font-weight: bold;
-    """
-    
-    STEP_CONTAINER_COMPLETED = """
-        QFrame {
-            background: rgba(0, 200, 83, 0.1);
-            border: 1px solid rgba(0, 200, 83, 0.3);
-            border-radius: 8px;
-            margin: 2px;
-            padding: 5px;
-        }
-    """
-    
-    # Success Status Label Style
-    STATUS_LABEL_SUCCESS = """
-        QLabel {
-            color: #00c853;
-            font-size: 13px;
-            font-weight: bold;
-            padding: 10px 0;
-        }
-    """
-    
-    # Error Status Label Style
-    STATUS_LABEL_ERROR = """
-        QLabel {
-            color: #ff5252;
-            font-size: 13px;
-            font-weight: bold;
-            padding: 10px 0;
-        }
-    """
-    
-    # Error Step Number Style
-    STEP_NUMBER_ERROR = """
-        QLabel {
-            background-color: #ff5252;
-            color: white;
-            border-radius: 17px;
-            font-weight: bold;
-            font-size: 14px;
-            min-width: 30px;
-            min-height: 30px;
-            max-width: 30px;
-            max-height: 30px;
-            padding: 0;
-            margin: 0;
-        }
-    """
-    
-    # Error Step Text Style
-    STEP_TEXT_ERROR = """
-        color: #ff5252;
-        font-size: 14px;
-        font-family: 'Segoe UI', sans-serif;
-        padding-left: 15px;
-        font-weight: bold;
-    """
-    
-    # Error Step Container Style
-    STEP_CONTAINER_ERROR = """
-        QFrame {
-            background: rgba(255, 82, 82, 0.1);
-            border: 1px solid #ff5252;
-            border-radius: 8px;
-            padding: 10px;
-            margin: 5px 0;
-        }
-    """
     
     # ============================================================================
     # UNIFIED LOADING DIALOG STYLES
@@ -1645,8 +1767,6 @@ class CrowEyeStyles:
             font-size: 24px;
             font-weight: bold;
             font-family: 'Consolas', monospace;
-            text-transform: uppercase;
-            letter-spacing: 2px;
             padding: 10px;
             background-color: rgba(0, 30, 60, 150);
             border: 1px solid #00ffff;
@@ -1719,7 +1839,7 @@ class CrowEyeStyles:
         }
         QPushButton:hover {
             background-color: rgba(30,41,59,0.9);
-            border-color: rgba(0,255,255,0.6);
+            border-color: rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background-color: rgba(15,23,42,1.0);
@@ -1738,19 +1858,17 @@ class CrowEyeStyles:
             color: #00FFFF;
             font-size: 16px;
             font-weight: bold;
-            letter-spacing: 0.8px;
             text-align: center;
             padding: 4px 10px;
             background-color: rgba(15,23,42,0.7);
             border-radius: 6px;
             border: 1px solid rgba(0,255,255,0.4);
-            text-transform: uppercase;
             max-width: 300px;
         }
         QLabel:hover {
             background-color: rgba(15,23,42,0.8);
-            border: 1px solid rgba(0,255,255,0.6);
-            color: #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            color: #E2E8F0;
             /* Qt doesn't support text-shadow, using brighter color instead */
             color: #80FFFF;
         }
@@ -1840,7 +1958,6 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            letter-spacing: 0.5px;
             margin: 2px 8px;
             min-width: 120px;
         }
@@ -1876,8 +1993,6 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
         }
         QPushButton:hover {
             background-color: #94A3B8;
@@ -1901,14 +2016,12 @@ class CrowEyeStyles:
             padding: 8px 16px;
             font-weight: 600;
             font-size: 12px;
-            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
             min-width: 80px;
         }
         QPushButton:hover {
             background-color: #A78BFA;
-            border: 1px solid rgba(0, 255, 255, 0.4);
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background-color: #6D28D9;
@@ -1931,14 +2044,12 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 11px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             min-width: 120px;
         }
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #34D399, stop:1 #10B981);
-            border: 1px solid #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background: #047857;
@@ -1957,14 +2068,12 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 11px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             min-width: 120px;
         }
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                                       stop:0 #22D3EE, stop:1 #0891B2);
-            border: 1px solid #00FFFF;
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background: #155E75;
@@ -1983,8 +2092,6 @@ class CrowEyeStyles:
             font-weight: bold;
             font-size: 12px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
             min-width: 140px;
         }
         QPushButton:hover {
@@ -2020,8 +2127,6 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             min-width: 120px;
         }
         QPushButton:hover {
@@ -2046,8 +2151,6 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             min-width: 120px;
         }
         QPushButton:hover {
@@ -2072,8 +2175,6 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             min-width: 120px;
         }
         QPushButton:hover {
@@ -2105,7 +2206,7 @@ class CrowEyeStyles:
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                 stop:0 #1E40AF, stop:1 #1D4ED8);
-            border-left: 3px solid #00FFFF;
+            border-left: 3px solid rgba(148, 163, 184, 0.28);
             border-right: 10px solid #0F172A;
         }
         QPushButton:pressed {
@@ -2139,12 +2240,10 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
         }
         QPushButton:hover {
             background-color: #60A5FA;
-            border: 1px solid rgba(0, 255, 255, 0.3); /* Replaced box-shadow with border for Qt compatibility */
+            border: 1px solid rgba(148, 163, 184, 0.28); /* Replaced box-shadow with border for Qt compatibility */
         }
         QPushButton:pressed {
             background-color: #1E40AF;
@@ -2170,14 +2269,12 @@ class CrowEyeStyles:
             font-weight: 700;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 1px;
             /* Removed box-shadow for Qt compatibility */
         }
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #A78BFA, stop:0.5 #8B5CF6, stop:1 #60A5FA);
-            border: 3px solid #00FFFF; /* Enhanced border to replace box-shadow effect */
+            border: 3px solid rgba(148, 163, 184, 0.28); /* Enhanced border to replace box-shadow effect */
         }
         QPushButton:pressed {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
@@ -2223,13 +2320,11 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             min-width: 100px;
         }
         QPushButton:hover {
             background-color: #60A5FA;
-            border: 1px solid rgba(0, 255, 255, 0.4);
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background-color: #1E40AF;
@@ -2251,13 +2346,11 @@ class CrowEyeStyles:
             font-weight: 600;
             font-size: 13px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
             min-width: 100px;
         }
         QPushButton:hover {
             background-color: #94A3B8;
-            border: 1px solid rgba(0, 255, 255, 0.3);
+            border: 1px solid rgba(148, 163, 184, 0.28);
         }
         QPushButton:pressed {
             background-color: #334155;
@@ -2291,8 +2384,6 @@ class CrowEyeStyles:
             font-size: 32px;
             font-weight: bold;
             font-family: 'Consolas', 'Courier New', monospace;
-            text-transform: uppercase;
-            letter-spacing: 3px;
             padding: 5px 20px 5px 20px;
             background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
                                       stop: 0 rgba(0, 255, 255, 0.15),
@@ -2303,16 +2394,19 @@ class CrowEyeStyles:
         }
     """
 
-    # Loading dialog icon/logo
+    # Loading dialog icon/logo — 3px gradient cyan border, flush to the icon
+    # (no padding). The outer halo glow is applied in code via QGraphicsDropShadowEffect.
     LOADING_DIALOG_ICON = """
         QLabel {
-            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
-                                      stop: 0 rgba(0, 255, 255, 0.2),
-                                      stop: 0.5 rgba(0, 255, 255, 0.3),
-                                      stop: 1 rgba(0, 255, 255, 0.1));
-            border: 3px solid #00ffff;
-            border-radius: 15px;
-            padding: 15px;
+            background-color: rgba(0, 255, 255, 0.05);
+            border: 4px solid qlineargradient(
+                x1: 0, y1: 0, x2: 1, y2: 1,
+                stop: 0 #00ffff,
+                stop: 0.3 #00bcff,
+                stop: 0.7 #00ffaa,
+                stop: 1 #00ffff);
+            border-radius: 16px;
+            padding: 8px;
         }
     """
 
@@ -2329,7 +2423,6 @@ class CrowEyeStyles:
             color: #ffffff;
             /* Removed text-shadow: 0 0 5px #00ffff, 0 0 10px #00ffff; */
             font-weight: 900;
-            letter-spacing: 1px;
             background-color: rgba(10, 25, 41, 0.8);
             min-height: 30px;
         }
@@ -2459,96 +2552,147 @@ class CrowEyeStyles:
     """
 
 
-    # Enhanced Tab Button Style (alias for TOP_TAB_BUTTON_STYLE)
-    TAB_BUTTON_STYLE = """
-        QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 14px 28px;
-            min-width: 140px;
-            border: none;
-            border-bottom: 3px solid transparent;
-            margin-right: 8px;
-            margin-bottom: 0;
-            font-weight: 600;
-            font-size: 13px;
-            font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-        }
-        
-        QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 3px solid #00FFFF;
-            font-weight: bold;
-        }
-        
-        QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #FFFFFF;
-        }
-        
-        QTabBar::tab:disabled {
-            color: #64748B;
-            background-color: #64748B;
-        }
-    """
+    # Enhanced Tab Button Style — REDIRECT to UNIFIED_TAB_STYLE (was duplicate block)
+    TAB_BUTTON_STYLE = UNIFIED_TAB_STYLE
 
     # Sub Tab Widget Style - Redirects to UNIFIED_TAB_STYLE
     SUB_TAB_WIDGET = UNIFIED_TAB_STYLE
 
-    # Modern Top Tab Button Style with Flat Design
-    TOP_TAB_BUTTON_STYLE = """
-        QTabBar::tab {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            padding: 14px 28px;
-            min-width: 140px;
-            border: none;
-            border-bottom: 3px solid transparent;
-            margin-right: 8px;
-            margin-bottom: 0;
-            font-weight: 600;
-            font-size: 13px;
-            font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-        }
-        
-        QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 3px solid #00FFFF;
-            font-weight: bold;
-        }
-        
-        QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #FFFFFF;
-        }
-        
-        QTabBar::tab:disabled {
-            color: #64748B;
-            background-color: #64748B;
-            min-width: 120px;
-            padding: 12px 20px;
-        }
+    # Top Tab Button Style — REDIRECT to UNIFIED_TAB_STYLE (was duplicate block)
+    TOP_TAB_BUTTON_STYLE = UNIFIED_TAB_STYLE
 
-        QTabBar::scroller {
-            width: 30px;
-        }
 
-        QTabBar QToolButton {
-            background-color: #1E293B;
-            border: 1px solid #334155;
-            border-radius: 4px;
-        }
+    # ------------------------------------------------------------------
+    # CROWCLAW_* — shared constants for Artifacts_Collectors/crow_claw GUI.
+    # All use the unified slate / brand-blue / emerald palette; cyan is
+    # reserved for :checked / :focus only (same rule as UNIFIED_TABLE_STYLE).
+    # ------------------------------------------------------------------
 
-        QTabBar QToolButton:hover {
-            background-color: #334155;
-            border: 1px solid #00FFFF;
-        }
-    """
+    CROWCLAW_SECTION_HEADER = (
+        f"color: {Colors.ACCENT_BLUE}; "
+        f"font-weight: 700; "
+        f"font-size: 11px; "
+    )
 
+    CROWCLAW_LABEL_KEY = (
+        f"color: {Colors.TEXT_SECONDARY}; "
+        f"font-weight: 600; "
+    )
+
+    CROWCLAW_LABEL_PATH = (
+        f"color: {Colors.SUCCESS}; "
+        f"font-weight: 600; "
+        f"background-color: transparent; "
+    )
+
+    CROWCLAW_STATUS_PILL_OK = (
+        f"color: {Colors.SUCCESS}; font-weight: bold; padding: 5px; "
+        f"background-color: {Colors.BG_PANELS}; "
+        f"border: 1px solid {Colors.SUCCESS}; border-radius: 4px;"
+    )
+
+    CROWCLAW_STATUS_PILL_WARN = (
+        f"color: {Colors.WARNING}; font-weight: bold; padding: 5px; "
+        f"background-color: {Colors.BG_PANELS}; "
+        f"border: 1px solid {Colors.WARNING}; border-radius: 4px;"
+    )
+
+    CROWCLAW_STATUS_PILL_ERROR = (
+        f"color: {Colors.ERROR}; font-weight: bold; padding: 5px; "
+        f"background-color: {Colors.BG_PANELS}; "
+        f"border: 1px solid {Colors.ERROR}; border-radius: 4px;"
+    )
+
+    CROWCLAW_LOG_AREA = (
+        f"QTextEdit {{ "
+        f"background-color: {Colors.BG_TABLES}; "
+        f"color: {Colors.TEXT_PRIMARY}; "
+        f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+        f"border-radius: 6px; "
+        f"padding: 10px; "
+        f"font-family: Consolas, 'Cascadia Mono', monospace; "
+        f"font-size: 10pt; "
+        f"selection-background-color: {Colors.SUCCESS}; "
+        f"selection-color: {Colors.BG_PRIMARY}; "
+        f"}}"
+    )
+
+    CROWCLAW_TOOLBAR_BUTTON = (
+        f"QPushButton {{ "
+        f"background-color: {Colors.BG_PANELS}; "
+        f"color: {Colors.TEXT_PRIMARY}; "
+        f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+        f"border-radius: 4px; "
+        f"padding: 8px 14px; "
+        f"font-weight: 600; "
+        f"font-size: 11px; "
+        f"}} "
+        f"QPushButton:hover {{ "
+        f"background-color: {Colors.BORDER_SUBTLE}; "
+        f"border-color: {Colors.ACCENT_BLUE}; "
+        f"}} "
+        f"QPushButton:pressed {{ "
+        f"background-color: {Colors.ACCENT_BLUE}; "
+        f"color: {Colors.BG_PRIMARY}; "
+        f"}} "
+        f"QPushButton:focus {{ "
+        f"border: 1px solid {Colors.ACCENT_CYAN}; "
+        f"}}"
+    )
+
+    CROWCLAW_PRIMARY_BUTTON = (
+        f"QPushButton {{ "
+        f"background-color: {Colors.SUCCESS}; "
+        f"color: {Colors.BG_PRIMARY}; "
+        f"font-size: 14px; font-weight: 800; "
+        f"border: none; "
+        f"border-radius: 6px; "
+        f"padding: 10px 18px; "
+        f"}} "
+        f"QPushButton:hover {{ "
+        f"background-color: #34D399; "
+        f"}} "
+        f"QPushButton:pressed {{ "
+        f"background-color: #059669; "
+        f"color: {Colors.TEXT_PRIMARY}; "
+        f"}} "
+        f"QPushButton:focus {{ "
+        f"outline: 2px solid {Colors.ACCENT_CYAN}; "
+        f"outline-offset: 2px; "
+        f"}}"
+    )
+
+    CROWCLAW_STEP_BUTTON_ACTIVE = (
+        f"background-color: {Colors.ACCENT_BLUE}; "
+        f"color: {Colors.TEXT_PRIMARY}; "
+        f"border: 1px solid {Colors.ACCENT_BLUE}; "
+        f"border-radius: 4px; padding: 10px; "
+        f"text-align: left; font-weight: 700;"
+    )
+
+    CROWCLAW_STEP_BUTTON_INACTIVE = (
+        f"background-color: {Colors.BG_PANELS}; "
+        f"color: {Colors.TEXT_PRIMARY}; "
+        f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+        f"border-radius: 4px; padding: 10px; "
+        f"text-align: left; font-weight: 600;"
+    )
+
+    CROWCLAW_PROGRESS_BAR = (
+        f"QProgressBar {{ "
+        f"background-color: {Colors.BG_PANELS}; "
+        f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+        f"border-radius: 6px; "
+        f"text-align: center; "
+        f"color: {Colors.TEXT_PRIMARY}; "
+        f"font-weight: 600; "
+        f"font-size: 12px; "
+        f"padding: 2px; "
+        f"}} "
+        f"QProgressBar::chunk {{ "
+        f"background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+        f"stop:0 {Colors.ACCENT_BLUE}, stop:1 {Colors.SUCCESS}); "
+        f"border-radius: 4px; "
+        f"}}"
+    )
 

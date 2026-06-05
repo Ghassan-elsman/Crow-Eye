@@ -9,6 +9,7 @@ This module manages conversation memory, including:
 - Evidence detection and preservation
 """
 
+import os
 import json
 import logging
 import hashlib
@@ -26,7 +27,11 @@ class HistoryManager:
         self.cm = context_manager
         self.logger = logging.getLogger(__name__)
         self.history: List[Dict[str, Any]] = []
-        self._message_id_counter = 0
+        self._message_id_counter = 0   # retained for legacy fallback only
+        # GEP Rule 4 (Non-Repudiation): rolling SHA-256 chain pointer.
+        # Each new message_id = sha256(prev_id + content + role).hexdigest()[:16].
+        # Flipping any byte of any historical message breaks the chain on next load.
+        self._prev_msg_id: str = ""
         self._lock = threading.RLock()
 
     def load_history(self):
@@ -43,6 +48,11 @@ class HistoryManager:
                         with self._lock:
                             # Migrate existing history if needed
                             self.history = self._migrate_existing_history(data)
+                            # GEP Rule 4: rehydrate the hash-chain pointer from the
+                            # tail of history so newly-appended messages extend the
+                            # same chain across process restarts.
+                            if self.history:
+                                self._prev_msg_id = self.history[-1].get("id", "") or ""
                         self.logger.info(f"Loaded {len(self.history)} messages from history.")
             except Exception as e:
                 self.logger.error(f"Failed to load history: {e}")
@@ -60,8 +70,14 @@ class HistoryManager:
             with self._lock:
                 history_snapshot = list(self.history)
 
-            with open(path, "w", encoding="utf-8") as f:
+            # Atomic write: a crash mid-write must not corrupt the persisted
+            # history. Write to a temp file, fsync, then atomically replace.
+            tmp_path = path.with_suffix(".json.tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(history_snapshot, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
         except Exception as e:
             self.logger.error(f"Failed to save history: {e}")
 
@@ -74,8 +90,8 @@ class HistoryManager:
             content: Message content
             metadata: Optional metadata dictionary
         """
-        # Generate unique message ID
-        message_id = self._generate_message_id()
+        # Generate unique message ID (GEP Rule 4 hash-chained)
+        message_id = self._generate_message_id(content, role)
 
         # Count tokens
         token_count = self.cm.token_counter.count_tokens(content)
@@ -107,13 +123,28 @@ class HistoryManager:
                     message["metadata"]["evidence_confidence"] = evidence_result["confidence"]
                     message["metadata"]["evidence_matches"] = evidence_result.get("matches", {})
 
+                    # GEP Rule 2 (Evidence Anchoring): embed raw evidence snippets
+                    # DIRECTLY into the message content as <evidence anchor="..."> tags
+                    # so the forensic markers travel with the message verbatim through
+                    # context-window summarization (the summarizer sees the tags as
+                    # part of the text and preserves them).
+                    preserve_flag = bool(message["metadata"].get("preserve_evidence"))
+                    cap_per_pattern = 25 if preserve_flag else 8
+                    anchor_lines = []
+                    for p_type, m_list in evidence_result.get("matches", {}).items():
+                        for m in m_list[:cap_per_pattern]:
+                            anchor_lines.append(f'<evidence anchor="{p_type}">{m}</evidence>')
+                    if anchor_lines:
+                        message["content"] = content + "\n\n" + "\n".join(anchor_lines)
+                        message["token_count"] = self.cm.token_counter.count_tokens(message["content"])
+
                     # Log preservation decision to audit trail if available
                     if hasattr(self.cm, 'truncation_auditor') and self.cm.truncation_auditor:
-                        message_hash = self._hash_message(content)
+                        message_hash = self._hash_message(message["content"])
                         # Extract snippets for the audit log (sanitized)
                         snippets = {}
                         for p_type, m_list in evidence_result.get("matches", {}).items():
-                            snippets[p_type] = [m[:100] + ("..." if len(m) > 100 else "") for m in m_list[:3]]
+                            snippets[p_type] = [m[:100] + ("..." if len(m) > 100 else "") for m in m_list[:cap_per_pattern]]
 
                         self.cm.truncation_auditor.log_event(
                             action="PRESERVED",
@@ -158,8 +189,14 @@ class HistoryManager:
         with self._lock:
             total_tokens = sum(m.get("token_count", 0) for m in self.history)
 
-            # If we exceed budget and have enough messages to summarize
-            if not (total_tokens > self.cm.token_budget["conversation_history"] and len(self.history) > 3):
+            # Compact persistent history only when it approaches the FULL usable
+            # context window (max_total_tokens minus the output reserve) — not the
+            # smaller per-component `conversation_history` sub-budget, which would
+            # truncate history long before the window is actually full. The
+            # per-call outgoing slim in guarded_generate uses the same `usable`
+            # value, so the two layers agree. Evidence/pinned messages are
+            # preserved below and every cut is audited as SUMMARIZED.
+            if not (total_tokens > self.cm.usable_context_tokens() and len(self.history) > 3):
                 return  # Nothing to do
 
             # Identify static boundaries to prevent fragmentation
@@ -189,7 +226,7 @@ class HistoryManager:
         # --- Phase 3: Write new history under lock ---
         with self._lock:
             summary_msg = {
-                "id": self._generate_message_id(),
+                "id": self._generate_message_id(summary_text, "system"),
                 "role": "system",
                 "content": summary_text,
                 "timestamp": datetime.now().isoformat(),
@@ -217,7 +254,9 @@ class HistoryManager:
                         message_hash=message_hash,
                         metadata={
                             "summary_msg_id": summary_msg["id"],
-                            "total_summarized": len(summarizable_msgs)
+                            "total_summarized": len(summarizable_msgs),
+                            "cut_content": msg.get("content", ""),
+                            "processed_content": summary_text
                         }
                     )
                 # Pillar 7: Auto-export JSON for machine readability
@@ -290,18 +329,32 @@ class HistoryManager:
         self.logger.info("Conversation history cleared.")
         return self.history
 
-    def _generate_message_id(self) -> str:
+    def _generate_message_id(self, content: str = "", role: str = "") -> str:
         """
-        Generate a unique message ID.
-        Thread-safe to prevent duplicates in concurrent operations.
-        
+        GEP Rule 4 (Non-Repudiation): generate a deterministic, hash-chained
+        message ID.  The ID is the first 16 hex chars of
+        sha256(previous_message_id + content + role).  Because the previous ID
+        is folded into every successor, silently editing any historical
+        message breaks the chain on next load and the tamper is detectable.
+
+        Thread-safe.  Falls back to the legacy timestamp+counter format only
+        if the inputs are completely empty (rare; preserves uniqueness for
+        edge cases that pre-date this rule).
+
         Returns:
-            Unique message ID in format: msg_{timestamp}_{counter}
+            16-char lowercase hex message ID (or legacy `msg_*` for fallback).
         """
         with self._lock:
-            self._message_id_counter += 1
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            return f"msg_{timestamp}_{self._message_id_counter}"
+            payload = (self._prev_msg_id + content + role).encode("utf-8", errors="replace")
+            if payload:
+                new_id = hashlib.sha256(payload).hexdigest()[:16]
+            else:
+                # Fallback for truly-empty inputs (should not happen in normal flow)
+                self._message_id_counter += 1
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                new_id = f"msg_{timestamp}_{self._message_id_counter}"
+            self._prev_msg_id = new_id
+            return new_id
     
     def _hash_message(self, content: str) -> str:
         """
@@ -543,7 +596,10 @@ class HistoryManager:
             
             # Add id field if missing
             if "id" not in msg:
-                msg["id"] = self._generate_message_id()
+                msg["id"] = self._generate_message_id(
+                    msg.get("content", "") or "",
+                    msg.get("role", "") or ""
+                )
                 needs_migration = True
             
             # Add token_count if missing (estimate from content)

@@ -1,25 +1,45 @@
 # Correlation Viewers Documentation
 
-This document describes the three correlation result viewers in the Crow-Eye Correlation Engine.
+This document describes the active correlation result viewers in the Crow-Eye Correlation Engine.
+
+> ## Consolidation note (current state)
+>
+> The viewer family went from five files to two active views plus an orchestrator. Deleted:
+>
+> - `correlation_results_view.py` — legacy database-first prototype, zero instantiations
+> - `hierarchical_results_view.py` — abandoned intermediate design, zero instantiations
+> - `time_based_results_view.py` — empty file (do not confuse with the active `timebased_results_viewer.py`)
+>
+> The two surviving views (`IdentityResultsView` and `TimeBasedResultsViewer`) are complementary, not overlapping, and are both hosted by `DynamicResultsTabWidget` (in `results_viewer.py`).
 
 ## Overview
 
-The Correlation Engine provides three specialized viewers for displaying correlation results:
+The Correlation Engine provides **two** specialized viewers, hosted in a tabbed orchestrator:
 
 | Viewer | File | Purpose |
 |--------|------|---------|
-| **CorrelationResultsView** | `correlation_results_view.py` | Database-backed hierarchical view with multi-tab support |
-| **TimeBasedResultsViewer** | `timebased_results_viewer.py` | Time-based correlation results with compact design |
-| **IdentityResultsView** | `identity_results_view.py` | Identity-based correlation with tree hierarchy |
+| **DynamicResultsTabWidget** | `results_viewer.py` | Tab orchestrator. Hosts the two viewers below + the filter panel + the match detail widget. Top-level entry from `MainWindow`. |
+| **IdentityResultsView** | `identity_results_view.py` | Identity-centric tree: `Identity → Sub-Identity → Anchor → Evidence`. Best for "what identities matched, with what evidence?" |
+| **TimeBasedResultsViewer** | `timebased_results_viewer.py` | Time-window tree: `Window → Identity → Sub-Identity → Anchor → Evidence`. Best for "when did matches cluster, and which identities appeared in each window?" |
+
+Both viewers share the **cascade-expand on Sub-Identity click** behaviour (`_on_item_clicked` → `_set_subtree_expanded(item, expanded=True, max_depth=2)`), and they share the semantic-search utility (`_search_semantic_data` is defined in `identity_results_view.py` and imported by `timebased_results_viewer.py`).
 
 ---
 
-## 1. CorrelationResultsView
+## ~~1. CorrelationResultsView~~ *(removed)*
 
-### Location
-`Crow-Eye/correlation_engine/gui/correlation_results_view.py`
+This viewer was deleted in the consolidation — it had zero instantiations and was a legacy database-first prototype superseded by the dual-viewer split below. The two active viewers cover its full feature set:
 
-### Purpose
+- Hierarchical Identity → Anchor → Evidence display → see `IdentityResultsView`
+- Time-window grouping → see `TimeBasedResultsViewer`
+- Multi-tab support → the host widget `DynamicResultsTabWidget` provides this
+
+The rest of this section is retained for historical reference.
+
+### Location *(removed)*
+`Crow-Eye/correlation_engine/gui/correlation_results_view.py` *(file deleted)*
+
+### Purpose *(historical)*
 Display correlation results from a SQLite database with hierarchical tree view and multi-tab support. Best for viewing persisted results from previous executions.
 
 ### Key Features
@@ -319,7 +339,7 @@ viewer._create_wing_tab(wing.wing_name, result.matches)
 ### Identity-Based Engine → IdentityResultsView
 
 ```python
-from correlation_engine.engine.identity_correlation_engine import IdentityBasedEngineAdapter
+from correlation_engine.engine.identity_based_engine_adapter import IdentityBasedEngineAdapter
 from correlation_engine.gui.identity_results_view import IdentityResultsView
 
 # Run correlation

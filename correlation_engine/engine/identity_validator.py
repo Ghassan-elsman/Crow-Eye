@@ -28,11 +28,25 @@ class IdentityValidator:
         'true', 'false', 'True', 'False', 'TRUE', 'FALSE',
         '1', '0', 'yes', 'no', 'Yes', 'No', 'YES', 'NO'
     }
+
+    # Placeholder strings that parsers emit when a field is structurally
+    # required but has no real value. Treating these as identities causes
+    # tens of thousands of unrelated records to collapse into one bogus
+    # "N/A" or "Unknown" identity bucket. Compared case-folded.
+    PLACEHOLDER_STRINGS = {
+        'n/a', 'na', 'none', 'null', 'nil', 'undefined',
+        'unknown', '[unknown]', '<unknown>', '(unknown)',
+        'not available', 'not applicable', 'not specified',
+        'empty', '<empty>', '(empty)',
+        '-', '--', '---', '...', '..', '.',
+        '0x0', '0x00', '0x000', '0x00000000',
+        '00000000-0000-0000-0000-000000000000', # nil GUID
+    }
     
     def __init__(self):
         """Initialize validator with statistics tracking."""
         self.filtered_count = 0
-        self.filtered_reasons = {}  # reason -> count
+        self.filtered_reasons = {} # reason -> count
         
         # Fields that should NOT be validated (known to contain IDs, GUIDs, etc.)
         self.skip_validation_fields = {
@@ -106,7 +120,14 @@ class IdentityValidator:
         # Check for boolean strings
         if value_str in self.BOOLEAN_STRINGS:
             return False, "boolean_string"
-        
+
+        # Check for placeholder strings ("N/A", "Unknown", "-",
+        # nil GUIDs etc.) — these are not real identities and
+        # would otherwise collapse unrelated records into one bogus
+        # bucket. Case-folded comparison.
+        if value_str.lower() in self.PLACEHOLDER_STRINGS:
+            return False, "placeholder_string"
+
         # Check for pure numeric values
         if self._is_numeric(value_str):
             return False, "numeric_value"

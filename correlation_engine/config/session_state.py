@@ -337,7 +337,7 @@ class ErrorResponse:
     """
     Standardized error response for error handling.
     """
-    severity: str  # "error", "warning", "info"
+    severity: str # "error", "warning", "info"
     message: str
     recovery_action: str
     user_message: str

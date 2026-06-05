@@ -31,15 +31,15 @@ class CorrelationProgress:
     Tracks progress for both Time-Window and Identity-Based engines.
     """
     # Engine identification
-    engine_type: str  # "time_window_scanning" or "identity_based"
+    engine_type: str # "time_window_scanning" or "identity_based"
     
     # Current phase
     current_phase: CorrelationPhase = CorrelationPhase.NOT_STARTED
     
     # Item tracking (windows or identities)
-    total_items: int = 0  # Total windows or identities to process
-    processed_items: int = 0  # Items processed so far
-    remaining_items: int = 0  # Items remaining
+    total_items: int = 0 # Total windows or identities to process
+    processed_items: int = 0 # Items processed so far
+    remaining_items: int = 0 # Items remaining
     
     # Match tracking
     matches_found: int = 0
@@ -50,7 +50,7 @@ class CorrelationProgress:
     estimated_completion_time: Optional[datetime] = None
     
     # Performance metrics
-    processing_rate: float = 0.0  # Items per second
+    processing_rate: float = 0.0 # Items per second
     elapsed_seconds: float = 0.0
     estimated_remaining_seconds: float = 0.0
     

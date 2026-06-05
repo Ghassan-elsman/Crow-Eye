@@ -33,7 +33,7 @@ class WindowMemoryStats:
     estimated_memory_mb: float
     actual_memory_mb: Optional[float] = None
     processing_time_seconds: Optional[float] = None
-    memory_efficiency: Optional[float] = None  # MB per 1000 records
+    memory_efficiency: Optional[float] = None # MB per 1000 records
 
 
 class WindowMemoryManager:
@@ -49,9 +49,9 @@ class WindowMemoryManager:
     """
     
     # Memory estimation constants
-    BYTES_PER_RECORD_BASE = 1024  # Base memory per record (1KB)
-    BYTES_PER_FIELD = 64  # Additional memory per field
-    OVERHEAD_MULTIPLIER = 1.5  # Overhead for Python objects and processing
+    BYTES_PER_RECORD_BASE = 1024 # Base memory per record (1KB)
+    BYTES_PER_FIELD = 64 # Additional memory per field
+    OVERHEAD_MULTIPLIER = 1.5 # Overhead for Python objects and processing
     
     def __init__(self, max_memory_mb: int = 500, enable_gc: bool = True):
         """
@@ -118,7 +118,7 @@ class WindowMemoryManager:
         
         # Check system memory availability
         available_memory_mb = self._get_available_system_memory()
-        if projected_memory_mb > available_memory_mb * 0.8:  # Leave 20% buffer
+        if projected_memory_mb > available_memory_mb * 0.8: # Leave 20% buffer
             reason = (f"Projected memory usage ({projected_memory_mb:.1f}MB) "
                      f"exceeds available system memory ({available_memory_mb:.1f}MB)")
             return False, reason
@@ -136,7 +136,7 @@ class WindowMemoryManager:
             Baseline memory usage in MB
         """
         if self.enable_gc:
-            gc.collect()  # Clean up before processing
+            gc.collect() # Clean up before processing
         
         baseline = self._get_current_memory_usage()
         
@@ -211,13 +211,13 @@ class WindowMemoryManager:
         elif usage_percentage > 50:
             recommendations.append("INFO: Memory usage above 50% - monitor closely")
         
-        if available_memory_mb < 1000:  # Less than 1GB available
+        if available_memory_mb < 1000: # Less than 1GB available
             recommendations.append("SYSTEM: Low system memory - consider closing other applications")
         
         # Performance recommendations
         if len(self.efficiency_history) > 10:
             avg_efficiency = sum(self.efficiency_history[-10:]) / 10
-            if avg_efficiency > 5.0:  # More than 5MB per 1000 records
+            if avg_efficiency > 5.0: # More than 5MB per 1000 records
                 recommendations.append("PERFORMANCE: High memory per record - check for memory leaks")
         
         return MemoryUsageReport(
@@ -348,7 +348,7 @@ class WindowMemoryManager:
         try:
             process = psutil.Process()
             memory_info = process.memory_info()
-            return memory_info.rss / (1024 * 1024)  # Convert bytes to MB
+            return memory_info.rss / (1024 * 1024) # Convert bytes to MB
         except Exception:
             # Fallback if psutil is not available
             return 0.0
@@ -357,10 +357,10 @@ class WindowMemoryManager:
         """Get available system memory in MB."""
         try:
             memory = psutil.virtual_memory()
-            return memory.available / (1024 * 1024)  # Convert bytes to MB
+            return memory.available / (1024 * 1024) # Convert bytes to MB
         except Exception:
             # Fallback if psutil is not available
-            return 4096.0  # Assume 4GB available
+            return 4096.0 # Assume 4GB available
     
     def _calculate_efficiency_trend(self) -> str:
         """Calculate efficiency trend from history."""

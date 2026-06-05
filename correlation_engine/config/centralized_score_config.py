@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -45,10 +45,10 @@ class CentralizedScoreConfig:
     
     # Tier weights for evidence levels
     tier_weights: Dict[str, float] = field(default_factory=lambda: {
-        'tier1': 1.0,   # Primary evidence
-        'tier2': 0.8,   # Secondary evidence
-        'tier3': 0.6,   # Supporting evidence
-        'tier4': 0.4    # Contextual evidence
+        'tier1': 1.0, # Primary evidence
+        'tier2': 0.8, # Secondary evidence
+        'tier3': 0.6, # Supporting evidence
+        'tier4': 0.4 # Contextual evidence
     })
     
     # Scoring penalties
@@ -188,40 +188,47 @@ class CentralizedScoreConfig:
         tier_key = f'tier{tier}'
         return self.tier_weights.get(tier_key, 0.0)
     
-    def validate(self) -> bool:
+    def validate(self) -> Tuple[bool, List[str]]:
         """
         Validate configuration values are within acceptable ranges.
-        
+
         Returns:
-            True if configuration is valid, False otherwise
+            Tuple of (is_valid, error_messages). Standardized return shape
+            matching SemanticConfig.validate() and Wing.validate() so callers
+            can inspect what specifically went wrong instead of only seeing
+            a True/False.
         """
+        errors: List[str] = []
         try:
-            # Validate thresholds are in range 0.0-1.0
             for key, value in self.thresholds.items():
                 if not (0.0 <= value <= 1.0):
-                    logger.error(f"Threshold '{key}' value {value} is out of range [0.0, 1.0]")
-                    return False
-            
-            # Validate tier weights are positive
+                    msg = f"Threshold '{key}' value {value} is out of range [0.0, 1.0]"
+                    logger.error(msg)
+                    errors.append(msg)
+
             for key, value in self.tier_weights.items():
                 if value < 0.0:
-                    logger.error(f"Tier weight '{key}' value {value} is negative")
-                    return False
-            
-            # Validate penalties are non-negative
+                    msg = f"Tier weight '{key}' value {value} is negative"
+                    logger.error(msg)
+                    errors.append(msg)
+
             for key, value in self.penalties.items():
                 if value < 0.0:
-                    logger.error(f"Penalty '{key}' value {value} is negative")
-                    return False
-            
-            # Validate bonuses are non-negative
+                    msg = f"Penalty '{key}' value {value} is negative"
+                    logger.error(msg)
+                    errors.append(msg)
+
             for key, value in self.bonuses.items():
                 if value < 0.0:
-                    logger.error(f"Bonus '{key}' value {value} is negative")
-                    return False
-            
-            logger.info("Score configuration validation passed")
-            return True
+                    msg = f"Bonus '{key}' value {value} is negative"
+                    logger.error(msg)
+                    errors.append(msg)
+
+            if not errors:
+                logger.info("Score configuration validation passed")
+            return (len(errors) == 0, errors)
         except Exception as e:
-            logger.error(f"Score configuration validation failed: {e}")
-            return False
+            msg = f"Score configuration validation failed: {e}"
+            logger.error(msg)
+            errors.append(msg)
+            return (False, errors)

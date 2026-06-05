@@ -252,7 +252,7 @@ class SimpleResultsTableWidget(QTableWidget):
                             elif isinstance(mapping_info, str):
                                 return mapping_info
         
-        return "-"  # Default when no semantic data available
+        return "-" # Default when no semantic data available
     
     def _get_score_display(self, match: 'CorrelationMatch') -> tuple:
         """
@@ -279,7 +279,7 @@ class SimpleResultsTableWidget(QTableWidget):
                         return str(record['identity_type'])
                     if '_identity_type' in record:
                         return str(record['_identity_type'])
-        return "application"  # Default identity type
+        return "application" # Default identity type
     
     def _format_timestamp(self, timestamp) -> str:
         """Format timestamp for display."""
@@ -315,12 +315,12 @@ class SimpleResultsTableWidget(QTableWidget):
                                    semantic_value: str, score_value: float, interpretation: str):
         """Populate row for time-window engine."""
         # Column order: Match ID, Window Start, Window End, Score, Interpretation, 
-        #               Feather Count, Time Spread, Semantic Value, Application, File Path
+        # Feather Count, Time Spread, Semantic Value, Application, File Path
         self.setItem(row, 0, QTableWidgetItem(match.match_id[:8]))
         self.setItem(row, 1, QTableWidgetItem(self._format_timestamp(match.timestamp)))
         
         # Window End - calculate from timestamp + time_spread
-        window_end = match.timestamp  # Simplified - same as start for now
+        window_end = match.timestamp # Simplified - same as start for now
         self.setItem(row, 2, QTableWidgetItem(self._format_timestamp(window_end)))
         
         self.setItem(row, 3, QTableWidgetItem(f"{score_value:.2f}"))
@@ -335,7 +335,7 @@ class SimpleResultsTableWidget(QTableWidget):
                                 semantic_value: str, score_value: float, interpretation: str):
         """Populate row for identity-based engine."""
         # Column order: Match ID, Identity Value, Identity Type, Semantic Value,
-        #               Score, Interpretation, Feather Count, First Seen, Last Seen, Application
+        # Score, Interpretation, Feather Count, First Seen, Last Seen, Application
         self.setItem(row, 0, QTableWidgetItem(match.match_id[:8]))
         
         # Identity Value - use matched_application or matched_file_path
@@ -485,9 +485,9 @@ class ResultTab(QWidget):
     """
     
     # Signals
-    tab_state_changed = pyqtSignal(str, dict)  # tab_id, state_data
-    match_selected = pyqtSignal(str, dict)  # tab_id, match_data
-    export_requested = pyqtSignal(str, dict)  # tab_id, export_options
+    tab_state_changed = pyqtSignal(str, dict) # tab_id, state_data
+    match_selected = pyqtSignal(str, dict) # tab_id, match_data
+    export_requested = pyqtSignal(str, dict) # tab_id, export_options
     
     def __init__(self, tab_state: TabState, engine_type: str = "time_based", parent=None):
         """
@@ -891,7 +891,7 @@ class ResultTab(QWidget):
             'include_semantic_mappings': True,
             'include_scoring_configuration': True,
             'include_filter_state': True,
-            'format': 'json'  # Default format
+            'format': 'json' # Default format
         }
         
         self.export_requested.emit(self.tab_state.tab_id, export_options)
@@ -995,9 +995,9 @@ class ResultsTabWidget(QWidget):
     ]
     
     # Signals
-    tab_state_changed = pyqtSignal(str, dict)  # tab_id, state_data
-    match_selected = pyqtSignal(str, dict)  # tab_id, match_data
-    export_requested = pyqtSignal(str, dict)  # tab_id, export_options
+    tab_state_changed = pyqtSignal(str, dict) # tab_id, state_data
+    match_selected = pyqtSignal(str, dict) # tab_id, match_data
+    export_requested = pyqtSignal(str, dict) # tab_id, export_options
     
     def __init__(self, parent=None):
         """Initialize results tab widget."""
@@ -1319,7 +1319,7 @@ class ResultsTabWidget(QWidget):
             invalid = stats.get('identities_filtered', stats.get('invalid_identities', 0))
             invalid_item = QTableWidgetItem(f"{invalid:,}")
             if invalid > 0:
-                invalid_item.setForeground(QColor("#F44336"))  # Red for invalid
+                invalid_item.setForeground(QColor("#F44336")) # Red for invalid
             self.feather_stats_table.setItem(row, 3, invalid_item)
             total_invalid += invalid
             
@@ -1467,9 +1467,9 @@ class ResultsTabWidget(QWidget):
         """Generate a descriptive tab label."""
         # Choose icon based on engine type
         if self.engine_type == "identity_based":
-            icon = "🔷"
+            icon = ""
         else:
-            icon = "⏱️"
+            icon = ""
         
         # Include match count
         match_count = len(result.matches)
@@ -1491,7 +1491,7 @@ class ResultsTabWidget(QWidget):
     
     def _close_tab(self, index: int):
         """Close a tab and clean up its state."""
-        if index == 0:  # Don't close summary tab
+        if index == 0: # Don't close summary tab
             return
         
         widget = self.tab_widget.widget(index)
@@ -1718,7 +1718,7 @@ class ResultsTabWidget(QWidget):
             return result_sets
         
         # Look for timestamped subdirectories or direct result files
-        for item in sorted(base_path.iterdir(), reverse=True):  # Most recent first
+        for item in sorted(base_path.iterdir(), reverse=True): # Most recent first
             if item.is_dir():
                 # Check for pipeline_summary.json
                 summary_file = item / "pipeline_summary.json"
@@ -1796,7 +1796,7 @@ class ResultsTabWidget(QWidget):
         """
         # Handle None input
         if output_dir is None:
-            print("❌ No output directory specified")
+            print("[ERROR] No output directory specified")
             return
         
         output_path = Path(output_dir)
@@ -1882,16 +1882,16 @@ class ResultsTabWidget(QWidget):
                         self.add_result_tab(result.wing_name, result)
                         loaded_count += 1
                         
-                        print(f"[ResultsTabWidget] ✓ Loaded {result.wing_name}: {len(result.matches):,} matches")
+                        print(f"[ResultsTabWidget] [OK] Loaded {result.wing_name}: {len(result.matches):,} matches")
                         
                     except Exception as e:
                         error_count += 1
-                        print(f"[ResultsTabWidget] ✗ Error processing result {result.wing_name}: {e}")
+                        print(f"[ResultsTabWidget] [FAIL] Error processing result {result.wing_name}: {e}")
                 
-                print(f"[ResultsTabWidget] ✓ Successfully loaded {loaded_count} results from database")
+                print(f"[ResultsTabWidget] [OK] Successfully loaded {loaded_count} results from database")
                 
                 if error_count > 0:
-                    print(f"[ResultsTabWidget] ⚠ {error_count} results had errors")
+                    print(f"[ResultsTabWidget] [WARN] {error_count} results had errors")
                 
                 # Update summary
                 self._update_summary()

@@ -125,7 +125,7 @@ class CorrelationIntegration:
         Example:
             >>> from correlation_engine.integration.correlation_integration import CorrelationIntegration
             >>> integration = CorrelationIntegration(crow_eye_ui)
-            >>> print(integration.config_manager)  # None or ConfigurationManager instance
+            >>> print(integration.config_manager) # None or ConfigurationManager instance
         
         Notes:
             - Configuration Manager is optional but provides enhanced functionality
@@ -160,10 +160,10 @@ class CorrelationIntegration:
         Directory Structure Created:
             case_root/
             └── Correlation/
-                ├── feathers/      (Normalized forensic data)
-                ├── wings/         (Correlation rules)
-                ├── pipelines/     (Analysis workflows)
-                └── results/       (Correlation results)
+                ├── feathers/ (Normalized forensic data)
+                ├── wings/ (Correlation rules)
+                ├── pipelines/ (Analysis workflows)
+                └── results/ (Correlation results)
         
         Case Initialization:
             - Copies default wings to case directory
@@ -191,7 +191,7 @@ class CorrelationIntegration:
         Example:
             >>> # From Crow-Eye correlation button click handler
             >>> def on_correlation_button_clicked(self):
-            ...     self.correlation_integration.show_correlation_dialog()
+            ... self.correlation_integration.show_correlation_dialog()
         
         Notes:
             - Requires case to be loaded in Crow-Eye (case_paths must be set)
@@ -238,20 +238,20 @@ class CorrelationIntegration:
                     init_result = CaseInitializer.initialize_case(Path(case_root))
                     
                     if init_result.success:
-                        print(f"[Correlation] ✓ Case initialization successful")
-                        print(f"[Correlation]   Wings copied: {len(init_result.wings_copied)}")
-                        print(f"[Correlation]   Feather configs generated: {len(init_result.feather_configs_generated)}")
+                        print(f"[Correlation] [OK] Case initialization successful")
+                        print(f"[Correlation] Wings copied: {len(init_result.wings_copied)}")
+                        print(f"[Correlation] Feather configs generated: {len(init_result.feather_configs_generated)}")
                         if init_result.pipeline_created:
-                            print(f"[Correlation]   Pipeline created: {init_result.pipeline_created.name}")
+                            print(f"[Correlation] Pipeline created: {init_result.pipeline_created.name}")
                     else:
-                        print(f"[Correlation] ⚠ Case initialization had errors:")
+                        print(f"[Correlation] [WARN] Case initialization had errors:")
                         for error in init_result.errors:
-                            print(f"[Correlation]     - {error}")
+                            print(f"[Correlation] - {error}")
                     
                     if init_result.has_warnings():
-                        print(f"[Correlation] ⚠ Warnings during initialization:")
+                        print(f"[Correlation] [WARN] Warnings during initialization:")
                         for warning in init_result.warnings:
-                            print(f"[Correlation]     - {warning}")
+                            print(f"[Correlation] - {warning}")
                             
                 except Exception as e:
                     print(f"[Correlation] Error during case initialization: {e}")
@@ -328,10 +328,10 @@ class CorrelationIntegration:
                     self.correlation_window.settings.setValue('last_directory', correlation_dir)
 
                 print(f"[Correlation] Configured directories:")
-                print(f"  - Feathers: {feathers_dir}")
-                print(f"  - Wings: {wings_dir}")
-                print(f"  - Pipelines: {pipelines_dir}")
-                print(f"  - Results: {results_dir}")
+                print(f" - Feathers: {feathers_dir}")
+                print(f" - Wings: {wings_dir}")
+                print(f" - Pipelines: {pipelines_dir}")
+                print(f" - Results: {results_dir}")
             
             # Show the window
             self.correlation_window.show()

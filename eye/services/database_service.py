@@ -10,6 +10,7 @@ with multiple layers of security enforcement:
 
 """
 
+import difflib
 import logging
 import re
 import sqlite3
@@ -58,7 +59,11 @@ class ForensicDatabaseService:
         self.case_directory = Path(case_directory)
         self.db_manager = DatabaseManager(case_directory)
         self.logger = logging.getLogger(self.__class__.__name__)
-        
+        # Cache of successfully discovered schemas, keyed by (db, table_or_None),
+        # so a learned schema is never re-discovered (and can serve as a fallback
+        # if a later live fetch fails).
+        self._schema_cache: Dict[tuple, Dict[str, Any]] = {}
+
         # Validate case directory
         if not self.case_directory.exists():
             self.logger.warning(f"Case directory does not exist: {self.case_directory}")
@@ -79,33 +84,100 @@ class ForensicDatabaseService:
             Read-only SQLite connection, or None if connection fails
             
         """
-        # Use DatabaseManager to establish connection
-        if not self.db_manager.connect(database_name):
-            self.logger.error(f"Failed to connect to database: {database_name}")
-            return None
-        
-        # Get the connection from DatabaseManager
-        conn = self.db_manager.connections.get(database_name)
-        if conn is None:
-            self.logger.error(f"Connection not found for database: {database_name}")
-            return None
-        
         try:
-            # Enforce read-only mode with PRAGMA
-            conn.execute("PRAGMA query_only = ON")
-            self.logger.debug(f"Read-only PRAGMA enforced for: {database_name}")
-            return conn
-            
-        except sqlite3.Error as e:
-            self.logger.error(f"Error setting read-only PRAGMA for {database_name}: {e}")
+            return self._open_ro(database_name)
+        except Exception as e:
+            self.logger.error(f"Failed to open read-only connection to {database_name}: {e}")
             return None
-    
+
+    # ------------------------------------------------------------------
+    # Thread-safe read-only access
+    #
+    # The Eye runs every query in a fresh QueryWorker QThread, so it must NOT
+    # reuse the host db_manager's cached connections (created on another thread)
+    # — that raises "SQLite objects created in a thread can only be used in that
+    # same thread". Instead we open a short-lived read-only connection in the
+    # CALLING thread for each operation. db_manager is used only to resolve the
+    # file path. check_same_thread=False is belt-and-suspenders (queries are
+    # serialized per turn anyway).
+    # ------------------------------------------------------------------
+    def _resolve_db_path(self, database_name: str) -> Optional[Path]:
+        """Resolve a database name to its on-disk file path."""
+        try:
+            p = self.case_directory / database_name
+            if p.exists():
+                return p
+        except Exception:
+            pass
+        try:
+            resolved = getattr(self.db_manager, "resolved_paths", {}) or {}
+            rp = resolved.get(database_name)
+            if rp and Path(rp).exists():
+                return Path(rp)
+        except Exception:
+            pass
+        try:
+            for d in self.discover_databases():
+                if d.get("name") == database_name and d.get("path") and Path(d["path"]).exists():
+                    return Path(d["path"])
+        except Exception:
+            pass
+        return None
+
+    def _open_ro(self, database_name: str) -> sqlite3.Connection:
+        """Open a fresh read-only SQLite connection in the current thread."""
+        path = self._resolve_db_path(database_name)
+        if path is None:
+            raise FileNotFoundError(f"Database not found: {database_name}")
+        conn = sqlite3.connect(
+            f"file:{path.as_posix()}?mode=ro", uri=True,
+            check_same_thread=False, timeout=30.0,
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA query_only = ON")
+        except sqlite3.Error:
+            pass
+        return conn
+
+    def _get_tables_safe(self, database_name: str) -> List[str]:
+        """List user tables via a per-call read-only connection (thread-safe)."""
+        try:
+            conn = self._open_ro(database_name)
+        except Exception:
+            return []
+        try:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+            return [r[0] for r in cur.fetchall()]
+        except Exception:
+            return []
+        finally:
+            conn.close()
+
+    def _get_columns_safe(self, database_name: str, table: str) -> List[str]:
+        """List a table's columns via a per-call read-only connection."""
+        try:
+            conn = self._open_ro(database_name)
+        except Exception:
+            return []
+        try:
+            cur = conn.execute(f'PRAGMA table_info("{table}")')
+            return [r[1] for r in cur.fetchall()]
+        except Exception:
+            return []
+        finally:
+            conn.close()
+
     def execute_query(
         self,
         database_name: str,
         sql_query: str,
         params: Tuple = (),
-        timeout: Optional[float] = 30.0
+        timeout: Optional[float] = 30.0,
+        _is_heal_retry: bool = False
     ) -> Dict[str, Any]:
         """
         Execute a SQL query with read-only validation.
@@ -145,45 +217,52 @@ class ForensicDatabaseService:
             }
         
         try:
-            # Ensure database is connected
-            if not self.db_manager.connect(database_name):
-                error_msg = f"Failed to connect to database: {database_name}"
-                return {
-                    "success": False,
-                    "data": [],
-                    "row_count": 0,
-                    "error": error_msg
-                }
+            conn = self._open_ro(database_name)
+        except Exception as e:
+            return {
+                "success": False,
+                "data": [],
+                "row_count": 0,
+                "error": f"Failed to connect to database: {database_name} ({e})",
+            }
 
-            # Execute query through DatabaseManager
-            results = self.db_manager.execute_query(
-                database_name=database_name,
-                query=sql_query,
-                params=params,
-                timeout=timeout
-            )
-            
+        try:
+            cur = conn.execute(sql_query, params)
+            rows = [dict(r) for r in cur.fetchall()]
+            columns = [d[0] for d in cur.description] if cur.description else []
+
             self.logger.info(
                 f"Query executed successfully on {database_name}: "
-                f"{len(results)} rows returned"
+                f"{len(rows)} rows returned"
             )
-            
+
             return {
                 "success": True,
-                "data": results,
-                "row_count": len(results),
+                "data": rows,
+                "row_count": len(rows),
+                "columns": columns,
                 "error": None,
-                "database_name": database_name
+                "database_name": database_name,
+                "sql_query": sql_query,
             }
-            
+
         except Exception as e:
             error_msg = str(e)
-            # Detect common schema errors
-            if "no such column" in error_msg.lower():
+            low = error_msg.lower()
+
+            # ---- Schema self-heal: discover the real schema and either safely
+            # auto-retry an unambiguous near-match, or hand the model the tables/
+            # columns it needs so it corrects itself instead of looping. ----
+            if "no such table" in low and not _is_heal_retry:
+                healed = self._self_heal_missing_table(
+                    database_name, sql_query, error_msg, params, timeout
+                )
+                if healed is not None:
+                    return healed
+            elif "no such column" in low:
                 self.logger.warning(f"Schema mismatch on {database_name}: {error_msg}")
-            elif "no such table" in error_msg.lower():
-                self.logger.warning(f"Table missing in {database_name}: {error_msg}")
-            
+                return self._self_heal_missing_column(database_name, sql_query, error_msg)
+
             self.logger.error(f"Error executing query on {database_name}: {e}")
             return {
                 "success": False,
@@ -191,6 +270,127 @@ class ForensicDatabaseService:
                 "row_count": 0,
                 "error": f"Database Error: {error_msg}"
             }
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # Sentinel marker name extracted from common SQLite errors, e.g.
+    # "no such table: security_event" -> "security_event".
+    @staticmethod
+    def _identifier_after(error_msg: str, marker: str) -> str:
+        low = error_msg.lower()
+        idx = low.find(marker.lower())
+        if idx == -1:
+            return ""
+        tail = error_msg[idx + len(marker):].strip()
+        # The bad identifier is the first token (may be schema.table).
+        token = tail.split()[0] if tail else ""
+        return token.strip().strip('"').strip("'").split(".")[-1]
+
+    @staticmethod
+    def _tables_in_query(sql_query: str) -> List[str]:
+        """Best-effort extraction of table names from FROM / JOIN clauses."""
+        names = re.findall(
+            r'(?:FROM|JOIN)\s+["\'`]?([A-Za-z_][A-Za-z0-9_]*)["\'`]?',
+            sql_query or "",
+            flags=re.IGNORECASE,
+        )
+        seen, out = set(), []
+        for n in names:
+            if n.lower() not in seen:
+                seen.add(n.lower())
+                out.append(n)
+        return out
+
+    def _self_heal_missing_table(
+        self, database_name, sql_query, error_msg, params, timeout
+    ) -> Optional[Dict[str, Any]]:
+        """Auto-discover tables for a 'no such table' error. Returns a result dict
+        (auto-retried rows or an enriched error), or None to fall through."""
+        bad = self._identifier_after(error_msg, "no such table:")
+        available = self._get_tables_safe(database_name)
+        self.logger.warning(
+            f"Table '{bad}' missing in {database_name}; self-heal among {len(available)} tables."
+        )
+
+        # Guarded transparent auto-retry: exactly one strong match (e.g.
+        # 'security_event' -> 'security_events'). Never silently swaps tables.
+        if bad and available:
+            scored = sorted(
+                ((difflib.SequenceMatcher(None, bad.lower(), t.lower()).ratio(), t)
+                 for t in available),
+                reverse=True,
+            )
+            strong = [t for r, t in scored if r >= 0.85]
+            if len(strong) == 1 and strong[0] != bad:
+                used = strong[0]
+                healed_sql = re.sub(
+                    rf'\b{re.escape(bad)}\b', f'"{used}"', sql_query
+                )
+                if healed_sql != sql_query:
+                    self.logger.info(
+                        f"Self-heal: retrying query with table '{used}' (was '{bad}')."
+                    )
+                    retry = self.execute_query(
+                        database_name, healed_sql, params, timeout, _is_heal_retry=True
+                    )
+                    if retry.get("success"):
+                        retry["self_healed"] = True
+                        retry["note"] = (
+                            f"Table '{bad}' was not found; automatically used the closest "
+                            f"match '{used}'."
+                        )
+                        return retry
+
+        suggestions = difflib.get_close_matches(bad, available, n=3, cutoff=0.5) if bad else []
+        # Columns of the top suggestion(s) so the model can rewrite in one step.
+        suggested_schema = {}
+        for t in suggestions[:2]:
+            cols = self._get_columns_safe(database_name, t)
+            if cols:
+                suggested_schema[t] = cols
+        return {
+            "success": False,
+            "data": [],
+            "row_count": 0,
+            "error": f"Database Error: {error_msg}",
+            "available_tables": available,
+            "did_you_mean": suggestions,
+            "suggested_schema": suggested_schema,
+            "hint": (
+                f"Table '{bad}' does not exist in {database_name}. Re-issue query_database "
+                f"using one of available_tables (see did_you_mean / suggested_schema). "
+                f"Do not repeat the same failing query."
+            ),
+        }
+
+    def _self_heal_missing_column(self, database_name, sql_query, error_msg) -> Dict[str, Any]:
+        """Enrich a 'no such column' error with the referenced tables' columns."""
+        bad = self._identifier_after(error_msg, "no such column:")
+        tables = self._tables_in_query(sql_query)
+        if not tables:
+            tables = self._get_tables_safe(database_name)
+        schema, all_cols = {}, []
+        for t in tables:
+            cols = self._get_columns_safe(database_name, t)
+            if cols:
+                schema[t] = cols
+                all_cols.extend(cols)
+        suggestions = difflib.get_close_matches(bad, all_cols, n=3, cutoff=0.5) if bad else []
+        return {
+            "success": False,
+            "data": [],
+            "row_count": 0,
+            "error": f"Database Error: {error_msg}",
+            "schema": schema,
+            "did_you_mean": suggestions,
+            "hint": (
+                f"Column '{bad}' does not exist. Use a real column from schema "
+                f"(see did_you_mean) and retry. Do not repeat the same failing query."
+            ),
+        }
     
     def get_schema(
         self,
@@ -218,82 +418,99 @@ class ForensicDatabaseService:
                 - error: Error message if retrieval failed
                 
         """
+        # Normalize "all tables" sentinels the model commonly invents (the tool
+        # uses get_schema to *discover* tables, so models pass "_all_"/"*"/etc.
+        # to mean "list everything"). Treat those as "no specific table".
+        if table_name is not None and str(table_name).strip().lower() in (
+            "", "_all_", "__all__", "all", "*", "%", "none", "null"
+        ):
+            table_name = None
+
+        cache_key = (database_name, table_name)
         try:
-            # Ensure connection exists
-            if not self.db_manager.connect(database_name):
-                return {
-                    "success": False,
-                    "database": database_name,
-                    "error": f"Failed to connect to database: {database_name}"
-                }
-            
-            # Get tables
+            conn = self._open_ro(database_name)
+        except Exception as e:
+            # Live fetch failed — serve a cached schema if we learned it earlier
+            # (avoids re-discovering / looping on a transient error).
+            cached = self._schema_cache.get(cache_key) or self._schema_cache.get((database_name, None))
+            if cached:
+                served = dict(cached)
+                served["from_cache"] = True
+                return served
+            self.logger.error(f"Error getting schema for {database_name}: {e}")
+            return {"success": False, "database": database_name,
+                    "error": f"Schema retrieval failed: {e}"}
+
+        try:
+            all_tables = [
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).fetchall()
+            ]
+
             if table_name:
+                if table_name not in all_tables:
+                    return {
+                        "success": False,
+                        "database": database_name,
+                        "error": f"Table '{table_name}' not found in {database_name}.",
+                        "available_tables": all_tables,
+                        "did_you_mean": difflib.get_close_matches(
+                            table_name, all_tables, n=3, cutoff=0.5
+                        ),
+                    }
                 tables = [table_name]
             else:
-                tables = self.db_manager.get_tables(database_name)
-            
+                tables = all_tables
+
             if not tables:
-                return {
-                    "success": False,
-                    "database": database_name,
-                    "error": f"No tables found in database: {database_name}"
-                }
-            
-            # Build schema information
-            schema = {}
-            sample_data = {}
-            row_counts = {}
-            
+                return {"success": False, "database": database_name,
+                        "error": f"No tables found in database: {database_name}"}
+
+            schema, sample_data, row_counts = {}, {}, {}
             for table in tables:
-                # Get columns
-                columns = self.db_manager.get_columns(database_name, table)
-                schema[table] = columns
-                
-                # Get row count
+                schema[table] = [r[1] for r in conn.execute(f'PRAGMA table_info("{table}")').fetchall()]
                 try:
-                    row_count = self.db_manager.get_row_count(database_name, table)
-                    row_counts[table] = row_count
+                    row_counts[table] = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
                 except Exception as e:
                     self.logger.warning(f"Could not get row count for {table}: {e}")
                     row_counts[table] = 0
-                
-                # Get sample data (first 3 rows)
                 try:
-                    # Escape table name for safety
-                    sample_query = f'SELECT * FROM "{table}" LIMIT 3'
-                    sample_rows = self.db_manager.execute_query(
-                        database_name=database_name,
-                        query=sample_query
-                    )
-                    sample_data[table] = sample_rows
+                    cur = conn.execute(f'SELECT * FROM "{table}" LIMIT 3')
+                    sample_data[table] = [dict(r) for r in cur.fetchall()]
                 except Exception as e:
                     self.logger.warning(f"Could not get sample data for {table}: {e}")
                     sample_data[table] = []
-            
-            self.logger.info(
-                f"Schema retrieved for {database_name}: "
-                f"{len(tables)} tables"
-            )
-            
-            return {
+
+            self.logger.info(f"Schema retrieved for {database_name}: {len(tables)} tables")
+            result = {
                 "success": True,
                 "database": database_name,
-                "tables": tables if not table_name else None,
+                "tables": all_tables if not table_name else None,
+                "all_tables": all_tables,  # always present (multi-table awareness)
                 "schema": schema,
                 "sample_data": sample_data,
                 "row_counts": row_counts,
-                "error": None
+                "error": None,
             }
-            
+            self._schema_cache[cache_key] = result
+            return result
+
         except Exception as e:
             error_msg = f"Schema retrieval failed: {str(e)}"
             self.logger.error(f"Error getting schema for {database_name}: {e}")
-            return {
-                "success": False,
-                "database": database_name,
-                "error": error_msg
-            }
+            cached = self._schema_cache.get(cache_key) or self._schema_cache.get((database_name, None))
+            if cached:
+                served = dict(cached)
+                served["from_cache"] = True
+                return served
+            return {"success": False, "database": database_name, "error": error_msg}
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
     
     def _is_readonly_query(self, sql: str) -> bool:
         """

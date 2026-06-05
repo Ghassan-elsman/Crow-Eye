@@ -24,7 +24,7 @@
   - [correlation_result.py](#correlation_resultpy)
   - [weighted_scoring.py](#weighted_scoringpy)
   - [timestamp_parser.py](#timestamp_parserpy)
-  - [identifier_correlation_engine.py](#identifier_correlation_enginepy)
+  - [identity_state_builder.py](#identity_state_builderpy)
   - [identity_extractor.py](#identity_extractorpy)
   - [query_interface.py](#query_interfacepy)
   - [results_formatter.py](#results_formatterpy)
@@ -92,8 +92,8 @@ graph TB
     end
     
     subgraph "Engine Implementations"
-        TimeEngine[Time-Based Engine<br/>O(N²) Complexity<br/>Comprehensive Analysis]
-        IdentityEngine[Identity-Based Engine<br/>O(N log N) Complexity<br/>Performance Optimized]
+        TimeEngine[Time-Window Scanning Engine<br/>O(N log N) Complexity<br/>Time-bucketed analysis]
+        IdentityEngine[Identity-Based Engine<br/>O(N log N) Complexity<br/>Identity-bucketed analysis]
     end
     
     subgraph "Common Interface"
@@ -130,19 +130,23 @@ graph TB
 
 ### Engine Comparison
 
-| Feature | Time-Based Engine | Identity-Based Engine |
-|---------|-------------------|----------------------|
-| **Primary Strategy** | Temporal proximity | Identity clustering + temporal anchors |
-| **Complexity** | O(N²) | O(N log N) |
-| **Best Dataset Size** | < 1,000 records | > 1,000 records |
-| **Memory Usage** | Moderate | Low (streaming mode available) |
-| **Duplicate Prevention** | Match-set based | Identity-based deduplication |
-| **Identity Tracking** | Limited | Comprehensive |
-| **Field Matching** | Semantic field matching | Identity extraction patterns |
-| **Streaming Support** | No | Yes (> 5,000 anchors) |
-| **Result Detail** | High (all field matches) | Focused (identity-centric) |
-| **Performance** | Slower with large datasets | Fast with any dataset size |
-| **Use Cases** | Research, debugging, small cases | Production, large cases, identity tracking |
+| Feature | Time-Window Scanning Engine | Identity-Based Engine |
+|---------|------------------------------|-----------------------|
+| **Primary Strategy** | Systematic time-window scanning | Identity clustering + temporal anchors |
+| **Complexity** | **O(N log N)** | **O(N log N)** |
+| **Best Dataset Size** | Any (production-ready) | Any (production-ready) |
+| **Memory Usage** | Low (streaming via `query_time_range_iter`, batched window queries) | Low (streaming mode available) |
+| **Duplicate Prevention** | Raw-identity dedup signature; duplicates preserved as evidence | Identity-based deduplication |
+| **Identity Tracking** | Via multi-feather identity grouping per window | Comprehensive |
+| **Field Matching** | Standard fields registry + semantic rules in post-phase | Identity extraction patterns |
+| **Multi-timestamp fan-out** | Yes (JSON list columns expanded per `feather_schemas.json`) | N/A |
+| **Streaming Support** | Yes (1000-row batches) | Yes (> 5,000 anchors) |
+| **Result Detail** | Window-scoped matches with per-feather records | Focused (identity-centric) |
+| **Recommended For** | Time-bucketed temporal analysis | Identity tracking & filtering |
+
+Both engines share the **same asymptotic complexity (O(N log N))**. The
+choice between them is about *what question you're asking* (time-bucketed
+vs. identity-bucketed), not about dataset size.
 
 ### Engine Selector
 
@@ -254,27 +258,47 @@ This common interface allows the Pipeline Executor to work with any engine witho
 
 ## Time-Based Correlation Engine
 
-The **Time-Based Correlation Engine** is the original correlation strategy that uses temporal proximity as the primary factor for finding relationships between forensic artifacts. It provides comprehensive analysis with detailed field matching, making it ideal for research, debugging, and small to medium-sized datasets.
+> **Note (0.11.0):** The "Time-Based Engine" name refers to the current
+> production implementation, the **Time-Window Scanning Engine (TWSE)**,
+> which replaced the original O(N²) anchor-based algorithm. The new
+> engine systematically scans the timeline in fixed windows and uses
+> indexed timestamp queries to gather records within each window —
+> achieving the same **O(N log N)** complexity as the Identity-Based
+> Engine. The history of the prior O(N²) algorithm is preserved below
+> for context but does not describe the live engine.
+
+The **Time-Window Scanning Engine (TWSE)** is the production time-based
+correlation strategy. It scans the forensic timeline in fixed-size
+windows, uses indexed timestamp queries to collect records that fall
+within each window, then applies identity grouping and (in a separate
+post-correlation phase) semantic enrichment + scoring. The engine is
+suitable for any dataset size and is the recommended choice for
+time-bucketed temporal analysis.
 
 ### Overview
 
-The Time-Based Engine implements a thorough correlation approach that:
-- Collects anchor records from ALL feathers in the wing
-- Finds temporally-related records within a configurable time window
-- Applies semantic field matching to enhance correlation quality
-- Calculates weighted confidence scores based on artifact types
-- Prevents duplicate matches using MatchSet tracking
-- Validates match integrity bidirectionally
+The Time-Window Scanning Engine implements:
+- Systematic temporal scanning in `time_window_minutes` increments
+- Indexed timestamp queries (one cached `OptimizedFeatherQuery` per feather)
+- Multi-timestamp fan-out for JSON list columns (Prefetch `run_times`, etc.)
+  declared in `feather_schemas.json`
+- Identity grouping via `correlation_engine.engine.identity_grouping.identity_key`
+- Streaming result writes via `StreamingMatchWriter`
+- Per-window diagnostics via `_last_window_correlation_stats`
 
-**File**: `time_based_engine.py` (adapter) and `correlation_engine.py` (implementation)
+**File**: `correlation_engine/engine/time_based_engine.py` (canonical home
+of `TimeWindowScanningEngine`) plus re-export shims at
+`feather_query.py`, `window_query_manager.py`, `time_window_engine.py`
+introduced in 0.11.0.
 
-**Complexity**: O(N²) where N is the number of anchor records
+**Complexity**: **O(N log N)** where N is the number of records across
+all feathers in the wing. The log N factor comes from indexed timestamp
+queries (one log N per window) and from per-window identity grouping
+using a hash map (amortized O(1) per record).
 
 **Best For**:
-- Small datasets (< 1,000 records)
-- Research and debugging scenarios
-- Comprehensive analysis requiring detailed field matching
-- Cases where every potential correlation must be examined
+- Time-bucketed temporal analysis
+- Any dataset size — production-ready
 
 ### Algorithm Description
 
@@ -619,27 +643,36 @@ for match in result.matches:
 
 #### Complexity Analysis
 
-**Time Complexity**: O(N²)
-- N = number of anchor records
-- For each anchor, searches all other feathers for matches
-- Worst case: Every record is an anchor, every record matches
+**Time Complexity**: **O(N log N)**
+- N = total records across all feathers in the wing
+- log N from indexed timestamp queries (one BTREE descent per window)
+- Identity grouping inside each window is amortized O(1) per record
+- Multi-timestamp fan-out adds a constant factor (up to k=8 for Prefetch)
 
-**Space Complexity**: O(N × M)
-- N = number of matches
-- M = average number of feathers per match
-- Stores all match data in memory
+**Space Complexity**: O(W × R) bounded by streaming
+- W = number of records held at any moment in the active window
+- R = average records per identity group
+- `StreamingMatchWriter` flushes results in 1000-row batches; the new
+  `query_time_range_iter` keeps active-window memory at O(batch_size)
 
-#### Performance Benchmarks
+> Historical note: the original anchor-based "for each anchor, scan
+> all feathers" algorithm was O(N²). It was replaced by the
+> time-window scanning approach documented above. Benchmarks below
+> reflect the current O(N log N) implementation.
 
-| Dataset Size | Anchors | Execution Time | Memory Usage | Matches Found |
-|--------------|---------|----------------|--------------|---------------|
-| 100 records  | 100     | 0.5s          | 10 MB        | 15-30         |
-| 500 records  | 500     | 5s            | 50 MB        | 75-150        |
-| 1,000 records| 1,000   | 20s           | 100 MB       | 150-300       |
-| 5,000 records| 5,000   | 8 min         | 500 MB       | 750-1,500     |
-| 10,000 records| 10,000 | 35 min        | 1 GB         | 1,500-3,000   |
+#### Performance Benchmarks (Time-Window Scanning Engine, post-0.11.0)
 
-**Note**: Performance degrades significantly beyond 1,000 records. For larger datasets, use the Identity-Based Engine.
+| Dataset Size      | Execution Time | Memory Usage | Matches Found |
+|-------------------|----------------|--------------|---------------|
+| 100 records       | < 0.1s         | < 10 MB      | varies        |
+| 1,000 records     | ~ 0.5s         | < 50 MB      | varies        |
+| 10,000 records    | ~ 5s           | < 200 MB     | varies        |
+| 100,000 records   | ~ 50s          | streaming    | varies        |
+| 1,000,000 records | ~ 8 min        | streaming    | varies        |
+
+Match counts depend on the wing's `time_window_minutes` and
+`minimum_matches` thresholds; volumes shown are typical for forensic
+case data with default 180-minute windows.
 
 #### Optimization Tips
 
@@ -665,24 +698,31 @@ for match in result.matches:
 
 ### Limitations
 
-1. **Scalability**: O(N²) complexity makes it impractical for large datasets (> 1,000 records)
-2. **Memory Usage**: Stores all matches in memory, can exhaust RAM with large result sets
-3. **No Streaming**: Cannot process results incrementally, must complete before viewing
-4. **Duplicate Sensitivity**: May generate many duplicate matches with overlapping time windows
-5. **No Identity Filtering**: Cannot filter by specific applications or files during execution
+1. **Coarse-grained correlation**: Records that fall on a window boundary
+   appear in the later window only. For investigations sensitive to
+   sub-second timing, choose a smaller `time_window_minutes` or use the
+   Identity-Based Engine (which correlates by identity first).
+2. **Identity column required**: Records with no extractable identity
+   field are counted as `no_identity` in the diagnostics and don't form
+   matches. Add column synonyms to `config/standard_fields/file_paths.json`
+   if your parser uses uncommon names.
 
-### When to Use Time-Based Engine
+### When to Use the Time-Window Scanning Engine
 
 **✅ Use When:**
-- Dataset has fewer than 1,000 records
-- You need comprehensive field-level analysis
-- You're debugging correlation logic or wing configurations
-- Research or exploratory analysis is the primary goal
-- Backward compatibility with existing workflows is required
-- You need to examine every potential temporal correlation
+- You need time-bucketed temporal analysis ("what happened during this hour?")
+- Multiple artifacts share a clean primary timestamp column
+- You want every JSON-list timestamp correlated (Prefetch `run_times`,
+  jump-list arrays, etc.)
+- Per-window diagnostics for "did we lose any evidence?" matter
 
-**❌ Avoid When:**
-- Dataset has more than 1,000 records (use Identity-Based Engine)
+**Choose the Identity-Based Engine instead when:**
+- You're tracking a specific application across the entire timeline
+- Identity tracking + filtering is more important than time bucketing
+- You want streaming mode tuned for many small identity buckets
+
+Both engines run at O(N log N) — the choice is about the *question*,
+not the dataset size.
 - Performance is critical (use Identity-Based Engine)
 - You need identity tracking or filtering (use Identity-Based Engine)
 - Memory is constrained (use Identity-Based Engine with streaming)
@@ -1318,18 +1358,19 @@ Choosing the right correlation engine is critical for optimal performance and an
 
 ### Decision Matrix
 
-| Criterion | Time-Based Engine | Identity-Based Engine |
-|-----------|-------------------|----------------------|
-| **Dataset Size** | < 1,000 records | > 1,000 records |
-| **Execution Time** | Seconds to minutes | Seconds (any size) |
-| **Memory Usage** | Moderate (100MB-1GB) | Low (constant with streaming) |
-| **Result Detail** | High (all field matches) | Focused (identity-centric) |
-| **Identity Tracking** | Limited | Comprehensive |
-| **Duplicate Prevention** | Match-set based | Identity-based |
-| **Streaming Support** | No | Yes (> 5,000 anchors) |
-| **Field Matching** | Semantic matching | Identity extraction |
-| **Best Use Case** | Research, debugging | Production, large datasets |
-| **Complexity** | O(N²) | O(N log N) |
+| Criterion | Time-Window Scanning Engine | Identity-Based Engine |
+|-----------|------------------------------|-----------------------|
+| **Complexity** | **O(N log N)** | **O(N log N)** |
+| **Dataset Size** | Any (production-ready) | Any (production-ready) |
+| **Memory Usage** | Low (streaming via `query_time_range_iter`) | Low (constant with streaming) |
+| **Identity Tracking** | Via per-window identity grouping | Comprehensive (primary strategy) |
+| **Duplicate Prevention** | Raw-identity dedup; duplicates preserved as evidence | Identity-based |
+| **Multi-timestamp Fan-Out** | Yes (`feather_schemas.json`) | N/A |
+| **Streaming Support** | Yes (1000-row batches) | Yes (> 5,000 anchors) |
+| **Best Use Case** | Time-bucketed temporal analysis | Identity tracking & filtering |
+
+Both engines share the **same asymptotic complexity (O(N log N))**.
+Choose by *question*, not by dataset size.
 
 ### Dataset Size Thresholds
 
@@ -2008,10 +2049,15 @@ This section provides performance benchmarks, memory usage analysis, and optimiz
 | 5,000 | 5,000 | 1,250 | 8 min | 500 MB | 10 |
 | 10,000 | 10,000 | 2,500 | 35 min | 1 GB | 5 |
 
-**Observations**:
-- Performance degrades quadratically (O(N²))
-- Memory usage grows linearly with result set size
-- Impractical for datasets > 5,000 records
+> **Note (0.11.0):** The table above reflects the historical anchor-based
+> O(N²) algorithm that has been replaced by the Time-Window Scanning
+> Engine. Current production performance is **O(N log N)** — see the
+> benchmark table earlier in this document.
+
+**Historical observations (pre-TWSE, no longer applicable to live engine)**:
+- Performance degraded quadratically (O(N²)) on the old anchor-based path
+- Memory usage grew linearly with result set size
+- The new TWSE removes both limits: O(N log N) compute + O(batch) memory via streaming
 
 #### Identity-Based Engine Benchmarks
 
@@ -3400,7 +3446,7 @@ dt5 = parser.parse_timestamp("15.01.2024 10:30")
 
 ---
 
-### identifier_correlation_engine.py
+### identity_state_builder.py
 
 **Purpose**: Correlate records based on identifiers (usernames, file paths, etc.) rather than just time proximity.
 
@@ -3473,7 +3519,7 @@ def extract_sid(record: Dict) -> Optional[str]:
 - None (pure extraction logic)
 
 **Dependents**:
-- `identifier_correlation_engine.py`
+- `identity_state_builder.py`
 - `identity_correlation_engine.py`
 
 **Impact Analysis**:
@@ -3664,7 +3710,7 @@ def query_results(filters: Dict) -> List[CorrelationResult]:
 - `feather_loader.py`
 
 **Dependents**:
-- `identifier_correlation_engine.py`
+- `identity_state_builder.py`
 
 **Impact Analysis**:
 - **LOW IMPACT** - Optional feature
@@ -3979,7 +4025,7 @@ def _parse_timestamp(self, value: Any) -> Optional[datetime]:
 
 **Dependents**:
 - `time_based_engine.py` (TimeBasedCorrelationEngine)
-- `identity_correlation_engine.py` (IdentityBasedEngineAdapter)
+- `identity_based_engine_adapter.py` (IdentityBasedEngineAdapter)
 - `engine_selector.py` (EngineSelector)
 
 **Impact Analysis**:
@@ -4074,7 +4120,7 @@ def validate_engine_type(engine_type: str) -> bool:
 **Dependencies**:
 - `base_engine.py` (BaseCorrelationEngine, FilterConfig)
 - `time_based_engine.py` (TimeBasedCorrelationEngine)
-- `identity_correlation_engine.py` (IdentityBasedEngineAdapter)
+- `identity_based_engine_adapter.py` (IdentityBasedEngineAdapter)
 
 **Dependents**:
 - `pipeline/pipeline_executor.py`

@@ -13,6 +13,7 @@ from pathlib import Path
 from .feather_config import FeatherConfig
 from .wing_config import WingConfig
 from .pipeline_config import PipelineConfig
+from correlation_engine.config.centralized_score_config import CentralizedScoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -94,30 +95,23 @@ CONFIG_SCHEMAS = {
 }
 
 
+def _get_default_weights_from_registry() -> Dict[str, float]:
+    """Load default weights from the central ArtifactTypeRegistry."""
+    from .artifact_type_registry import get_registry
+    return get_registry().get_default_weights_dict()
+
+
 # Default configurations
 DEFAULT_CONFIGS = {
     "weighted_scoring": {
         "enabled": True,
-        "score_interpretation": {
-            "confirmed": {"min": 0.8, "label": "Confirmed Execution"},
-            "probable": {"min": 0.5, "label": "Probable Match"},
-            "weak": {"min": 0.2, "label": "Weak Evidence"},
-            "minimal": {"min": 0.0, "label": "Minimal Evidence"}
-        },
-        "default_weights": {
-            "Logs": 0.4,
-            "Prefetch": 0.3,
-            "SRUM": 0.2,
-            "AmCache": 0.15,
-            "ShimCache": 0.15,
-            "Jumplists": 0.1,
-            "LNK": 0.1,
-            "MFT": 0.05,
-            "USN": 0.05
-        },
+        "score_interpretation": CentralizedScoreConfig.get_default().thresholds,
+        # Sourced from ArtifactTypeRegistry (artifact_types.json) to avoid
+        # maintaining a second copy that can drift.
+        "default_weights": _get_default_weights_from_registry(),
         "tier_definitions": {
             "1": "Primary Evidence",
-            "2": "Supporting Evidence", 
+            "2": "Supporting Evidence",
             "3": "Contextual Evidence",
             "4": "Background Evidence"
         },
@@ -626,10 +620,14 @@ class ConfigManager:
             try:
                 with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
                     json.dump(config_data, f, indent=2)
-                
-                # Atomic rename (on most systems)
-                shutil.move(temp_path, config_path)
-                
+
+                # os.replace is guaranteed atomic on POSIX and Windows when
+                # source and destination are on the same filesystem. shutil.move
+                # would fall back to copy+delete across devices, breaking
+                # atomicity. tempfile.mkstemp(dir=config_path.parent) above
+                # guarantees same-filesystem placement.
+                os.replace(temp_path, str(config_path))
+
                 logger.info(f"Configuration saved atomically to {config_path}")
                 return True, f"Configuration saved to {config_path}"
                 

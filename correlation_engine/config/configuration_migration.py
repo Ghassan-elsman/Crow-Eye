@@ -31,7 +31,7 @@ class ConfigurationMigration:
         try:
             if not config_path.exists():
                 logger.info(f"Configuration file not found: {config_path}")
-                return True  # Nothing to migrate
+                return True # Nothing to migrate
             
             # Load existing configuration
             with open(config_path, 'r') as f:
@@ -113,7 +113,7 @@ class ConfigurationMigration:
         try:
             if not wing_config_path.exists():
                 logger.info(f"Wing configuration file not found: {wing_config_path}")
-                return True  # Nothing to migrate
+                return True # Nothing to migrate
             
             # Load existing configuration
             with open(wing_config_path, 'r') as f:
@@ -272,7 +272,7 @@ def migrate_on_startup(config_directory: str = "configs") -> bool:
             if results['failed'] > 0:
                 logger.warning(f"Migration completed with {results['failed']} failures")
                 for error in results['errors']:
-                    logger.error(f"  {error}")
+                    logger.error(f" {error}")
                 return False
             else:
                 logger.info("Configuration migration completed successfully")

@@ -57,15 +57,31 @@ class ContextWindowConfigManager:
             - token_budget
             - history_management
         """
-        # Try to load from eye_config.json first
+        # Start from the full preset so the returned config ALWAYS has the keys
+        # the dialog requires (max_total_tokens, token_budget.*, history_management.*).
+        base = self._get_preset_for_backend(backend)
+
+        # Overlay any stored context_window. The Eye-AI settings panel writes a
+        # PARTIAL context_window (e.g. only max_total_tokens + store_full_payload),
+        # so we deep-merge token_budget / history_management key-by-key instead of
+        # returning the partial dict verbatim (which would KeyError in the dialog).
         if self.eye_config_path.exists():
-            with open(self.eye_config_path, 'r') as f:
-                eye_config = json.load(f)
-                if "context_window" in eye_config:
-                    return eye_config["context_window"]
-        
-        # Fall back to preset
-        return self._get_preset_for_backend(backend)
+            try:
+                with open(self.eye_config_path, 'r') as f:
+                    eye_config = json.load(f)
+                stored = eye_config.get("context_window")
+            except Exception:
+                stored = None
+            if isinstance(stored, dict):
+                merged = dict(base)
+                for key, value in stored.items():
+                    if key in ("token_budget", "history_management") and isinstance(value, dict):
+                        merged[key] = {**base.get(key, {}), **value}
+                    else:
+                        merged[key] = value
+                return merged
+
+        return base
     
     def _get_preset_for_backend(self, backend: str) -> Dict[str, Any]:
         """
@@ -111,9 +127,17 @@ class ContextWindowConfigManager:
         else:
             eye_config = {}
         
-        # Update context_window section
-        eye_config["context_window"] = config
-        
+        # Merge into the existing context_window (don't replace it) so keys the
+        # Eye-AI settings panel owns — store_full_payload,
+        # sealed_payload_recent_uncompressed, evidence_preservation, … — survive
+        # a save from this advanced dialog.
+        existing = eye_config.get("context_window")
+        if isinstance(existing, dict):
+            existing.update(config)
+            eye_config["context_window"] = existing
+        else:
+            eye_config["context_window"] = config
+
         # Save back to file
         with open(self.eye_config_path, 'w') as f:
             json.dump(eye_config, f, indent=2)

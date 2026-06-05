@@ -1,0 +1,212 @@
+{
+  "config_name": "anti_forensics_correlation",
+  "wing_name": "Anti-Forensics & Evidence Tampering Correlation",
+  "wing_id": "default_wing_antiforensics_001",
+  "description": "Detects evidence that an actor attempted to remove forensic traces or tamper with logging on the host. Uses a tiered approach with audit-log clearance events (Security 1102 / System 104) and wiper-tool prefetch hits weighted highest, followed by mass-delete bursts in USN, RecycleBin context, and tampering with Defender / autostart / services as supporting context.",
+  "proves": "An actor attempted to remove forensic traces or tamper with logging",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-05-18T00:00:00Z",
+  "last_modified": "2026-05-18T00:00:00Z",
+  "version": "1.0",
+
+  "feathers": [
+    {
+      "feather_config_name": "SecurityLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SecurityLogs_CrowEyeFeather.db",
+      "artifact_type": "SecurityLogs",
+      "feather_id": "security_logs",
+      "weight": 0.35,
+      "tier": 1,
+      "tier_name": "Audit-log clearance evidence"
+    },
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.20,
+      "tier": 1,
+      "tier_name": "Wiper / tampering tool execution"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "USN delete-burst evidence"
+    },
+    {
+      "feather_config_name": "RecycleBin_CrowEyeFeather",
+      "feather_database_path": "feathers/RecycleBin_CrowEyeFeather.db",
+      "artifact_type": "RecycleBin",
+      "feather_id": "recyclebin",
+      "weight": 0.10,
+      "tier": 2,
+      "tier_name": "Recycle Bin context"
+    },
+    {
+      "feather_config_name": "SystemLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemLogs_CrowEyeFeather.db",
+      "artifact_type": "SystemLogs",
+      "feather_id": "system_logs",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "System-log audit context"
+    },
+    {
+      "feather_config_name": "ApplicationLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/ApplicationLogs_CrowEyeFeather.db",
+      "artifact_type": "ApplicationLogs",
+      "feather_id": "app_logs",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "Application-log audit context"
+    },
+    {
+      "feather_config_name": "SystemServices_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemServices_CrowEyeFeather.db",
+      "artifact_type": "SystemServices",
+      "feather_id": "services",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "Defender / logging service tamper"
+    },
+    {
+      "feather_config_name": "AutoStartPrograms_CrowEyeFeather",
+      "feather_database_path": "feathers/AutoStartPrograms_CrowEyeFeather.db",
+      "artifact_type": "AutoStartPrograms",
+      "feather_id": "autostart",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "Defender autostart tamper"
+    }
+  ],
+
+  "time_window_minutes": 180,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "1102,104",
+  "apply_to": "all",
+  "anchor_priority": [
+    "SecurityLogs",
+    "Prefetch",
+    "MFT",
+    "SystemLogs",
+    "ApplicationLogs",
+    "RecycleBin",
+    "SystemServices",
+    "AutoStartPrograms"
+  ],
+  "use_weighted_scoring": true,
+
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed":  { "min": 0.70, "label": "Confirmed Anti-Forensics" },
+      "probable":   { "min": 0.40, "label": "Probable Anti-Forensics" },
+      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
+      "not_proven": { "min": 0.00, "label": "Not Proven" }
+    }
+  },
+
+  "semantic_rules": [
+    {
+      "rule_id": "af_security_log_cleared",
+      "name": "Security Audit Log Cleared (1102)",
+      "semantic_value": "Security Log Cleared",
+      "description": "Security event 1102 — the audit log was cleared. Single loudest red flag.",
+      "conditions": [
+        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "1102" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "anti_forensics",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "af_system_log_cleared",
+      "name": "System Event Log Cleared (104)",
+      "semantic_value": "System Log Cleared",
+      "description": "System event 104 — a non-Security event log was cleared",
+      "conditions": [
+        { "feather_id": "system_logs", "field_name": "EventID", "operator": "equals", "value": "104" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "anti_forensics",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "af_wiper_tool_run",
+      "name": "Wiper Tool Executed",
+      "semantic_value": "Wiper Tool Run",
+      "description": "Prefetch evidence of a known wiping / log-cleanup tool (sdelete.exe, cipher.exe, wevtutil.exe, bcdedit.exe, fsutil.exe, eraser.exe, ccleaner.exe, etc.)",
+      "conditions": [
+        { "feather_id": "prefetch", "field_name": "executable_name", "operator": "regex", "value": "\\b(?:sdelete|cipher|wevtutil|bcdedit|fsutil|eraser|ccleaner|wipe(?:disk|file|info)?|sysclean|cleanmgr|forfiles|del\\.exe|cmd\\.exe.*\\/c\\s*del)\\b" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "anti_forensics",
+      "severity": "high"
+    },
+    {
+      "rule_id": "af_log_cleared_and_wiper",
+      "name": "Log Cleared AND Wiper Ran (AND)",
+      "semantic_value": "Coordinated Log Tampering",
+      "description": "A log-clear event AND a wiper tool execution within the same window — strong signal of deliberate tampering",
+      "conditions": [
+        { "feather_id": "security_logs", "field_name": "EventID",         "operator": "equals",   "value": "1102" },
+        { "feather_id": "prefetch",      "field_name": "executable_name", "operator": "wildcard", "value": "*" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "anti_forensics",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "af_mass_delete",
+      "name": "Mass Delete in USN Journal",
+      "semantic_value": "Mass File Deletion",
+      "description": "Burst of FILE_DELETE | CLOSE entries in USN — characteristic of cleanup activity",
+      "conditions": [
+        { "feather_id": "mft_usn", "field_name": "reason", "operator": "contains", "value": "FILE_DELETE" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "anti_forensics",
+      "severity": "high"
+    },
+    {
+      "rule_id": "af_defender_tamper",
+      "name": "Defender / Logging Service Tampered (OR)",
+      "semantic_value": "Security Tooling Tamper",
+      "description": "Service stopped / disabled OR Defender autostart removed OR audit policy change in System logs",
+      "conditions": [
+        { "feather_id": "services",   "field_name": "service_name", "operator": "contains", "value": "Defender" },
+        { "feather_id": "autostart",  "field_name": "name",         "operator": "contains", "value": "Defender" },
+        { "feather_id": "system_logs","field_name": "EventID",      "operator": "equals",   "value": "7036" }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "anti_forensics",
+      "severity": "high"
+    }
+  ],
+
+  "tags": [
+    "anti_forensics",
+    "tampering",
+    "default",
+    "weighted",
+    "ir"
+  ],
+  "case_types": [
+    "intrusion",
+    "insider_threat",
+    "disputed_evidence",
+    "chain_of_custody"
+  ]
+}

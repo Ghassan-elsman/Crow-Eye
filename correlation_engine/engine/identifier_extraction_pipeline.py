@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from correlation_engine.config.identifier_extraction_config import WingsConfig
 from correlation_engine.engine.feather_loader import FeatherLoader
-from correlation_engine.engine.identifier_correlation_engine import IdentifierCorrelationEngine
+from correlation_engine.engine.identity_state_builder import IdentifierCorrelationEngine
 from correlation_engine.engine.database_persistence import DatabasePersistence
 from correlation_engine.engine.timestamp_parser import TimestampParser
 
@@ -131,15 +131,15 @@ if __name__ == "__main__":
     )
     
     if len(sys.argv) < 3:
-        print("Usage: python identifier_extraction_pipeline.py <config_path> <feather_path1> [feather_path2 ...]")
+        logger.info("Usage: python identifier_extraction_pipeline.py <config_path> <feather_path1> [feather_path2 ...]")
         sys.exit(1)
     
     config_path = sys.argv[1]
     feather_paths = sys.argv[2:]
     
     results = run_identifier_extraction(config_path, feather_paths)
-    print(f"\nPipeline Results:")
-    print(f"  Identities: {results['database_stats']['identities']}")
-    print(f"  Anchors: {results['database_stats']['anchors']}")
-    print(f"  Evidence: {results['database_stats']['evidence']}")
-    print(f"  Output: {results['output_database']}")
+    logger.info(f"\nPipeline Results:")
+    logger.info(f" Identities: {results['database_stats']['identities']}")
+    logger.info(f" Anchors: {results['database_stats']['anchors']}")
+    logger.info(f" Evidence: {results['database_stats']['evidence']}")
+    logger.info(f" Output: {results['output_database']}")

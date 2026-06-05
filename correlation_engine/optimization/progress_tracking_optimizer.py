@@ -20,9 +20,9 @@ from enum import Enum
 
 class OptimizationLevel(Enum):
     """Optimization levels for progress tracking"""
-    MINIMAL = "minimal"      # Basic throttling only
-    BALANCED = "balanced"    # Moderate batching and throttling
-    AGGRESSIVE = "aggressive"  # Maximum optimization, minimal updates
+    MINIMAL = "minimal" # Basic throttling only
+    BALANCED = "balanced" # Moderate batching and throttling
+    AGGRESSIVE = "aggressive" # Maximum optimization, minimal updates
 
 
 @dataclass
@@ -31,21 +31,21 @@ class OptimizationConfig:
     level: OptimizationLevel = OptimizationLevel.BALANCED
     
     # Event throttling settings
-    min_update_interval_ms: int = 100  # Minimum time between GUI updates
-    batch_size: int = 10               # Number of events to batch together
-    batch_timeout_ms: int = 500        # Maximum time to wait for batch completion
+    min_update_interval_ms: int = 100 # Minimum time between GUI updates
+    batch_size: int = 10 # Number of events to batch together
+    batch_timeout_ms: int = 500 # Maximum time to wait for batch completion
     
     # Memory optimization settings
-    max_event_history: int = 1000      # Maximum events to keep in memory
-    enable_event_compression: bool = True  # Compress similar events
+    max_event_history: int = 1000 # Maximum events to keep in memory
+    enable_event_compression: bool = True # Compress similar events
     
     # GUI update optimization
-    progress_update_threshold: float = 1.0  # Minimum percentage change to trigger update
-    time_estimation_update_interval: int = 5  # Update time estimates every N windows
+    progress_update_threshold: float = 1.0 # Minimum percentage change to trigger update
+    time_estimation_update_interval: int = 5 # Update time estimates every N windows
     
     # Performance monitoring
     enable_performance_metrics: bool = False
-    metrics_collection_interval: int = 100  # Collect metrics every N events
+    metrics_collection_interval: int = 100 # Collect metrics every N events
 
 
 @dataclass
@@ -59,7 +59,7 @@ class PerformanceMetrics:
     average_batch_size: float = 0.0
     average_processing_time_ms: float = 0.0
     memory_usage_mb: float = 0.0
-    optimization_efficiency: float = 0.0  # Percentage of events optimized away
+    optimization_efficiency: float = 0.0 # Percentage of events optimized away
 
 
 class ProgressTrackingOptimizer:
@@ -152,4 +152,4 @@ def get_optimization_config_for_level(level: OptimizationLevel) -> OptimizationC
         )
     
     else:
-        return OptimizationConfig()  # Default balanced config
+        return OptimizationConfig() # Default balanced config

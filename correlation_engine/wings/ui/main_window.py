@@ -42,9 +42,9 @@ class WingsCreatorWindow(QMainWindow):
         super().__init__()
         self.wing = Wing()
         self.feather_widgets = []
-        self.current_config = None  # Store current wing config
+        self.current_config = None # Store current wing config
         self.config_manager = ConfigManager() if CONFIG_AVAILABLE else None
-        self.case_directory = None  # Store case directory for feather path resolution
+        self.case_directory = None # Store case directory for feather path resolution
         self.init_ui()
         self.load_stylesheet()
     
@@ -314,7 +314,7 @@ class WingsCreatorWindow(QMainWindow):
         event_layout.addWidget(self.target_event_input)
         event_layout.addWidget(event_help)
         layout.addWidget(self.event_id_widget)
-        self.event_id_widget.setVisible(False)  # Hidden by default
+        self.event_id_widget.setVisible(False) # Hidden by default
         
         # Separator
         from PyQt5.QtWidgets import QFrame
@@ -330,7 +330,7 @@ class WingsCreatorWindow(QMainWindow):
         self.time_window_spin = QSpinBox()
         self.time_window_spin.setMinimum(1)
         self.time_window_spin.setMaximum(1440)
-        self.time_window_spin.setValue(180)  # Default: 3 hours for better correlation accuracy
+        self.time_window_spin.setValue(180) # Default: 3 hours for better correlation accuracy
         self.time_window_spin.setSuffix(" minutes")
         self.time_window_spin.valueChanged.connect(self.on_time_window_changed)
         time_help = QLabel("(±tolerance for matching)")
@@ -418,7 +418,7 @@ class WingsCreatorWindow(QMainWindow):
         self.weights_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.weights_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.weights_table.setMinimumHeight(200)
-        self.weights_table.setEnabled(False)  # Disabled until weighted scoring is enabled
+        self.weights_table.setEnabled(False) # Disabled until weighted scoring is enabled
         self.weights_table.itemChanged.connect(self.on_weight_changed)
         layout.addWidget(self.weights_table)
         
@@ -464,7 +464,7 @@ class WingsCreatorWindow(QMainWindow):
         ])
         self.interpretation_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.interpretation_table.setMinimumHeight(150)
-        self.interpretation_table.setEnabled(False)  # Disabled until weighted scoring is enabled
+        self.interpretation_table.setEnabled(False) # Disabled until weighted scoring is enabled
         self.interpretation_table.itemChanged.connect(self.on_interpretation_changed)
         
         # Add default interpretation levels
@@ -599,26 +599,28 @@ class WingsCreatorWindow(QMainWindow):
         ])
         # Make all columns user-resizable with Interactive mode
         header = self.semantic_mappings_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)  # Allow user to resize all columns
+        header.setSectionResizeMode(QHeaderView.Interactive) # Allow user to resize all columns
         # Set initial widths
-        header.resizeSection(0, 80)   # Type
-        header.resizeSection(1, 200)  # Name
-        header.resizeSection(2, 60)   # Logic
-        header.resizeSection(3, 400)  # Conditions/Value - wider for readability
-        header.resizeSection(4, 200)  # Semantic Value
-        header.resizeSection(5, 80)   # Severity
-        header.resizeSection(6, 150)  # Feathers
-        header.resizeSection(7, 300)  # Description
+        header.resizeSection(0, 80) # Type
+        header.resizeSection(1, 200) # Name
+        header.resizeSection(2, 60) # Logic
+        header.resizeSection(3, 400) # Conditions/Value - wider for readability
+        header.resizeSection(4, 200) # Semantic Value
+        header.resizeSection(5, 80) # Severity
+        header.resizeSection(6, 150) # Feathers
+        header.resizeSection(7, 300) # Description
         # Make last column stretch to fill remaining space
         header.setStretchLastSection(True)
-        self.semantic_mappings_table.setMinimumHeight(450)  # Increased height for all rules
+        self.semantic_mappings_table.setMinimumHeight(450) # Increased height for all rules
         self.semantic_mappings_table.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.semantic_mappings_table)
         
         # Buttons
         button_layout = QHBoxLayout()
         
-        self.load_global_mappings_btn = QPushButton("📥 Load Global Mappings")
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.load_global_mappings_btn = QPushButton("Load Global Mappings")
+        self.load_global_mappings_btn.setIcon(CrowEyeIcons.download())
         self.load_global_mappings_btn.setToolTip("Load semantic mappings from global configuration")
         self.load_global_mappings_btn.clicked.connect(self.load_global_semantic_mappings)
         self.load_global_mappings_btn.setStyleSheet("background-color: #10B981;")
@@ -642,7 +644,7 @@ class WingsCreatorWindow(QMainWindow):
         
         # Info label
         info_label = QLabel(
-            "💡 Simple mappings (green) translate single values. Advanced rules (cyan) use AND/OR logic with multiple conditions. "
+            "Tip: Simple mappings (green) translate single values. Advanced rules (cyan) use AND/OR logic with multiple conditions. "
             "All 36 default rules are loaded automatically. Wing-specific rules take priority over global rules."
         )
         info_label.setWordWrap(True)
@@ -657,7 +659,7 @@ class WingsCreatorWindow(QMainWindow):
         # Show info message if no mappings or rules were loaded
         if not self.wing_semantic_mappings and not self.wing_semantic_rules:
             info_msg = QLabel(
-                "ℹ️ No semantic mappings loaded. Click 'Load Global Mappings' to import global mappings, "
+                "[INFO] No semantic mappings loaded. Click 'Load Global Mappings' to import global mappings, "
                 "or use 'Add Mapping' to create wing-specific mappings."
             )
             info_msg.setWordWrap(True)
@@ -720,7 +722,7 @@ class WingsCreatorWindow(QMainWindow):
         
         # Info label
         info_label = QLabel(
-            "💡 Advanced rules support: AND/OR logic operators, wildcard (*) matching, "
+            "Tip: Advanced rules support: AND/OR logic operators, wildcard (*) matching, "
             "and multi-value conditions. Wing rules take priority over global rules."
         )
         info_label.setWordWrap(True)
@@ -859,14 +861,14 @@ class WingsCreatorWindow(QMainWindow):
         if conditions:
             lines.append("")
             lines.append("Conditions:")
-            for cond in conditions[:3]:  # Show first 3 conditions
+            for cond in conditions[:3]: # Show first 3 conditions
                 feather = cond.get('feather_id', '')
                 field = cond.get('field_name', '')
                 op = cond.get('operator', 'equals')
                 value = cond.get('value', '')
-                lines.append(f"  • {feather}.{field} {op} '{value}'")
+                lines.append(f" • {feather}.{field} {op} '{value}'")
             if len(conditions) > 3:
-                lines.append(f"  ... and {len(conditions) - 3} more")
+                lines.append(f" ... and {len(conditions) - 3} more")
         
         return "\n".join(lines)
     
@@ -895,7 +897,7 @@ class WingsCreatorWindow(QMainWindow):
             rule_name = rule_data.get('name', 'Unnamed Rule')
             semantic_value = rule_data.get('semantic_value', '')
             logic_op = rule_data.get('logic_operator', 'AND')
-            print(f"[Wing Creator]   - Rule: {rule_name} ({logic_op}) → {semantic_value}")
+            print(f"[Wing Creator] - Rule: {rule_name} ({logic_op}) → {semantic_value}")
             item = QListWidgetItem(f"{rule_name} → {semantic_value}")
             item.setData(Qt.UserRole, rule_data)
             item.setToolTip(self._format_rule_tooltip(rule_data))
@@ -1247,7 +1249,7 @@ class WingsCreatorWindow(QMainWindow):
     
     def update_weights_table(self):
         """Update the weights table with current feathers"""
-        self.weights_table.blockSignals(True)  # Prevent triggering itemChanged
+        self.weights_table.blockSignals(True) # Prevent triggering itemChanged
         
         self.weights_table.setRowCount(len(self.feather_widgets))
         
@@ -1320,7 +1322,7 @@ class WingsCreatorWindow(QMainWindow):
     
     def on_weight_changed(self, item):
         """Handle weight table item change (for tier name)"""
-        if item.column() == 3:  # Tier name column
+        if item.column() == 3: # Tier name column
             row = item.row()
             if row < len(self.feather_widgets):
                 feather_spec = self.feather_widgets[row].get_feather_spec()
@@ -1338,25 +1340,25 @@ class WingsCreatorWindow(QMainWindow):
         
         # Update total weight label color based on value
         if total > 1.0:
-            self.total_weight_label.setStyleSheet("color: #F59E0B; font-size: 11pt; font-weight: bold;")  # Amber
+            self.total_weight_label.setStyleSheet("color: #F59E0B; font-size: 11pt; font-weight: bold;") # Amber
         elif total >= 0.8:
-            self.total_weight_label.setStyleSheet("color: #10B981; font-size: 11pt; font-weight: bold;")  # Green
+            self.total_weight_label.setStyleSheet("color: #10B981; font-size: 11pt; font-weight: bold;") # Green
         else:
-            self.total_weight_label.setStyleSheet("color: #00d9ff; font-size: 11pt; font-weight: bold;")  # Cyan
+            self.total_weight_label.setStyleSheet("color: #00d9ff; font-size: 11pt; font-weight: bold;") # Cyan
         
         # Show informative message based on total weight
         if total > 1.0:
             self.weight_warning_label.setText(
-                f"ℹ️ Total weight ({total:.2f}) exceeds 1.0 - Scores will be normalized. "
+                f"[INFO] Total weight ({total:.2f}) exceeds 1.0 - Scores will be normalized. "
                 "This is valid for relative scoring where feather importance is compared."
             )
-            self.weight_warning_label.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 9pt;")  # Amber
+            self.weight_warning_label.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 9pt;") # Amber
             self.weight_warning_label.show()
         elif total < 0.5:
             self.weight_warning_label.setText(
-                f"💡 Tip: Total weight ({total:.2f}) is low. Consider increasing weights for more meaningful scores."
+                f"Tip: Tip: Total weight ({total:.2f}) is low. Consider increasing weights for more meaningful scores."
             )
-            self.weight_warning_label.setStyleSheet("color: #60A5FA; font-weight: bold; font-size: 9pt;")  # Blue
+            self.weight_warning_label.setStyleSheet("color: #60A5FA; font-weight: bold; font-size: 9pt;") # Blue
             self.weight_warning_label.show()
         else:
             self.weight_warning_label.hide()
@@ -1390,7 +1392,7 @@ class WingsCreatorWindow(QMainWindow):
     
     def on_interpretation_changed(self, item):
         """Handle interpretation table item change"""
-        if item.column() == 1:  # Label column
+        if item.column() == 1: # Label column
             row = item.row()
             if row < len(self.interpretation_levels):
                 self.interpretation_levels[row]['label'] = item.text()
@@ -1455,7 +1457,7 @@ class WingsCreatorWindow(QMainWindow):
         dialog = SemanticMappingDialog(
             parent=self,
             mapping=None,
-            scope='wing',  # Default to wing scope when opened from Wings Creator
+            scope='wing', # Default to wing scope when opened from Wings Creator
             wing_id=self.wing.wing_id
         )
         if dialog.exec_() == QDialog.Accepted:
@@ -1503,7 +1505,7 @@ class WingsCreatorWindow(QMainWindow):
         if current_row < num_mappings:
             # Editing a simple mapping
             mapping = self.wing_semantic_mappings[current_row]
-            mapping['mode'] = 'simple'  # Ensure mode is set
+            mapping['mode'] = 'simple' # Ensure mode is set
             print(f"[Wing Creator] Editing simple mapping at row {current_row}")
         else:
             # Editing an advanced rule
@@ -1525,7 +1527,7 @@ class WingsCreatorWindow(QMainWindow):
                     'mode': 'advanced'
                 }
             else:
-                mapping['mode'] = 'advanced'  # Ensure mode is set
+                mapping['mode'] = 'advanced' # Ensure mode is set
             print(f"[Wing Creator] Editing advanced rule at row {current_row} (rule index {rule_index})")
         
         # Pass wing_id to enable wing-specific scope selection
@@ -1785,8 +1787,8 @@ class WingsCreatorWindow(QMainWindow):
             self.update_semantic_mappings_table()
             
             # Show result
-            message = f"✓ Loaded {added_mappings} global semantic mappings.\n"
-            message += f"✓ Loaded {added_rules} advanced semantic rules (with AND/OR logic)."
+            message = f"[OK] Loaded {added_mappings} global semantic mappings.\n"
+            message += f"[OK] Loaded {added_rules} advanced semantic rules (with AND/OR logic)."
             if skipped_mappings > 0 or skipped_rules > 0:
                 message += f"\n⊘ Skipped {skipped_mappings} duplicate mappings and {skipped_rules} duplicate rules."
             
@@ -2153,17 +2155,17 @@ class WingsCreatorWindow(QMainWindow):
         feathers = []
         for i, feather in enumerate(wing_config.feathers):
             print(f"[Wing Creator] Converting feather {i+1}: {feather.feather_id}")
-            print(f"[Wing Creator]   - artifact_type: {feather.artifact_type}")
-            print(f"[Wing Creator]   - feather_database_path: {feather.feather_database_path}")
+            print(f"[Wing Creator] - artifact_type: {feather.artifact_type}")
+            print(f"[Wing Creator] - feather_database_path: {feather.feather_database_path}")
             
             # Create FeatherSpec directly instead of using from_dict
             # This preserves the full database path
             feather_spec = FeatherSpec(
                 feather_id=feather.feather_id,
-                database_filename=feather.feather_database_path,  # Keep full path
+                database_filename=feather.feather_database_path, # Keep full path
                 artifact_type=feather.artifact_type,
-                detection_confidence='high',  # Default for config-based feathers
-                manually_overridden=True,  # Config-based feathers are manually configured
+                detection_confidence='high', # Default for config-based feathers
+                manually_overridden=True, # Config-based feathers are manually configured
                 detection_method='metadata',
                 feather_config_name=getattr(feather, 'feather_config_name', None),
                 weight=getattr(feather, 'weight', 0.0),
@@ -2172,7 +2174,7 @@ class WingsCreatorWindow(QMainWindow):
             )
             
             feathers.append(feather_spec)
-            print(f"[Wing Creator]   - Created FeatherSpec with database_filename: {feather_spec.database_filename}")
+            print(f"[Wing Creator] - Created FeatherSpec with database_filename: {feather_spec.database_filename}")
         
         print(f"[Wing Creator] Converted {len(feathers)} feathers")
         
@@ -2268,8 +2270,8 @@ class WingsCreatorWindow(QMainWindow):
         # Add feather widgets
         for i, feather in enumerate(self.wing.feathers):
             print(f"[Wing Creator] Creating widget for feather {i+1}: {feather.feather_id}")
-            print(f"[Wing Creator]   - database_filename: {feather.database_filename}")
-            print(f"[Wing Creator]   - artifact_type: {feather.artifact_type}")
+            print(f"[Wing Creator] - database_filename: {feather.database_filename}")
+            print(f"[Wing Creator] - artifact_type: {feather.artifact_type}")
             
             feather_widget = FeatherWidget(len(self.feather_widgets) + 1)
             # Set case directory if available
@@ -2281,8 +2283,8 @@ class WingsCreatorWindow(QMainWindow):
             
             self.feather_widgets.append(feather_widget)
             self.feathers_container.addWidget(feather_widget)
-            feather_widget.show()  # Explicitly show the widget
-            print(f"[Wing Creator]   - Widget added and shown")
+            feather_widget.show() # Explicitly show the widget
+            print(f"[Wing Creator] - Widget added and shown")
         
         print(f"[Wing Creator] Created {len(self.feather_widgets)} feather widgets")
         
@@ -2316,7 +2318,7 @@ class WingsCreatorWindow(QMainWindow):
             existing_keys = [f"{m.get('source', '')}.{m.get('field', '')}.{m.get('technical_value', '')}" for m in self.wing_semantic_mappings]
             if mapping_key not in existing_keys:
                 self.wing_semantic_mappings.append(mapping)
-                print(f"[Wing Creator]   Added wing-specific mapping: {mapping_key}")
+                print(f"[Wing Creator] Added wing-specific mapping: {mapping_key}")
         
         # Add wing-specific rules that aren't already in global
         for rule in wing_rules:
@@ -2327,7 +2329,7 @@ class WingsCreatorWindow(QMainWindow):
             existing_names = [r.get('name', '') if isinstance(r, dict) else getattr(r, 'name', '') for r in self.wing_semantic_rules]
             if rule_id not in existing_ids and rule_name not in existing_names:
                 self.wing_semantic_rules.append(rule)
-                print(f"[Wing Creator]   Added wing-specific rule: {rule_name}")
+                print(f"[Wing Creator] Added wing-specific rule: {rule_name}")
         
         print(f"[Wing Creator] Total: {len(self.wing_semantic_mappings)} mappings + {len(self.wing_semantic_rules)} rules")
         
@@ -2417,7 +2419,7 @@ class WingsCreatorWindow(QMainWindow):
                 feather_spec = feather_widget.get_feather_spec()
                 feather_refs.append(
                     WingFeatherReference(
-                        feather_config_name="",  # Can be linked later
+                        feather_config_name="", # Can be linked later
                         feather_database_path=feather_spec.database_filename,
                         artifact_type=feather_spec.artifact_type,
                         feather_id=feather_spec.feather_id,
@@ -2539,7 +2541,7 @@ class WingsCreatorWindow(QMainWindow):
             # Save configuration silently
             saved_path = self.config_manager.save_wing_config(config)
             self.current_config = config
-            self.status_bar.showMessage(f"✓ Config auto-saved: {config_name}")
+            self.status_bar.showMessage(f"[OK] Config auto-saved: {config_name}")
             
         except Exception as e:
             # Don't show error to user, just log it
@@ -2563,7 +2565,7 @@ class WingsCreatorWindow(QMainWindow):
             feather_id=feather_ref.feather_id,
             database_filename=feather_ref.feather_database_path,
             artifact_type=feather_ref.artifact_type,
-            detection_confidence="high",  # Default for loaded configs
+            detection_confidence="high", # Default for loaded configs
             manually_overridden=False
         )
         
@@ -2699,14 +2701,14 @@ class WingsCreatorWindow(QMainWindow):
             # Show configuration details with loading results
             if failed_feathers:
                 # Partial load - show warning
-                failed_list = "\n".join([f"  • {fid}: {err}" for fid, err in failed_feathers])
+                failed_list = "\n".join([f" • {fid}: {err}" for fid, err in failed_feathers])
                 details = (
                     f"Configuration: {config.config_name}\n"
                     f"Wing: {config.wing_name}\n"
                     f"Feathers Loaded: {loaded_count}/{len(config.feathers)}\n"
                     f"Target: {config.target_application or 'All applications'}\n"
                     f"Weighted Scoring: {'Enabled' if config.use_weighted_scoring else 'Disabled'}\n\n"
-                    f"⚠ Warning: Some feathers failed to load:\n{failed_list}\n\n"
+                    f"[WARN] Warning: Some feathers failed to load:\n{failed_list}\n\n"
                     f"You may need to manually select the feather database files."
                 )
                 QMessageBox.warning(
@@ -2722,7 +2724,7 @@ class WingsCreatorWindow(QMainWindow):
                     f"Target: {config.target_application or 'All applications'}\n"
                     f"Weighted Scoring: {'Enabled' if config.use_weighted_scoring else 'Disabled'}\n"
                     f"Created: {config.created_date}\n\n"
-                    f"✓ All feathers loaded successfully!"
+                    f"[OK] All feathers loaded successfully!"
                 )
                 QMessageBox.information(
                     self, "Configuration Loaded",
@@ -2761,11 +2763,11 @@ class WingsCreatorWindow(QMainWindow):
                     info = self.config_manager.get_config_info("wing", config_name)
                     config_list.append(
                         f"• {config_name}\n"
-                        f"  Wing: {info.get('wing_name', 'Unknown')}\n"
-                        f"  Feathers: {info.get('feathers', 0)}\n"
-                        f"  Proves: {info.get('proves', 'N/A')}\n"
+                        f" Wing: {info.get('wing_name', 'Unknown')}\n"
+                        f" Feathers: {info.get('feathers', 0)}\n"
+                        f" Proves: {info.get('proves', 'N/A')}\n"
                     )
-                except:
+                except Exception as e:
                     config_list.append(f"• {config_name}\n")
             
             message = "Available Wing Configurations:\n\n" + "\n".join(config_list)

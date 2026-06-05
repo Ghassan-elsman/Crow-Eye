@@ -38,7 +38,7 @@ class SemanticMatchResult:
     confidence: float
     category: str
     severity: str
-    scope: str  # global, wing, pipeline
+    scope: str # global, wing, pipeline
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -140,7 +140,7 @@ class QueryBuilder:
             
         Operator Mapping:
             equals -> field = ?
-            contains -> field LIKE ?  (value wrapped with %)
+            contains -> field LIKE ? (value wrapped with %)
             regex -> field REGEXP ?
             wildcard -> field IS NOT NULL AND field != ''
             greater_than -> field > ?
@@ -168,13 +168,21 @@ class QueryBuilder:
             return None
         
         sql_operator = self.operator_map[operator]
-        
+
         # Handle contains operator - add % wildcards
         if operator == 'contains':
             param_value = f"%{value}%"
             where_clause = f"{field_name} {sql_operator} ?"
             return (where_clause, param_value)
-        
+
+        # not_equals must be NULL-safe: SQL three-valued logic makes
+        # `field != value` evaluate to NULL (falsy) for any row where
+        # field IS NULL, silently excluding those rows. Analysts expect
+        # "field is not X" to include rows where the field is unset.
+        if operator == 'not_equals':
+            where_clause = f"({field_name} {sql_operator} ? OR {field_name} IS NULL)"
+            return (where_clause, value)
+
         # Standard operators with parameterized value
         where_clause = f"{field_name} {sql_operator} ?"
         return (where_clause, value)
@@ -811,7 +819,7 @@ class ParallelFeatherProcessor:
                         rule_name=rule.name,
                         semantic_value=rule.semantic_value,
                         logic_operator=rule.logic_operator,
-                        matched_feathers=[feather_id],  # Track which feather matched
+                        matched_feathers=[feather_id], # Track which feather matched
                         conditions=[
                             f"{c.feather_id}.{c.field_name} {c.operator} '{c.value}'"
                             for c in rule.conditions
@@ -1533,7 +1541,7 @@ class SemanticRuleEvaluator:
                 f"Connecting to feather database: {feather_path} for rule '{rule.rule_id}'"
             )
             connection = sqlite3.Connection(feather_path)
-            connection.row_factory = sqlite3.Row  # Enable column access by name
+            connection.row_factory = sqlite3.Row # Enable column access by name
             
             # Setup REGEXP function if query contains REGEXP operator
             if 'REGEXP' in query.upper():
@@ -1670,7 +1678,7 @@ class SemanticRuleEvaluator:
                         rule_name=rule.name,
                         semantic_value=rule.semantic_value,
                         logic_operator=rule.logic_operator,
-                        matched_feathers=matched_feather_ids,  # Use extracted feather_ids
+                        matched_feathers=matched_feather_ids, # Use extracted feather_ids
                         conditions=[
                             f"{c.feather_id}.{c.field_name} {c.operator} '{c.value}'"
                             for c in rule.conditions
@@ -1807,7 +1815,7 @@ class SemanticRuleEvaluator:
                         rule_name=rule.name,
                         semantic_value=rule.semantic_value,
                         logic_operator=rule.logic_operator,
-                        matched_feathers=["_identity"],  # Identity-level rules match against _identity
+                        matched_feathers=["_identity"], # Identity-level rules match against _identity
                         conditions=[
                             f"{c.feather_id}.{c.field_name} {c.operator} '{c.value}'"
                             for c in rule.conditions
@@ -2024,7 +2032,7 @@ class SemanticRuleEvaluator:
                     metadata_check_passed = self._check_feather_metadata(
                         feather_path,
                         required_columns,
-                        required_artifact_type=None  # Could be extracted from rule if available
+                        required_artifact_type=None # Could be extracted from rule if available
                     )
                     
                     if not metadata_check_passed:
@@ -2110,7 +2118,7 @@ class SemanticRuleEvaluator:
                             rule_name=rule.name,
                             semantic_value=rule.semantic_value,
                             logic_operator=rule.logic_operator,
-                            matched_feathers=[feather_id],  # Track which feather matched
+                            matched_feathers=[feather_id], # Track which feather matched
                             conditions=[
                                 f"{c.feather_id}.{c.field_name} {c.operator} '{c.value}'"
                                 for c in rule.conditions

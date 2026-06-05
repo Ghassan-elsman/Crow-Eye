@@ -139,9 +139,13 @@ class ParsingWorker(QThread):
                 except Exception as e:
                     logger.error(f"Error emitting heartbeat signal: {e}", exc_info=True)
             
+            # Create a progress callback that emits the Qt signal to the main thread
+            def emit_progress(current, total, artifact_name, artifact_type):
+                self.progress_update.emit(current, total, artifact_name, artifact_type)
+            
             results = self.parser.parse_artifacts_batch(
                 self.artifacts,
-                progress_callback=self.progress_callback,
+                progress_callback=emit_progress,
                 cancellation_check=self.cancellation_check,
                 error_log_path=self.error_log_path,
                 heartbeat_callback=heartbeat_callback
@@ -1046,6 +1050,116 @@ class ParseArtifactsDialog(QDialog):
         # Show dialog modally (centering handled by showEvent)
         error_dialog.exec_()
 
+    def on_progress_update(self, current: int, total: int, artifact_name: str, artifact_type: str):
+        """Update loading dialog with current parsing status (runs on main thread)."""
+        if not hasattr(self, 'loading_dialog') or not self.loading_dialog:
+            return
+        
+        # Ensure dialog stays visible (Bug Fix 3.3)
+        if not self.loading_dialog.isVisible():
+            logger.warning("LoadingDialog became invisible, re-showing")
+            self.loading_dialog.show()
+            self.loading_dialog.raise_()
+            self.loading_dialog.activateWindow()
+        
+        # Initialize step progress tracking if not present
+        if not hasattr(self, 'step_progress'):
+            self.step_progress = {}
+            
+        # Update progress based on artifact type and ranges
+        if hasattr(self, 'type_to_step_index') and self.type_to_step_index:
+            total_steps = len(self.type_to_step_index)
+            
+            # Seed all steps in step_progress first
+            for t in self.type_to_step_index:
+                if t not in self.step_progress:
+                    self.step_progress[t] = 0.0
+            
+            # Handle overall completion
+            if artifact_name == "Complete":
+                for t in self.type_to_step_index:
+                    self.step_progress[t] = 1.0
+                overall_percent = 100
+                completed_steps = total_steps
+            else:
+                if artifact_type and hasattr(self, 'step_ranges') and artifact_type in self.step_ranges:
+                    range_info = self.step_ranges[artifact_type]
+                    start_count = range_info['start']
+                    count = range_info['count']
+                    is_directory = range_info['is_directory']
+                    
+                    if is_directory:
+                        # Directory parser runs once; progress is 0.0 while active
+                        step_progress = 0.0
+                    else:
+                        if count > 0:
+                            step_progress = min(1.0, max(0.0, (current - start_count) / count))
+                        else:
+                            step_progress = 1.0
+                    
+                    self.step_progress[artifact_type] = step_progress
+                    
+                    # Ensure finished prior steps are marked 1.0, and unstarted subsequent steps are 0.0
+                    current_step_idx = self.type_to_step_index[artifact_type]
+                    for t, step_idx in self.type_to_step_index.items():
+                        if step_idx < current_step_idx:
+                            self.step_progress[t] = 1.0
+                        elif step_idx > current_step_idx:
+                            self.step_progress[t] = 0.0
+                else:
+                    # Fallback if no step_ranges or unknown type
+                    if artifact_type:
+                        denom = max(1, total)
+                        self.step_progress[artifact_type] = min(1.0, current / denom)
+            
+            # Calculate overall progress from completed/current steps
+            avg_fraction = sum(self.step_progress.values()) / total_steps
+            overall_percent = int(avg_fraction * 100)
+            completed_steps = sum(1 for f in self.step_progress.values() if f >= 1.0)
+            
+            filename = os.path.basename(artifact_name)
+            
+            # If we have a filename, include it in the status
+            status_msg = f"Parsing {artifact_type}"
+            if filename and filename != artifact_type:
+                status_msg += f": {filename}"
+            
+            # Log the message to the console area in the dialog
+            if artifact_type in self.type_to_step_index:
+                step_idx = self.type_to_step_index[artifact_type]
+                self.loading_dialog.add_log_message(f"Step {step_idx + 1}: {status_msg}")
+            else:
+                self.loading_dialog.add_log_message(status_msg)
+                
+            # Update overall progress bar values
+            self.loading_dialog.update_overall_progress(overall_percent, completed_steps, total_steps)
+            
+            # If it's the "Complete" message from ParserInvoker
+            if artifact_name == "Complete":
+                self.loading_dialog.show_completion("ARTIFACT PARSING COMPLETE")
+        
+        # Process events to keep UI responsive and ensure visibility
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
+
+    def on_parsing_complete(self, results):
+        """Handle parsing completion (runs on main thread)."""
+        self.parse_results = results
+        self.worker_finished = True
+
+    def on_parsing_error(self, error_msg):
+        """Handle parsing error (runs on main thread)."""
+        self.worker_error = error_msg
+        self.worker_finished = True
+
+    def on_heartbeat(self):
+        """Process events to keep animation smooth during long parsing operations (runs on main thread)."""
+        try:
+            from PyQt5.QtWidgets import QApplication
+            QApplication.processEvents()
+        except Exception as e:
+            logger.error(f"Error processing events in heartbeat: {e}", exc_info=True)
+
     def parse_selected_artifacts_with_progress(self) -> tuple[bool, bool, int, int, list, object]:
         """
         Parse selected artifacts with progress tracking using LoadingDialog.
@@ -1059,11 +1173,7 @@ class ParseArtifactsDialog(QDialog):
             - parse_results: List of ParserResult objects for displaying results dialog
             - loading_dialog: LoadingDialog object (kept open for data loading phase)
         """
-        from Artifacts_Collectors.Offline_Importer.parser_invoker import ParserInvoker
-        
-        # Get selected artifacts
         selected_artifacts = self.get_selected_artifacts()
-        
         if not selected_artifacts:
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Warning)
@@ -1076,8 +1186,8 @@ class ParseArtifactsDialog(QDialog):
         
         # Create LoadingDialog for consistent UI with live parsers (Requirement 3)
         if LOADING_DIALOG_AVAILABLE:
-            # Use None as parent to avoid modal dialog conflicts (Bug Fix 3.3)
-            loading_dialog = LoadingDialog("PARSING ARTIFACTS", None)
+            # Use self as parent to prevent active modal dialog from blocking this dialog (Fixing modality bug)
+            self.loading_dialog = LoadingDialog("PARSING ARTIFACTS", self)
             
             # Apply EXACT cyberpunk styling used by live parsers (same as Crow Eye.py line 7325-7330)
             try:
@@ -1085,25 +1195,25 @@ class ParseArtifactsDialog(QDialog):
                 from PyQt5 import QtWidgets
                 
                 # Apply the main dialog style (same as live parsers)
-                loading_dialog.setStyleSheet(CrowEyeStyles.LOADING_DIALOG)
+                self.loading_dialog.setStyleSheet(CrowEyeStyles.LOADING_DIALOG)
                 
                 # Apply title style (same as live parsers)
-                title_label = loading_dialog.findChild(QtWidgets.QLabel, "titleLabel")
+                title_label = self.loading_dialog.findChild(QtWidgets.QLabel, "titleLabel")
                 if title_label:
                     title_label.setStyleSheet(CrowEyeStyles.OVERLAY_TITLE)
                 
                 # Apply status style (same as live parsers)
-                status_label = loading_dialog.findChild(QtWidgets.QLabel, "statusLabel")
+                status_label = self.loading_dialog.findChild(QtWidgets.QLabel, "statusLabel")
                 if status_label:
                     status_label.setStyleSheet(CrowEyeStyles.OVERLAY_STATUS)
                 
                 # Apply progress bar style (same as live parsers)
-                progress_bar = loading_dialog.findChild(QtWidgets.QProgressBar)
+                progress_bar = self.loading_dialog.findChild(QtWidgets.QProgressBar)
                 if progress_bar:
                     progress_bar.setStyleSheet(CrowEyeStyles.OVERLAY_PROGRESS)
                 
                 # Apply log text style (same as live parsers)
-                log_text = loading_dialog.findChild(QtWidgets.QTextEdit)
+                log_text = self.loading_dialog.findChild(QtWidgets.QTextEdit)
                 if log_text:
                     log_text.setStyleSheet(CrowEyeStyles.OVERLAY_LOG)
                     
@@ -1128,98 +1238,82 @@ class ParseArtifactsDialog(QDialog):
             
             # Set steps based on unique artifact types
             steps = [f"Analyzing {t}" for t in unique_types]
-            loading_dialog.set_steps(steps)
-            loading_dialog.show()
+            self.loading_dialog.set_steps(steps)
+            self.loading_dialog.show()
             
             # Force dialog to front and ensure visibility (Bug Fix 3.3)
-            loading_dialog.raise_()  # Bring to front
-            loading_dialog.activateWindow()  # Activate window
+            self.loading_dialog.raise_()  # Bring to front
+            self.loading_dialog.activateWindow()  # Activate window
             
             # Force immediate rendering
             from PyQt5.QtWidgets import QApplication
             QApplication.processEvents()
             
             # Debug logging for visibility and window state
-            logger.info(f"LoadingDialog visibility: {loading_dialog.isVisible()}, window state: {loading_dialog.windowState()}")
+            logger.info(f"LoadingDialog visibility: {self.loading_dialog.isVisible()}, window state: {self.loading_dialog.windowState()}")
             
+            # Group artifacts by type for progress calculation
+            artifacts_by_type = {}
+            for a in selected_artifacts:
+                if a.artifact_type not in artifacts_by_type:
+                    artifacts_by_type[a.artifact_type] = []
+                artifacts_by_type[a.artifact_type].append(a)
+                
+            # Build execution order step ranges
+            self.step_ranges = {}
+            current_idx = 0
+            
+            # Sort the artifact types based on canonical order (same as parser_invoker.py)
+            ordered_selected_types = sorted(
+                artifacts_by_type.keys(),
+                key=lambda x: canonical_order.index(x) if x in canonical_order else len(canonical_order)
+            )
+            
+            for t in ordered_selected_types:
+                n_files = len(artifacts_by_type.get(t, []))
+                if t == 'Unknown':
+                    current_idx += n_files
+                    continue
+                
+                is_directory_parser = t in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin']
+                self.step_ranges[t] = {
+                    'start': current_idx,
+                    'count': n_files,
+                    'is_directory': is_directory_parser
+                }
+                current_idx += n_files
+
             # Map artifact types to their step index for progress reporting
-            type_to_step_index = {t: i for i, t in enumerate(unique_types)}
+            self.type_to_step_index = {t: i for i, t in enumerate(unique_types)}
             
             # Start log capture (same as live parsers - Crow Eye.py line 6991)
-            loading_dialog.start_log_capture()
+            self.loading_dialog.start_log_capture()
 
             # Connect cancellation signal
             def on_cancelled():
-                nonlocal cancelled
-                cancelled = True
+                self.cancelled = True
                 logger.warning("User clicked cancel in LoadingDialog")
                 
                 # Update dialog title to show cancellation is in progress
                 if LOADING_DIALOG_AVAILABLE:
-                    loading_dialog.title_label.setText("CANCELLING OPERATION...")
-                    loading_dialog.add_log_message("\n⚠ Cancellation requested - waiting for current operation to complete...")
+                    self.loading_dialog.title_label.setText("CANCELLING OPERATION...")
+                    self.loading_dialog.add_log_message("\n⚠ Cancellation requested - waiting for current operation to complete...")
                 
-            loading_dialog.cancelled.connect(on_cancelled)
+            self.loading_dialog.cancelled.connect(on_cancelled)
         else:
             # Fallback to QProgressDialog if LoadingDialog not available
-            loading_dialog = None
-            type_to_step_index = {}
+            self.loading_dialog = None
+            self.type_to_step_index = {}
         
         # Initialize parser
+        from Artifacts_Collectors.Offline_Importer.parser_invoker import ParserInvoker
         parser = ParserInvoker(self.case_root)
         
         # Track results
-        parse_results = []
-        cancelled = False
-        worker_finished = False
-        worker_error = None
-        
-        def progress_callback(current: int, total: int, artifact_name: str, artifact_type: str):
-            """Update loading dialog with current parsing status."""
-            nonlocal cancelled
-            
-            if not LOADING_DIALOG_AVAILABLE:
-                return
-            
-            # Ensure dialog stays visible (Bug Fix 3.3)
-            if not loading_dialog.isVisible():
-                logger.warning("LoadingDialog became invisible, re-showing")
-                loading_dialog.show()
-                loading_dialog.raise_()
-                loading_dialog.activateWindow()
-            
-            # Update step based on artifact type
-            if artifact_type in type_to_step_index:
-                step_idx = type_to_step_index[artifact_type]
-                filename = os.path.basename(artifact_name)
-                
-                # If we have a filename, include it in the status
-                status_msg = f"Parsing {artifact_type}"
-                if filename and filename != artifact_type:
-                    status_msg += f": {filename}"
-                
-                loading_dialog.update_step(step_idx, status_msg)
-                
-                # If it's the "Complete" message from ParserInvoker
-                if artifact_name == "Complete":
-                    loading_dialog.show_completion("ARTIFACT PARSING COMPLETE")
-            
-            # Process events to keep UI responsive and ensure visibility
-            from PyQt5.QtWidgets import QApplication
-            QApplication.processEvents()
-        
-        # Bug Fix #3: Use worker thread to prevent GUI freezing
-        def on_parsing_complete(results):
-            """Handle parsing completion from worker thread."""
-            nonlocal parse_results, worker_finished
-            parse_results = results
-            worker_finished = True
-        
-        def on_parsing_error(error_msg):
-            """Handle parsing error from worker thread."""
-            nonlocal worker_error, worker_finished
-            worker_error = error_msg
-            worker_finished = True
+        self.parse_results = []
+        self.cancelled = False
+        self.worker_finished = False
+        self.worker_error = None
         
         try:
             # Create error log file path (Bug Fix #6: Use offline_parsing_logs.txt)
@@ -1229,27 +1323,17 @@ class ParseArtifactsDialog(QDialog):
             worker = ParsingWorker(
                 parser,
                 selected_artifacts,
-                progress_callback,
-                lambda: cancelled,
+                None,
+                lambda: self.cancelled,
                 error_log_path
             )
             
-            # Connect worker signals with exception handling
+            # Connect worker signals with exception handling using QueuedConnection
             try:
-                worker.parsing_complete.connect(on_parsing_complete)
-                worker.parsing_error.connect(on_parsing_error)
-                
-                # Connect heartbeat signal to keep QEventLoop active during long operations
-                # This ensures animation timer events are processed even when no progress updates occur
-                def on_heartbeat():
-                    """Process events to keep animation smooth during long parsing operations."""
-                    try:
-                        from PyQt5.QtWidgets import QApplication
-                        QApplication.processEvents()
-                    except Exception as e:
-                        logger.error(f"Error processing events in heartbeat: {e}", exc_info=True)
-                
-                worker.heartbeat.connect(on_heartbeat)
+                worker.progress_update.connect(self.on_progress_update, Qt.QueuedConnection)
+                worker.parsing_complete.connect(self.on_parsing_complete, Qt.QueuedConnection)
+                worker.parsing_error.connect(self.on_parsing_error, Qt.QueuedConnection)
+                worker.heartbeat.connect(self.on_heartbeat, Qt.QueuedConnection)
             except Exception as e:
                 logger.error(f"Error connecting worker signals: {e}", exc_info=True)
                 raise
@@ -1263,7 +1347,7 @@ class ParseArtifactsDialog(QDialog):
             
             # Connect worker finished signal to quit the event loop
             try:
-                worker.finished.connect(loop.quit)
+                worker.finished.connect(loop.quit, Qt.QueuedConnection)
             except Exception as e:
                 logger.error(f"Error connecting worker finished signal: {e}", exc_info=True)
                 raise
@@ -1276,8 +1360,8 @@ class ParseArtifactsDialog(QDialog):
                 raise
             
             # Check for worker errors
-            if worker_error:
-                raise Exception(worker_error)
+            if self.worker_error:
+                raise Exception(self.worker_error)
             
             # Clean up worker thread
             try:
@@ -1287,13 +1371,13 @@ class ParseArtifactsDialog(QDialog):
             
             # Update artifact index with parsed status
             # Fix logical error: use min(len, len) to avoid IndexError if cancelled
-            processed_count = min(len(selected_artifacts), len(parse_results))
+            processed_count = min(len(selected_artifacts), len(self.parse_results))
             
             # Group results by artifact type to avoid duplicate messages for directory-based parsers
             results_by_type = {}
             for i in range(processed_count):
                 artifact = selected_artifacts[i]
-                result = parse_results[i]
+                result = self.parse_results[i]
                 
                 if artifact.artifact_type not in results_by_type:
                     results_by_type[artifact.artifact_type] = {
@@ -1335,10 +1419,10 @@ class ParseArtifactsDialog(QDialog):
                     if success_count > 0:
                         if success_count == total_files:
                             # All files succeeded
-                            loading_dialog.add_log_message(f"✓ {artifact_type}: Successfully parsed {total_records} records from {total_files} file(s)")
+                            self.loading_dialog.add_log_message(f"✓ {artifact_type}: Successfully parsed {total_records} records from {total_files} file(s)")
                         else:
                             # Partial success
-                            loading_dialog.add_log_message(f"⚠ {artifact_type}: Parsed {total_records} records from {success_count}/{total_files} file(s)")
+                            self.loading_dialog.add_log_message(f"⚠ {artifact_type}: Parsed {total_records} records from {success_count}/{total_files} file(s)")
                     
                     if error_count > 0:
                         # Show error summary
@@ -1349,7 +1433,7 @@ class ParseArtifactsDialog(QDialog):
                         
                         if error_details:
                             error_summary = error_details[0] if len(error_details) == 1 else f"{len(error_details)} errors"
-                            loading_dialog.add_log_message(f"✗ {artifact_type}: {error_count} file(s) FAILED - {error_summary}")
+                            self.loading_dialog.add_log_message(f"✗ {artifact_type}: {error_count} file(s) FAILED - {error_summary}")
             
             # Save updated index with verification
             index_save_success = False
@@ -1364,33 +1448,44 @@ class ParseArtifactsDialog(QDialog):
                 logger.error(f"Failed to save artifact index: {e}", exc_info=True)
                 print(f"[ERROR] Failed to save artifact index: {e}")
                 if LOADING_DIALOG_AVAILABLE:
-                    loading_dialog.add_log_message(f"⚠ Warning: Failed to save artifact index: {str(e)}")
+                    self.loading_dialog.add_log_message(f"⚠ Warning: Failed to save artifact index: {str(e)}")
+
+            # Keep loading_dialog open so it can show data loading progress
             
             # Summary stats
             print("[DEBUG] Calculating summary stats...")
-            success_count = sum(1 for r in parse_results if r.success)
-            error_count = len(parse_results) - success_count
+            success_count = sum(1 for r in self.parse_results if r.success)
+            error_count = len(self.parse_results) - success_count
             print(f"[DEBUG] Summary: {success_count} success, {error_count} errors")
             
-            # Show completion in loading dialog with summary (Requirement 11.2)
-            print("[DEBUG] Parsing complete, keeping loading dialog open for data loading...")
             if LOADING_DIALOG_AVAILABLE:
                 try:
-                    loading_dialog.add_log_message("\n" + "="*50)
-                    loading_dialog.add_log_message(f"PARSING SUMMARY: {success_count} Success, {error_count} Failed")
-                    loading_dialog.add_log_message("="*50 + "\n")
-                    
-                    if error_count > 0:
-                        loading_dialog.add_log_message("ERROR DETAILS:")
-                        for i in range(processed_count):
-                            if not parse_results[i].success:
-                                artifact = selected_artifacts[i]
-                                error_msg = ", ".join(parse_results[i].errors)
-                                loading_dialog.add_log_message(f"  • {artifact.artifact_type}: {error_msg}")
+                    errors_list = []
+                    warnings_list = []
+                    for i in range(processed_count):
+                        artifact = selected_artifacts[i]
+                        result = self.parse_results[i]
+                        if not result.success and result.errors:
+                            for err in result.errors:
+                                errors_list.append(f"{artifact.artifact_type}: {err}")
+                        if result.warnings:
+                            for warn in result.warnings:
+                                warnings_list.append(f"{artifact.artifact_type}: {warn}")
+
+                    if errors_list:
+                        self.loading_dialog.add_log_message(f"Errors ({len(errors_list)})")
+                        for err in errors_list:
+                            self.loading_dialog.add_log_message(f" {err}")
+                        self.loading_dialog.add_log_message("")
+                        
+                    if warnings_list:
+                        self.loading_dialog.add_log_message(f"Warnings ({len(warnings_list)})")
+                        for warn in warnings_list:
+                            self.loading_dialog.add_log_message(f" {warn}")
                     
                     # Update dialog to show data loading phase
-                    loading_dialog.add_log_message("\n📊 LOADING DATA INTO GUI TABLES...")
-                    loading_dialog.title_label.setText("LOADING DATA INTO GUI")
+                    self.loading_dialog.add_log_message("\n📊 LOADING DATA INTO GUI TABLES...")
+                    self.loading_dialog.title_label.setText("LOADING DATA INTO GUI")
                     from PyQt5.QtWidgets import QApplication
                     QApplication.processEvents()
                     print("[DEBUG] Loading dialog updated for data loading phase")
@@ -1407,18 +1502,18 @@ class ParseArtifactsDialog(QDialog):
             # Keep loading_dialog open so it can show data loading progress
             
             logger.info(f"Parsing complete: {success_count} success, {error_count} errors")
-            return True, index_save_success, success_count, error_count, parse_results, loading_dialog if LOADING_DIALOG_AVAILABLE else None
+            return True, index_save_success, success_count, error_count, self.parse_results, self.loading_dialog if LOADING_DIALOG_AVAILABLE else None
             
         except Exception as e:
             logger.error(f"Parsing failed: {e}", exc_info=True)
             if LOADING_DIALOG_AVAILABLE:
                 try:
-                    loading_dialog.add_log_message(f"[Error] Parsing failed: {str(e)}")
+                    self.loading_dialog.add_log_message(f"[Error] Parsing failed: {str(e)}")
                     # Keep error dialog open longer (same as live parsers - Crow Eye.py line 7017)
                     from PyQt5.QtCore import QTimer
                     from PyQt5.QtWidgets import QApplication
                     QApplication.processEvents()
-                    QTimer.singleShot(3000, loading_dialog.close)
+                    QTimer.singleShot(3000, self.loading_dialog.close)
                 except Exception as dialog_error:
                     logger.error(f"Failed to update loading dialog: {dialog_error}", exc_info=True)
             
@@ -1435,6 +1530,6 @@ class ParseArtifactsDialog(QDialog):
             # Always stop log capture (same as live parsers - Crow Eye.py line 7023)
             if LOADING_DIALOG_AVAILABLE:
                 try:
-                    loading_dialog.stop_log_capture()
+                    self.loading_dialog.stop_log_capture()
                 except Exception as e:
                     logger.error(f"Failed to stop log capture: {e}", exc_info=True)

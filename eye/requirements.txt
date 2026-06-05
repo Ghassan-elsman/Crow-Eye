@@ -17,6 +17,10 @@ markdown>=3.4.0
 # Token Counting for Context Management
 tiktoken>=0.5.0
 
+# Compression for archived sealed-payload sidecars (optional: stdlib gzip is the
+# automatic fallback if this is not installed)
+zstandard>=0.21.0
+
 # Testing
 hypothesis>=6.82.0
 pytest>=7.4.0

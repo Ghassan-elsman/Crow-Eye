@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from ..config import FeatherConfig, WingConfig
+from .ui_styling import CorrelationEngineStyles
 
 
 class ComponentDetailPanel(QWidget):
@@ -22,36 +23,57 @@ class ComponentDetailPanel(QWidget):
     
     def _init_ui(self):
         """Initialize the user interface"""
+        # Slate-blue panel background so the embed matches the
+        # surrounding Crow-Eye chrome instead of falling back to default
+        # Qt light gray.
+        self.setStyleSheet(
+            f"QWidget {{ background-color: {CorrelationEngineStyles.BG_PRIMARY};"
+            f" color: {CorrelationEngineStyles.TEXT_PRIMARY}; }}"
+        )
+
         layout = QVBoxLayout(self)
-        
+
         # Create scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
+        CorrelationEngineStyles.apply_scroll_style(scroll)
+
         # Create content widget
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.addStretch()
-        
+
         scroll.setWidget(self.content_widget)
         layout.addWidget(scroll)
-        
+
         # Initial message
         self._show_empty_message()
-    
+
     def _show_empty_message(self):
         """Show message when no component is selected"""
         self._clear_content()
-        
+
         label = QLabel("Select a component to view details")
         label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet("color: #888; font-size: 14px;")
+        label.setStyleSheet(
+            f"color: {CorrelationEngineStyles.TEXT_MUTED}; font-size: 14px;"
+        )
         self.content_layout.insertWidget(0, label)
+
+    def _style_section(self, group_box: QGroupBox) -> QGroupBox:
+        """Apply the Crow-Eye chrome to a freshly built section and its
+        children (text edits, inputs). Call before adding the box to
+        ``self.content_layout`` so the styles are in place when Qt
+        first lays out the widget."""
+        CorrelationEngineStyles.apply_group_box_style(group_box)
+        for te in group_box.findChildren(QTextEdit):
+            CorrelationEngineStyles.apply_text_edit_style(te)
+        return group_box
     
     def _clear_content(self):
         """Clear all content"""
-        while self.content_layout.count() > 1:  # Keep stretch
+        while self.content_layout.count() > 1: # Keep stretch
             item = self.content_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
@@ -153,7 +175,18 @@ class ComponentDetailPanel(QWidget):
         
         meta_group.setLayout(meta_layout)
         self.content_layout.insertWidget(6, meta_group)
-    
+
+        # GUI-polish: style every freshly built section + its inner
+        # text edits / inputs in one pass.
+        self._style_all_sections()
+
+    def _style_all_sections(self) -> None:
+        """Apply the Crow-Eye chrome to every QGroupBox + QTextEdit
+        currently inside ``content_widget``. Called at the end of
+        ``display_feather_details`` and ``display_wing_details``."""
+        for gb in self.content_widget.findChildren(QGroupBox):
+            self._style_section(gb)
+
     def display_wing_details(self, wing_config: WingConfig):
         """
         Display wing configuration details.
@@ -196,11 +229,11 @@ class ComponentDetailPanel(QWidget):
         for i, feather_ref in enumerate(wing_config.feathers, 1):
             feather_info = QLabel(
                 f"{i}. {feather_ref.feather_id} ({feather_ref.artifact_type})\n"
-                f"   Config: {feather_ref.feather_config_name}\n"
-                f"   Database: {feather_ref.feather_database_path}"
+                f" Config: {feather_ref.feather_config_name}\n"
+                f" Database: {feather_ref.feather_database_path}"
             )
             feather_info.setWordWrap(True)
-            feather_info.setStyleSheet("padding: 5px; background-color: #f5f5f5; border-radius: 3px;")
+            feather_info.setStyleSheet("padding: 5px; background-color: #1E293B; border-radius: 3px;")
             feathers_layout.addWidget(feather_info)
         
         feathers_group.setLayout(feathers_layout)
@@ -257,7 +290,10 @@ class ComponentDetailPanel(QWidget):
         
         meta_group.setLayout(meta_layout)
         self.content_layout.insertWidget(6, meta_group)
-    
+
+        # GUI-polish: style every freshly built section in one pass.
+        self._style_all_sections()
+
     def clear(self):
         """Clear the detail panel"""
         self._show_empty_message()

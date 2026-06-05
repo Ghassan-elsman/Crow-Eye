@@ -43,32 +43,32 @@ class InitializationResult:
         lines.append("CASE INITIALIZATION SUMMARY")
         lines.append("=" * 60)
         lines.append(f"Case: {self.case_directory.name}")
-        lines.append(f"Status: {'✓ SUCCESS' if self.success else '❌ FAILED'}")
+        lines.append(f"Status: {'[OK] SUCCESS' if self.success else '[ERROR] FAILED'}")
         lines.append("")
         lines.append(f"Wings Copied: {len(self.wings_copied)}")
         for wing_path in self.wings_copied:
-            lines.append(f"  ✓ {wing_path.name}")
+            lines.append(f" [OK] {wing_path.name}")
         lines.append("")
         lines.append(f"Feather Configs Generated: {len(self.feather_configs_generated)}")
         for config_path in self.feather_configs_generated:
-            lines.append(f"  ✓ {config_path.name}")
+            lines.append(f" [OK] {config_path.name}")
         lines.append("")
         if self.pipeline_created:
-            lines.append(f"Pipeline Created: ✓ {self.pipeline_created.name}")
+            lines.append(f"Pipeline Created: [OK] {self.pipeline_created.name}")
         else:
-            lines.append("Pipeline Created: ❌ None")
+            lines.append("Pipeline Created: [ERROR] None")
         
         if self.warnings:
             lines.append("")
             lines.append(f"Warnings ({len(self.warnings)}):")
             for warning in self.warnings:
-                lines.append(f"  ⚠ {warning}")
+                lines.append(f" [WARN] {warning}")
         
         if self.errors:
             lines.append("")
             lines.append(f"Errors ({len(self.errors)}):")
             for error in self.errors:
-                lines.append(f"  ❌ {error}")
+                lines.append(f" [ERROR] {error}")
         
         lines.append("=" * 60)
         return "\n".join(lines)
@@ -116,7 +116,7 @@ class CaseInitializer:
             (correlation_dir / "wings").mkdir(exist_ok=True)
             (correlation_dir / "pipelines").mkdir(exist_ok=True)
             (correlation_dir / "output").mkdir(exist_ok=True)
-            logger.info("✓ Correlation directory structure created")
+            logger.info("[OK] Correlation directory structure created")
         except Exception as e:
             error_msg = f"Failed to create Correlation directory structure: {e}"
             logger.error(error_msg)
@@ -130,7 +130,7 @@ class CaseInitializer:
             result.wings_copied = wings_copied
             
             if wings_copied:
-                logger.info(f"✓ Copied {len(wings_copied)} Default Wings")
+                logger.info(f"[OK] Copied {len(wings_copied)} Default Wings")
             else:
                 info_msg = "No Default Wings were copied (already exist)"
                 logger.info(info_msg)
@@ -149,7 +149,7 @@ class CaseInitializer:
             result.feather_configs_generated = configs_generated
             
             if configs_generated:
-                logger.info(f"✓ Generated {len(configs_generated)} feather configs")
+                logger.info(f"[OK] Generated {len(configs_generated)} feather configs")
             else:
                 logger.info("No feather configs needed to be generated")
         except Exception as e:
@@ -180,7 +180,7 @@ class CaseInitializer:
                 if pipeline:
                     config_name = pipeline_name.lower().replace(' ', '_')
                     result.pipeline_created = correlation_dir / "pipelines" / f"{config_name}.json"
-                    logger.info(f"✓ Created default pipeline: {pipeline_name}")
+                    logger.info(f"[OK] Created default pipeline: {pipeline_name}")
                 else:
                     warning_msg = "Failed to create default pipeline"
                     logger.warning(warning_msg)
@@ -218,14 +218,11 @@ class CaseInitializer:
         wings_dir = correlation_dir / "wings"
         pipelines_dir = correlation_dir / "pipelines"
         
-        # Check if Default Wings exist
+        # Check if Default Wings exist (any one of the discovered default
+        # wings being present is enough to consider the case "initialized").
         default_wings_exist = False
         if wings_dir.exists():
-            default_wing_files = [
-                "Execution_Proof_Correlation.json",
-                "User_Activity_Correlation.json"
-            ]
-            for wing_file in default_wing_files:
+            for wing_file in DefaultWingsLoader.get_default_wing_files():
                 if (wings_dir / wing_file).exists():
                     default_wings_exist = True
                     break
@@ -269,18 +266,15 @@ class CaseInitializer:
         
         status['correlation_dir_exists'] = True
         
-        # Check Default Wings
+        # Check Default Wings — discover dynamically from the source defaults
+        # folder so newly-shipped default wings are reflected in status.
         wings_dir = correlation_dir / "wings"
         if wings_dir.exists():
-            default_wing_files = [
-                "Execution_Proof_Correlation.json",
-                "User_Activity_Correlation.json"
-            ]
-            wings_found = 0
-            for wing_file in default_wing_files:
-                if (wings_dir / wing_file).exists():
-                    wings_found += 1
-            
+            default_wing_files = DefaultWingsLoader.get_default_wing_files()
+            wings_found = sum(
+                1 for wing_file in default_wing_files
+                if (wings_dir / wing_file).exists()
+            )
             status['default_wings_exist'] = wings_found > 0
             status['default_wings_count'] = wings_found
         

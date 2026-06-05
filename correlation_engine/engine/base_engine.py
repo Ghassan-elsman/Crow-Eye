@@ -174,7 +174,7 @@ class BaseCorrelationEngine(ABC):
             Filtered list of records within time period
         """
         if not self.filters.time_period_start and not self.filters.time_period_end:
-            return records  # No filter applied
+            return records # No filter applied
         
         filtered = []
         skipped_count = 0
@@ -198,94 +198,21 @@ class BaseCorrelationEngine(ABC):
         
         # Log filter statistics
         if skipped_count > 0:
-            print(f"[Time Filter] Skipped {skipped_count} records with invalid timestamps")
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"[Time Filter] Skipped {skipped_count} records with invalid timestamps")
         
         if len(filtered) < len(records):
-            print(f"[Time Filter] Filtered {len(records)} → {len(filtered)} records "
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"[Time Filter] Filtered {len(records)} → {len(filtered)} records "
                   f"({len(records) - len(filtered)} excluded)")
         
         return filtered
     
     def _parse_timestamp(self, value: Any) -> Optional[datetime]:
         """
-        Parse timestamp from various formats.
-        
-        Supports:
-        - datetime objects (returned as-is)
-        - ISO 8601 strings
-        - Unix timestamps (seconds)
-        - Unix timestamps (milliseconds)
-        - Windows FILETIME
-        
-        Args:
-            value: Timestamp value to parse
-            
-        Returns:
-            Parsed datetime or None if invalid
+        Parse timestamp from various formats using ResilientTimestampParser.
         """
-        if not value:
-            return None
-        
-        # Already a datetime
-        if isinstance(value, datetime):
-            return value
-        
-        # Convert to string
-        timestamp_str = str(value).strip()
-        
-        if not timestamp_str or timestamp_str.lower() in ('none', 'null', 'n/a', ''):
-            return None
-        
-        # Try numeric timestamps
-        try:
-            numeric_value = float(timestamp_str)
-            
-            # Windows FILETIME (100-nanosecond intervals since 1601-01-01)
-            if numeric_value > 10000000000000:
-                unix_timestamp = (numeric_value - 116444736000000000) / 10000000
-                parsed_time = datetime.fromtimestamp(unix_timestamp)
-            # Unix timestamp in milliseconds
-            elif numeric_value > 10000000000:
-                parsed_time = datetime.fromtimestamp(numeric_value / 1000)
-            # Unix timestamp in seconds
-            elif numeric_value > 0:
-                parsed_time = datetime.fromtimestamp(numeric_value)
-            else:
-                return None
-            
-            # Validate range
-            if 1970 <= parsed_time.year <= 2100:
-                return parsed_time
-            return None
-            
-        except (ValueError, OSError, OverflowError):
-            pass
-        
-        # Try ISO format
-        try:
-            return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-        except:
-            pass
-        
-        # Try common formats
-        formats = [
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M:%S.%f",
-            "%Y/%m/%d %H:%M:%S",
-            "%d/%m/%Y %H:%M:%S",
-            "%m/%d/%Y %H:%M:%S",
-            "%Y-%m-%d",
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%dT%H:%M:%SZ",
-            "%Y-%m-%dT%H:%M:%S.%f",
-        ]
-        
-        for fmt in formats:
-            try:
-                parsed_time = datetime.strptime(timestamp_str, fmt)
-                if 1970 <= parsed_time.year <= 2100:
-                    return parsed_time
-            except:
-                continue
-        
-        return None
+        from .timestamp_parser import ResilientTimestampParser
+        return ResilientTimestampParser.parse_timestamp(value)

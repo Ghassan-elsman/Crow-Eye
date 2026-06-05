@@ -91,10 +91,10 @@ class FeatherLoader:
         self.config = config
         self.timestamp_parser = timestamp_parser
         self.current_table = None
-        self.is_metadata_based = False  # Track if metadata table was found
-        self.inferred_artifact_type = None  # Track inferred artifact type
-        self.detection_confidence = "low"  # Track detection confidence
-        self.schema_cache = {}  # Cache detected columns per table
+        self.is_metadata_based = False # Track if metadata table was found
+        self.inferred_artifact_type = None # Track inferred artifact type
+        self.detection_confidence = "low" # Track detection confidence
+        self.schema_cache = {} # Cache detected columns per table
     
     def connect(self):
         """Connect to the feather database with metadata-optional support"""
@@ -102,7 +102,7 @@ class FeatherLoader:
             raise FileNotFoundError(f"Feather database not found: {self.database_path}")
         
         self.connection = sqlite3.connect(self.database_path)
-        self.connection.row_factory = sqlite3.Row  # Access columns by name
+        self.connection.row_factory = sqlite3.Row # Access columns by name
         
         # Check if metadata table exists
         has_metadata = self._check_metadata_table()
@@ -129,16 +129,16 @@ class FeatherLoader:
         if self.is_metadata_based:
             logger.info(
                 f"Feather detection complete for {self.database_path}\n"
-                f"  - Artifact Type: {self.artifact_type} (confidence: high)\n"
-                f"  - Inference Method: metadata\n"
-                f"  - Metadata-based: True"
+                f" - Artifact Type: {self.artifact_type} (confidence: high)\n"
+                f" - Inference Method: metadata\n"
+                f" - Metadata-based: True"
             )
         else:
             logger.info(
                 f"Feather detection complete for {self.database_path}\n"
-                f"  - Artifact Type: {self.artifact_type} (confidence: {self.detection_confidence})\n"
-                f"  - Inference Method: inferred\n"
-                f"  - Metadata-based: False"
+                f" - Artifact Type: {self.artifact_type} (confidence: {self.detection_confidence})\n"
+                f" - Inference Method: inferred\n"
+                f" - Metadata-based: False"
             )
     
     def _check_metadata_table(self) -> bool:
@@ -306,10 +306,11 @@ class FeatherLoader:
         if not Path(database_path).exists():
             return False, [f"Database file not found: {database_path}"]
         
+        conn = None
         try:
             conn = sqlite3.connect(database_path)
             cursor = conn.cursor()
-            
+
             # Check feather_data table
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='feather_data'"
@@ -324,18 +325,22 @@ class FeatherLoader:
                 missing_columns = required_columns - columns
                 if missing_columns:
                     errors.append(f"Missing columns in feather_data: {', '.join(missing_columns)}")
-            
+
             # Check feather_metadata table
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='feather_metadata'"
             )
             if not cursor.fetchone():
                 errors.append("'feather_metadata' table not found")
-            
-            conn.close()
-            
-        except Exception as e:
+
+        except sqlite3.Error as e:
             errors.append(f"Database error: {str(e)}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
         
         return len(errors) == 0, errors
     
@@ -768,7 +773,7 @@ class FeatherLoader:
             if use_regex:
                 # Regex filtering - need to fetch all and filter in Python
                 # (SQLite doesn't have native regex support)
-                pass  # Will filter after query
+                pass # Will filter after query
             elif '*' in file_path:
                 query += " AND file_path LIKE ?"
                 params.append(file_path.replace('*', '%'))
@@ -937,7 +942,7 @@ class FeatherLoader:
         # Get all column names
         cursor = self.connection.cursor()
         cursor.execute(f"PRAGMA table_info({table_name})")
-        all_columns = [row[1].lower() for row in cursor.fetchall()]  # row[1] is column name
+        all_columns = [row[1].lower() for row in cursor.fetchall()] # row[1] is column name
         
         detected = DetectedColumns()
         
@@ -1089,10 +1094,11 @@ class FeatherLoader:
         if not Path(table_path).exists():
             return False, [f"Table file not found: {table_path}"]
         
+        conn = None
         try:
             conn = sqlite3.connect(f"file:{table_path}?mode=ro", uri=True)
             cursor = conn.cursor()
-            
+
             # Check if feather_data table exists
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='feather_data'"
@@ -1106,11 +1112,15 @@ class FeatherLoader:
                 data_tables = cursor.fetchall()
                 if not data_tables:
                     errors.append("No data tables found in database")
-            
-            conn.close()
-            
+
         except sqlite3.Error as e:
             errors.append(f"Database error: {str(e)}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
         
         return len(errors) == 0, errors
     
@@ -1194,11 +1204,11 @@ class FeatherLoader:
             
             logger.info(
                 f"Created feather '{feather_name}' with metadata:\n"
-                f"  - Artifact Type: {artifact_type}\n"
-                f"  - Table Name: {table_name}\n"
-                f"  - Record Count: {len(data)}\n"
-                f"  - Columns: {len(columns)}\n"
-                f"  - Indexed Columns: {indexed_columns or 'None'}"
+                f" - Artifact Type: {artifact_type}\n"
+                f" - Table Name: {table_name}\n"
+                f" - Record Count: {len(data)}\n"
+                f" - Columns: {len(columns)}\n"
+                f" - Indexed Columns: {indexed_columns or 'None'}"
             )
             
             return True, None
@@ -1230,8 +1240,8 @@ def load_feather_table(table_path: str, config, artifact_name: Optional[str] = N
         from correlation_engine.engine.feather_loader import load_feather_table
         
         for extracted in load_feather_table("prefetch.db", config):
-            print(f"Names: {extracted.names}")
-            print(f"Paths: {extracted.paths}")
+            logger.info(f"Names: {extracted.names}")
+            logger.info(f"Paths: {extracted.paths}")
     """
     from correlation_engine.engine.timestamp_parser import TimestampParser
     

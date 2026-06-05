@@ -25,7 +25,7 @@ class IdentifierExtractionConfigPanel(QWidget):
     - Advanced options (column overrides, custom formats)
     """
     
-    config_changed = pyqtSignal()  # Signal emitted when config changes
+    config_changed = pyqtSignal() # Signal emitted when config changes
     
     def __init__(self, config: WingsConfig, parent=None):
         """
@@ -72,7 +72,7 @@ class IdentifierExtractionConfigPanel(QWidget):
         anchor_layout.addWidget(QLabel("Time Window (minutes):"))
         self.time_window_spin = QSpinBox()
         self.time_window_spin.setMinimum(1)
-        self.time_window_spin.setMaximum(1440)  # Max 24 hours
+        self.time_window_spin.setMaximum(1440) # Max 24 hours
         self.time_window_spin.setValue(5)
         self.time_window_spin.setToolTip(
             "Evidence within this time window will be grouped into the same execution anchor"

@@ -48,29 +48,44 @@
     },
     "context_window": {
       "type": "object",
-      "description": "Context window and token budget configuration",
-      "required": [
-        "max_total_tokens",
-        "token_budget",
-        "history_management"
-      ],
+      "description": "Context window and token budget configuration. All fields are optional; the Eye supplies defaults for any that are absent.",
       "properties": {
         "max_total_tokens": {
           "type": "integer",
-          "description": "Maximum total tokens for the context window",
+          "description": "Fallback context window size (tokens) for models whose real window is unknown. For known cloud models the real window is auto-resolved and this is ignored unless lock_max_total_tokens is true; local servers are sized by their runtime n_ctx probe.",
           "minimum": 1000
+        },
+        "lock_max_total_tokens": {
+          "type": "boolean",
+          "description": "Pin max_total_tokens to the configured value and disable automatic resolution to the backend model's real context window.",
+          "default": false
+        },
+        "max_tool_output_chars": {
+          "type": "integer",
+          "description": "Maximum characters allowed for tool output before memory truncation",
+          "minimum": 1000,
+          "default": 100000
+        },
+        "store_full_payload": {
+          "type": "boolean",
+          "description": "Persist the full payload sent to the model per evidence seal so the Compliance log can reproduce (not just verify) each turn.",
+          "default": true
+        },
+        "sealed_payload_recent_uncompressed": {
+          "type": "integer",
+          "description": "Keep this many recent sealed payloads uncompressed; older ones are compressed (zstd, gzip fallback).",
+          "minimum": 0,
+          "default": 10
         },
         "token_budget": {
           "type": "object",
-          "description": "Token allocation across context components",
-          "required": [
-            "system_prompt",
-            "rag_context",
-            "conversation_history",
-            "tool_definitions",
-            "response_buffer"
-          ],
+          "description": "Optional per-component token allocation. When absent it is auto-scaled to the resolved context window; an explicit value pins it.",
           "properties": {
+            "conversation_history": {
+              "type": "integer",
+              "description": "Tokens allocated for conversation history",
+              "minimum": 0
+            },
             "system_prompt": {
               "type": "integer",
               "description": "Tokens allocated for system prompt",
@@ -81,19 +96,9 @@
               "description": "Tokens allocated for RAG context",
               "minimum": 0
             },
-            "conversation_history": {
+            "tool_results": {
               "type": "integer",
-              "description": "Tokens allocated for conversation history",
-              "minimum": 0
-            },
-            "tool_definitions": {
-              "type": "integer",
-              "description": "Tokens allocated for tool definitions",
-              "minimum": 0
-            },
-            "response_buffer": {
-              "type": "integer",
-              "description": "Tokens reserved for LLM response",
+              "description": "Tokens allocated for tool results",
               "minimum": 0
             }
           }
@@ -132,53 +137,12 @@
           "type": "object",
           "description": "Evidence preservation and detection settings",
           "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable automatic evidence detection and preservation",
-              "default": true
-            },
             "confidence_threshold": {
               "type": "number",
               "description": "Minimum confidence score (0.0-1.0) to preserve evidence",
               "minimum": 0.0,
               "maximum": 1.0,
               "default": 0.7
-            },
-            "max_pinned_messages": {
-              "type": "integer",
-              "description": "Maximum number of messages that can be manually pinned",
-              "minimum": 1,
-              "maximum": 50,
-              "default": 10
-            },
-            "auto_detect_evidence": {
-              "type": "boolean",
-              "description": "Automatically detect forensic evidence patterns in messages",
-              "default": true
-            }
-          }
-        },
-        "audit_trail": {
-          "type": "object",
-          "description": "Audit trail configuration for chain of custody",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable audit trail logging",
-              "default": true
-            },
-            "buffer_size": {
-              "type": "integer",
-              "description": "Number of entries to buffer before flushing to disk",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 10
-            },
-            "export_format": {
-              "type": "string",
-              "enum": ["text", "json", "csv"],
-              "description": "Default format for audit trail exports",
-              "default": "text"
             }
           }
         }

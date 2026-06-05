@@ -20,11 +20,12 @@ from .ui_styling import CorrelationEngineStyles
 
 from ..config import PipelineConfig, FeatherConfig, WingConfig
 from ..integration.feather_mappings import (
-    detect_artifact_type_from_name, 
+    detect_artifact_type_from_name,
     get_artifact_type_info,
     get_parent_artifact_type,
     ENHANCED_ARTIFACT_TYPES
 )
+from .crow_eye_icons import apply_status_to_label
 
 
 class PipelineBuilderWidget(QWidget):
@@ -36,9 +37,9 @@ class PipelineBuilderWidget(QWidget):
         super().__init__(parent)
         
         self.current_pipeline: Optional[PipelineConfig] = None
-        self.config_manager = None  # Will be set by correlation integration
-        self.case_directory = None  # Case directory for extracting case name
-        self.case_name = None  # Extracted case name
+        self.config_manager = None # Will be set by correlation integration
+        self.case_directory = None # Case directory for extracting case name
+        self.case_name = None # Extracted case name
         
         # File monitoring
         self._feathers_watch_dir = None
@@ -47,10 +48,32 @@ class PipelineBuilderWidget(QWidget):
         self._known_wing_configs = set()
         self._watch_timer = QTimer()
         self._watch_timer.timeout.connect(self._check_for_new_configs)
-        self._watch_timer.setInterval(2000)  # Check every 2 seconds
-        
+        self._watch_timer.setInterval(2000) # Check every 2 seconds
+
+        # Spawned Feather/Wing Creator windows are held here so Qt doesn't
+        # garbage-collect them while they're visible. Each entry is released
+        # via _track_child_window when the window is destroyed.
+        self._child_windows = []
+
         self._init_ui()
-        
+
+    def _track_child_window(self, window):
+        """Hold a reference to a spawned child window and release it on close
+        so the list doesn't grow unbounded across the widget's lifetime."""
+        self._child_windows.append(window)
+        window.destroyed.connect(
+            lambda _=None, w=window: (
+                self._child_windows.remove(w) if w in self._child_windows else None
+            )
+        )
+
+    def closeEvent(self, event):
+        """Stop the 2-second config watcher when the builder is closed so the
+        timer doesn't keep polling for the rest of the app's lifetime."""
+        if self._watch_timer.isActive():
+            self._watch_timer.stop()
+        super().closeEvent(event)
+
     def set_config_manager(self, config_manager):
         """
         Set Configuration Manager and connect signals.
@@ -103,6 +126,10 @@ class PipelineBuilderWidget(QWidget):
         else:
             self._known_wing_configs = set()
         
+        # Start watching for new configs immediately
+        if not self._watch_timer.isActive():
+            self._watch_timer.start()
+
         print(f"[Pipeline Builder] Case directory set: {case_directory}")
         print(f"[Pipeline Builder] Extracted case name: {self.case_name}")
         print(f"[Pipeline Builder] Feathers watch dir: {self._feathers_watch_dir}")
@@ -153,7 +180,7 @@ class PipelineBuilderWidget(QWidget):
             Tuple of (is_unique, error_message)
         """
         if not self.case_directory:
-            return (True, None)  # Can't validate without case directory
+            return (True, None) # Can't validate without case directory
         
         from pathlib import Path
         
@@ -161,7 +188,7 @@ class PipelineBuilderWidget(QWidget):
         pipelines_dir = Path(self.case_directory) / "Correlation" / "pipelines"
         
         if not pipelines_dir.exists():
-            return (True, None)  # No pipelines yet, so it's unique
+            return (True, None) # No pipelines yet, so it's unique
         
         # Generate config name from pipeline name
         config_name = pipeline_name.strip().replace(' ', '_').lower()
@@ -301,7 +328,7 @@ class PipelineBuilderWidget(QWidget):
             is_unique, error_msg = self._validate_pipeline_name_uniqueness(pipeline_name)
             
             if not is_unique:
-                self.name_validation_label.setText(f"⚠ {error_msg}")
+                apply_status_to_label(self.name_validation_label, "WARN", f"{error_msg}")
                 self.name_validation_label.setStyleSheet("color: #FF9800;")
             else:
                 self.name_validation_label.setText("")
@@ -564,10 +591,14 @@ class PipelineBuilderWidget(QWidget):
         
         # Update validation label
         if errors:
-            self.validation_label.setText("❌ Validation failed:\n" + "\n".join(f"• {e}" for e in errors))
+            # Rich-text body so the Crow-Eye error icon sits next to the
+            # heading; the bullet list keeps the existing line-per-error
+            # layout (escaped <br> instead of \n for richtext rendering).
+            body = "Validation failed:<br>" + "<br>".join(f"&bull; {e}" for e in errors)
+            apply_status_to_label(self.validation_label, "ERROR", body)
             self.validation_label.setStyleSheet("color: #F44336;")
         else:
-            self.validation_label.setText("✓ Pipeline configuration is valid")
+            apply_status_to_label(self.validation_label, "OK", "Pipeline configuration is valid")
             self.validation_label.setStyleSheet("color: #4CAF50;")
         
         return (len(errors) == 0, errors)
@@ -633,12 +664,8 @@ class PipelineBuilderWidget(QWidget):
             feather_window.feather_path_input.setText(str(feathers_dir))
             
             feather_window.show()
-            
-            # Store reference to prevent garbage collection
-            if not hasattr(self, '_child_windows'):
-                self._child_windows = []
-            self._child_windows.append(feather_window)
-            
+            self._track_child_window(feather_window)
+
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -678,11 +705,11 @@ class PipelineBuilderWidget(QWidget):
         # Add forensic value indicator
         forensic_value = type_info.get('forensic_value', 'Unknown')
         if 'High' in forensic_value:
-            display_name += " 🔴"  # High value
+            display_name += " " # High value
         elif 'Medium' in forensic_value:
-            display_name += " 🟡"  # Medium value
+            display_name += " " # Medium value
         else:
-            display_name += " ⚪"  # Low/Unknown value
+            display_name += " " # Low/Unknown value
             
         return display_name
     
@@ -820,19 +847,15 @@ class PipelineBuilderWidget(QWidget):
             wing_window = WingsCreatorWindow()
             
             # Set case directory for feather path resolution
-            case_directory = configs_dir.parent  # Go up from Correlation to case directory
+            case_directory = configs_dir.parent # Go up from Correlation to case directory
             wing_window.set_case_directory(str(case_directory))
             
             # Replace the config manager with one pointing to our output directory
             wing_window.config_manager = ConfigManager(str(configs_dir))
             
             wing_window.show()
-            
-            # Store reference to prevent garbage collection
-            if not hasattr(self, '_child_windows'):
-                self._child_windows = []
-            self._child_windows.append(wing_window)
-            
+            self._track_child_window(wing_window)
+
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -929,8 +952,10 @@ class PipelineBuilderWidget(QWidget):
                     elif isinstance(existing_config, dict):
                         existing_name = existing_config.get('feather_id', '') or existing_config.get('feather_name', '')
                     
-                    # Check for exact match or if feather_name is contained
-                    if existing_name and (existing_name == feather_name or feather_name in existing_name):
+                    # Exact-name equality only. Substring matching (e.g.
+                    # "MFT" in "MFT_USN") would silently dedup distinct
+                    # feathers that share a prefix.
+                    if existing_name and existing_name == feather_name:
                         already_added = True
                         feathers_skipped += 1
                         print(f"[Pipeline Builder] Skipping duplicate feather: {feather_name}")
@@ -987,17 +1012,17 @@ class PipelineBuilderWidget(QWidget):
                                 self.current_pipeline.add_feather_config(feather_config)
                         
                         feathers_added += 1
-                        print(f"[Pipeline Builder] ✓ Auto-added feather from Wing: {feather_name} (DB exists)")
+                        print(f"[Pipeline Builder] [OK] Auto-added feather from Wing: {feather_name} (DB exists)")
                     else:
-                        print(f"[Pipeline Builder] ⚠ Warning: Feather database not found: {db_path}")
+                        print(f"[Pipeline Builder] [WARN] Warning: Feather database not found: {db_path}")
                         # Still add it but with a warning and enhanced display
-                        display_name = self._enhance_artifact_type_display(feather_config) + " ⚠"
+                        display_name = self._enhance_artifact_type_display(feather_config) + " [WARN]"
                         item = QListWidgetItem(display_name)
                         item.setData(Qt.UserRole, feather_config)
                         
                         # Enhanced tooltip with warning
                         tooltip = self._create_enhanced_tooltip(feather_config, wing_config.wing_name)
-                        tooltip = f"⚠ Database not found: {feather_config.output_database}\n\n{tooltip}"
+                        tooltip = f"[WARN] Database not found: {feather_config.output_database}\n\n{tooltip}"
                         item.setToolTip(tooltip)
                         
                         self.feathers_list.addItem(item)
@@ -1010,7 +1035,7 @@ class PipelineBuilderWidget(QWidget):
                         feathers_added += 1
                     
                 except Exception as e:
-                    print(f"[Pipeline Builder] ⚠ Error loading feather config {feather_name}: {e}")
+                    print(f"[Pipeline Builder] [WARN] Error loading feather config {feather_name}: {e}")
                     # Fall through to create placeholder
                     feather_json_path = None
             
@@ -1057,27 +1082,27 @@ class PipelineBuilderWidget(QWidget):
                         config_name=feather_name,
                         feather_name=feather_name,
                         artifact_type=feather_ref.artifact_type,
-                        source_database="",  # Unknown for placeholder
-                        source_table="",  # Unknown for placeholder
-                        selected_columns=[],  # Unknown for placeholder
-                        column_mapping={},  # Unknown for placeholder
-                        timestamp_column="timestamp",  # Default assumption
-                        timestamp_format="",  # Unknown for placeholder
+                        source_database="", # Unknown for placeholder
+                        source_table="", # Unknown for placeholder
+                        selected_columns=[], # Unknown for placeholder
+                        column_mapping={}, # Unknown for placeholder
+                        timestamp_column="timestamp", # Default assumption
+                        timestamp_format="", # Unknown for placeholder
                         output_database=feather_db_path
                     )
                     
                     # Create display entry
                     display_name = f"{feather_name} ({feather_ref.artifact_type})"
                     if not db_exists:
-                        display_name += " ⚠"
-                        print(f"[Pipeline Builder] ⚠ Warning: Creating placeholder for missing feather: {feather_name}")
+                        display_name += " [WARN]"
+                        print(f"[Pipeline Builder] [WARN] Warning: Creating placeholder for missing feather: {feather_name}")
                     
                     item = QListWidgetItem(display_name)
                     item.setData(Qt.UserRole, placeholder_config)
                     
                     tooltip = f"From Wing: {wing_config.wing_name}\nDatabase: {feather_db_path}"
                     if not db_exists:
-                        tooltip = f"⚠ Feather not created yet - Click 'Create Feather' to build it\n{tooltip}"
+                        tooltip = f"[WARN] Feather not created yet - Click 'Create Feather' to build it\n{tooltip}"
                     item.setToolTip(tooltip)
                     
                     self.feathers_list.addItem(item)
@@ -1088,14 +1113,14 @@ class PipelineBuilderWidget(QWidget):
                             self.current_pipeline.add_feather_config(placeholder_config)
                     
                     placeholders_created += 1
-                    print(f"[Pipeline Builder] ✓ Created placeholder FeatherConfig for: {feather_name}")
+                    print(f"[Pipeline Builder] [OK] Created placeholder FeatherConfig for: {feather_name}")
                     
                 except Exception as e:
-                    print(f"[Pipeline Builder] ⚠ Error creating placeholder FeatherConfig for {feather_name}: {e}")
+                    print(f"[Pipeline Builder] [WARN] Error creating placeholder FeatherConfig for {feather_name}: {e}")
                     # Fallback to dict-based placeholder
                     display_name = f"{feather_name} ({feather_ref.artifact_type})"
                     if not db_exists:
-                        display_name += " ⚠"
+                        display_name += " [WARN]"
                     
                     item = QListWidgetItem(display_name)
                     item.setData(Qt.UserRole, {
@@ -1108,7 +1133,7 @@ class PipelineBuilderWidget(QWidget):
                     
                     tooltip = f"From Wing: {wing_config.wing_name}\nDatabase: {feather_db_path}"
                     if not db_exists:
-                        tooltip = f"⚠ Feather not created yet - Click 'Create Feather' to build it\n{tooltip}"
+                        tooltip = f"[WARN] Feather not created yet - Click 'Create Feather' to build it\n{tooltip}"
                     item.setToolTip(tooltip)
                     
                     self.feathers_list.addItem(item)
@@ -1116,9 +1141,9 @@ class PipelineBuilderWidget(QWidget):
         
         # Log summary
         print(f"[Pipeline Builder] Feather auto-load summary for Wing '{wing_config.wing_name}':")
-        print(f"  - Added: {feathers_added}")
-        print(f"  - Skipped (duplicates): {feathers_skipped}")
-        print(f"  - Placeholders created: {placeholders_created}")
+        print(f" - Added: {feathers_added}")
+        print(f" - Skipped (duplicates): {feathers_skipped}")
+        print(f" - Placeholders created: {placeholders_created}")
         
         # Trigger validation after adding feathers
         if feathers_added > 0 or placeholders_created > 0:
@@ -1219,12 +1244,8 @@ class PipelineBuilderWidget(QWidget):
                 self._watch_timer.start()
             
             feather_window.show()
-            
-            # Store reference to prevent garbage collection
-            if not hasattr(self, '_child_windows'):
-                self._child_windows = []
-            self._child_windows.append(feather_window)
-            
+            self._track_child_window(feather_window)
+
             print(f"[Pipeline Builder] Opened feather for editing: {feather_config}")
             
         except Exception as e:
@@ -1268,7 +1289,7 @@ class PipelineBuilderWidget(QWidget):
             wing_window = WingsCreatorWindow()
             
             # Set case directory for feather path resolution
-            case_directory = configs_dir.parent  # Go up from Correlation to case directory
+            case_directory = configs_dir.parent # Go up from Correlation to case directory
             print(f"[Pipeline Builder] configs_dir: {configs_dir}")
             print(f"[Pipeline Builder] case_directory: {case_directory}")
             wing_window.set_case_directory(str(case_directory))
@@ -1334,7 +1355,7 @@ class PipelineBuilderWidget(QWidget):
                                 tier_name=getattr(feather_ref, 'tier_name', '')
                             )
                             feathers.append(feather_spec)
-                            print(f"[Pipeline Builder]   Converted feather: {feather_spec.feather_id}")
+                            print(f"[Pipeline Builder] Converted feather: {feather_spec.feather_id}")
                         
                         # Create correlation rules
                         correlation_rules = CorrelationRules(
@@ -1385,12 +1406,8 @@ class PipelineBuilderWidget(QWidget):
                 self._watch_timer.start()
             
             wing_window.show()
-            
-            # Store reference to prevent garbage collection
-            if not hasattr(self, '_child_windows'):
-                self._child_windows = []
-            self._child_windows.append(wing_window)
-            
+            self._track_child_window(wing_window)
+
             print(f"[Pipeline Builder] Opened wing for editing: {wing_config.wing_name}")
             
         except Exception as e:
@@ -1565,7 +1582,7 @@ class PipelineBuilderWidget(QWidget):
                     
                     if not already_added:
                         self._add_feather_to_list(feather_config)
-                        print(f"[Pipeline Builder] ✓ Loaded feather: {feather_config.feather_name}")
+                        print(f"[Pipeline Builder] [OK] Loaded feather: {feather_config.feather_name}")
                 except Exception as e:
                     print(f"[Pipeline Builder] Error loading feather {config_path.name}: {e}")
             
@@ -1586,10 +1603,10 @@ class PipelineBuilderWidget(QWidget):
                     
                     # Debug: print config details
                     print(f"[Pipeline Builder] Wing loaded from: {config_path.name}")
-                    print(f"[Pipeline Builder]   config_name: {wing_config.config_name}")
-                    print(f"[Pipeline Builder]   wing_name: {wing_config.wing_name}")
-                    print(f"[Pipeline Builder]   wing_id: {wing_config.wing_id}")
-                    print(f"[Pipeline Builder]   feathers: {len(wing_config.feathers)}")
+                    print(f"[Pipeline Builder] config_name: {wing_config.config_name}")
+                    print(f"[Pipeline Builder] wing_name: {wing_config.wing_name}")
+                    print(f"[Pipeline Builder] wing_id: {wing_config.wing_id}")
+                    print(f"[Pipeline Builder] feathers: {len(wing_config.feathers)}")
                     
                     # Check if not already in list
                     already_added = False
@@ -1602,7 +1619,7 @@ class PipelineBuilderWidget(QWidget):
                     
                     if not already_added:
                         self._add_wing_to_list(wing_config)
-                        print(f"[Pipeline Builder] ✓ Loaded wing: {wing_config.wing_name}")
+                        print(f"[Pipeline Builder] [OK] Loaded wing: {wing_config.wing_name}")
                 except Exception as e:
                     print(f"[Pipeline Builder] Error loading wing {config_path.name}: {e}")
             
@@ -1638,8 +1655,8 @@ class PipelineBuilderWidget(QWidget):
                     if not already_added:
                         self._add_feather_to_list(feather_config)
                         self._on_modified()
-                        self.show_notification(f"✓ New feather added: {feather_config.feather_name}")
-                        print(f"[Pipeline Builder] ✓ Added new feather: {feather_config.feather_name}")
+                        self.show_notification(f"[OK] New feather added: {feather_config.feather_name}")
+                        print(f"[Pipeline Builder] [OK] Added new feather: {feather_config.feather_name}")
                 except Exception as e:
                     print(f"[Pipeline Builder] Error auto-adding feather {config_name}: {e}")
             
@@ -1675,8 +1692,8 @@ class PipelineBuilderWidget(QWidget):
                                             break
                                 
                                 self._on_modified()
-                                self.show_notification(f"✓ Feather updated: {updated_config.feather_name}")
-                                print(f"[Pipeline Builder] ✓ Updated feather: {updated_config.feather_name}")
+                                self.show_notification(f"[OK] Feather updated: {updated_config.feather_name}")
+                                print(f"[Pipeline Builder] [OK] Updated feather: {updated_config.feather_name}")
                         except Exception as e:
                             print(f"[Pipeline Builder] Error checking feather modification {config_name}: {e}")
             
@@ -1705,8 +1722,8 @@ class PipelineBuilderWidget(QWidget):
                     if not already_added:
                         self._add_wing_to_list(wing_config)
                         self._on_modified()
-                        self.show_notification(f"✓ New wing added: {wing_config.wing_name}")
-                        print(f"[Pipeline Builder] ✓ Added new wing: {wing_config.wing_name}")
+                        self.show_notification(f"[OK] New wing added: {wing_config.wing_name}")
+                        print(f"[Pipeline Builder] [OK] Added new wing: {wing_config.wing_name}")
                 except Exception as e:
                     print(f"[Pipeline Builder] Error auto-adding wing {config_name}: {e}")
             
@@ -1742,8 +1759,8 @@ class PipelineBuilderWidget(QWidget):
                                             break
                                 
                                 self._on_modified()
-                                self.show_notification(f"✓ Wing updated: {updated_config.wing_name}")
-                                print(f"[Pipeline Builder] ✓ Updated wing: {updated_config.wing_name}")
+                                self.show_notification(f"[OK] Wing updated: {updated_config.wing_name}")
+                                print(f"[Pipeline Builder] [OK] Updated wing: {updated_config.wing_name}")
                         except Exception as e:
                             print(f"[Pipeline Builder] Error checking wing modification {config_name}: {e}")
             
@@ -1824,7 +1841,7 @@ class PipelineBuilderWidget(QWidget):
             self.feathers_list.scrollToBottom()
             
             # Show notification
-            self.show_notification(f"✓ New feather added: {feather_config.feather_name}")
+            self.show_notification(f"[OK] New feather added: {feather_config.feather_name}")
             
             # Validate pipeline
             self.validate_pipeline()
@@ -1883,7 +1900,7 @@ class PipelineBuilderWidget(QWidget):
             self.wings_list.scrollToBottom()
             
             # Show notification
-            self.show_notification(f"✓ New wing added: {wing_config.wing_name}")
+            self.show_notification(f"[OK] New wing added: {wing_config.wing_name}")
             
             # Validate pipeline
             self.validate_pipeline()
@@ -1960,7 +1977,7 @@ class PipelineBuilderWidget(QWidget):
                                 )
                                 
                                 self._add_feather_to_list(feather_config)
-                                print(f"[Pipeline Builder] ✓ Loaded feather: {feather_config.feather_name}")
+                                print(f"[Pipeline Builder] [OK] Loaded feather: {feather_config.feather_name}")
                             
                             except Exception as e:
                                 # Fallback: Add feather directly without FeatherConfig
@@ -1972,11 +1989,11 @@ class PipelineBuilderWidget(QWidget):
                                 db_path = feather_metadata.get('database_path', '')
                                 
                                 item = QListWidgetItem(f"{feather_name} ({artifact_type})")
-                                item.setData(Qt.UserRole, feather_metadata)  # Store metadata directly
+                                item.setData(Qt.UserRole, feather_metadata) # Store metadata directly
                                 item.setToolTip(f"Database: {db_path}")
                                 self.feathers_list.addItem(item)
                                 
-                                print(f"[Pipeline Builder] ✓ Loaded feather (fallback): {feather_name}")
+                                print(f"[Pipeline Builder] [OK] Loaded feather (fallback): {feather_name}")
                     
                     except Exception as e:
                         print(f"[Pipeline Builder] Error loading feather {feather_id}: {e}")

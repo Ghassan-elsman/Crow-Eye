@@ -7,14 +7,33 @@ providing CRUD operations for report blocks and maintaining edit history.
 """
 
 import threading
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+import hashlib
+from typing import List, Dict, Any, Optional, Union
+from datetime import datetime, date
 from uuid import uuid4
 import logging
 import base64
 import os
 import json
 from dataclasses import fields
+
+class SafeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles non-serializable objects safely."""
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        if hasattr(obj, '__dict__'):
+            return obj.__dict__
+        if isinstance(obj, bytes):
+            return base64.b64encode(obj).decode('utf-8')
+        try:
+            return str(obj)
+        except:
+            return None
+
+def safe_json_dumps(obj, indent=None):
+    """Safely dump object to JSON string."""
+    return json.dumps(obj, cls=SafeEncoder, ensure_ascii=False, indent=indent)
 
 try:
     import markdown
@@ -49,6 +68,15 @@ class ReportEngine:
         self.edit_history: List[Dict[str, Any]] = []
         self.logger = logging.getLogger(__name__)
         self.max_history_size = 50
+        # Originating investigator question for blocks created in the current
+        # turn. QueryProcessor sets this at the start of each query so every
+        # block inherits its provenance (see _stamp_and_append).
+        self.current_source_query: str = ""
+
+        # GEP Rule 4 (Non-Repudiation): rolling hash-chain pointer for block IDs.
+        # Every new block gets sha256(prev_id + block_type + metadata)[:16] so
+        # silent edits to any historical block break the chain on next load.
+        self._prev_block_id: str = ""
         
         # Initialize color manager for chart visuals
         self.color_manager = ColorManager()
@@ -90,18 +118,57 @@ class ReportEngine:
         """Update the active case directory and load existing report workspace."""
         self.case_directory = case_directory
         self.load_report()
-    
-    def append_section(self, title: str, markdown_content: str, author: str = "ai") -> str:
+
+    # ---- GEP Rule 4 (Non-Repudiation) helpers --------------------------
+    def _chain_block_id(self, block) -> str:
+        """
+        Compute the next hash-chained block_id from the previous block_id +
+        the new block's type + serialized metadata.  Updates the rolling
+        pointer so successive blocks form a tamper-evident chain.
+        """
+        prev = self._prev_block_id or ""
+        try:
+            meta_str = json.dumps(block.metadata or {}, sort_keys=True, default=str)
+        except Exception:
+            meta_str = str(getattr(block, "metadata", ""))
+        seed = (prev + (getattr(block, "block_type", "") or "") + meta_str).encode(
+            "utf-8", errors="replace"
+        )
+        new_id = hashlib.sha256(seed).hexdigest()[:16]
+        self._prev_block_id = new_id
+        return new_id
+
+    def _stamp_and_append(self, block) -> None:
+        """
+        Stamp a freshly-created block with its hash-chained ID then append it
+        to the report.  Every newly-created block (any add_* method) must
+        funnel through here so the chain is unbroken.
+        """
+        # Stamp provenance on EVERY block type (not just the two handlers that
+        # used to do it inline): the originating question and a generation
+        # timestamp. Done BEFORE hashing so provenance is covered by the
+        # integrity chain. setdefault preserves any value an add_* set itself.
+        if getattr(block, "metadata", None) is None:
+            block.metadata = {}
+        block.metadata.setdefault("source_query", self.current_source_query or "Unknown Query")
+        block.metadata.setdefault("timestamp", datetime.now().isoformat())
+        block.block_id = self._chain_block_id(block)
+        self.blocks.append(block)
+    # --------------------------------------------------------------------
+
+    def append_section(self, title: str, content: str, author: str = "ai", category: str = "") -> str:
+        """Add a markdown text block to the report."""
         with self._lock:
             block = TextBlock(
                 title=title,
-                markdown_content=markdown_content,
+                markdown_content=content,
+                category=category,
                 metadata={
                     "author": author,
                     "timestamp": datetime.now().isoformat()
                 }
             )
-            self.blocks.append(block)
+            self._stamp_and_append(block)
             self._record_edit("append", block.block_id, author, {
                 "block_type": "text",
                 "title": title
@@ -121,26 +188,37 @@ class ReportEngine:
         caption: str = "",
         column_widths: Optional[Dict[str, str]] = None,
         compact_spacing: bool = False,
-        author: str = "ai"
+        author: str = "ai",
+        category: str = ""
     ) -> str:
         with self._lock:
+            # Truncate rows for report stability and performance
+            MAX_REPORT_ROWS = 1000
+            is_truncated = len(rows) > MAX_REPORT_ROWS
+            report_rows = rows[:MAX_REPORT_ROWS] if is_truncated else rows
+            
             block = TableBlock(
                 sql_query=sql_query,
                 columns=columns,
-                rows=rows,
+                rows=report_rows,
                 caption=caption,
+                category=category,
                 column_widths=column_widths or {},
                 compact_spacing=compact_spacing,
                 metadata={
                     "author": author,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
+                    "total_rows": len(rows),
+                    "is_truncated": is_truncated
                 }
             )
-            self.blocks.append(block)
+            self._stamp_and_append(block)
             self._record_edit("append", block.block_id, author, {
                 "block_type": "table",
-                "row_count": len(rows),
-                "column_count": len(columns)
+                "row_count": len(report_rows),
+                "total_rows": len(rows),
+                "column_count": len(columns),
+                "is_truncated": is_truncated
             })
             return block.block_id
 
@@ -153,41 +231,26 @@ class ReportEngine:
                     "timestamp": datetime.now().isoformat()
                 }
             )
-            self.blocks.append(block)
+            self._stamp_and_append(block)
             self._record_edit("append", block.block_id, author, {
                 "block_type": "chat",
                 "message_count": len(messages)
             })
             return block.block_id
 
-    def add_chart(self, title: str, labels: List[str], datasets: List[Dict[str, Any]], chart_type: str = "bar", author: str = "ai") -> str:
-        with self._lock:
-            block = ChartBlock(
-                title=title,
-                labels=labels,
-                datasets=datasets,
-                chart_type=chart_type,
-                metadata={
-                    "author": author,
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-            
-
-            try:
-                from eye.services.chart_renderer import ChartRenderer
-                chart_renderer = ChartRenderer()
-                block.metadata["chart_config"] = chart_renderer.render_chart_config(block)
-            except Exception as e:
-                self.logger.warning(f"Could not render chart config for {title}: {e}")
-            
-            self.blocks.append(block)
-            self._record_edit("append", block.block_id, author, {
-                "block_type": "chart",
-                "chart_type": chart_type,
-                "title": title
-            })
-            return block.block_id
+    def add_chart(self, title: str, labels: List[str], datasets: List[Dict[str, Any]], chart_type: str = "bar", author: str = "ai", category: str = "", **kwargs) -> str:
+        """
+        Primary method for adding charts. Wraps add_chart_enhanced for a unified API.
+        """
+        return self.add_chart_enhanced(
+            title=title,
+            labels=labels,
+            datasets=datasets,
+            chart_type=chart_type,
+            author=author,
+            category=category,
+            **kwargs
+        )
     
     def add_chart_enhanced(
         self,
@@ -201,7 +264,9 @@ class ReportEngine:
         legend_position: str = "top",
         annotations: Optional[List[Dict[str, Any]]] = None,
         reference_lines: Optional[List[Dict[str, Any]]] = None,
-        author: str = "ai"
+        category: str = "",
+        author: str = "ai",
+        **kwargs
     ) -> str:
         """
         Add enhanced chart with color customization and advanced features.
@@ -217,6 +282,7 @@ class ReportEngine:
             legend_position: Legend position (top, bottom, left, right, hidden)
             annotations: Optional list of text annotations with x, y, label
             reference_lines: Optional list of reference lines with type, value, color, label
+            category: Forensic category for grouping
             author: Author of the block
             
         Returns:
@@ -238,6 +304,7 @@ class ReportEngine:
                 legend_position=legend_position,
                 annotations=annotations if annotations else [],
                 reference_lines=reference_lines if reference_lines else [],
+                category=category,
                 metadata={
                     "author": author,
                     "timestamp": datetime.now().isoformat()
@@ -245,14 +312,14 @@ class ReportEngine:
             )
             
             # Use ChartRenderer to generate Chart.js configuration
-            chart_renderer = ChartRenderer()
+            chart_renderer = ChartRenderer(self.color_manager)
             chart_config = chart_renderer.render_chart_config(block)
             
             # Store the rendered configuration in metadata for later use
             block.metadata["chart_config"] = chart_config
             
             # Add block to report
-            self.blocks.append(block)
+            self._stamp_and_append(block)
             
             # Record edit history
             self._record_edit("append", block.block_id, author, {
@@ -301,7 +368,7 @@ class ReportEngine:
                     "timestamp": datetime.now().isoformat()
                 }
             )
-            self.blocks.append(block)
+            self._stamp_and_append(block)
             self._record_edit("append", block.block_id, author, {
                 "block_type": "timeline",
                 "title": title,
@@ -345,7 +412,7 @@ class ReportEngine:
                     "timestamp": datetime.now().isoformat()
                 }
             )
-            self.blocks.append(block)
+            self._stamp_and_append(block)
             self._record_edit("append", block.block_id, author, {
                 "block_type": "heatmap",
                 "title": title,
@@ -391,13 +458,48 @@ class ReportEngine:
                         "Required fields: evidence_id, handler_name, action, timestamp"
                     )
             
-            self.blocks.append(block)
+            self._stamp_and_append(block)
             self._record_edit("append", block.block_id, author, {
                 "block_type": "chain_of_custody",
                 "entry_count": len(entries)
             })
             return block.block_id
-    
+
+
+    def add_evidence(
+        self,
+        reference_text: str,
+        source_link: str,
+        evidence_data: List[Dict[str, Any]],
+        columns: Optional[List[str]] = None,
+        author: str = "ai",
+        category: str = "evidence"
+    ) -> str:
+        """Add an expandable evidence reference block."""
+        with self._lock:
+            # If columns weren't provided, try to extract from data
+            if not columns and evidence_data:
+                columns = list(evidence_data[0].keys())
+
+            block = ReferenceBlock(
+                reference_text=reference_text,
+                source_link=source_link,
+                columns=columns or [],
+                evidence_data=evidence_data,
+                category=category,
+                metadata={
+                    "author": author,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+            self._stamp_and_append(block)
+            self._record_edit("append", block.block_id, author, {
+                "block_type": "reference",
+                "evidence_count": len(evidence_data),
+                "column_count": len(columns or [])
+            })
+            return block.block_id
+
     def add_image(
         self,
         image_path: str,
@@ -423,7 +525,7 @@ class ReportEngine:
                     "timestamp": datetime.now().isoformat()
                 }
             )
-            self.blocks.append(block)
+            self._stamp_and_append(block)
             self._record_edit("append", block.block_id, author, {
                 "block_type": "image",
                 "image_path": image_path
@@ -510,9 +612,10 @@ class ReportEngine:
                 try:
                     # Check for duplicate block_id collision
                     if block.block_id in existing_ids:
-                        # Generate new UUID and log warning
+                        # GEP Rule 4: on collision, re-stamp using the hash chain
+                        # so the new ID stays tamper-evident (no random UUID).
                         old_id = block.block_id
-                        block.block_id = str(uuid4())
+                        block.block_id = self._chain_block_id(block)
                         self.logger.warning(
                             f"Duplicate block_id collision: {old_id} -> {block.block_id}"
                         )
@@ -536,7 +639,9 @@ class ReportEngine:
                     if "timestamp" not in block.metadata:
                         block.metadata["timestamp"] = datetime.now().isoformat()
                     
-                    # Append to blocks list
+                    # Append to blocks list. Imported blocks KEEP their existing
+                    # block_id (collision handler above already swapped collisions
+                    # to a new chain ID), so we bypass _stamp_and_append here.
                     self.blocks.append(block)
                     imported_count += 1
                     
@@ -633,7 +738,7 @@ class ReportEngine:
             state = self.get_report_json()
 
             with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(state, f, indent=2)
+                f.write(safe_json_dumps(state, indent=2))
             
             # Atomic swap (os.replace is more robust on Windows than remove+rename)
             os.replace(temp_file, report_file)
@@ -683,7 +788,9 @@ class ReportEngine:
                         valid_fields = {f.name for f in fields(cls)}
                         params = {k: v for k, v in block_data.items() if k in valid_fields}
                         
-                        # Initialize block with filtered fields
+                        # Initialize block with filtered fields. Loaded blocks
+                        # MUST keep their on-disk block_id so audit-log references
+                        # remain valid; we do NOT re-stamp via the chain helper.
                         try:
                             block = cls(**params)
                             self.blocks.append(block)
@@ -691,7 +798,13 @@ class ReportEngine:
                             self.logger.error(f"Failed to reconstruct {b_type} block: {e}")
                 
                 self.edit_history = state.get("edit_history", [])
-                
+
+            # GEP Rule 4: rehydrate the hash-chain pointer from the tail of the
+            # restored block list so newly-added blocks extend the same chain
+            # rather than starting a parallel one.
+            if self.blocks:
+                self._prev_block_id = self.blocks[-1].block_id or ""
+
             self.logger.info(f"Loaded {len(self.blocks)} blocks from report workspace.")
             return True
         except Exception as e:

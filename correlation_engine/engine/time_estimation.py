@@ -41,11 +41,11 @@ class EstimationResult:
     """Result of time estimation calculation"""
     estimated_completion_time: Optional[datetime]
     time_remaining_seconds: Optional[float]
-    confidence_level: float  # 0.0 to 1.0
+    confidence_level: float # 0.0 to 1.0
     processing_rate_windows_per_second: float
     processing_rate_records_per_second: float
     estimation_method: str
-    trend_direction: str  # "improving", "stable", "degrading"
+    trend_direction: str # "improving", "stable", "degrading"
     
     @property
     def time_remaining_formatted(self) -> str:
@@ -283,15 +283,15 @@ class AdaptiveTimeEstimator:
     
     def _estimate_linear_regression(self, current_windows: int, total_windows: int) -> EstimationResult:
         """Linear regression on processing rate over time"""
-        if len(self.measurements) < 10:  # Need more data for regression
+        if len(self.measurements) < 10: # Need more data for regression
             raise ValueError("Insufficient data for regression")
         
         recent_measurements = list(self.measurements)[-self.trend_analysis_window:]
         
         # Prepare data for regression (time vs cumulative windows)
         start_time = recent_measurements[0].timestamp
-        x_values = []  # Time in seconds from start
-        y_values = []  # Cumulative windows processed
+        x_values = [] # Time in seconds from start
+        y_values = [] # Cumulative windows processed
         
         cumulative_windows = 0
         for measurement in recent_measurements:
@@ -339,7 +339,7 @@ class AdaptiveTimeEstimator:
     
     def _estimate_exponential_smoothing(self, current_windows: int, total_windows: int) -> EstimationResult:
         """Exponential smoothing for processing rate estimation"""
-        alpha = 0.3  # Smoothing factor
+        alpha = 0.3 # Smoothing factor
         
         recent_measurements = list(self.measurements)[-self.trend_analysis_window:]
         
@@ -415,7 +415,7 @@ class AdaptiveTimeEstimator:
             trend_slope = 0
         
         # Current rate (recent average)
-        current_rate = statistics.mean(rates[-3:])  # Last 3 measurements
+        current_rate = statistics.mean(rates[-3:]) # Last 3 measurements
         
         # Project future rate based on trend
         remaining_windows = total_windows - current_windows
@@ -426,7 +426,7 @@ class AdaptiveTimeEstimator:
         
         # Adjust rate based on trend
         future_rate = current_rate + (trend_slope * estimated_future_measurements)
-        future_rate = max(future_rate, current_rate * 0.1)  # Don't let it go too low
+        future_rate = max(future_rate, current_rate * 0.1) # Don't let it go too low
         
         # Use average of current and projected rate
         adjusted_rate = (current_rate + future_rate) / 2

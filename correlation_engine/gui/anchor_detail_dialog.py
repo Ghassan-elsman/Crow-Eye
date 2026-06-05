@@ -19,6 +19,7 @@ from datetime import datetime
 
 from correlation_engine.engine.data_structures import Anchor
 from correlation_engine.gui.timeline_widget import TimelineWidget
+from correlation_engine.gui.ui_styling import CorrelationEngineStyles
 
 
 class AnchorDetailDialog(QDialog):
@@ -40,6 +41,9 @@ class AnchorDetailDialog(QDialog):
         self.anchor = anchor
         self.setup_ui()
         self.load_data()
+        # GUI-polish pass: unified slate / cyan / emerald look across
+        # every widget in this dialog. See ui_styling.py.
+        CorrelationEngineStyles.apply_evidence_detail_styling(self)
     
     def setup_ui(self):
         """Setup dialog UI."""
@@ -103,6 +107,11 @@ class AnchorDetailDialog(QDialog):
         start_str = self.anchor.start_time.strftime("%Y-%m-%d %H:%M:%S") if self.anchor.start_time else "N/A"
         end_str = self.anchor.end_time.strftime("%Y-%m-%d %H:%M:%S") if self.anchor.end_time else "N/A"
         
+        # Pre-format confidence outside the f-string — Python f-strings
+        # don't accept `value:.2f if cond else 'N/A'` as a format spec.
+        confidence_str = (
+            f"{self.anchor.confidence:.2f}" if self.anchor.confidence else "N/A"
+        )
         metadata_html = f"""
 <b>Anchor ID:</b> {self.anchor.anchor_id}<br>
 <b>Start Time:</b> {start_str}<br>
@@ -115,39 +124,40 @@ Primary: {self.anchor.primary_count}<br>
 Secondary: {self.anchor.secondary_count}<br>
 <br>
 <b>Primary Artifact:</b> {self.anchor.primary_artifact or 'N/A'}<br>
-<b>Confidence:</b> {self.anchor.confidence:.2f if self.anchor.confidence else 'N/A'}
+<b>Confidence:</b> {confidence_str}
         """
         self.metadata_text.setHtml(metadata_html)
     
     def _load_timeline(self):
-        """Load simple timeline visualization."""
+        """Load timeline visualization into the embedded TimelineWidget.
+
+        Hands the sorted evidence list off to TimelineWidget.load_events
+        when available; otherwise falls back silently (the timeline area
+        is purely visual and never blocks the rest of the dialog).
+        """
         if not self.anchor.rows:
-            self.timeline_text.setText("No timestamped evidence")
             return
-        
+
         # Sort evidence by timestamp
         sorted_evidence = sorted(
             [e for e in self.anchor.rows if e.timestamp],
             key=lambda e: e.timestamp
         )
-        
         if not sorted_evidence:
-            self.timeline_text.setText("No timestamped evidence")
             return
-        
-        # Create simple text timeline
-        timeline_str = "<b>Event Timeline:</b><br><br>"
-        for evidence in sorted_evidence:
-            time_str = evidence.timestamp.strftime("%H:%M:%S")
-            role_badge = {
-                "primary": "[PRIMARY]",
-                "secondary": "[SECONDARY]",
-                "supporting": "[SUPPORTING]"
-            }.get(evidence.role, "[UNKNOWN]")
-            
-            timeline_str += f"{time_str} - {role_badge} {evidence.artifact}<br>"
-        
-        self.timeline_text.setText(timeline_str)
+
+        # Best-effort handoff to the TimelineWidget instance built by
+        # setup_ui. Older builds of TimelineWidget expose a different
+        # API, so we probe before calling — the timeline view is a
+        # nice-to-have, not a blocker.
+        for method_name in ("load_events", "load_anchor", "set_events", "update_events"):
+            method = getattr(self.timeline_widget, method_name, None)
+            if callable(method):
+                try:
+                    method(sorted_evidence)
+                except Exception:
+                    pass
+                return
     
     def _load_evidence(self):
         """Load evidence list."""
@@ -160,17 +170,19 @@ Secondary: {self.anchor.secondary_count}<br>
             # Artifact
             self.evidence_table.setItem(i, 1, QTableWidgetItem(evidence.artifact))
             
-            # Role
+            # Role — map to the Crow-Eye semantic palette so the badge
+            # color matches the rest of the engine (Score/Confidence
+            # categories in the main viewers use the same hues).
             role_item = QTableWidgetItem(evidence.role.upper())
             if evidence.role == "primary":
-                role_item.setForeground(QColor(255, 100, 100))
+                role_item.setForeground(QColor(CorrelationEngineStyles.SCORE_WEAK)) # red — primary = strongest claim
                 font = QFont()
                 font.setBold(True)
                 role_item.setFont(font)
             elif evidence.role == "secondary":
-                role_item.setForeground(QColor(255, 255, 100))
+                role_item.setForeground(QColor(CorrelationEngineStyles.SCORE_PROBABLE)) # amber
             else:
-                role_item.setForeground(QColor(100, 255, 100))
+                role_item.setForeground(QColor(CorrelationEngineStyles.SCORE_CONFIRMED)) # emerald — supporting
             self.evidence_table.setItem(i, 2, role_item)
             
             # Timestamp

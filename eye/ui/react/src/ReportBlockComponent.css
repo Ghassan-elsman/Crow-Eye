@@ -1,98 +1,168 @@
 /**
  * Report Block Component Styles
- * Cyberpunk dashboard theme matching the unified dissection
+ * Professional dark forensic palette — aligned with ReportBuilderPanel.css.
+ * No neon accents; calm blue accent and quiet borders.
  */
 
 :root {
-  --bg: #0a0c10; --bg1: #0f1218; --bg2: #151a22; --bg3: #1c2330; --border: #1e2a3a; --border2: #2a3a50; --tx: #e8edf5; --tx2: #8899aa; --tx3: #4a5a6a;
-  --accent: #f97316; --accent-dim: rgba(249, 115, 22, 0.1); --header-color: #f97316; --header-dim: #3d1a0a; --identity-color: #06b6d4; --identity-dim: #0a1d2e;
-  --times-color: #ec4899; --times-dim: #2a0a1a; --props-color: #10b981; --props-dim: #0a2a1a; --danger: #ff4d6a;
+  --bg: #07090e;
+  --bg1: #0e131c;
+  --bg2: #11151c;
+  --bg3: #1a2236;
+  --border: #1f2530;
+  --border2: #2a3a55;
+  --tx: #e6edf3;
+  --tx2: #94a3b8;
+  --tx3: #64748b;
+  --accent: #4a90e2;
+  --accent-strong: #60a5fa;
+  --accent-dim: rgba(74, 144, 226, 0.10);
+  --header-color: #4a90e2;
+  --header-dim: rgba(74, 144, 226, 0.10);
+  --identity-color: #60a5fa;
+  --identity-dim: rgba(96, 165, 250, 0.10);
+  --times-color: #ec4899;
+  --times-dim: rgba(236, 72, 153, 0.10);
+  --props-color: #10b981;
+  --props-dim: rgba(16, 185, 129, 0.10);
+  --danger: #f85149;
 }
 
 .report-block {
-  margin-bottom: 24px;
+  --block-accent: var(--accent);
+  position: relative;
+  margin-bottom: 20px;
   background: var(--bg1);
-  border: 1px solid var(--border);
-  border-radius: 24px;
+  border: 1px solid var(--border2);
+  border-left: 3px solid var(--block-accent);
+  border-radius: 8px;
   overflow: hidden;
-  transition: all 0.2s ease-in-out;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+  transition: border-color 0.15s ease-in-out;
 }
 
 .report-block:hover {
-  border-color: var(--border2);
+  border-color: var(--accent);
+  border-left-color: var(--block-accent);
 }
 
 .report-block.dragging {
-  opacity: 0.5;
-  border: 2px dashed var(--accent);
-  box-shadow: 0 0 20px var(--accent-dim);
+  opacity: 0.6;
+  border: 1px dashed var(--accent);
 }
 
-/* Block Header */
-.block-header {
-  display: flex;
-  align-items: center;
-  padding: 16px 24px;
-  background: var(--bg2);
-  border-bottom: 1px solid var(--border);
-  gap: 12px;
+/* Hover-revealed corner controls — keep the block surface clean while
+   preserving drag-to-reorder and delete affordances. */
+.block-drag-handle,
+.block-delete-action {
+  position: absolute;
+  top: 8px;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s, color 0.15s;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  z-index: 2;
 }
 
-.drag-handle {
+.report-block:hover .block-drag-handle,
+.report-block:hover .block-delete-action,
+.block-drag-handle:focus-visible,
+.block-delete-action:focus-visible {
+  opacity: 0.85;
+}
+
+.block-drag-handle {
+  left: 10px;
   cursor: grab;
   color: var(--tx3);
-  font-size: 18px;
+  font-size: 14px;
+  line-height: 1;
   user-select: none;
-  padding: 0 4px;
+  padding: 4px 6px;
+  border-radius: 4px;
 }
 
-.drag-handle:active {
+.block-drag-handle:hover {
+  color: var(--tx);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.block-drag-handle:active {
   cursor: grabbing;
 }
 
-.block-type-badge {
-  background: var(--bg3);
-  color: var(--tx);
-  font-size: 10px;
-  font-family: 'Space Mono', monospace;
-  font-weight: 700;
-  text-transform: uppercase;
-  padding: 4px 10px;
-  border-radius: 4px;
-  border: 1px solid var(--border2);
-  letter-spacing: 0.5px;
-}
-
-.block-meta {
-  flex: 1;
-  display: flex;
+.block-delete-action {
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--tx2);
-  font-family: 'Space Mono', monospace;
-}
-
-.block-author {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.delete-button {
+  justify-content: center;
   background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 4px;
+  border: 1px solid var(--border2);
   border-radius: 4px;
-  opacity: 0.6;
-  transition: all 0.2s;
+  color: var(--tx2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
 }
 
-.delete-button:hover {
-  background: var(--accent-dim);
+.block-delete-action:hover {
+  background: rgba(248, 81, 73, 0.10);
+  border-color: rgba(248, 81, 73, 0.50);
+  color: var(--danger);
   opacity: 1;
-  transform: scale(1.1);
+}
+
+/* Provenance hover card — when the block was generated + which question
+   produced it. Hidden until the block is hovered (mirrors the corner
+   controls' hover-reveal pattern). */
+.block-provenance-card {
+  position: absolute;
+  top: 36px;
+  right: 10px;
+  z-index: 5;
+  min-width: 220px;
+  max-width: 340px;
+  padding: 8px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--tx);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out, visibility 0.15s;
+  pointer-events: none;
+}
+
+.report-block:hover .block-provenance-card {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.block-provenance-row {
+  display: flex;
+  gap: 8px;
+}
+
+.block-provenance-label {
+  flex: 0 0 88px;
+  color: var(--tx3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  padding-top: 1px;
+}
+
+.block-provenance-value {
+  flex: 1 1 auto;
+  color: var(--tx);
+  word-break: break-word;
 }
 
 /* Block Body */
@@ -104,10 +174,11 @@
 /* Text Block */
 .text-block-title {
   color: var(--tx);
-  font-family: 'Syne', sans-serif;
-  margin: 0 0 16px 0;
-  font-size: 24px;
-  font-weight: 800;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  margin: 0 0 14px 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
 }
 
 .text-block-content p {
@@ -133,13 +204,13 @@
 
 .title-input {
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 10px 12px;
   color: var(--tx);
-  font-size: 16px;
-  font-family: 'Syne', sans-serif;
-  font-weight: 800;
+  font-size: 15px;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-weight: 600;
 }
 
 .content-textarea {
@@ -160,32 +231,45 @@
 }
 
 .save-button, .cancel-button {
-  padding: 8px 16px;
+  padding: 7px 16px;
   border-radius: 4px;
   font-size: 12px;
   font-weight: 600;
-  font-family: 'Space Mono', monospace;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  letter-spacing: 0.2px;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .save-button {
   background: var(--accent);
-  color: var(--bg);
-  border: none;
+  color: #ffffff;
+  border: 1px solid var(--accent);
+}
+
+.save-button:hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 
 .cancel-button {
   background: transparent;
   color: var(--tx2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border2);
+}
+
+.cancel-button:hover {
+  color: var(--tx);
+  border-color: var(--tx2);
 }
 
 /* Table Block */
 .table-caption {
-  font-family: 'Space Mono', monospace;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
   font-size: 11px;
-  color: var(--tx3);
+  color: var(--tx2);
   margin-bottom: 12px;
+  letter-spacing: 0.3px;
   text-transform: uppercase;
 }
 
@@ -199,73 +283,148 @@
 
 .table-filter {
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border2);
   border-radius: 4px;
-  padding: 8px 12px;
+  padding: 7px 12px;
   color: var(--tx);
-  width: 200px;
+  width: 220px;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 12.5px;
+  transition: border-color 0.15s;
 }
 
+.table-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.table-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--tx2);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 12px;
+}
+
+.pagination-btn {
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  color: var(--tx);
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--bg3);
+}
+
+.pagination-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.table-info {
+  min-width: 140px;
+  text-align: center;
+}
+
+/* Data table — framed as an analyst panel, not a bare HTML table */
 .table-wrapper {
   overflow-x: auto;
-  border-radius: 8px;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  background: var(--bg);
 }
 
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .data-table th {
-  background: var(--bg2);
-  color: var(--accent);
-  font-family: 'Space Mono', monospace;
+  background: var(--bg3);                       /* lifted header band */
+  color: var(--tx);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
   text-align: left;
-  padding: 12px;
+  padding: 10px 14px;
   font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
   text-transform: uppercase;
-  border-bottom: 1px solid var(--border2);
+  border-bottom: 2px solid var(--border2);     /* crisp header divider */
+  border-right: 1px solid var(--border2);
   cursor: pointer;
   white-space: nowrap;
 }
 
+.data-table th:last-child {
+  border-right: none;
+}
+
+.data-table th:hover {
+  background: #243054;
+}
+
 .data-table td {
-  padding: 12px;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--border);
-  color: var(--tx2);
+  color: var(--tx);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+}
+
+.data-table tr:nth-child(even) td {
+  background: rgba(20, 25, 35, 0.4);           /* subtle zebra */
 }
 
 .data-table tr:hover td {
-  background: rgba(255,255,255,0.02);
+  background: rgba(74, 144, 226, 0.06);
 }
 
-/* Chart Block */
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Chart Block — analyst data panel: titled frame, calm bg, no inset glow */
 .chart-block-view {
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: inset 0 0 20px rgba(0,0,0,0.2);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chart-block-view::before {
+  content: "DATA VISUALIZATION";
+  display: block;
+  padding: 8px 16px;
+  background: var(--bg3);
+  border-bottom: 2px solid var(--border2);
+  color: var(--tx2);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
 }
 
 .chart-container {
-  height: 400px;
   width: 100%;
-}
-
-/* Chat Block */
-.chart-block-view {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: inset 0 0 20px rgba(0,0,0,0.2);
-}
-
-.chart-container {
+  min-height: 300px;
   height: 400px;
-  width: 100%;
+  position: relative;
+  margin: 0 auto;
+  padding: 20px 24px 16px;
+  box-sizing: border-box;
 }
 
 /* Chat Block */

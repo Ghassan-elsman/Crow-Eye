@@ -102,9 +102,7 @@ class CaseCardWidget(QtWidgets.QWidget):
                 font-size: 18px;
                 font-weight: 800;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                letter-spacing: 0.8px;
                 background-color: transparent;
-                text-transform: uppercase;
             }
         """)
         card_layout.addWidget(name_label)
@@ -113,7 +111,7 @@ class CaseCardWidget(QtWidgets.QWidget):
         path_label = QtWidgets.QLabel(self.case_metadata.path)
         path_label.setStyleSheet("""
             QLabel {
-                color: #CBD5E1;
+                color: #E2E8F0;
                 font-size: 12px;
                 font-family: 'Segoe UI', sans-serif;
                 background-color: transparent;
@@ -163,7 +161,7 @@ class CaseCardWidget(QtWidgets.QWidget):
             desc_label = QtWidgets.QLabel(self.case_metadata.description)
             desc_label.setStyleSheet("""
                 QLabel {
-                    color: #CBD5E1;
+                    color: #E2E8F0;
                     font-size: 13px;
                     font-family: 'Segoe UI', sans-serif;
                     font-style: italic;
@@ -339,8 +337,6 @@ class StartupMenuDialog(QtWidgets.QDialog):
                 font-size: 14px;
                 font-weight: 700;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 1px;
                 padding: 5px 0;
             }
         """)

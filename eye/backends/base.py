@@ -201,6 +201,19 @@ class LLMBackend(ABC):
             # gpt-3.5-turbo: 5000 requests remaining (resets in 1 hour)
         """
         pass
+
+    def get_context_window(self) -> Optional[int]:
+        """Report the active model's real context window in tokens, or None.
+
+        Default: None — meaning "this backend can't self-report; the caller
+        should fall back to the static registry / default". Backends whose
+        provider exposes the window (Gemini ``input_token_limit``, Ollama /
+        LM Studio model info) override this. Implementations MUST be best-effort:
+        any error/timeout returns None and never raises, since this runs during
+        ContextManager init and model switches.
+        """
+        return None
+
     def _sanitize_messages(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """
         Sanitize messages for strict role-alternation backends.

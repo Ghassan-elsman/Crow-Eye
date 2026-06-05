@@ -1,0 +1,85 @@
+{
+  "semantic_mapping": {
+    "enabled": true,
+    "global_mappings_path": "config/semantic_mappings.json",
+    "case_specific": {
+      "enabled": true,
+      "storage_path": "cases/{case_id}/semantic_mappings.json"
+    },
+    "fallback_to_raw_values": true,
+    "log_mapping_statistics": true
+  },
+  "weighted_scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed": {
+        "min": 0.8,
+        "label": "Confirmed Execution"
+      },
+      "probable": {
+        "min": 0.5,
+        "label": "Probable Match"
+      },
+      "weak": {
+        "min": 0.2,
+        "label": "Weak Evidence"
+      },
+      "minimal": {
+        "min": 0.0,
+        "label": "Minimal Evidence"
+      }
+    },
+    "default_weights": {
+      "Logs": 0.4,
+      "Prefetch": 0.3,
+      "SRUM": 0.2,
+      "AmCache": 0.15,
+      "ShimCache": 0.15,
+      "Jumplists": 0.1,
+      "LNK": 0.1,
+      "MFT": 0.05,
+      "USN": 0.05,
+      "Registry": 0.1,
+      "Browser": 0.1,
+      "Network": 0.15
+    },
+    "tier_definitions": {
+      "1": "Primary Evidence",
+      "2": "Supporting Evidence",
+      "3": "Contextual Evidence",
+      "4": "Background Evidence"
+    },
+    "validation_rules": {
+      "max_weight": 1.0,
+      "min_weight": 0.0,
+      "max_tier": 4,
+      "min_tier": 1,
+      "require_positive_weights": true,
+      "allow_zero_weights": true
+    },
+    "case_specific": {
+      "enabled": true,
+      "storage_path": "cases/{case_id}/scoring_weights.json"
+    },
+    "fallback_to_simple_count": true
+  },
+  "progress_tracking": {
+    "enabled": true,
+    "update_frequency_ms": 500,
+    "show_memory_usage": true,
+    "show_time_estimates": true,
+    "log_progress_events": true,
+    "terminal_output_enabled": true,
+    "gui_updates_enabled": true
+  },
+  "engine_selection": {
+    "default_engine": "identity_based",
+    "show_engine_comparison": true,
+    "show_engine_capabilities": true,
+    "allow_engine_switching": true
+  },
+  "case_specific": null,
+  "version": "1.0",
+  "created_date": "2026-05-18T13:56:45.576941",
+  "last_modified": "2026-05-18T13:56:45.576941"
+}

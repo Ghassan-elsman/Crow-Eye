@@ -252,10 +252,15 @@ def file_attributes_to_text(file_attributes):
     return "|".join(attributes) if attributes else "NORMAL"
 
 # --------- Reason / Source Mappings ----------
+# Complete USN_REASON_* flag set per
+# https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2
 REASON_MAP = {
     0x00000001: "DATA_OVERWRITE",
     0x00000002: "DATA_EXTEND",
     0x00000004: "DATA_TRUNCATION",
+    0x00000010: "NAMED_DATA_OVERWRITE",
+    0x00000020: "NAMED_DATA_EXTEND",
+    0x00000040: "NAMED_DATA_TRUNCATION",
     0x00000100: "FILE_CREATE",
     0x00000200: "FILE_DELETE",
     0x00000400: "EA_CHANGE",
@@ -270,6 +275,9 @@ REASON_MAP = {
     0x00080000: "OBJECT_ID_CHANGE",
     0x00100000: "REPARSE_POINT_CHANGE",
     0x00200000: "STREAM_CHANGE",
+    0x00400000: "TRANSACTED_CHANGE",
+    0x00800000: "INTEGRITY_CHANGE",
+    0x01000000: "DESIRED_STORAGE_CLASS_CHANGE",
     0x80000000: "CLOSE",
 }
 
@@ -488,12 +496,15 @@ def parse_record(data_bytes, offset):
             frn = str(hdr.FileReferenceNumber)
             parent_frn = str(hdr.ParentFileReferenceNumber)
             usn = int(hdr.Usn)
+            minor_version = int(hdr.MinorVersion)
 
             timestamp = filetime_to_datetime(hdr.TimeStamp)
-            reason = reason_to_text(hdr.Reason)
-            source_info = sourceinfo_to_text(hdr.SourceInfo)
+            reason_raw = int(hdr.Reason)
+            reason = reason_to_text(reason_raw)
+            source_info_raw = int(hdr.SourceInfo)
+            source_info = sourceinfo_to_text(source_info_raw)
             security_id = int(hdr.SecurityId)
-            file_attributes = int(hdr.FileAttributes)
+            file_attributes_raw = int(hdr.FileAttributes)
             fn_len, fn_off = int(hdr.FileNameLength), int(hdr.FileNameOffset)
         elif major_version == 3:
             min_size = ctypes.sizeof(USN_RECORD_V3)
@@ -503,15 +514,18 @@ def parse_record(data_bytes, offset):
             frn = file_id_128_to_str(hdr.FileReferenceNumber)
             parent_frn = file_id_128_to_str(hdr.ParentFileReferenceNumber)
             usn = int(hdr.Usn)
+            minor_version = int(hdr.MinorVersion)
 
             timestamp = filetime_to_datetime(hdr.TimeStamp)
-            reason = reason_to_text(hdr.Reason)
-            source_info = sourceinfo_to_text(hdr.SourceInfo)
+            reason_raw = int(hdr.Reason)
+            reason = reason_to_text(reason_raw)
+            source_info_raw = int(hdr.SourceInfo)
+            source_info = sourceinfo_to_text(source_info_raw)
             security_id = int(hdr.SecurityId)
-            file_attributes = int(hdr.FileAttributes)
+            file_attributes_raw = int(hdr.FileAttributes)
             fn_len, fn_off = int(hdr.FileNameLength), int(hdr.FileNameOffset)
         else:
-            # unknown major version - skip
+            # unknown major version (e.g. V4 range-tracking) - skip
             return None
 
         filename = ""
@@ -522,16 +536,33 @@ def parse_record(data_bytes, offset):
                     filename = data_bytes[start:end].decode("utf-16le", errors="replace")
                 except Exception:
                     filename = ""
+
+        # Pack additional decoded data into the existing TEXT columns without
+        # changing the database schema:
+        #   - file_attributes column now holds pipe-separated attribute names
+        #     ("ARCHIVE|HIDDEN") plus the raw hex value as a suffix so existing
+        #     queries on "file_attributes LIKE '%ARCHIVE%'" keep working.
+        #   - source_info column carries the minor_version + raw reason hex tag
+        #     so analysts can recover the exact bitmask if needed.
+        file_attributes_text = file_attributes_to_text(file_attributes_raw)
+        file_attributes_packed = f"{file_attributes_text}|raw=0x{file_attributes_raw:08X}"
+
+        source_info_packed = (
+            f"{source_info}|v{major_version}.{minor_version}"
+            f"|reason_raw=0x{reason_raw:08X}"
+        )
+
         return {
             "major_version": major_version,
+            "minor_version": minor_version,
             "usn": usn,
             "frn": frn,
             "parent_frn": parent_frn,
             "timestamp": timestamp,
             "reason": reason,
-            "source_info": source_info,
+            "source_info": source_info_packed,
             "security_id": security_id,
-            "file_attributes": file_attributes,
+            "file_attributes": file_attributes_packed,
             "filename": filename,
             "record_length": rec_len
         }

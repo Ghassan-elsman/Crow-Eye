@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class IntegrationHealthReport:
     """Comprehensive health report for integration components"""
     timestamp: datetime = field(default_factory=datetime.now)
-    overall_status: str = "unknown"  # healthy, warning, error
+    overall_status: str = "unknown" # healthy, warning, error
     component_health: Dict[str, str] = field(default_factory=dict)
     diagnostic_results: List[DiagnosticResult] = field(default_factory=list)
     performance_summary: Dict[str, Any] = field(default_factory=dict)
@@ -169,17 +169,17 @@ class IntegrationDiagnostics:
             
             # Check for slow operations
             avg_duration = metrics.get('avg_duration_ms', 0)
-            if avg_duration > 5000:  # 5 seconds
+            if avg_duration > 5000: # 5 seconds
                 recommendations.append(f"Slow performance in {component}: average {avg_duration:.0f}ms - consider optimization")
             
             # Check for high memory usage
             avg_memory = metrics.get('avg_memory_delta_mb', 0)
-            if avg_memory > 100:  # 100MB
+            if avg_memory > 100: # 100MB
                 recommendations.append(f"High memory usage in {component}: average {avg_memory:.0f}MB - consider memory optimization")
             
             # Check for low success rate
             success_rate = metrics.get('success_rate', 1.0)
-            if success_rate < 0.9:  # Less than 90%
+            if success_rate < 0.9: # Less than 90%
                 recommendations.append(f"Low success rate in {component}: {success_rate:.1%} - investigate error causes")
         
         # Error-based recommendations
@@ -263,7 +263,7 @@ class IntegrationDiagnostics:
         avg_duration = metrics.get('avg_duration_ms', 0)
         max_duration = metrics.get('max_duration_ms', 0)
         
-        if avg_duration > 2000:  # 2 seconds
+        if avg_duration > 2000: # 2 seconds
             bottlenecks.append({
                 'type': 'slow_execution',
                 'component': component,
@@ -273,7 +273,7 @@ class IntegrationDiagnostics:
                 'description': f"Slow average execution time: {avg_duration:.0f}ms"
             })
         
-        if max_duration > 10000:  # 10 seconds
+        if max_duration > 10000: # 10 seconds
             bottlenecks.append({
                 'type': 'very_slow_execution',
                 'component': component,
@@ -287,7 +287,7 @@ class IntegrationDiagnostics:
         avg_memory = metrics.get('avg_memory_delta_mb', 0)
         max_memory = metrics.get('max_memory_delta_mb', 0)
         
-        if avg_memory > 50:  # 50MB
+        if avg_memory > 50: # 50MB
             bottlenecks.append({
                 'type': 'high_memory_usage',
                 'component': component,
@@ -299,7 +299,7 @@ class IntegrationDiagnostics:
         
         # Check error rate bottlenecks
         success_rate = metrics.get('success_rate', 1.0)
-        if success_rate < 0.95:  # Less than 95%
+        if success_rate < 0.95: # Less than 95%
             bottlenecks.append({
                 'type': 'low_success_rate',
                 'component': component,
@@ -425,7 +425,7 @@ class IntegrationDiagnostics:
         
         # Identify patterns
         for key, group_errors in error_groups.items():
-            if len(group_errors) >= 3:  # Pattern threshold
+            if len(group_errors) >= 3: # Pattern threshold
                 component, error_type = key.split('_', 1)
                 
                 # Calculate time intervals between errors
@@ -453,9 +453,9 @@ class IntegrationDiagnostics:
     
     def _classify_error_pattern(self, avg_interval: float, occurrences: int) -> str:
         """Classify error pattern type"""
-        if avg_interval < 60:  # Less than 1 minute
+        if avg_interval < 60: # Less than 1 minute
             return "burst"
-        elif avg_interval < 3600:  # Less than 1 hour
+        elif avg_interval < 3600: # Less than 1 hour
             return "frequent"
         elif occurrences > 10:
             return "recurring"
@@ -482,7 +482,7 @@ class IntegrationDiagnostics:
         sorted_errors = sorted(error_counts.items(), key=lambda x: x[1], reverse=True)
         
         return {
-            'most_common_errors': sorted_errors[:10],  # Top 10
+            'most_common_errors': sorted_errors[:10], # Top 10
             'errors_by_component': component_errors,
             'total_unique_error_types': len(error_counts)
         }

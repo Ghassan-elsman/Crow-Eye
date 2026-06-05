@@ -210,6 +210,6 @@ class CustomRulesManager:
         if self._db_connection:
             try:
                 self._db_connection.close()
-            except:
+            except Exception:
                 pass
             self._db_connection = None

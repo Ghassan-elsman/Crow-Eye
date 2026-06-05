@@ -1,12 +1,32 @@
 /**
  * Report Builder Panel Styles
- * Cyberpunk dashboard theme matching the unified dissection
+ * Professional dark forensic report theme — calm blue accent, no neon glows.
+ * Palette aligned with the Crow-Eye desktop dark-navy table palette so the
+ * report reads as a single coherent surface.
  */
 
 :root {
-  --bg: #0a0c10; --bg1: #0f1218; --bg2: #151a22; --bg3: #1c2330; --border: #1e2a3a; --border2: #2a3a50; --tx: #e8edf5; --tx2: #8899aa; --tx3: #4a5a6a;
-  --accent: #f97316; --accent-dim: rgba(249, 115, 22, 0.1); --header-color: #f97316; --header-dim: #3d1a0a; --identity-color: #06b6d4; --identity-dim: #0a1d2e;
-  --times-color: #ec4899; --times-dim: #2a0a1a; --props-color: #10b981; --props-dim: #0a2a1a; --danger: #ff4d6a;
+  --bg: #07090e;            /* canvas — near-black with hint of navy */
+  --bg1: #0e131c;           /* panels / containers */
+  --bg2: #11151c;           /* row body / inputs */
+  --bg3: #1a2236;           /* lifted header band / interactive */
+  --border: #1f2530;        /* subtle outlines */
+  --border2: #2a3a55;       /* visible separators / lifted band borders */
+  --tx: #e6edf3;            /* primary text */
+  --tx2: #94a3b8;           /* secondary text */
+  --tx3: #64748b;           /* muted */
+  --accent: #4a90e2;        /* calm professional blue — no neon */
+  --accent-strong: #60a5fa; /* hover-state blue */
+  --accent-dim: rgba(74, 144, 226, 0.10);
+  --header-color: #4a90e2;
+  --header-dim: rgba(74, 144, 226, 0.10);
+  --identity-color: #60a5fa;
+  --identity-dim: rgba(96, 165, 250, 0.10);
+  --times-color: #ec4899;
+  --times-dim: rgba(236, 72, 153, 0.10);
+  --props-color: #10b981;
+  --props-dim: rgba(16, 185, 129, 0.10);
+  --danger: #f85149;
 }
 
 /* Main container */
@@ -20,84 +40,197 @@
   font-size: 15px;
 }
 
-/* Toolbar */
+/* Toolbar — flat panel with a single clean bottom rule */
 .report-toolbar {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
+  align-items: flex-end;
+  gap: 24px;
+  padding: 18px 28px 16px;
   background: var(--bg1);
-  border-bottom: 2px solid var(--accent);
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  border-bottom: 1px solid var(--border2);
   flex-shrink: 0;
   z-index: 10;
+  position: relative;
 }
 
 .toolbar-left {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  min-width: 0;
+}
+
+.report-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--tx2);
+  font-weight: 600;
 }
 
 .report-title {
   margin: 0;
-  font-family: 'Syne', sans-serif;
-  font-size: 1.2em;
-  font-weight: 800;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 1.4em;
+  font-weight: 600;
   color: var(--tx);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.2px;
+  line-height: 1.2;
 }
 
 .report-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 10px;
+  gap: 10px;
+  font-size: 11px;
   color: var(--tx2);
-  font-family: 'Space Mono', monospace;
-  text-transform: uppercase;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  flex-wrap: wrap;
+}
+
+.report-meta .separator {
+  color: var(--tx3);
 }
 
 .block-count {
-  font-weight: 700;
-  color: var(--accent);
+  font-weight: 600;
+  color: var(--tx);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  border: 1px solid var(--border2);
+  background: var(--bg2);
+}
+
+.status-pill .status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-pill.is-active {
+  color: var(--props-color);
+  border-color: rgba(16, 185, 129, 0.40);
+  background: rgba(16, 185, 129, 0.06);
+}
+
+.status-pill.is-empty {
+  color: var(--tx2);
+  border-color: var(--border2);
 }
 
 .toolbar-right {
   display: flex;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-/* Export buttons */
+.toolbar-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border2);
+  margin: 0 4px;
+}
+
+/* Export buttons — flat, professional, no hover lift */
 .export-button {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 7px 14px;
   background: var(--bg2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border2);
   border-radius: 4px;
-  color: var(--tx2);
-  font-family: 'Space Mono', monospace;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
+  color: var(--tx);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .export-button:hover:not(:disabled) {
   background: var(--bg3);
-  color: var(--accent);
+  color: var(--accent-strong);
   border-color: var(--accent);
-  transform: translateY(-1px);
 }
 
 .export-button:disabled {
-  opacity: 0.3;
+  opacity: 0.4;
   cursor: not-allowed;
-  border-color: var(--border2);
+}
+
+/* Banners (error / success) */
+.error-banner,
+.success-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 28px 0;
+  padding: 11px 16px;
+  border-radius: 6px;
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 12.5px;
+  color: var(--tx);
+  border: 1px solid var(--border2);
+  background: var(--bg1);
+}
+
+.error-banner {
+  border-color: rgba(248, 81, 73, 0.45);
+  background: rgba(248, 81, 73, 0.06);
+  color: #ffb4c0;
+}
+
+.success-banner {
+  border-color: rgba(16, 185, 129, 0.40);
+  background: rgba(16, 185, 129, 0.06);
+  color: #a7f3d0;
+}
+
+.error-icon,
+.success-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.dismiss-button {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: background 0.2s, opacity 0.2s, border-color 0.2s;
+}
+
+.dismiss-button:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 /* Report content area */
@@ -141,33 +274,39 @@
   to { transform: rotate(360deg); }
 }
 
-/* Empty state */
+/* Empty state — calm, no decorative glow */
 .empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 100px 40px;
+  padding: 80px 40px;
   text-align: center;
   background: var(--bg1);
-  border: 1px dashed var(--border2);
-  border-radius: 12px;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  max-width: 1000px;
+  margin: 0 auto;
 }
 
 .empty-icon {
-  font-size: 3em;
-  margin-bottom: 20px;
-  filter: grayscale(1) opacity(0.3);
+  font-size: 2.2em;
+  margin-bottom: 16px;
+  opacity: 0.3;
 }
 
 .empty-state h3 {
   margin: 0 0 10px 0;
-  font-size: 1.2em;
-  color: var(--tx2);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  font-size: 1.05em;
+  font-weight: 600;
+  color: var(--tx);
+  letter-spacing: 0.2px;
 }
 
 .empty-state p {
   font-size: 0.9em;
-  color: var(--tx3);
-  max-width: 400px;
+  color: var(--tx2);
+  max-width: 440px;
+  line-height: 1.55;
 }

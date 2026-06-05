@@ -294,24 +294,31 @@ class ArtifactTypeRegistry:
             self._load_hardcoded_defaults()
     
     def _load_hardcoded_defaults(self):
-        """Load hard-coded default artifact types as last resort fallback"""
+        """Load hard-coded default artifact types as last resort fallback.
+
+        Categories and forensic_strength values mirror the JSON default in
+        _create_default_configuration so callers like get_artifacts_by_category
+        return consistent results whether the registry loaded from file or
+        fell back to these hardcoded values.
+        """
+        # (id, name, weight, tier, priority, category, forensic_strength)
         defaults = [
-            ("Logs", "Event Logs", 0.4, 1, 1),
-            ("Prefetch", "Prefetch Files", 0.3, 1, 2),
-            ("SRUM", "System Resource Usage Monitor", 0.2, 2, 3),
-            ("AmCache", "AmCache", 0.15, 2, 4),
-            ("ShimCache", "ShimCache", 0.15, 2, 5),
-            ("Jumplists", "Jump Lists", 0.1, 3, 6),
-            ("LNK", "LNK Files", 0.1, 3, 7),
-            ("MFT", "Master File Table", 0.05, 4, 8),
-            ("USN", "USN Journal", 0.05, 4, 9),
-            ("Registry", "Registry", 0.1, 3, 10),
-            ("Browser", "Browser History", 0.1, 3, 11)
+            ("Logs", "Event Logs", 0.4, 1, 1, "primary_evidence", "high"),
+            ("Prefetch", "Prefetch Files", 0.3, 1, 2, "primary_evidence", "high"),
+            ("SRUM", "System Resource Usage Monitor", 0.2, 2, 3, "supporting_evidence", "medium"),
+            ("AmCache", "AmCache", 0.15, 2, 4, "supporting_evidence", "medium"),
+            ("ShimCache", "ShimCache", 0.15, 2, 5, "supporting_evidence", "medium"),
+            ("Jumplists", "Jump Lists", 0.1, 3, 6, "contextual_evidence", "low"),
+            ("LNK", "LNK Files", 0.1, 3, 7, "contextual_evidence", "low"),
+            ("MFT", "Master File Table", 0.05, 4, 8, "background_evidence", "low"),
+            ("USN", "USN Journal", 0.05, 4, 9, "background_evidence", "low"),
+            ("Registry", "Registry", 0.1, 3, 10, "contextual_evidence", "medium"),
+            ("Browser", "Browser History", 0.1, 3, 11, "contextual_evidence", "low"),
         ]
-        
+
         self._artifacts.clear()
-        
-        for artifact_id, name, weight, tier, priority in defaults:
+
+        for artifact_id, name, weight, tier, priority, category, strength in defaults:
             artifact = ArtifactType(
                 id=artifact_id,
                 name=name,
@@ -319,11 +326,11 @@ class ArtifactTypeRegistry:
                 default_weight=weight,
                 default_tier=tier,
                 anchor_priority=priority,
-                category="evidence",
-                forensic_strength="medium"
+                category=category,
+                forensic_strength=strength,
             )
             self._artifacts[artifact_id] = artifact
-        
+
         self._cache_valid = True
         logger.info(f"Loaded {len(self._artifacts)} hard-coded default artifact types")
     
@@ -409,7 +416,7 @@ class ArtifactTypeRegistry:
         """
         try:
             self._artifacts[artifact.id] = artifact
-            self._cache_valid = False  # Invalidate cache
+            self._cache_valid = False # Invalidate cache
             logger.info(f"Registered artifact type: {artifact.id}")
             return True
         except Exception as e:

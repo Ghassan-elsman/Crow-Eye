@@ -445,7 +445,7 @@ class SemanticMappingViewer(QDialog):
         # Apply filters
         if self.show_cross_feather_only:
             rules = [r for r in rules if self._is_cross_feather_rule(r)]
-            mappings = []  # Don't show simple mappings when filtering for cross-feather
+            mappings = [] # Don't show simple mappings when filtering for cross-feather
         
         artifact_filter = self.artifact_filter.currentText()
         if artifact_filter != "All":
@@ -483,7 +483,7 @@ class SemanticMappingViewer(QDialog):
         # Add advanced rules
         for rule in rules:
             type_item = QTableWidgetItem("Advanced")
-            type_item.setForeground(QColor(0, 255, 255))  # Cyan for advanced
+            type_item.setForeground(QColor(0, 255, 255)) # Cyan for advanced
             table.setItem(row, 0, type_item)
             
             table.setItem(row, 1, QTableWidgetItem(rule.name))
@@ -494,7 +494,7 @@ class SemanticMappingViewer(QDialog):
             feathers = self._get_rule_feathers(rule)
             feather_item = QTableWidgetItem(str(len(feathers)))
             if len(feathers) > 1:
-                feather_item.setForeground(QColor(0, 255, 255))  # Highlight cross-feather
+                feather_item.setForeground(QColor(0, 255, 255)) # Highlight cross-feather
                 feather_item.setFont(QFont("Arial", 10, QFont.Bold))
             table.setItem(row, 5, feather_item)
             
@@ -628,7 +628,7 @@ class SemanticMappingViewer(QDialog):
         if table == self.all_tab:
             type_item = table.item(row, 0)
             if type_item and type_item.text() == "Simple":
-                return  # Don't show details for simple mappings
+                return # Don't show details for simple mappings
             name = table.item(row, 1).text() if table.item(row, 1) else ""
         else:
             name = table.item(row, 0).text() if table.item(row, 0) else ""

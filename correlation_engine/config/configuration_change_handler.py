@@ -39,7 +39,7 @@ class ConfigurationChangeHandler:
             'progress_tracking': [],
             'engine_selection': [],
             'case_specific': [],
-            'all': []  # Listeners that want all changes
+            'all': [] # Listeners that want all changes
         }
         
         self.current_config: IntegratedConfiguration = None

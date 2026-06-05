@@ -74,8 +74,19 @@ class GeminiBackend(LLMBackend):
             api_key = self.credential_manager.get_credential("gemini_api_key")
             if not api_key:
                 raise ValueError("Gemini API key not found. Please configure it in the Setup Wizard.")
-                
-            self._client = genai.Client(api_key=api_key)
+
+            # Apply an explicit request timeout (ms) so a hung provider cannot
+            # freeze the worker thread (parity with the other backends). Done
+            # defensively: older google-genai signatures that don't accept
+            # http_options fall back to the default client.
+            try:
+                self._client = genai.Client(
+                    api_key=api_key,
+                    http_options={"timeout": 120000},
+                )
+            except Exception as http_exc:
+                self.logger.debug(f"Gemini http_options timeout unsupported; using default client: {http_exc}")
+                self._client = genai.Client(api_key=api_key)
         return self._client
 
     def generate(self, system_prompt, user_message, tools=None, history=None):
@@ -206,31 +217,61 @@ class GeminiBackend(LLMBackend):
         """
         Discovers available Google models and caches them for offline recovery.
         
-        We ask Google what models are available (like checking a menu). We only show
-        models that support "generateContent" (text generation) - no point showing
-        embedding models or other non-chat models.
-        
-        The model list is cached so Eye can still show options even if you go offline.
+        We ask Google what models are available. We include models that support 
+        text generation (generateContent, generateMessage, etc.)
         """
         try:
-            # Detect models using both modern (supported_generation_methods) and legacy (supported_actions) properties
-            # This ensures compatibility across different versions of the Google GenAI SDKs
             models = []
+            # Iterate through the available models from the Google GenAI API
             for m in self.client.models.list():
-                # Check for modern SDK property
+                # Extract identifiers and capabilities
+                m_name = getattr(m, "name", "") or ""
                 methods = getattr(m, "supported_generation_methods", []) or []
-                # Check for legacy SDK property
                 actions = getattr(m, "supported_actions", []) or []
                 
-                # If either contains "generateContent", it's a chat-capable model
-                if "generateContent" in methods or "generateContent" in actions:
-                    models.append(m.name.replace("models/", ""))
+                # Permissive check for chat/generation capabilities
+                is_chat = any(x in methods or x in actions for x in ["generateContent", "generateMessage", "generateText", "chat"])
+                
+                if is_chat:
+                    # Strip prefix if present (e.g., "models/gemini-pro" -> "gemini-pro")
+                    clean_name = m_name.replace("models/", "")
+                    if clean_name and clean_name not in models:
+                        models.append(clean_name)
             
-            if models: self._model_cache = models  # Cache for offline use
+            if models: 
+                self._model_cache = models
+                self.logger.info(f"Discovered {len(models)} Gemini models via Google GenAI API.")
+            else:
+                self.logger.warning("Gemini API returned no chat-capable models. Check API key permissions.")
+                
             return models
         except Exception as e: 
-            self.logger.error(f"Failed to list Cloud models: {e}")
+            self.logger.error(f"Failed to list Cloud (Gemini) models: {e}")
             return self._model_cache if self._model_cache else []
+
+    def get_context_window(self) -> Optional[int]:
+        """Report the active model's real context window via Gemini's
+        ``input_token_limit`` (e.g. 1,048,576 for 1.5 Flash, 2,097,152 for Pro).
+
+        Best-effort: returns None on any failure so the caller falls back to the
+        registry / default. Cached per instance after the first successful read.
+        """
+        if getattr(self, "_context_window_cache", None):
+            return self._context_window_cache
+        try:
+            target = (self.model_name or "").replace("models/", "").lower()
+            for m in self.client.models.list():
+                name = (getattr(m, "name", "") or "").replace("models/", "").lower()
+                if name == target:
+                    limit = getattr(m, "input_token_limit", None)
+                    if limit:
+                        self._context_window_cache = int(limit)
+                        self.logger.info(f"Gemini reported context window {self._context_window_cache:,} for {target}")
+                        return self._context_window_cache
+                    break
+        except Exception as e:
+            self.logger.debug(f"Gemini context-window lookup failed: {e}")
+        return None
 
     def get_models_with_quota(self):
         """

@@ -9,7 +9,10 @@ import os
 import logging
 import traceback
 from PyQt5 import QtWidgets, QtCore, QtGui
-from eye.ui.eye_tab import EYETab
+# Legacy module: the live app uses eye_window_manager. The original eye_tab
+# module was replaced by eye_tab_stub; alias the stub so this module still
+# imports cleanly.
+from eye.ui.eye_tab_stub import EYETabStub as EYETab
 
 logger = logging.getLogger(__name__)
 

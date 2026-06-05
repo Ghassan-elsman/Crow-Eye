@@ -67,7 +67,9 @@ class OpenAIBackend(LLMBackend):
             # This prevents 400 errors in strict local/cloud model templates
             messages = self._sanitize_messages(raw_messages)
             
-            params = {"model": self.model_name, "messages": messages}
+            # Explicit request timeout so a slow/hung provider cannot freeze the
+            # worker thread indefinitely (parity with Ollama/LM Studio).
+            params = {"model": self.model_name, "messages": messages, "timeout": 120}
             if tools:
                 # Format tools to strict OpenAI specification: {"type": "function", "function": {...}}
                 formatted_tools = []

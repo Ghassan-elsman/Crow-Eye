@@ -83,15 +83,15 @@ class SemanticConfig:
     # Performance Settings
     batch_size: int = 1000
     cache_size: int = 10000
-    cache_ttl_seconds: int = 300  # 5 minutes
+    cache_ttl_seconds: int = 300 # 5 minutes
     
     # Progress Reporting
     enable_progress_reporting: bool = True
-    progress_update_interval: int = 100  # Update every 100 matches
+    progress_update_interval: int = 100 # Update every 100 matches
     
     # Error Handling
     continue_on_error: bool = True
-    max_errors_before_abort: int = 0  # 0 = unlimited
+    max_errors_before_abort: int = 0 # 0 = unlimited
     log_json_parse_errors: bool = True
     
     # Rule Priority (categories to apply first)
@@ -222,7 +222,7 @@ class SemanticConfig:
         if not is_valid:
             raise ValueError(
                 f"Invalid configuration loaded from {config_path}:\n" +
-                "\n".join(f"  - {error}" for error in errors)
+                "\n".join(f" - {error}" for error in errors)
             )
         
         return config
@@ -245,7 +245,7 @@ class SemanticConfig:
         if not is_valid:
             raise ValueError(
                 "Cannot save invalid configuration:\n" +
-                "\n".join(f"  - {error}" for error in errors)
+                "\n".join(f" - {error}" for error in errors)
             )
         
         # Convert to dict

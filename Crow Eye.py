@@ -38,9 +38,29 @@ Forensic Value:
 - Supports both live system analysis and offline forensic image examination
 
 Author: Ghassan Elsman
-Version: 0.10.0
+Version: 0.11.0
 License: GPL-3.0
 """
+
+# Module-level version constants. Crow-Eye and its Correlation Engine
+# can be released independently; the engine version surfaces in the
+# About menu so analysts can tell which engine build they're running.
+__version__ = "0.11.0"
+CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
+
+# Short list of notable recent additions, shown in About → Correlation Engine.
+# Update this when shipping new engine features so the analyst can see
+# at a glance what's in their build.
+CORRELATION_ENGINE_RECENT_CHANGES = [
+    "Per-feather source_timezone (Plaso→UTC, Autopsy local-time hint)",
+    "Pre-flight semantic-rule validation (unsupported operators + missing fields)",
+    "Evidence accounting (silent DB fallbacks, schema/parse failures surfaced to summary)",
+    "Issues tab with severity glyphs + clipboard copy",
+    "Loud-fail after N consecutive feather failures (FeatherUnavailableError)",
+    "Identity iteration sorted for deterministic match ordering",
+    "Format-detection sample size 10 → 100",
+    "not_equals semantic rule operator NULL-safe",
+]
 
 import venv
 import os
@@ -77,19 +97,19 @@ if not IS_WINDOWS:
         pass
 
 # Ensure the tool runs with administrator privileges on Windows
-if IS_WINDOWS:  # Check if running on Windows
+if IS_WINDOWS: # Check if running on Windows
     if not is_admin():
         print("This script requires administrator privileges to run. Please run as administrator.")
         # Re-run the script with admin privileges using ShellExecuteW with 'runas' verb
         try:
-            script = os.path.abspath(sys.argv[0])  # Get absolute path to script
+            script = os.path.abspath(sys.argv[0]) # Get absolute path to script
             # Properly handle command line arguments with spaces
             params = ' '.join([f'\"' + p + '\"' for p in sys.argv[1:]])
             # Use ShellExecuteW to prompt for UAC elevation
             ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, script, params, 1)
         except Exception as e:
             print(f"Failed to re-run as administrator: {e}")
-        sys.exit(1)  # Exit the non-elevated process
+        sys.exit(1) # Exit the non-elevated process
 else:
     print("Running on non-Windows system - Live parsers will be disabled, offline analysis available.")
     
@@ -116,11 +136,11 @@ def install_initial_requirements():
     
     for package in initial_requirements:
         try:
-            print(f'  -> Installing {package}...')
+            print(f' -> Installing {package}...')
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
-            print(f'  -> Successfully installed {package}')
+            print(f' -> Successfully installed {package}')
         except subprocess.CalledProcessError:
-            print(f'  -> Failed to install {package}. Please run: python -m pip install {package}')
+            print(f' -> Failed to install {package}. Please run: python -m pip install {package}')
             return False
     
     print('[STEP 1/5] Initial requirements installed successfully!\n')
@@ -154,7 +174,7 @@ def safe_import_initial_modules():
         from colorama import init as colorama_init, Fore as colorama_Fore
         init = colorama_init
         Fore = colorama_Fore
-        init()  # Initialize colorama
+        init() # Initialize colorama
         return True
     except ImportError as e:
         print(f'Warning: Failed to import colorama: {str(e)}')
@@ -199,7 +219,7 @@ def setup_virtual_environment():
         print('\n' + '='*60)
         print('[STEP 2/5] Virtual environment check')
         print('='*60)
-        print('  -> Already running in virtual environment')
+        print(' -> Already running in virtual environment')
         print('[STEP 2/5] Complete!\n')
         # Import colorama now that we're in the venv
         safe_import_initial_modules()
@@ -213,32 +233,32 @@ def setup_virtual_environment():
     
     # Create virtual environment if it doesn't exist
     if not os.path.exists(venv_path):
-        print('  -> Creating virtual environment (10-20 seconds, only happens once)...')
-        print('  -> Please wait...')
+        print(' -> Creating virtual environment (10-20 seconds, only happens once)...')
+        print(' -> Please wait...')
         try:
             venv.create(venv_path, with_pip=True)
-            print(f'  -> Virtual environment created successfully!')
-            print(f'  -> Location: {venv_path}')
+            print(f' -> Virtual environment created successfully!')
+            print(f' -> Location: {venv_path}')
         except Exception as e:
-            print(f'  -> Failed to create virtual environment: {str(e)}')
-            print('  -> Please check disk space and permissions')
+            print(f' -> Failed to create virtual environment: {str(e)}')
+            print(' -> Please check disk space and permissions')
             input('Press Enter to continue with global Python environment...')
             # Import colorama even if venv creation failed
             safe_import_initial_modules()
             return
     else:
-        print('  -> Virtual environment already exists')
-        print(f'  -> Location: {venv_path}')
+        print(' -> Virtual environment already exists')
+        print(f' -> Location: {venv_path}')
 
     # Restart the script with the virtual environment's Python executable
     try:
-        if os.name == 'nt':  # Windows
+        if os.name == 'nt': # Windows
             venv_python = os.path.join(venv_path, 'Scripts', 'python.exe')
-        else:  # Unix-like
+        else: # Unix-like
             venv_python = os.path.join(venv_path, 'bin', 'python')
         
         if os.path.exists(venv_python):
-            print('\n  -> Restarting with virtual environment...')
+            print('\n -> Restarting with virtual environment...')
             print('[STEP 2/5] Complete!\n')
             # Restart the script using the virtual environment's Python
             # Use subprocess.Popen instead of os.execv to handle paths with spaces and special characters
@@ -246,16 +266,16 @@ def setup_virtual_environment():
             script_path = os.path.abspath(sys.argv[0])
             if os.name == 'nt':
                 subprocess.Popen([venv_python, script_path] + sys.argv[1:], shell=False)
-                sys.exit(0)  # Exit current process after starting the new one
+                sys.exit(0) # Exit current process after starting the new one
             else:
                 os.execv(venv_python, [venv_python, script_path] + sys.argv[1:])
         else:
-            print(f'  -> Virtual environment Python not found at {venv_python}')
+            print(f' -> Virtual environment Python not found at {venv_python}')
             input('Press Enter to continue with global Python environment...')
             # Import colorama even if venv python not found
             safe_import_initial_modules()
     except Exception as e:
-        print(f'  -> Failed to restart with virtual environment: {str(e)}')
+        print(f' -> Failed to restart with virtual environment: {str(e)}')
         input('Press Enter to continue with global Python environment...')
         # Import colorama even if restart failed
         safe_import_initial_modules()
@@ -276,26 +296,26 @@ General_Requirements = [
     'tqdm',
     'colorama',
     'pyyaml',
-    'matplotlib',  # Optional: Enhanced chart rendering (PyQt5 native charts work without it)
-    'python-evtx',  # Offline EVTX parser
-    'dissect.esedb',  # Offline SRUM/ESE database parser (recommended)
-    'dissect.target',  # Required for forensic image parsing
-    'dissect.volume',  # Required for forensic image parsing
-    'dissect.ntfs',  # Required for forensic image parsing
-    'dissect.fat',  # Required for forensic image parsing
-    'dissect.extfs',  # Required for forensic image parsing
-    'dissect.evidence',  # Required for forensic image parsing
-    'pycdlib',  # ISO 9660 optical disc image support (pure Python, always works)
+    'matplotlib', # Optional: Enhanced chart rendering (PyQt5 native charts work without it)
+    'python-evtx', # Offline EVTX parser
+    'dissect.esedb', # Offline SRUM/ESE database parser (recommended)
+    'dissect.target', # Required for forensic image parsing
+    'dissect.volume', # Required for forensic image parsing
+    'dissect.ntfs', # Required for forensic image parsing
+    'dissect.fat', # Required for forensic image parsing
+    'dissect.extfs', # Required for forensic image parsing
+    'dissect.evidence', # Required for forensic image parsing
+    'pycdlib', # ISO 9660 optical disc image support (pure Python, always works)
     # EYE AI Assistant core dependencies
-    'keyring',  # Secure credential storage
-    'requests',  # HTTP client for API backends
-    'weasyprint',  # Report generation (PDF export)
-    'markdown',  # Markdown processing for reports
-    'tiktoken',  # Token counting for context management
-    'jsonschema',  # JSON schema validation
-    'openai',  # OpenAI API backend
-    'anthropic',  # Anthropic API backend
-    'google-genai',  # Google Gemini API backend
+    'keyring', # Secure credential storage
+    'requests', # HTTP client for API backends
+    'weasyprint', # Report generation (PDF export)
+    'markdown', # Markdown processing for reports
+    'tiktoken', # Token counting for context management
+    'jsonschema', # JSON schema validation
+    'openai', # OpenAI API backend
+    'anthropic', # Anthropic API backend
+    'google-genai', # Google Gemini API backend
 ]
 
 # Optional forensic image parsing requirements
@@ -323,14 +343,14 @@ def check_and_install_requirements():
     
     # Show which requirements are being checked based on OS
     if IS_WINDOWS:
-        print('  -> Checking Windows + General requirements...')
+        print(' -> Checking Windows + General requirements...')
     else:
-        print('  -> Checking General requirements (non-Windows system)...')
+        print(' -> Checking General requirements (non-Windows system)...')
     
     missing_packages = []
     installed_count = 0
     
-    print('  -> Scanning installed packages...')
+    print(' -> Scanning installed packages...')
     for package in Crow_Eye_Requirements:
         try:
             importlib.metadata.version(package)
@@ -340,20 +360,20 @@ def check_and_install_requirements():
     
     # Show summary instead of listing each package
     if installed_count > 0:
-        print(Fore.GREEN + f'  -> {installed_count}/{len(Crow_Eye_Requirements)} required packages already installed' + Fore.RESET)
+        print(Fore.GREEN + f' -> {installed_count}/{len(Crow_Eye_Requirements)} required packages already installed' + Fore.RESET)
     
     if missing_packages:
-        print(Fore.YELLOW + f'  -> {len(missing_packages)} packages need to be installed: {", ".join(missing_packages)}' + Fore.RESET)
+        print(Fore.YELLOW + f' -> {len(missing_packages)} packages need to be installed: {", ".join(missing_packages)}' + Fore.RESET)
         print('\n' + '='*60)
         print('[STEP 3/5] Installing missing Python packages...')
         print('='*60)
-        print('  -> This may take 2-5 minutes depending on your internet speed')
-        print('  -> Please wait while packages are being downloaded and installed...\n')
+        print(' -> This may take 2-5 minutes depending on your internet speed')
+        print(' -> Please wait while packages are being downloaded and installed...\n')
         try:
             # Install all missing packages in a single pip command (much faster)
-            print('\n  -> Installing packages, please wait...\n')
+            print('\n -> Installing packages, please wait...\n')
             subprocess.check_call([sys.executable, '-m', 'pip', 'install'] + missing_packages)
-            print(Fore.GREEN + '\n  -> Successfully installed all missing packages!' + Fore.RESET)
+            print(Fore.GREEN + '\n -> Successfully installed all missing packages!' + Fore.RESET)
             print('[STEP 3/5] Complete!\n')
             
             # Restart the application to ensure proper loading
@@ -364,30 +384,30 @@ def check_and_install_requirements():
             print('='*60 + '\n')
             
             import time
-            time.sleep(1)  # Brief pause to ensure output is visible
+            time.sleep(1) # Brief pause to ensure output is visible
             
             # Cross-platform restart mechanism
-            if os.name == 'nt':  # Windows
+            if os.name == 'nt': # Windows
                 subprocess.Popen([sys.executable] + sys.argv, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.stdin.isatty() else 0)
                 sys.exit(0)
-            else:  # Unix/Linux/Mac
+            else: # Unix/Linux/Mac
                 os.execv(sys.executable, [sys.executable] + sys.argv)
         except subprocess.CalledProcessError as e:
-            print(Fore.RED + '\n  -> Batch installation failed, trying individually...' + Fore.RESET)
+            print(Fore.RED + '\n -> Batch installation failed, trying individually...' + Fore.RESET)
             # Fallback: try installing one by one
             success_count = 0
             for i, package in enumerate(missing_packages, 1):
                 try:
-                    print(f'  -> [{i}/{len(missing_packages)}] Installing {package}...')
+                    print(f' -> [{i}/{len(missing_packages)}] Installing {package}...')
                     subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
                     success_count += 1
-                    print(Fore.GREEN + f'      [+] {package} installed successfully' + Fore.RESET)
+                    print(Fore.GREEN + f' [+] {package} installed successfully' + Fore.RESET)
                 except subprocess.CalledProcessError:
-                    print(Fore.RED + f'      [-] {package} installation failed' + Fore.RESET)
+                    print(Fore.RED + f' [-] {package} installation failed' + Fore.RESET)
             
             if success_count > 0:
                 # Restart after individual installation
-                print(Fore.YELLOW + f'\n  -> {success_count}/{len(missing_packages)} packages installed successfully' + Fore.RESET)
+                print(Fore.YELLOW + f'\n -> {success_count}/{len(missing_packages)} packages installed successfully' + Fore.RESET)
                 print('[STEP 3/5] Complete!\n')
                 print('='*60)
                 print('[INFO] Packages installed successfully!')
@@ -396,7 +416,7 @@ def check_and_install_requirements():
                 print('='*60 + '\n')
                 
                 import time
-                time.sleep(1)  # Brief pause to ensure output is visible
+                time.sleep(1) # Brief pause to ensure output is visible
                 
                 if os.name == 'nt':
                     subprocess.Popen([sys.executable] + sys.argv, creationflags=subprocess.CREATE_NEW_CONSOLE if sys.stdin.isatty() else 0)
@@ -404,7 +424,7 @@ def check_and_install_requirements():
                 else:
                     os.execv(sys.executable, [sys.executable] + sys.argv)
     else:
-        print(Fore.GREEN + '  -> All required packages are installed!' + Fore.RESET)
+        print(Fore.GREEN + ' -> All required packages are installed!' + Fore.RESET)
         print('[STEP 3/5] Complete!\n')
 
 # Check and install required packages
@@ -432,7 +452,7 @@ def ensure_timeline_built():
                 try:
                     if os.path.getmtime(f_path) > build_mtime:
                         should_rebuild = True
-                        print(f"  -> Detected change in {f}, triggering rebuild...")
+                        print(f" -> Detected change in {f}, triggering rebuild...")
                         break
                 except OSError:
                     continue
@@ -448,46 +468,46 @@ def ensure_timeline_built():
             from utils.nodejs_installer import ensure_nodejs_installed
             
             if not ensure_nodejs_installed():
-                print(Fore.YELLOW + "  -> Node.js installation failed or incomplete" + Fore.RESET)
-                print(Fore.YELLOW + "  -> Timeline feature will not be available" + Fore.RESET)
-                print(Fore.YELLOW + "  -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
+                print(Fore.YELLOW + " -> Node.js installation failed or incomplete" + Fore.RESET)
+                print(Fore.YELLOW + " -> Timeline feature will not be available" + Fore.RESET)
+                print(Fore.YELLOW + " -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
                 return
         except ImportError as e:
-            print(Fore.RED + f"  -> [ERROR] Failed to import Node.js installer: {e}" + Fore.RESET)
-            print(Fore.YELLOW + "  -> Please verify that 'utils/nodejs_installer.py' exists." + Fore.RESET)
+            print(Fore.RED + f" -> [ERROR] Failed to import Node.js installer: {e}" + Fore.RESET)
+            print(Fore.YELLOW + " -> Please verify that 'utils/nodejs_installer.py' exists." + Fore.RESET)
             return
         except Exception as e:
-            print(Fore.RED + f"  -> [ERROR] Unexpected error during Node.js check: {e}" + Fore.RESET)
+            print(Fore.RED + f" -> [ERROR] Unexpected error during Node.js check: {e}" + Fore.RESET)
             return
         
         # Now build the timeline with npm
         try:
-            print("  -> Installing NPM dependencies (this may take a minute)...")
+            print(" -> Installing NPM dependencies (this may take a minute)...")
             # Explicitly pass current environment to ensure Node.js is in PATH
             npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
             subprocess.run([npm_cmd, 'install'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
             
-            print("  -> Building React application...")
+            print(" -> Building React application...")
             subprocess.run([npm_cmd, 'run', 'build'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
             # Apply patches for compatibility
             try:
                 from eye.ui.react.patch_eye_ui import patch_file
                 patch_file(os.path.join(dist_dir, 'index.html'))
-                print("  -> Applied browser compatibility patches to Timeline")
+                print(" -> Applied browser compatibility patches to Timeline")
             except:
                 pass
                 
-            print(Fore.GREEN + "  -> [FINISHED] Timeline built successfully!" + Fore.RESET)
+            print(Fore.GREEN + " -> [FINISHED] Timeline built successfully!" + Fore.RESET)
             print('-'*40 + '\n')
                 
         except subprocess.CalledProcessError as e:
-            print(Fore.RED + f"  -> Failed to build Timeline. Exit code: {e.returncode}" + Fore.RESET)
-            print(Fore.YELLOW + "  -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
-            print(Fore.YELLOW + f"     {timeline_dir}" + Fore.RESET)
+            print(Fore.RED + f" -> Failed to build Timeline. Exit code: {e.returncode}" + Fore.RESET)
+            print(Fore.YELLOW + " -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
+            print(Fore.YELLOW + f" {timeline_dir}" + Fore.RESET)
         except FileNotFoundError:
-            print(Fore.RED + "  -> NPM not found. Please install Node.js to use the Timeline feature." + Fore.RESET)
+            print(Fore.RED + " -> NPM not found. Please install Node.js to use the Timeline feature." + Fore.RESET)
     else:
-        print("  -> Timeline React application already built")
+        print(" -> Timeline React application already built")
 
 def ensure_eye_ui_built():
     """Ensure the Eye AI React frontend is built and ready."""
@@ -510,7 +530,7 @@ def ensure_eye_ui_built():
                 try:
                     if os.path.getmtime(f_path) > build_mtime:
                         should_rebuild = True
-                        print(f"  -> Detected change in {f}, triggering rebuild...")
+                        print(f" -> Detected change in {f}, triggering rebuild...")
                         break
                 except OSError:
                     continue
@@ -526,42 +546,42 @@ def ensure_eye_ui_built():
             from utils.nodejs_installer import ensure_nodejs_installed
             
             if not ensure_nodejs_installed():
-                print(Fore.YELLOW + "  -> Node.js installation failed or incomplete" + Fore.RESET)
-                print(Fore.YELLOW + "  -> Eye AI Assistant features will not be available" + Fore.RESET)
-                print(Fore.YELLOW + "  -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
+                print(Fore.YELLOW + " -> Node.js installation failed or incomplete" + Fore.RESET)
+                print(Fore.YELLOW + " -> Eye AI Assistant features will not be available" + Fore.RESET)
+                print(Fore.YELLOW + " -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
                 return
         except ImportError as e:
-            print(Fore.RED + f"  -> Failed to import Node.js installer: {e}" + Fore.RESET)
-            print(Fore.YELLOW + "  -> Please manually install Node.js from https://nodejs.org/" + Fore.RESET)
+            print(Fore.RED + f" -> Failed to import Node.js installer: {e}" + Fore.RESET)
+            print(Fore.YELLOW + " -> Please manually install Node.js from https://nodejs.org/" + Fore.RESET)
             return
         
         # Now build the Eye UI with npm
         try:
-            print("  -> Installing NPM dependencies for Eye AI...")
+            print(" -> Installing NPM dependencies for Eye AI...")
             npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
             subprocess.run([npm_cmd, 'install'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
             
-            print("  -> Building Eye AI React application...")
+            print(" -> Building Eye AI React application...")
             subprocess.run([npm_cmd, 'run', 'build'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
             
             # Apply patches for compatibility
             try:
                 from eye.ui.react.patch_eye_ui import patch_file
                 patch_file(os.path.join(dist_dir, 'index.html'))
-                print("  -> Applied browser compatibility patches to Eye UI")
+                print(" -> Applied browser compatibility patches to Eye UI")
             except Exception as e:
-                print(f"  -> Patching failed: {e}")
+                print(f" -> Patching failed: {e}")
                 
-            print(Fore.GREEN + "  -> [FINISHED] Eye AI built successfully!" + Fore.RESET)
+            print(Fore.GREEN + " -> [FINISHED] Eye AI built successfully!" + Fore.RESET)
             print('-'*40 + '\n')
         except subprocess.CalledProcessError as e:
-            print(Fore.RED + f"  -> Failed to build Eye AI. Exit code: {e.returncode}" + Fore.RESET)
-            print(Fore.YELLOW + "  -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
-            print(Fore.YELLOW + f"     {eye_ui_dir}" + Fore.RESET)
+            print(Fore.RED + f" -> Failed to build Eye AI. Exit code: {e.returncode}" + Fore.RESET)
+            print(Fore.YELLOW + " -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
+            print(Fore.YELLOW + f" {eye_ui_dir}" + Fore.RESET)
         except FileNotFoundError:
-            print(Fore.RED + "  -> NPM not found. Please install Node.js to use the Eye AI feature." + Fore.RESET)
+            print(Fore.RED + " -> NPM not found. Please install Node.js to use the Eye AI feature." + Fore.RESET)
     else:
-        print("  -> Eye AI React application already built")
+        print(" -> Eye AI React application already built")
 
 
 # Handle pywin32 post-install if needed (Windows only)
@@ -569,15 +589,15 @@ def handle_pywin32_postinstall():
     """Run pywin32 post-install script if win32 modules are not accessible with automatic retry."""
     # Skip on non-Windows systems
     if not IS_WINDOWS:
-        print("  -> Skipping pywin32 post-install (not on Windows)")
+        print(" -> Skipping pywin32 post-install (not on Windows)")
         return True
     
     max_retries = 2
     
     for attempt in range(max_retries):
         try:
-            import win32evtlog  # Test if win32 modules are accessible
-            print(Fore.GREEN + "  -> win32 modules are accessible" + Fore.RESET)
+            import win32evtlog # Test if win32 modules are accessible
+            print(Fore.GREEN + " -> win32 modules are accessible" + Fore.RESET)
             return True
         except ImportError:
             if attempt == 0:
@@ -606,7 +626,7 @@ def handle_pywin32_postinstall():
                             print(Fore.GREEN + "win32 modules now accessible after post-install" + Fore.RESET)
                             return True
                         except ImportError:
-                            continue  # Try one more time if still failing
+                            continue # Try one more time if still failing
                     else:
                         print(Fore.RED + f"pywin32 post-install failed: {result.stderr}" + Fore.RESET)
                         if attempt == max_retries - 1:
@@ -686,7 +706,7 @@ def safe_import(module_name, import_path=None, alias=None):
         return True
     except ImportError as e:
         print(Fore.RED + f"[-] Failed to import {module_name}: {str(e)}" + Fore.RESET)
-        print(Fore.YELLOW + f"   Please ensure {module_name} is properly installed" + Fore.RESET)
+        print(Fore.YELLOW + f" Please ensure {module_name} is properly installed" + Fore.RESET)
         return False
     except Exception as e:
         print(Fore.RED + f"[-] Unexpected error importing {module_name}: {str(e)}" + Fore.RESET)
@@ -797,7 +817,7 @@ except ImportError as e:
     CorrelationIntegration = None
 
 try:
-    from correlation_engine.config.case_configuration_manager import CaseConfigurationManager
+    from correlation_engine.config._case_coordinator_service import CaseConfigurationManager
     print(Fore.GREEN + "[+] Successfully imported CaseConfigurationManager" + Fore.RESET)
 except ImportError as e:
     print(Fore.RED + f"[-] Failed to import CaseConfigurationManager: {str(e)}" + Fore.RESET)
@@ -857,7 +877,7 @@ def validate_dependencies():
         except ImportError:
             if dep == 'win32evtlog':
                 print(Fore.RED + f"[-] {dep}: MISSING ({purpose})" + Fore.RESET)
-                print(Fore.YELLOW + "   Attempting automatic recovery for win32evtlog..." + Fore.RESET)
+                print(Fore.YELLOW + " Attempting automatic recovery for win32evtlog..." + Fore.RESET)
                 
                 # Try to automatically fix win32evtlog
                 if handle_pywin32_postinstall():
@@ -866,7 +886,7 @@ def validate_dependencies():
                         import win32evtlog
                         print(Fore.GREEN + f"[+] {dep}: RECOVERED ({purpose})" + Fore.RESET)
                         win32evtlog_fixed = True
-                        continue  # Skip the error flag for this dependency
+                        continue # Skip the error flag for this dependency
                     except ImportError:
                         print(Fore.RED + f"[-] {dep}: AUTOMATIC RECOVERY FAILED ({purpose})" + Fore.RESET)
                 else:
@@ -876,15 +896,15 @@ def validate_dependencies():
             
             all_ok = False
         except Exception as e:
-            print(Fore.YELLOW + f"⚠ {dep}: ERROR - {str(e)} ({purpose})" + Fore.RESET)
+            print(Fore.YELLOW + f"[WARN] {dep}: ERROR - {str(e)} ({purpose})" + Fore.RESET)
             all_ok = False
     
     if not all_ok:
-        print(Fore.YELLOW + "\n⚠ Some dependencies have issues. The application may not function fully." + Fore.RESET)
+        print(Fore.YELLOW + "\n[WARN] Some dependencies have issues. The application may not function fully." + Fore.RESET)
         if not win32evtlog_fixed:
-            print(Fore.YELLOW + "   For win32evtlog issues, try running the pywin32 post-install script manually:" + Fore.RESET)
-            print(Fore.YELLOW + "   python crow_eye_venv\\Scripts\\pywin32_postinstall.py -install" + Fore.RESET)
-        print(Fore.YELLOW + "   Or run: python -m pip install --upgrade -r requirements.txt" + Fore.RESET)
+            print(Fore.YELLOW + " For win32evtlog issues, try running the pywin32 post-install script manually:" + Fore.RESET)
+            print(Fore.YELLOW + " python crow_eye_venv\\Scripts\\pywin32_postinstall.py -install" + Fore.RESET)
+        print(Fore.YELLOW + " Or run: python -m pip install --upgrade -r requirements.txt" + Fore.RESET)
     else:
         print(Fore.GREEN + "\n[+] All critical dependencies are working properly!" + Fore.RESET)
     
@@ -921,11 +941,11 @@ def format_file_size(size_bytes: int) -> str:
     """
     if size_bytes < 1024:
         return f"{size_bytes} Bytes"
-    elif size_bytes < 1048576:  # 1024^2
+    elif size_bytes < 1048576: # 1024^2
         return f"{size_bytes / 1024:.2f} KB"
-    elif size_bytes < 1073741824:  # 1024^3
+    elif size_bytes < 1073741824: # 1024^3
         return f"{size_bytes / 1048576:.2f} MB"
-    elif size_bytes < 1099511627776:  # 1024^4
+    elif size_bytes < 1099511627776: # 1024^4
         return f"{size_bytes / 1073741824:.2f} GB"
     else:
         return f"{size_bytes / 1099511627776:.2f} TB"
@@ -1013,7 +1033,323 @@ class FunctionWorker(QtCore.QThread):
             self.error.emit(error_msg)
 
 
-class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain object
+class _EyeInstantSplash(QtWidgets.QWidget):
+    """Native instant-paint splash for the Eye AI launch path.
+
+    Mirrors `eye/ui/eye_splash.html` so the user sees the same Eye visual
+    identity the moment they click the button — but without any WebEngine
+    cost. Uses pure QPainter; animations are driven by a single QTimer.
+
+    Palette (matched to eye_splash.html):
+        Card backdrop #0f1017
+        Card border rgba(168, 85, 247, 0.30) (purple, 30% alpha)
+        Stripe #4f46e5 → #a855f7 → #22d3ee (indigo → purple → cyan)
+        Title text #e2e8f0
+        Subtitle #475569
+        Status text #64748b
+        Accent purple #a855f7
+        Accent cyan #22d3ee
+        Track rgba(255, 255, 255, 0.06)
+    """
+
+    CARD_W = 360
+    CARD_H = 168
+    BORDER_RADIUS = 16
+    SPINNER_SIZE = 70
+    PAD_X = 24
+    PAD_TOP = 28
+
+    def __init__(self, logo_path=None, parent=None):
+        super().__init__(parent)
+        # Frameless, always-on-top, translucent so the rounded card actually
+        # has rounded edges (not boxed in by the window background).
+        self.setWindowFlags(
+            QtCore.Qt.SplashScreen
+            | QtCore.Qt.FramelessWindowHint
+            | QtCore.Qt.WindowStaysOnTopHint
+        )
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        self.setFixedSize(self.CARD_W, self.CARD_H)
+
+        # Center on the primary screen.
+        try:
+            screen = QtWidgets.QApplication.primaryScreen().geometry()
+            self.move(
+                (screen.width() - self.width()) // 2,
+                (screen.height() - self.height()) // 2,
+            )
+        except Exception:
+            pass
+
+        # Preload the Eye logo once so paintEvent stays fast.
+        self._logo = None
+        if logo_path and os.path.exists(logo_path):
+            try:
+                pix = QtGui.QPixmap(logo_path)
+                if not pix.isNull():
+                    self._logo = pix.scaled(
+                        int(self.SPINNER_SIZE * 0.8),
+                        int(self.SPINNER_SIZE * 0.8),
+                        QtCore.Qt.KeepAspectRatio,
+                        QtCore.Qt.SmoothTransformation,
+                    )
+            except Exception:
+                self._logo = None
+
+        # Animation state.
+        self._angle = 0 # ring rotation, 0..360°
+        self._dot_alpha = 1.0 # status dot pulse, 0.4..1.0
+        self._dot_dir = -1 # pulse direction
+        self._bar_phase = 0 # 0..200 — drives the indeterminate sliding bar
+        self._status_idx = 0
+        self._status_steps = [
+            "Initializing Eye engine…",
+            "Connecting to Python bridge…",
+            "Loading forensic context…",
+            "Opening case databases…",
+            "Synthesizing workspace…",
+        ]
+        # 30 ms tick → ~33 fps. Half the interval of the original 60 ms doubles
+        # the chance that a 15 ms processEvents() pump in EYEAssistantWindow's
+        # constructor catches a tick — without the higher rate, pumps spaced
+        # at typical init-step intervals (~tens of ms) often miss the timer
+        # deadline and the spinner appears to freeze between widget creations.
+        # Per-tick increments below are halved to keep the same visual speed.
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(30)
+        self._timer.timeout.connect(self._tick)
+        self._tick_count = 0
+
+    # ---- lifecycle ----
+    def showEvent(self, event):
+        self._timer.start()
+        super().showEvent(event)
+
+    def closeEvent(self, event):
+        self._timer.stop()
+        super().closeEvent(event)
+
+    def _tick(self):
+        self._tick_count += 1
+        # Spinner: 360° / 1.2 s @ 30 ms tick = 9° per tick.
+        self._angle = (self._angle + 9) % 360
+        # Dot pulse: oscillate alpha 0.4..1.0 (step halved for 30 ms tick).
+        self._dot_alpha += 0.04 * self._dot_dir
+        if self._dot_alpha <= 0.4:
+            self._dot_alpha = 0.4
+            self._dot_dir = 1
+        elif self._dot_alpha >= 1.0:
+            self._dot_alpha = 1.0
+            self._dot_dir = -1
+        # Progress bar phase: 0..199 over ~1.6 s (step halved for 30 ms tick).
+        self._bar_phase = (self._bar_phase + 4) % 200
+        # Cycle status text every 40 ticks (~1.2 s) to match the HTML cadence.
+        if self._tick_count % 40 == 0:
+            self._status_idx = (self._status_idx + 1) % len(self._status_steps)
+        self.update()
+
+    # ---- painting ----
+    def paintEvent(self, event):
+        p = QtGui.QPainter(self)
+        try:
+            p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+            p.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+
+            w, h = self.CARD_W, self.CARD_H
+            radius = self.BORDER_RADIUS
+
+            # ---- Card body ----
+            card_rect = QtCore.QRectF(0.5, 0.5, w - 1, h - 1)
+            p.setBrush(QtGui.QColor("#0f1017"))
+            border = QtGui.QColor(168, 85, 247, int(0.30 * 255)) # purple 30%
+            pen = QtGui.QPen(border)
+            pen.setWidthF(1.0)
+            p.setPen(pen)
+            p.drawRoundedRect(card_rect, radius, radius)
+
+            # ---- Top 2 px gradient stripe (clipped to card top corners) ----
+            p.save()
+            try:
+                clip = QtGui.QPainterPath()
+                clip.addRoundedRect(card_rect, radius, radius)
+                p.setClipPath(clip)
+                stripe = QtGui.QLinearGradient(0, 0, w, 0)
+                stripe.setColorAt(0.0, QtGui.QColor("#4f46e5"))
+                stripe.setColorAt(0.5, QtGui.QColor("#a855f7"))
+                stripe.setColorAt(1.0, QtGui.QColor("#22d3ee"))
+                p.setPen(QtCore.Qt.NoPen)
+                p.setBrush(stripe)
+                p.drawRect(0, 0, w, 2)
+            finally:
+                p.restore()
+
+            # ---- Header: spinner + logo on left, title + subtitle on right ----
+            spinner_size = self.SPINNER_SIZE
+            spinner_x = self.PAD_X
+            spinner_y = self.PAD_TOP
+            spinner_rect = QtCore.QRectF(
+                spinner_x, spinner_y, spinner_size, spinner_size
+            )
+
+            # Rotating ring: 2 px stroke, two coloured arcs (purple top, cyan right).
+            ring_pen_purple = QtGui.QPen(QtGui.QColor("#a855f7"))
+            ring_pen_purple.setWidthF(2.0)
+            ring_pen_purple.setCapStyle(QtCore.Qt.RoundCap)
+            ring_pen_cyan = QtGui.QPen(QtGui.QColor("#22d3ee"))
+            ring_pen_cyan.setWidthF(2.0)
+            ring_pen_cyan.setCapStyle(QtCore.Qt.RoundCap)
+
+            # Qt arcs use 1/16 of a degree.
+            start_a = -self._angle * 16
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.setPen(ring_pen_purple)
+            p.drawArc(spinner_rect, start_a, 90 * 16)
+            p.setPen(ring_pen_cyan)
+            p.drawArc(spinner_rect, start_a + 180 * 16, 90 * 16)
+
+            # Eye logo, centered inside the ring.
+            if self._logo is not None:
+                lx = spinner_x + (spinner_size - self._logo.width()) // 2
+                ly = spinner_y + (spinner_size - self._logo.height()) // 2
+                p.drawPixmap(int(lx), int(ly), self._logo)
+
+            # Title + subtitle, right of the spinner.
+            text_x = spinner_x + spinner_size + 16
+            title_font = QtGui.QFont("Segoe UI", 14, QtGui.QFont.Bold)
+            title_font.setLetterSpacing(QtGui.QFont.PercentageSpacing, 118)
+            p.setFont(title_font)
+            p.setPen(QtGui.QColor("#e2e8f0"))
+            p.drawText(
+                QtCore.QRect(text_x, spinner_y + 8, w - text_x - self.PAD_X, 24),
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                "EYE",
+            )
+
+            subtitle_font = QtGui.QFont("Segoe UI", 9)
+            p.setFont(subtitle_font)
+            p.setPen(QtGui.QColor("#475569"))
+            p.drawText(
+                QtCore.QRect(text_x, spinner_y + 34, w - text_x - self.PAD_X, 18),
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                "Forensic Assistant",
+            )
+
+            # ---- Status row (dot + cycling text) ----
+            status_y = self.PAD_TOP + spinner_size + 14
+            # Pulsing dot.
+            dot_x = self.PAD_X
+            dot_color = QtGui.QColor("#a855f7")
+            dot_color.setAlphaF(self._dot_alpha)
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(dot_color)
+            p.drawEllipse(QtCore.QRectF(dot_x, status_y + 4, 6, 6))
+
+            status_font = QtGui.QFont("Consolas", 9)
+            p.setFont(status_font)
+            p.setPen(QtGui.QColor("#64748b"))
+            p.drawText(
+                QtCore.QRect(
+                    dot_x + 14, status_y, w - (dot_x + 14) - self.PAD_X, 16
+                ),
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                self._status_steps[self._status_idx],
+            )
+
+            # ---- Indeterminate progress bar (2 px, gradient slider) ----
+            bar_y = h - self.PAD_X
+            track_rect = QtCore.QRectF(
+                self.PAD_X, bar_y, w - 2 * self.PAD_X, 2
+            )
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(QtGui.QColor(255, 255, 255, int(0.06 * 255)))
+            p.drawRect(track_rect)
+
+            # Slider position: oscillates left↔right based on _bar_phase.
+            track_w = track_rect.width()
+            slider_w = track_w * 0.4
+            # 0..200 maps to -slider_w..track_w (so slider scrolls fully off-screen).
+            t = self._bar_phase / 200.0
+            slider_x = -slider_w + t * (track_w + slider_w)
+            slider_rect = QtCore.QRectF(
+                track_rect.x() + slider_x, bar_y, slider_w, 2
+            )
+            # Clip slider to track so it doesn't draw outside.
+            p.save()
+            try:
+                p.setClipRect(track_rect)
+                slider_grad = QtGui.QLinearGradient(
+                    slider_rect.x(), 0, slider_rect.right(), 0
+                )
+                slider_grad.setColorAt(0.0, QtGui.QColor("#4f46e5"))
+                slider_grad.setColorAt(0.5, QtGui.QColor("#a855f7"))
+                slider_grad.setColorAt(1.0, QtGui.QColor("#22d3ee"))
+                p.setBrush(slider_grad)
+                p.drawRect(slider_rect)
+            finally:
+                p.restore()
+        finally:
+            p.end()
+
+
+class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just a plain object
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def _on_generic_heartbeat(self):
+        """Process events to keep GUI responsive during long-running background tasks."""
+        try:
+            QtWidgets.QApplication.processEvents()
+        except Exception as e:
+            print(f"[Heartbeat Error] Failed to process events: {e}")
+
+    def _on_live_acquisition_finished(self):
+        """Handle completion of live acquisition on the main thread."""
+        dialog = getattr(self, '_live_dialog', None)
+        if not dialog:
+            return
+            
+        # Clean up worker thread
+        if hasattr(self, '_live_worker') and self._live_worker:
+            self._live_worker.deleteLater()
+            self._live_worker = None
+            
+        # NOW load the data while the dialog is still visible
+        try:
+            dialog.update_step(14, "LOADING DATA INTO GUI")
+            self.load_all_data_internal()
+            dialog.show_completion("ALL ARTIFACTS COLLECTED AND LOADED")
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"[GUI Error] Failed to load data into UI: {str(e)}")
+            dialog.add_log_message(f"[GUI Error] {str(e)}")
+
+        # Shut down the entire Process_Manager (terminates manager server + worker)
+        if hasattr(self, 'process_manager') and self.process_manager:
+            self.process_manager.shutdown()
+            self.process_manager = None
+
+        # Show completion and success message
+        QtCore.QTimer.singleShot(2500, dialog.close)
+        
+        def show_success():
+            QtWidgets.QMessageBox.information(
+                self.main_window,
+                "Live Artifacts Collection",
+                "All live artifacts have been collected and loaded successfully."
+            )
+        
+        QtCore.QTimer.singleShot(3000, show_success)
+
+    def _on_live_acquisition_error(self, task_id, error_msg, traceback_str):
+        """Handle live acquisition errors on the main thread."""
+        dialog = getattr(self, '_live_dialog', None)
+        if dialog:
+            dialog.add_log_message(f"[Error] {error_msg}")
+        print(f"[Error] {error_msg}\n{traceback_str}")
     # Add data loading methods to the class
 
     def load_allReg_data(self):
@@ -1035,7 +1371,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         print("[Registry] All registry data loaded")
     
     # ============================================================================
-    #  PROPER DATA LOADING METHODS START BELOW (at class level)
+    # PROPER DATA LOADING METHODS START BELOW (at class level)
     # ============================================================================
     
     def get_registry_db_path(self):
@@ -1065,6 +1401,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.NetworkLists_table.setItem(row_index, col_index, item)
                 self.NetworkLists_table.setUpdatesEnabled(True)
                 self.NetworkLists_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.NetworkLists_table)
             conn.close()
         except Exception as e:
             print(f"[NetworkLists] Error loading data: {str(e)}")
@@ -1087,6 +1424,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.computerName_table.setItem(row_index, col_index, item)
                 self.computerName_table.setUpdatesEnabled(True)
                 self.computerName_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.computerName_table)
             conn.close()
         except Exception as e:
             print(f"[ComputerName] Error loading data: {str(e)}")
@@ -1109,6 +1447,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.TimeZone_table.setItem(row_index, col_index, item)
                 self.TimeZone_table.setUpdatesEnabled(True)
                 self.TimeZone_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.TimeZone_table)
             conn.close()
         except Exception as e:
             print(f"[Timezone] Error loading data: {str(e)}")
@@ -1131,6 +1470,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.NetworkInterface_table.setItem(row_index, col_index, item)
                 self.NetworkInterface_table.setUpdatesEnabled(True)
                 self.NetworkInterface_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.NetworkInterface_table)
             conn.close()
         except Exception as e:
             print(f"[NetworkInterfaces] Error loading data: {str(e)}")
@@ -1153,6 +1493,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.MachineRun_table.setItem(row_index, col_index, item)
                 self.MachineRun_table.setUpdatesEnabled(True)
                 self.MachineRun_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.MachineRun_table)
             conn.close()
         except Exception as e:
             print(f"[MachineRun] Error loading data: {str(e)}")
@@ -1165,7 +1506,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM machine_run_once")
             rows = cursor.fetchall()
-            if hasattr(self, 'MachineRunOnce_table'):  # Note: keeping original typo for compatibility
+            if hasattr(self, 'MachineRunOnce_table'): # Note: keeping original typo for compatibility
                 self.MachineRunOnce_table.setUpdatesEnabled(False)
                 self.MachineRunOnce_table.setSortingEnabled(False)
                 self.MachineRunOnce_table.setRowCount(len(rows))
@@ -1175,6 +1516,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.MachineRunOnce_table.setItem(row_index, col_index, item)
                 self.MachineRunOnce_table.setUpdatesEnabled(True)
                 self.MachineRunOnce_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.MachineRunOnce_table)
             conn.close()
         except Exception as e:
             print(f"[MachineRunOnce] Error loading data: {str(e)}")
@@ -1197,6 +1539,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.UserRun_table.setItem(row_index, col_index, item)
                 self.UserRun_table.setUpdatesEnabled(True)
                 self.UserRun_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.UserRun_table)
             conn.close()
         except Exception as e:
             print(f"[UserRun] Error loading data: {str(e)}")
@@ -1219,6 +1562,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.UserRunOnce_table.setItem(row_index, col_index, item)
                 self.UserRunOnce_table.setUpdatesEnabled(True)
                 self.UserRunOnce_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.UserRunOnce_table)
             conn.close()
         except Exception as e:
             print(f"[UserRunOnce] Error loading data: {str(e)}")
@@ -1241,6 +1585,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.LastUpdate_table.setItem(row_index, col_index, item)
                 self.LastUpdate_table.setUpdatesEnabled(True)
                 self.LastUpdate_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.LastUpdate_table)
             conn.close()
         except Exception as e:
             print(f"[LastUpdate] Error loading data: {str(e)}")
@@ -1263,6 +1608,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.LastUpdateInfo_table.setItem(row_index, col_index, item)
                 self.LastUpdateInfo_table.setUpdatesEnabled(True)
                 self.LastUpdateInfo_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.LastUpdateInfo_table)
             conn.close()
         except Exception as e:
             print(f"[LastUpdateSubkeys] Error loading data: {str(e)}")
@@ -1285,6 +1631,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.ShutDown_table.setItem(row_index, col_index, item)
                 self.ShutDown_table.setUpdatesEnabled(True)
                 self.ShutDown_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.ShutDown_table)
             conn.close()
         except Exception as e:
             print(f"[ShutdownInfo] Error loading data: {str(e)}")
@@ -1307,6 +1654,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.RecentDocs_table.setItem(row_index, col_index, item)
                 self.RecentDocs_table.setUpdatesEnabled(True)
                 self.RecentDocs_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.RecentDocs_table)
             conn.close()
         except Exception as e:
             print(f"[RecentDocs] Error loading data: {str(e)}")
@@ -1330,6 +1678,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.OpenSaveMRU_table.setItem(row_index, col_index, item)
                 self.OpenSaveMRU_table.setUpdatesEnabled(True)
                 self.OpenSaveMRU_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.OpenSaveMRU_table)
             conn.close()
         except Exception as e:
             print(f"[OpenSaveMRU] Error loading data: {str(e)}")
@@ -1352,6 +1701,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.LastSaveMRU_table.setItem(row_index, col_index, item)
                 self.LastSaveMRU_table.setUpdatesEnabled(True)
                 self.LastSaveMRU_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.LastSaveMRU_table)
             conn.close()
         except Exception as e:
             print(f"[LastSaveMRU] Error loading data: {str(e)}")
@@ -1374,6 +1724,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.TypedPath_table.setItem(row_index, col_index, item)
                 self.TypedPath_table.setUpdatesEnabled(True)
                 self.TypedPath_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.TypedPath_table)
             conn.close()
         except Exception as e:
             print(f"[TypedPaths] Error loading data: {str(e)}")
@@ -1396,6 +1747,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.Bam_table.setItem(row_index, col_index, item)
                 self.Bam_table.setUpdatesEnabled(True)
                 self.Bam_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.Bam_table)
             conn.close()
         except Exception as e:
             print(f"[BAM] Error loading data: {str(e)}")
@@ -1418,6 +1770,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.Dam_table.setItem(row_index, col_index, item)
                 self.Dam_table.setUpdatesEnabled(True)
                 self.Dam_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.Dam_table)
             conn.close()
         except Exception as e:
             print(f"[DAM] Error loading data: {str(e)}")
@@ -1453,6 +1806,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         self.UserAssist_table.setItem(row_index, col_index, item)
                 self.UserAssist_table.setUpdatesEnabled(True)
                 self.UserAssist_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.UserAssist_table)
             conn.close()
         except Exception as e:
             print(f"[UserAssist] Error loading data: {str(e)}")
@@ -1523,6 +1877,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.Shellbags_table.setSortingEnabled(True)
                 print(f"[Shellbags] Successfully loaded {len(rows)} records")
             
+                self.apply_dynamic_column_sizing(self.Shellbags_table)
             conn.close()
         except Exception as e:
             print(f"[Shellbags] Error loading data: {str(e)}")
@@ -1555,6 +1910,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.RunMRU_table.setUpdatesEnabled(True)
 
                 self.RunMRU_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.RunMRU_table)
             conn.close()
         except Exception as e:
             print(f"[RunMRU] Error loading data: {str(e)}")
@@ -1585,6 +1941,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.MUICache_table.setUpdatesEnabled(True)
 
                 self.MUICache_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.MUICache_table)
             conn.close()
         except Exception as e:
             print(f"[MUICache] Error loading data: {str(e)}")
@@ -1615,6 +1972,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.WordWheelQuery_table.setUpdatesEnabled(True)
 
                 self.WordWheelQuery_table.setSortingEnabled(True)
+                self.apply_dynamic_column_sizing(self.WordWheelQuery_table)
             conn.close()
         except Exception as e:
             print(f"[WordWheelQuery] Error loading data: {str(e)}")
@@ -1744,6 +2102,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     self.AJL_table.setSortingEnabled(True)
                     self.apply_lnk_suspicious_highlighting(self.AJL_table)
             
+                self.apply_dynamic_column_sizing(self.LNK_table)
             conn.close()
         except Exception as e:
             print(f"[LNK/AJL] Error loading data: {str(e)}")
@@ -1815,6 +2174,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     self.Clj_table.setSortingEnabled(True)
                     self.apply_lnk_suspicious_highlighting(self.Clj_table)
             
+                self.apply_dynamic_column_sizing(self.Clj_table)
             conn.close()
         except Exception as e:
             print(f"[CJL] Error loading data: {str(e)}")
@@ -2045,8 +2405,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                                 is_suspicious = any(s in value for s in check)
                             
                             if is_suspicious:
-                                item.setBackground(QtGui.QColor(255, 100, 100, 100))  # Light red
-                                item.setForeground(QtGui.QColor(255, 255, 255))  # White text
+                                item.setBackground(QtGui.QColor(255, 100, 100, 100)) # Light red
+                                item.setForeground(QtGui.QColor(255, 255, 255)) # White text
                                 
         except Exception as e:
             print(f"Error applying suspicious highlighting: {str(e)}")
@@ -2222,6 +2582,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.tableWidget_22.setUpdatesEnabled(True)
                 self.tableWidget_22.setSortingEnabled(True)
                 print(f"[SystemLogs] Successfully loaded {len(rows)} records from {db_path}")
+                self.apply_dynamic_column_sizing(self.tableWidget_22)
             conn.close()
         except Exception as e:
             print(f"[SystemLogs] Error loading data: {str(e)}")
@@ -2261,6 +2622,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.AppLogs_table.setUpdatesEnabled(True)
                 self.AppLogs_table.setSortingEnabled(True)
                 print(f"[AppLogs] Successfully loaded {len(rows)} records from {db_path}")
+                self.apply_dynamic_column_sizing(self.AppLogs_table)
             conn.close()
         except Exception as e:
             print(f"[AppLogs] Error loading data: {str(e)}")
@@ -2300,6 +2662,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.SecurityLogs_table.setUpdatesEnabled(True)
                 self.SecurityLogs_table.setSortingEnabled(True)
                 print(f"[SecurityLogs] Successfully loaded {len(rows)} records from {db_path}")
+                self.apply_dynamic_column_sizing(self.SecurityLogs_table)
             conn.close()
         except Exception as e:
             print(f"[SecurityLogs] Error loading data: {str(e)}")
@@ -2363,6 +2726,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.UserProfiles_table.setSortingEnabled(True)
                 print(f"[UserProfiles] Successfully loaded {len(rows)} records")
                 
+                self.apply_dynamic_column_sizing(self.UserProfiles_table)
             conn.close()
         except Exception as e:
             print(f"[UserProfiles] Error loading data: {str(e)}")
@@ -2460,7 +2824,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # Set a friendly display name for the tab
             friendly_name = table_name
             if table_name.startswith("Inventory"):
-                friendly_name = table_name[9:]  # Remove "Inventory" prefix
+                friendly_name = table_name[9:] # Remove "Inventory" prefix
             self.Amcache_tab_widget.setTabText(
                 self.Amcache_tab_widget.indexOf(tab), 
                 friendly_name
@@ -2744,9 +3108,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 loading_function=self._load_amcache_data_worker
             )
             
-            # Connect signals - populate widgets on main thread
-            worker.loading_complete.connect(self._populate_amcache_tables)
-            worker.loading_error.connect(lambda dtype, err: print(f"[Amcache Error] {err}"))
+            # Connect signals - populate widgets on main thread using QueuedConnection
+            worker.loading_complete.connect(self._populate_amcache_tables, QtCore.Qt.QueuedConnection)
+            worker.loading_error.connect(lambda dtype, err: print(f"[Amcache Error] {err}"), QtCore.Qt.QueuedConnection)
             
             # Start worker
             worker.start()
@@ -2925,7 +3289,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Use QEventLoop to wait for completion (non-blocking)
         loop = QEventLoop()
-        loaded_count = [0]  # Use list to capture value from signal
+        loaded_count = [0] # Use list to capture value from signal
         
         def on_complete(name, count):
             loaded_count[0] = count
@@ -2993,7 +3357,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             """Worker-compatible batch processing function for data loaders"""
             loaded_count = 0
             current_page = 1
-            page_result = result  # Use first page result
+            page_result = result # Use first page result
             
             while current_page <= total_pages:
                 # Check for cancellation
@@ -3072,7 +3436,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Use QEventLoop to wait for completion (non-blocking)
         loop = QEventLoop()
-        loaded_count = [0]  # Use list to capture value from signal
+        loaded_count = [0] # Use list to capture value from signal
         
         def on_complete(name, count):
             loaded_count[0] = count
@@ -3870,7 +4234,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             header.setSortIndicatorShown(True)
             header.setSectionsMovable(True)
             header.setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
-            header.setStretchLastSection(False)  # Allow manual resizing of all columns
+            header.setStretchLastSection(False) # Allow manual resizing of all columns
             
             # Force style update with additional header-specific styling
             header.setAttribute(QtCore.Qt.WA_StyledBackground, True)
@@ -3941,7 +4305,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             if not data:
                 print(f"[Database Info] No data found in table '{table_name}'")
                 table_widget.setUpdatesEnabled(was_updates_enabled) 
-                return True  # Empty table is still a success
+                return True # Empty table is still a success
                 
             # Validate data consistency
             if data and len(data[0]) != len(columns):
@@ -3964,12 +4328,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     reordered_row = [row_data[col_idx] for col_idx in col_mapping]
                     for col_index, cell_data in enumerate(reordered_row):
                         item = QtWidgets.QTableWidgetItem(str(cell_data) if cell_data is not None else "")
-                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # Make cells read-only
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable) # Make cells read-only
                         table_widget.setItem(row_index, col_index, item)
             
-            # Resize columns to fit content
-            table_widget.resizeColumnsToContents()
-            
+            # Smart-hybrid: auto-fit + clamp + interactive + stretch-last
+            self.apply_dynamic_column_sizing(table_widget)
+
             # Apply styles after data is loaded
             # Note: Only apply to the table widget itself, not the header separately
             # The header styling is already included in UNIFIED_TABLE_STYLE
@@ -4123,9 +4487,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             loading_function=_load_shimcache_worker
         )
         
-        # Connect signals
-        worker.loading_complete.connect(self._populate_shimcache_table)
-        worker.loading_error.connect(lambda data_type, error: print(f"[{data_type}] Loading error: {error}"))
+        # Connect signals using QueuedConnection to run on GUI thread
+        worker.loading_complete.connect(self._populate_shimcache_table, QtCore.Qt.QueuedConnection)
+        worker.loading_error.connect(lambda data_type, error: print(f"[{data_type}] Loading error: {error}"), QtCore.Qt.QueuedConnection)
         
         # Use QEventLoop for non-blocking wait
         loop = QEventLoop()
@@ -4165,14 +4529,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 for row_index, row in enumerate(rows):
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
-                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # Make cells read-only
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable) # Make cells read-only
                         self.ShimCache_main_table.setItem(row_index, col_index, item)
                 self.ShimCache_main_table.setUpdatesEnabled(True)
                 self.ShimCache_main_table.setSortingEnabled(True)
                 
-                # Re-enable updates and resize columns to content
+                # Re-enable updates and apply smart-hybrid column sizing
                 self.ShimCache_main_table.setUpdatesEnabled(was_updates_enabled)
-                self.ShimCache_main_table.resizeColumnsToContents()
+                self.apply_dynamic_column_sizing(self.ShimCache_main_table)
                 
                 print(f"[ShimCache] Loaded {len(rows)} records into main ShimCache table")
                 
@@ -4255,7 +4619,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Apply appropriate style based on the style parameter
         if style.lower() == 'red':
             button.setStyleSheet(CrowEyeStyles.RED_BUTTON)
-        else:  # Default to parser button style (Blue)
+        else: # Default to parser button style (Blue)
             button.setStyleSheet(CrowEyeStyles.PARSER_BUTTON)
             
         button.setCheckable(checkable)
@@ -4347,7 +4711,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # Create and show the partition window with all database paths
             print(f"[open_partition_window] Creating PartitionWindow with {len(db_paths)} database(s)")
             for source_name, db_path in db_paths:
-                print(f"  - {source_name}: {db_path}")
+                print(f" - {source_name}: {db_path}")
             partition_window = PartitionWindow(db_paths, self.main_window if hasattr(self, 'main_window') else None)
             partition_window.exec_()
             
@@ -4531,7 +4895,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     # Base width on widest digit string plus padding
                     widest_text = "9" * digits
                     text_width = fm.horizontalAdvance(widest_text)
-                    padding = 16  # extra padding for style and spacing
+                    padding = 16 # extra padding for style and spacing
                     vheader_width = text_width + padding
                     # Apply a reasonable min/max guard
                     vheader_width = max(40, min(vheader_width, 140))
@@ -4578,6 +4942,397 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         finally:
             # Always restore update state
             table.setUpdatesEnabled(was_updates_enabled)
+
+    def apply_dynamic_column_sizing(self, table, max_col_width=480, min_col_width=60, stretch_last=True, enrich=True, exclude_source=None, fixed_width_cols=None):
+        """Smart-hybrid column sizing + intelligence enrichment, applied to a
+        QTableWidget after data is loaded.
+
+        - Auto-fits each column to its content (header + cells).
+        - Clamps each column to [min_col_width, max_col_width] so one giant column
+          (e.g. a long file path) cannot crush the rest of the table.
+        - Leaves the header in Interactive mode so the user can still drag dividers.
+        - Stretches the last section to fill any remaining width.
+        - If enrich=True (default), walks every cell and appends [Dynamic_Key]
+          for any value that matches Crow_Intelligence.db Mapping. Pass
+          exclude_source=<table name> to enforce the Source Exclusion Rule.
+        - fixed_width_cols: optional iterable of column indices that hold
+          pathologically long text (e.g. Prefetch's directories/resources lists).
+          These are pinned directly to max_col_width instead of being measured by
+          resizeColumnsToContents, which would otherwise lay out tens-of-KB
+          strings only to clamp the result away — the main cause of Prefetch lag.
+
+        Call this once after the table is populated.
+        """
+        fixed_width_cols = set(fixed_width_cols) if fixed_width_cols else set()
+        if not table:
+            return
+        try:
+            # Enrich FIRST so column sizing measures the final (possibly longer)
+            # text including the appended [Dynamic_Key] suffix.
+            if enrich:
+                try:
+                    self._enrich_table_cells_post_load(table, exclude_source=exclude_source)
+                except Exception as enrich_err:
+                    print(f"[Enrichment] Skipped on table: {enrich_err}")
+
+            header = table.horizontalHeader()
+            if not header:
+                return
+            col_count = table.columnCount()
+            if col_count <= 0:
+                return
+
+            # Step 0: pin known-huge columns to max width up front and exclude them
+            # from content measurement (measuring multi-KB strings is wasted work
+            # since they'd be clamped to max_col_width anyway).
+            for i in fixed_width_cols:
+                if 0 <= i < col_count:
+                    header.resizeSection(i, max_col_width)
+
+            # Step 1: auto-fit to content (Qt measures header text + visible cells).
+            # Limit how many rows Qt samples per column so long-text tables don't
+            # stall the UI thread laying out every cell.
+            header.setResizeContentsPrecision(50)
+            for i in range(col_count):
+                if i not in fixed_width_cols:
+                    table.resizeColumnToContents(i)
+
+            # Step 2: clamp each column to a sensible range so the layout stays balanced.
+            for i in range(col_count):
+                if i in fixed_width_cols:
+                    continue
+                current_w = header.sectionSize(i)
+                if current_w > max_col_width:
+                    header.resizeSection(i, max_col_width)
+                elif current_w < min_col_width:
+                    header.resizeSection(i, min_col_width)
+
+            # Step 3: hand control back to the user; final column fills empty space.
+            header.setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
+            header.setStretchLastSection(stretch_last)
+        except Exception as e:
+            print(f"Error applying dynamic column sizing: {str(e)}")
+
+    # ------------------------------------------------------------------
+    # Intelligence enrichment (Dynamic Linking)
+    # ------------------------------------------------------------------
+    # The forensic loaders in this file populate QTableWidget cells with raw
+    # values straight from per-artifact SQLite DBs. Crow_Intelligence.db holds
+    # Value→Key mappings (SID→Username, MAC→Hostname, etc.). These helpers walk
+    # an already-populated table and append " [Key]" to any cell whose value
+    # matches a Mapping row — without rewriting any of the load functions' SQL.
+
+    def _get_intel_mappings(self, exclude_source=None):
+        """Return the Crow_Intelligence.db Mapping table as a dict {value: key}.
+
+        Results are cached per (case_root, exclude_source) for the lifetime of
+        the case so we don't reopen the SQLite file once per table. The cache
+        is invalidated when the case_root changes.
+
+        Returns {} when there is nothing to enrich with. Distinguishes between:
+          - **Expected absences** (no case open, DB doesn't exist yet because
+            the user hasn't run intelligence gathering, Mapping table empty):
+            returns {} silently; only logs to console.
+          - **Real errors** (DB exists but won't open, schema is wrong, SQL
+            fails): returns {} *and* surfaces a visible QMessageBox warning
+            via `_report_enrichment_error`, deduped per session so loading
+            many tables in a row doesn't spam popups.
+        """
+        try:
+            case_root = None
+            if hasattr(self, 'case_paths') and self.case_paths:
+                case_root = self.case_paths.get('case_root')
+            if not case_root:
+                # Expected at startup before a case is opened. Silent.
+                return {}
+
+            intel_db = os.path.join(case_root, "Crow_Intelligence.db")
+            if not os.path.exists(intel_db):
+                # Expected before the user runs Dynamic Linking → Intelligence
+                # Gathering. Silent so we don't yell at a fresh case.
+                return {}
+
+            # Invalidate cache on case change.
+            current_key = (case_root, exclude_source or "")
+            cache = getattr(self, '_intel_mapping_cache', None)
+            if cache and cache.get('key') == current_key:
+                return cache.get('mappings', {})
+
+            mappings = {}
+            try:
+                conn = sqlite3.connect(f"file:{intel_db}?mode=ro", uri=True, timeout=5.0)
+                cursor = conn.cursor()
+                if exclude_source:
+                    cursor.execute(
+                        "SELECT value, key FROM Mapping WHERE source != ?",
+                        (exclude_source,),
+                    )
+                else:
+                    cursor.execute("SELECT value, key FROM Mapping")
+                for value, key in cursor.fetchall():
+                    if value and key:
+                        val_str = str(value)
+                        key_str = str(key)
+                        mappings[val_str] = key_str
+                        
+                        # Handle Amcache 44-character file_id to bare 40-character SHA-1 hash mapping
+                        if len(val_str) == 44 and val_str.startswith("0000"):
+                            bare_hash = val_str[4:]
+                            if bare_hash not in mappings:
+                                mappings[bare_hash] = key_str
+                            bare_lower = bare_hash.lower()
+                            if bare_lower not in mappings:
+                                mappings[bare_lower] = key_str
+
+                        # Inject lower-case version for case-insensitive fallback
+                        # ONLY if it doesn't overwrite an exact-case collision
+                        val_lower = val_str.lower()
+                        if val_lower not in mappings:
+                            mappings[val_lower] = key_str
+                conn.close()
+            except sqlite3.Error as e:
+                # The DB file exists but won't read — corruption, locked, schema
+                # mismatch, permissions. This IS a real error worth surfacing.
+                self._report_enrichment_error(
+                    "Intelligence database read failed",
+                    f"Crow_Intelligence.db exists at\n {intel_db}\n\n"
+                    f"…but the Mapping table could not be read:\n\n {e}\n\n"
+                    f"Dynamic Linking will be disabled for this session until "
+                    f"the database is regenerated (Dynamic Linking → Intelligence Gathering)."
+                )
+                return {}
+
+            self._intel_mapping_cache = {'key': current_key, 'mappings': mappings}
+            return mappings
+        except Exception as e:
+            # Unexpected failure (filesystem race, attribute missing, etc.) —
+            # still surface it so the user knows enrichment is off.
+            self._report_enrichment_error(
+                "Dynamic Linking lookup failed",
+                f"An unexpected error blocked the Intelligence lookup:\n\n {e}\n\n"
+                f"Enrichment will be skipped for this load. See console for the full traceback."
+            )
+            import traceback
+            traceback.print_exc()
+            return {}
+
+    def _report_enrichment_error(self, title, body):
+        """Show a visible warning for a Dynamic Linking failure.
+
+        Dedupes by message body within a session — loading 30 tables that all
+        hit the same broken Intelligence DB triggers only ONE popup, not 30.
+        Falls back to console output if no main window is attached yet (e.g.
+        during early startup, before the UI is constructed).
+        """
+        try:
+            seen = getattr(self, '_enrichment_errors_shown', None)
+            if seen is None:
+                seen = set()
+                self._enrichment_errors_shown = seen
+            if body in seen:
+                # Already complained about this exact problem this session.
+                print(f"[Enrichment] (suppressed duplicate) {title}: {body.splitlines()[0]}")
+                return
+            seen.add(body)
+
+            parent = getattr(self, 'main_window', None)
+            if parent is None:
+                # UI not up yet — log loudly, don't crash.
+                print(f"[Enrichment ERROR] {title}\n{body}")
+                return
+
+            QtWidgets.QMessageBox.warning(parent, title, body)
+        except Exception as e:
+            # Never let the error-reporter itself break a data load.
+            print(f"[Enrichment] Error reporter failed: {e}")
+            print(f"[Enrichment ERROR] {title}\n{body}")
+
+    def _enrich_text_value(self, raw_text, mappings):
+        """Append " [Key]" to raw_text if it matches a Mapping value.
+
+        Match strategy (issue-3 fix — decorated values):
+          1. Exact match against the full cell text.
+          2. Strip common trailing decorations and retry:
+             "S-1-5-21-1001-500 (Administrator)" → "S-1-5-21-1001-500"
+          3. Tokenise on , ; | whitespace separators and look up each token.
+             Tokens that match get their own inline [Key] suffix; the cell is
+             rebuilt preserving its original separator style.
+
+        Returns the original raw_text unchanged if nothing matches, or if the
+        text already contains a "[" (assume already enriched).
+        """
+        if not raw_text or not mappings:
+            return raw_text
+        if not isinstance(raw_text, str):
+            raw_text = str(raw_text)
+        # Skip pathologically long cells (e.g. Prefetch's " | "-joined directory /
+        # resource lists). Tokenising tens-of-KB strings here is the second source
+        # of the Prefetch lag, and those file-path lists effectively never contain
+        # SID / MAC / hash Dynamic Linking values. Full text is left untouched.
+        if len(raw_text) > 2000:
+            return raw_text
+        if "[" in raw_text: # Already enriched, skip.
+            return raw_text
+        stripped = raw_text.strip()
+        if not stripped:
+            return raw_text
+
+        # 0. Strip "PySID:" prefix for SRUM data enrichment
+        lookup_val = stripped
+        if lookup_val.startswith("PySID:"):
+            lookup_val = lookup_val[6:]
+
+        # 1. Exact whole-cell match.
+        key = mappings.get(lookup_val)
+        if not key:
+            key = mappings.get(lookup_val.lower())
+            
+        # Support looking up bare 40-character SHA-1 if lookup_val is a 44-character Amcache file_id
+        if not key and len(lookup_val) == 44 and lookup_val.startswith("0000"):
+            bare_hash = lookup_val[4:]
+            key = mappings.get(bare_hash)
+            if not key:
+                key = mappings.get(bare_hash.lower())
+                
+        # Support looking up 44-character padded version if lookup_val is a bare 40-character SHA-1
+        if not key and len(lookup_val) == 40:
+            padded_hash = "0000" + lookup_val
+            key = mappings.get(padded_hash)
+            if not key:
+                key = mappings.get(padded_hash.lower())
+
+        if key:
+            return f"{raw_text} [{key}]"
+
+        # 2. Strip decoration suffixes like " (Description)" or " : extra".
+        import re
+        bare = re.split(r"\s*[(:]", lookup_val, maxsplit=1)[0].strip()
+        if bare and bare != lookup_val:
+            key = mappings.get(bare)
+            if key:
+                return f"{raw_text} [{key}]"
+
+        # 3. Tokenise. We split on the common forensic separators, capturing
+        # the separators themselves so we don't shred the string's layout.
+        # This keeps 'A, B; C' as 'A', ', ', 'B', '; ', 'C'.
+        tokens = re.split(r"([,;|]+\s*)", lookup_val)
+        if len(tokens) <= 1:
+            return raw_text # Nothing to tokenise.
+
+        any_hit = False
+        enriched_tokens = []
+        for i, tok in enumerate(tokens):
+            if i % 2 != 0:
+                # This is a separator token
+                enriched_tokens.append(tok)
+                continue
+
+            tok_stripped = tok.strip()
+            if not tok_stripped:
+                enriched_tokens.append(tok)
+                continue
+
+            # Check case-sensitive exact and lower (due to our injection above)
+            tok_key = mappings.get(tok_stripped)
+            if not tok_key:
+                tok_key = mappings.get(tok_stripped.lower())
+
+            if not tok_key:
+                # Try decoration-stripped variant of the token.
+                tok_bare = re.split(r"\s*[(:]", tok_stripped, maxsplit=1)[0].strip()
+                if tok_bare and tok_bare != tok_stripped:
+                    tok_key = mappings.get(tok_bare)
+                    if not tok_key:
+                        tok_key = mappings.get(tok_bare.lower())
+
+            if tok_key:
+                any_hit = True
+                # Preserve whatever leading/trailing whitespace was on this token.
+                lead = tok[: len(tok) - len(tok.lstrip())]
+                trail = tok[len(tok.rstrip()):]
+                enriched_tokens.append(f"{lead}{tok_stripped} [{tok_key}]{trail}")
+            else:
+                enriched_tokens.append(tok)
+
+        if not any_hit:
+            return raw_text
+
+        # Re-join exactly as it was laid out
+        return "".join(enriched_tokens)
+
+    def _enrich_table_cells_post_load(self, table_widget, exclude_source=None, max_cells=200000):
+        """Walk a populated QTableWidget and apply Mapping enrichment to every
+        non-empty, non-already-enriched cell.
+
+        - Reads the mapping table once (cached via _get_intel_mappings).
+        - Stops early if the table exceeds max_cells (safety guard for very large
+          virtual tables; those should go through BaseDataLoader instead).
+        - Disables sorting/updates around the walk so the visual state stays
+          consistent and the scan is fast.
+
+        Error policy: a real failure during the cell walk (item access, text
+        mutation) is shown to the user via `_report_enrichment_error` so they
+        know enrichment failed for this table. The data load itself continues —
+        the table just stays un-enriched.
+        """
+        if not table_widget:
+            return
+        try:
+            row_count = table_widget.rowCount()
+            col_count = table_widget.columnCount()
+            if row_count <= 0 or col_count <= 0:
+                return
+            if row_count * col_count > max_cells:
+                # Large tables (virtual scroll, MFT, USN) load through
+                # BaseDataLoader, which has its own SQL-level enrichment.
+                return
+
+            mappings = self._get_intel_mappings(exclude_source=exclude_source)
+            if not mappings:
+                # Could be empty Mapping table or expected absence — either way,
+                # nothing to enrich. _get_intel_mappings has already surfaced any
+                # real error via _report_enrichment_error.
+                return
+
+            was_sorting = table_widget.isSortingEnabled()
+            was_updates = table_widget.updatesEnabled()
+            table_widget.setSortingEnabled(False)
+            table_widget.setUpdatesEnabled(False)
+            was_signals = table_widget.blockSignals(True)
+            try:
+                enriched_count = 0
+                for r in range(row_count):
+                    for c in range(col_count):
+                        item = table_widget.item(r, c)
+                        if not item:
+                            continue
+                        raw = item.text()
+                        if not raw:
+                            continue
+                        new_text = self._enrich_text_value(raw, mappings)
+                        if new_text != raw:
+                            item.setText(new_text)
+                            enriched_count += 1
+                if enriched_count > 0:
+                    print(
+                        f"[Enrichment] Applied {enriched_count} mapping(s) "
+                        f"to {row_count}×{col_count} table"
+                        + (f" (source={exclude_source})" if exclude_source else "")
+                    )
+            finally:
+                table_widget.blockSignals(was_signals)
+                table_widget.setUpdatesEnabled(was_updates)
+                table_widget.setSortingEnabled(was_sorting)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._report_enrichment_error(
+                "Dynamic Linking cell update failed",
+                f"While applying intelligence mappings to a table, the cell-walk "
+                f"failed:\n\n {e}\n\n"
+                f"The table content is intact, but no [Dynamic_Key] suffixes were "
+                f"applied for this load. See the console for the full traceback."
+            )
 
     # --- Sidebar toggle animation ---
     def toggle_sidebar(self, checked=False):
@@ -4660,7 +5415,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             tab_widget.setElideMode(Qt.ElideRight)
             tab_widget.setTabsClosable(False)
             tab_widget.setMovable(True)
-            tab_widget.setTabBarAutoHide(False)  # Keep tabs always visible for consistency
+            tab_widget.setTabBarAutoHide(False) # Keep tabs always visible for consistency
             
             # Combine both style_sheet and tab_button_style if both are provided
             combined_style = ""
@@ -4773,8 +5528,6 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         border-bottom: 2px solid #334155;
                         font-weight: bold;
                         font-size: 13px;
-                        text-transform: uppercase;
-                        letter-spacing: 1px;
                     }
                     QHeaderView::section:hover {
                         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -4880,7 +5633,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Helper function to create standardized progress bars - reduces code duplication"""
         progress_bar = QtWidgets.QProgressBar()
         if indeterminate:
-            progress_bar.setRange(0, 0)  # Indeterminate progress
+            progress_bar.setRange(0, 0) # Indeterminate progress
         else:
             progress_bar.setRange(0, 100)
             progress_bar.setValue(0)
@@ -5028,9 +5781,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             db_path=db_path
         )
         
-        # Connect signals to populate widgets on main thread
-        worker.loading_complete.connect(self._populate_event_logs_tables)
-        worker.loading_error.connect(lambda dtype, err: print(f"[{dtype}] Loading error: {err}"))
+        # Connect signals to populate widgets on main thread using QueuedConnection
+        worker.loading_complete.connect(self._populate_event_logs_tables, QtCore.Qt.QueuedConnection)
+        worker.loading_error.connect(lambda dtype, err: print(f"[{dtype}] Loading error: {err}"), QtCore.Qt.QueuedConnection)
         
         # Start worker
         worker.start()
@@ -5085,10 +5838,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     table_widget.setItem(row_index, col_index, item)
             
-            # Resize and restore updates
-            table_widget.resizeColumnsToContents()
+            # Apply smart-hybrid sizing and restore updates
+            self.apply_dynamic_column_sizing(table_widget)
             table_widget.setUpdatesEnabled(was_updates_enabled)
-            
+
             print(f"[{title}] Populated {len(rows)} records into table")
     
     def _load_prefetch_data_worker(self, progress_callback, cancellation_check):
@@ -5131,24 +5884,139 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             # Fetch all data
             cursor.execute("SELECT * FROM prefetch_data")
-            rows = cursor.fetchall()
+            raw_rows = cursor.fetchall()
             
             # Get column names
             cursor.execute("PRAGMA table_info(prefetch_data);")
             columns_info = cursor.fetchall()
             columns = [column[1] for column in columns_info]
             
+            # Pre-process the rows in the background thread to avoid UI lag
+            # We parse the complex JSON columns (Run Times, Volumes, Directories, Resources) here
+            # in the worker thread so that the main UI thread isn't blocked by heavy computation,
+            # which previously caused the application to freeze ("lag") when loading large Prefetch databases.
+            # Display caps so the UI never has to render/scroll multi-hundred-KB
+            # cells (Prefetch resources/directories reach ~200 KB each, which made
+            # scrolling stutter no matter the column sizing). The cell shows a
+            # capped display; the fuller value is offered on hover, and the
+            # complete value always remains in the DB and in CSV/JSON/HTML exports.
+            DISPLAY_CAP = 600
+            TOOLTIP_CAP = 8000
+
+            def _cap_cell(full):
+                parts = full.split(" | ")
+                out, total = [], 0
+                for p in parts:
+                    if out and total + len(p) + 3 > DISPLAY_CAP:
+                        break
+                    out.append(p)
+                    total += len(p) + 3
+                remaining = len(parts) - len(out)
+                disp = " | ".join(out)
+                if remaining > 0:
+                    disp += f"  … (+{remaining} more)"
+                tip = full if len(full) <= TOOLTIP_CAP else \
+                    full[:TOOLTIP_CAP] + "  … (truncated — full value in export/DB)"
+                return disp, tip
+
+            processed_rows = []
+            tooltips = []  # per-row {col_index: full_tooltip_text} for capped cells
+            for raw_row in raw_rows:
+                row = list(raw_row)
+                
+                for col_index, cell_data in enumerate(row):
+                    cell_str = str(cell_data) if cell_data is not None else ""
+                    
+                    # Format JSON columns for better display
+                    if col_index == 5 and cell_str: # Run Times column
+                        try:
+                            run_times = json.loads(cell_str)
+                            row[col_index] = " | ".join(run_times)
+                        except json.JSONDecodeError:
+                            row[col_index] = cell_str
+                    
+                    elif col_index == 6 and cell_str: # Volumes column
+                        try:
+                            volumes = json.loads(cell_str)
+                            volume_details = []
+                            for v in volumes:
+                                vol_id = v.get('volume_id', 'Unknown')
+                                device_name = v.get('device_name', '')
+                                creation_time = v.get('creation_time', '')
+                                serial_num = v.get('serial_number', '')
+                                
+                                # Format creation time if available
+                                creation_str = ''
+                                if creation_time and creation_time.lower() != 'none':
+                                    try:
+                                        creation_dt = datetime.datetime.fromisoformat(creation_time)
+                                        creation_str = f", Created: {creation_dt.strftime('%Y-%m-%d')}"
+                                    except:
+                                        creation_str = f", Created: {creation_time}"
+                                
+                                # Format volume info
+                                vol_info = f"{vol_id}"
+                                if device_name:
+                                    device_short = device_name.split('\\')[-1] if '\\' in device_name else device_name
+                                    vol_info += f" ({device_short})"
+                                if serial_num:
+                                    vol_info += f", SN:{serial_num}"
+                                vol_info += creation_str
+                                
+                                volume_details.append(vol_info)
+                            row[col_index] = " | ".join(volume_details)
+                        except json.JSONDecodeError:
+                            row[col_index] = cell_str
+                    
+                    elif col_index == 7 and cell_str: # Directories column
+                        try:
+                            dirs = json.loads(cell_str)
+                            row[col_index] = " | ".join(dirs)
+                        except json.JSONDecodeError:
+                            row[col_index] = cell_str
+                    
+                    elif col_index == 8 and cell_str: # Resources column
+                        try:
+                            resources = json.loads(cell_str)
+                            parts = []
+                            for r in resources:
+                                if isinstance(r, str):
+                                    parts.append(r)
+                                elif isinstance(r, dict):
+                                    parts.append(r.get('path') or r.get('name') or r.get('resource') or json.dumps(r, ensure_ascii=False))
+                                else:
+                                    parts.append(str(r))
+                            row[col_index] = " | ".join(parts)
+                        except json.JSONDecodeError:
+                            row[col_index] = cell_str
+                    else:
+                        row[col_index] = cell_str
+
+                # Cap the heavy list columns (volumes/directories/resources) so the
+                # table never holds a giant string to paint while scrolling.
+                row_tips = {}
+                for ci in (6, 7, 8):
+                    val = row[ci]
+                    if isinstance(val, str) and len(val) > DISPLAY_CAP:
+                        disp, tip = _cap_cell(val)
+                        row[ci] = disp
+                        row_tips[ci] = tip
+                tooltips.append(row_tips)
+
+                processed_rows.append(row)
+
             conn.close()
             
             # Report completion
             progress_callback(1, 1)
             
-            print(f"[Prefetch] Loaded {len(rows)} records from database")
+            print(f"[Prefetch] Loaded {len(processed_rows)} records from database")
             
             # Return data structure (NO widget manipulation!)
             return {
-                'rows': rows,
-                'columns': columns
+                'rows': processed_rows,
+                'columns': columns,
+                'tooltips': tooltips,
             }
             
         except Exception as e:
@@ -5167,13 +6035,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 loading_function=self._load_prefetch_data_worker
             )
             
-            # Connect signals - populate widgets on main thread
-            worker.loading_complete.connect(self._populate_prefetch_table)
+            # Connect signals - populate widgets on main thread using QueuedConnection
+            worker.loading_complete.connect(self._populate_prefetch_table, QtCore.Qt.QueuedConnection)
             worker.loading_error.connect(lambda dtype, err: self.show_error_message(
                 "Prefetch Data",
                 f"Error loading prefetch data: {err}",
                 "critical"
-            ))
+            ), QtCore.Qt.QueuedConnection)
             
             # Start worker
             worker.start()
@@ -5203,11 +6071,28 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         rows = data['rows']
         columns = data['columns']
-        
+
+        # Disable sorting during bulk population. The table is created with
+        # sorting enabled, and while enabled Qt re-sorts the WHOLE table on every
+        # setItem() call — turning population into an O(rows² · log) operation.
+        # That is the dominant cause of Prefetch lag on large cases; restore the
+        # user's sorting state once (single sort) after all rows are inserted.
+        was_sorting = self.Prefetch_table.isSortingEnabled()
+        self.Prefetch_table.setSortingEnabled(False)
+
+        # Turn OFF word wrap (Qt enables it by default). Prefetch's resources /
+        # directories cells reach ~200 KB each; with word wrap on, Qt lays out the
+        # ENTIRE string to compute line breaks on every repaint of a visible cell,
+        # freezing both the initial paint and scrolling. With wrap off + right
+        # elide, Qt only processes the leading visible portion — the full text is
+        # still in the item (and DB/exports), just shown on one elided line.
+        self.Prefetch_table.setWordWrap(False)
+        self.Prefetch_table.setTextElideMode(Qt.ElideRight)
+
         # Disable updates during population
         was_updates_enabled = self.Prefetch_table.updatesEnabled()
         self.Prefetch_table.setUpdatesEnabled(False)
-        
+
         # Set columns
         self.Prefetch_table.setColumnCount(len(columns))
         self.Prefetch_table.setHorizontalHeaderLabels(columns)
@@ -5215,76 +6100,39 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Set row count
         self.Prefetch_table.setRowCount(len(rows))
         
-        # Populate cells and format JSON columns
+        # Populate cells with pre-formatted strings
+        # Note: We no longer perform json.loads() operations here.
+        # The JSON parsing and string formatting logic was moved to _load_prefetch_data_worker
+        # to ensure it executes on a background thread. Doing it here in the main UI thread
+        # was causing severe lag for large datasets.
+        tooltips = data.get('tooltips') or []
         for row_index, row_data in enumerate(rows):
+            row_tips = tooltips[row_index] if row_index < len(tooltips) else None
             for col_index, cell_data in enumerate(row_data):
                 # Convert cell data to string
                 cell_str = str(cell_data) if cell_data is not None else ""
-                
-                # Format JSON columns for better display
-                if col_index == 5 and cell_str:  # Run Times column
-                    try:
-                        run_times = json.loads(cell_str)
-                        cell_str = " | ".join(run_times)
-                    except json.JSONDecodeError:
-                        pass
-                
-                elif col_index == 6 and cell_str:  # Volumes column
-                    try:
-                        volumes = json.loads(cell_str)
-                        volume_details = []
-                        for v in volumes:
-                            vol_id = v.get('volume_id', 'Unknown')
-                            device_name = v.get('device_name', '')
-                            creation_time = v.get('creation_time', '')
-                            serial_num = v.get('serial_number', '')
-                            
-                            # Format creation time if available
-                            creation_str = ''
-                            if creation_time and creation_time.lower() != 'none':
-                                try:
-                                    creation_dt = datetime.datetime.fromisoformat(creation_time)
-                                    creation_str = f", Created: {creation_dt.strftime('%Y-%m-%d')}"
-                                except:
-                                    creation_str = f", Created: {creation_time}"
-                            
-                            # Format volume info
-                            vol_info = f"{vol_id}"
-                            if device_name:
-                                device_short = device_name.split('\\')[-1] if '\\' in device_name else device_name
-                                vol_info += f" ({device_short})"
-                            if serial_num:
-                                vol_info += f", SN:{serial_num}"
-                            vol_info += creation_str
-                            
-                            volume_details.append(vol_info)
-                        cell_str = " | ".join(volume_details)
-                    except json.JSONDecodeError:
-                        pass
-                
-                elif col_index == 7 and cell_str:  # Directories column
-                    try:
-                        dirs = json.loads(cell_str)
-                        cell_str = " | ".join(dirs)
-                    except json.JSONDecodeError:
-                        pass
-                
-                elif col_index == 8 and cell_str:  # Resources column
-                    try:
-                        resources = json.loads(cell_str)
-                        cell_str = " | ".join(resources)
-                    except json.JSONDecodeError:
-                        pass
-                
+
                 # Create and set item
                 item = QtWidgets.QTableWidgetItem(cell_str)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                # For capped heavy cells, offer the fuller value on hover.
+                if row_tips and col_index in row_tips:
+                    item.setToolTip(row_tips[col_index])
                 self.Prefetch_table.setItem(row_index, col_index, item)
         
-        # Resize and restore updates
-        self.Prefetch_table.resizeColumnsToContents()
+        # Apply smart-hybrid sizing and restore updates.
+        # Volumes (6), Directories (7) and Resources (8) hold the long " | "-joined
+        # path lists — pin them to a fixed width so we don't measure tens-of-KB
+        # strings on the UI thread (the source of the Prefetch lag).
+        # enrich=False: Prefetch cells (exe names, prefetch hash, file paths,
+        # timestamps) never contain the SID/MAC/IOC values Dynamic Linking maps,
+        # so the per-cell enrichment walk is pure cost here — it was the
+        # regression vs the older, non-enriched populate path. Skip it.
+        self.apply_dynamic_column_sizing(self.Prefetch_table, fixed_width_cols={6, 7, 8}, enrich=False)
         self.Prefetch_table.setUpdatesEnabled(was_updates_enabled)
-        
+        # Re-enable sorting once, after the table is fully populated (single sort).
+        self.Prefetch_table.setSortingEnabled(was_sorting)
+
         print(f"[Prefetch] Populated {len(rows)} records into table")
     
     def _load_registry_data_worker(self, progress_callback, cancellation_check):
@@ -5383,13 +6231,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 loading_function=self._load_registry_data_worker
             )
             
-            # Connect signals - populate widgets on main thread
-            worker.loading_complete.connect(self._populate_registry_tables)
+            # Connect signals - populate widgets on main thread using QueuedConnection
+            worker.loading_complete.connect(self._populate_registry_tables, QtCore.Qt.QueuedConnection)
             worker.loading_error.connect(lambda dtype, err: self.show_error_message(
                 "Registry Data",
                 f"Error loading registry data: {err}",
                 "warning"
-            ))
+            ), QtCore.Qt.QueuedConnection)
             
             # Start worker
             worker.start()
@@ -5486,8 +6334,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     gui_table.setItem(r_idx, c_idx, item)
 
-            # Resize and restore updates
-            gui_table.resizeColumnsToContents()
+            # Apply smart-hybrid sizing and restore updates
+            self.apply_dynamic_column_sizing(gui_table)
             gui_table.setUpdatesEnabled(was_updates_enabled)
 
             print(f"[Registry] Populated {len(rows)} records into {db_table} table")
@@ -5499,17 +6347,17 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         self.main_window = Crow_Eye
         # Store search results
-        self.search_results = []  # Will store tuples of (table, row, column)
-        self.current_result_index = -1  # Current position in search results
+        self.search_results = [] # Will store tuples of (table, row, column)
+        self.current_result_index = -1 # Current position in search results
         self.highlight_queue = collections.deque()
         self.highlight_timer = QtCore.QTimer()
-        self.highlight_timer.setInterval(50)  # Process queue every 50ms
+        self.highlight_timer.setInterval(50) # Process queue every 50ms
         self.highlight_timer.timeout.connect(self.process_highlight_queue)
         self.highlight_timer.start()
         self.is_processing_highlight = False
         # Initialize loading overlay
         self.loading_overlay = QtWidgets.QWidget(self.main_window)
-        self.loading_overlay.hide()  # Hide by default
+        self.loading_overlay.hide() # Hide by default
         self.loading_overlay.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.loading_overlay.setAttribute(Qt.WA_TranslucentBackground)
         self.loading_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 180);")
@@ -5733,7 +6581,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Add proper spacing between sidebar elements for better visual separation
         try:
             self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
-            self.verticalLayout_3.setSpacing(8)  # Increased spacing between green buttons
+            self.verticalLayout_3.setSpacing(8) # Increased spacing between green buttons
         except Exception:
             pass
         self.export_json_CSV = QtWidgets.QPushButton(self.side_fram)
@@ -5769,7 +6617,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         icon_correlation = QtGui.QIcon()
         icon_correlation.addPixmap(QtGui.QPixmap("GUI Resources/icons/correlation_icon_v4.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.correlation_button.setIcon(icon_correlation)
-        self.correlation_button.setIconSize(QtCore.QSize(24, 24))  # Larger icon for better visibility
+        self.correlation_button.setIconSize(QtCore.QSize(24, 24)) # Larger icon for better visibility
         self.correlation_button.setText("RUN CORRELATION")
         self.correlation_button.setToolTip("Analyze and correlate artifacts across multiple data sources")
         self.correlation_button.setObjectName("correlation_button")
@@ -5809,7 +6657,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         spacerItem_live = QtWidgets.QSpacerItem(20, 8, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
         self.verticalLayout_3.addItem(spacerItem_live)
         if not IS_WINDOWS:
-            spacerItem_live.changeSize(0, 0, QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)        
+            spacerItem_live.changeSize(0, 0, QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed) 
         self.parse_all = QtWidgets.QPushButton(self.side_fram)
         self.parse_all.setStyleSheet(CrowEyeStyles.PARSE_ALL_BUTTON)
         self.parse_all.setObjectName("parse_all")
@@ -5919,7 +6767,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.verticalLayout_3.addWidget(self.CrowClawButton)
         
         self.OfflineImporterButton = QtWidgets.QPushButton(self.side_fram)
-        self.setup_parse_button(self.OfflineImporterButton, True, True, False)  # Checkable and checked by default like other buttons
+        self.setup_parse_button(self.OfflineImporterButton, True, True, False) # Checkable and checked by default like other buttons
         self.OfflineImporterButton.setObjectName("OfflineImporterButton")
         self.verticalLayout_3.addWidget(self.OfflineImporterButton)
         
@@ -5931,7 +6779,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.ParseOfflineArtifactsButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.ParseOfflineArtifactsButton, True, True, False)
         self.ParseOfflineArtifactsButton.setObjectName("ParseOfflineArtifactsButton")
-        self.ParseOfflineArtifactsButton.setEnabled(False)  # Initially disabled until case is opened
+        self.ParseOfflineArtifactsButton.setEnabled(False) # Initially disabled until case is opened
         self.verticalLayout_3.addWidget(self.ParseOfflineArtifactsButton)
 
         spacerItem4 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
@@ -7325,14 +8173,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Initialize Prefetch_table headers if it exists
         if hasattr(self, 'Prefetch_table'):
-            self.Prefetch_table.setColumnCount(12)  # Updated column count to match new database structure
+            self.Prefetch_table.setColumnCount(12) # Updated column count to match new database structure
             headers = [
                 "Filename", "Executable Name", "Hash", "Run Count", "Last Executed",
                 "Run Times", "Volumes", "Directories", "Resources",
                 "Created On", "Modified On", "Accessed On"
             ]
             for i, header in enumerate(headers):
-                if i < self.Prefetch_table.columnCount():  # Ensure we don't exceed column count
+                if i < self.Prefetch_table.columnCount(): # Ensure we don't exceed column count
                     item = QtWidgets.QTableWidgetItem()
                     self.Prefetch_table.setHorizontalHeaderItem(i, item)
                     item.setText(_translate("Crow_Eye", header))
@@ -7354,7 +8202,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize LNK_table headers if it exists
         if hasattr(self, 'LNK_table'):
             self.LNK_table.setSortingEnabled(True)
-            self.LNK_table.setColumnCount(48)  # Extended to include forensic metadata
+            self.LNK_table.setColumnCount(48) # Extended to include forensic metadata
             headers = [
                 "Source_Name", "Source_path", "Owner UID", "Owner GID", "Time_Access",
                 "Time_Creation", "Time_modefication", "app_Type", "App_ID",
@@ -7408,7 +8256,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize AJL_table headers if it exists
         if hasattr(self, 'AJL_table'):
             self.AJL_table.setSortingEnabled(True)
-            self.AJL_table.setColumnCount(48)  # Same as LNK table
+            self.AJL_table.setColumnCount(48) # Same as LNK table
             headers = [
                 "Source_Name", "Source_path", "Owner UID", "Owner GID", "Time_Access",
                 "Time_Creation", "Time_modefication", "app_Type", "App_ID",
@@ -7436,7 +8284,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize Clj_table headers if it exists
         if hasattr(self, 'Clj_table'):
             self.Clj_table.setSortingEnabled(True)
-            self.Clj_table.setColumnCount(27)  # Corrected to 27 (14 base + 13 extensions)
+            self.Clj_table.setColumnCount(27) # Corrected to 27 (14 base + 13 extensions)
             headers = [
                 "File name", "File Directory", "Owner UID", "Owner GID", "Access time",
                 "Creation Time", "Modification Time", "File Size", "File permission", "File Type",
@@ -7459,13 +8307,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize AppLogs_table headers if it exists
         if hasattr(self, 'AppLogs_table'):
             self.AppLogs_table.setSortingEnabled(True)
-            self.AppLogs_table.setColumnCount(9)  # Total number of columns in the table
+            self.AppLogs_table.setColumnCount(9) # Total number of columns in the table
             headers = [
                 "Event ID", "Source", "Event Type", "Category", "Time",
                 "Computer Name", "User", "Key words", "Event Description"
             ]
             for i, header in enumerate(headers):
-                if i < self.AppLogs_table.columnCount():  # Ensure we don't exceed column count
+                if i < self.AppLogs_table.columnCount(): # Ensure we don't exceed column count
                     item = QtWidgets.QTableWidgetItem()
                     self.AppLogs_table.setHorizontalHeaderItem(i, item)
                     item.setText(_translate("Crow_Eye", header))
@@ -7479,13 +8327,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize SecurityLogs_table headers if it exists
         if hasattr(self, 'SecurityLogs_table'):
             self.SecurityLogs_table.setSortingEnabled(True)
-            self.SecurityLogs_table.setColumnCount(10)  # Total number of columns in the table
+            self.SecurityLogs_table.setColumnCount(10) # Total number of columns in the table
             headers = [
                 "Event ID", "Source", "Event Type", "Category", "Time",
                 "Computer Name", "User", "Key words", "Task Level", "Event Description"
             ]
             for i, header in enumerate(headers):
-                if i < self.SecurityLogs_table.columnCount():  # Ensure we don't exceed column count
+                if i < self.SecurityLogs_table.columnCount(): # Ensure we don't exceed column count
                     item = QtWidgets.QTableWidgetItem()
                     self.SecurityLogs_table.setHorizontalHeaderItem(i, item)
                     item.setText(_translate("Crow_Eye", header))
@@ -7499,13 +8347,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         # Initialize SystemLogs_table headers if it exists
         if hasattr(self, 'SystemLogs_table'):
             self.SystemLogs_table.setSortingEnabled(True)
-            self.SystemLogs_table.setColumnCount(9)  # Total number of columns in the table
+            self.SystemLogs_table.setColumnCount(9) # Total number of columns in the table
             headers = [
                 "Event ID", "Source", "Event Type", "Category", "Time",
                 "Computer Name", "User", "Key words", "Event Description"
             ]
             for i, header in enumerate(headers):
-                if i < self.SystemLogs_table.columnCount():  # Ensure we don't exceed column count
+                if i < self.SystemLogs_table.columnCount(): # Ensure we don't exceed column count
                     item = QtWidgets.QTableWidgetItem()
                     self.SystemLogs_table.setHorizontalHeaderItem(i, item)
                     item.setText(_translate("Crow_Eye", header))
@@ -7529,13 +8377,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                
 
                 
-        # Connect data loading buttons with enhanced cyberpunk loading
-        self.lnkbutton.clicked.connect(lambda: self.show_loading_screen_with_function(
-            "LOADING LNK DATA", self.load_data_from_database_lnkAJL))
-
-        self.logbutton.clicked.connect(self.load_all_logs)
-        
-        # Keep existing analysis button connections
+        # Connect analysis button connections
         self.lnkbutton.clicked.connect(self.run_lnk_analysis)
         self.registrybutton.clicked.connect(self.run_registry_analysis)
         self.logbutton.clicked.connect(self.run_logs_analysis)
@@ -7675,20 +8517,52 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             )
 
     def _show_eye_assistant(self):
-        """Show Eye AI Forensic Assistant Window"""
+        """Show Eye AI Forensic Assistant Window.
+
+        The actual Eye window load is heavy on first click (PyQt WebEngine
+        process spin-up + React bundle load takes ~1-3 s). We surface a
+        lightweight native splash IN THE SAME EVENT-LOOP TICK so the user
+        sees visible feedback immediately and cannot mistake the delay for
+        a crash. The native splash uses only QPixmap + QLabel — no
+        WebEngine — so it paints in well under 100 ms even cold.
+        """
+        instant_splash = None
         try:
-            # Use current case artifacts directory
+            # ---- 1. Instant visual feedback (paints same second as the click) ----
+            instant_splash = self._build_eye_instant_splash()
+            if instant_splash is not None:
+                instant_splash.show()
+                instant_splash.raise_()
+                # Force Qt to render the splash before we touch anything heavy.
+                instant_splash.repaint()
+                QtWidgets.QApplication.processEvents(
+                    QtCore.QEventLoop.ExcludeUserInputEvents, 50
+                )
+
+            # ---- 2. Resolve case context (cheap) ----
             artifacts_dir = None
             if hasattr(self, 'case_paths') and self.case_paths:
                 artifacts_dir = self.case_paths.get('case_root')
+            QtWidgets.QApplication.processEvents(
+                QtCore.QEventLoop.ExcludeUserInputEvents, 25
+            )
 
+            # ---- 3. Heavy work (WebEngine init, EYE window build, React load) ----
+            # Hand the instant splash to EYEWindowManager so it can be torn
+            # down at the right moment — after the real Eye window is on
+            # screen but BEFORE start_session opens the case-setup modal.
+            # Otherwise the instant splash stays painted behind the modal for
+            # the entire duration the user spends filling it in.
             from eye.ui.eye_window_manager import EYEWindowManager
             self.eye_tab = EYEWindowManager.show_assistant(
                 main_window=self.main_window,
-                artifacts_dir=artifacts_dir
+                artifacts_dir=artifacts_dir,
+                parent_splash=instant_splash,
             )
+            # show_assistant has already destroyed the splash; don't double-close.
+            instant_splash = None
             print("[Eye AI] Window launched successfully")
-                
+
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -7697,16 +8571,36 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 "Eye AI Error",
                 f"An error occurred while launching Eye AI:\n{str(e)}"
             )
-                
-        except Exception as e:
-            print(f"[Error] Failed to show EYE AI Assistant: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            QtWidgets.QMessageBox.critical(
-                self.main_window,
-                "EYE AI Assistant Error",
-                f"An error occurred:\n{str(e)}"
+        finally:
+            # Defensive: if show_assistant didn't take ownership (e.g. an
+            # exception fired before it could destroy the splash), tear it
+            # down here.
+            if instant_splash is not None:
+                try:
+                    instant_splash.close()
+                    instant_splash.deleteLater()
+                except Exception:
+                    pass
+
+    def _build_eye_instant_splash(self):
+        """Build a lightweight native splash for the Eye AI launch path.
+
+        Uses only QWidget + QPainter so it paints in the same event-loop tick
+        the user clicked the button. No WebEngine, no HTML load. Styling
+        matches `eye/ui/eye_splash.html` (purple #a855f7 accent, cyan #22d3ee
+        secondary, dark #0f1017 card, indigo→purple→cyan gradient stripe,
+        Eye logo with rotating ring, indeterminate progress bar).
+        Returns None if the splash cannot be built (never raises).
+        """
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            logo_path = os.path.join(
+                base_dir, "GUI Resources", "the Eye AI agent transparent.png"
             )
+            return _EyeInstantSplash(logo_path=logo_path, parent=self.main_window)
+        except Exception as e:
+            print(f"[Eye AI] Instant splash unavailable: {e}")
+            return None
 
     def get_app_config_dir(self):
         """Get the configuration and default case directories"""
@@ -7938,7 +8832,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
 
     def load_case_config(self, case_name):
         """Load case configuration from file"""
-        config_dir, _ = self.get_app_config_dir()  # Get config dir only
+        config_dir, _ = self.get_app_config_dir() # Get config dir only
         config_path = os.path.join(config_dir, f"case_{case_name}.json")
         
         try:
@@ -7963,7 +8857,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             print("[Warning] Invalid case name, cannot save configuration")
             return
             
-        config_dir, _ = self.get_app_config_dir()  # Get config dir only
+        config_dir, _ = self.get_app_config_dir() # Get config dir only
         config_path = os.path.join(config_dir, f"case_{case_name}.json")
         
         try:
@@ -8248,11 +9142,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             directory_path = QFileDialog.getExistingDirectory(
                 self.main_window,
                 "Select Parent Directory",
-                default_cases_dir,  # Start in the default cases directory
+                default_cases_dir, # Start in the default cases directory
                 QFileDialog.ShowDirsOnly
             )
             
-            if not directory_path:  # User cancelled
+            if not directory_path: # User cancelled
                 self.Creat_case.setEnabled(True)
                 return None
                 
@@ -8412,7 +9306,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.create_directory()
             elif choice == 'open':
                 self.open_case()
-            else:  # None (cancelled or closed)
+            else: # None (cancelled or closed)
                 sys.exit(0)
                 
         except ImportError as e:
@@ -8437,7 +9331,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.create_directory()
             elif msg_box.clickedButton() == open_button:
                 self.open_case()
-            else:  # Exit button or dialog closed
+            else: # Exit button or dialog closed
                 sys.exit(0)
     
     def open_settings_dialog(self):
@@ -8480,10 +9374,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # Import the loading dialog
             from ui.Loading_dialog import LoadingDialog
             
+            # Use currently active window if available to prevent modal blocking, fallback to main_window
+            active_window = QtWidgets.QApplication.activeWindow()
+            parent = active_window if active_window else self.main_window
+            
             # Create and configure the loading dialog with cyberpunk style
             loading_dialog = LoadingDialog(
                 title="CROW EYE SYSTEM",
-                parent=self.main_window
+                parent=parent
             )
             
             # Store reference to loading dialog for progress callbacks
@@ -8538,14 +9436,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     def on_error(error_msg):
                         result_container['error'] = error_msg
                     
-                    def on_heartbeat():
-                        # Process events to keep animation smooth
-                        QtWidgets.QApplication.processEvents()
-                    
                     # Connect worker signals
                     worker.result.connect(on_result)
                     worker.error.connect(on_error)
-                    worker.heartbeat.connect(on_heartbeat)
+                    worker.heartbeat.connect(self._on_generic_heartbeat, QtCore.Qt.QueuedConnection)
                     
                     # Start worker thread
                     worker.start()
@@ -8573,11 +9467,18 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 loading_dialog.show_completion("OPERATION COMPLETED SUCCESSFULLY")
                 QtWidgets.QApplication.processEvents()
                 
+                def finalize():
+                    loading_dialog.close()
+                    # Ensure main window is reactivated and maximized
+                    self.main_window.setWindowState(QtCore.Qt.WindowMaximized)
+                    self.main_window.raise_()
+                    self.main_window.activateWindow()
+                
                 # Keep dialog open for a moment to show completion
-                QtCore.QTimer.singleShot(1500, loading_dialog.close)
+                QtCore.QTimer.singleShot(1500, finalize)
                 
                 # Wait a bit for user to see the completion
-                QtCore.QTimer.singleShot(2000, lambda: None)  # Brief pause
+                QtCore.QTimer.singleShot(2000, lambda: None) # Brief pause
                 
                 return result
                 
@@ -8726,12 +9627,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Run Crow-Claw Collector GUI"""
         try:
             print("[Info] Opening Crow-Claw Collector...")
-            import sys
-            import os
+            from utils.path_utils import PathUtils
+            app_root = PathUtils.get_app_root()
+            
             # Add crow_claw path to sys.path
-            crow_claw_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'crow_claw')
-            if crow_claw_path not in sys.path:
-                sys.path.insert(0, crow_claw_path)
+            crow_claw_path = app_root / 'Artifacts_Collectors' / 'crow_claw'
+            if str(crow_claw_path) not in sys.path:
+                sys.path.insert(0, str(crow_claw_path))
             
             # Use the dedicated GUI window
             from Artifacts_Collectors.crow_claw.gui.main_window import CrowClawMainWindow
@@ -8781,13 +9683,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         """Open the Offline Artifact Importer GUI"""
         try:
             print("[Info] Opening Offline Artifact Importer...")
-            import sys
-            import os
+            from utils.path_utils import PathUtils
+            app_root = PathUtils.get_app_root()
             
             # Add Offline_Importer path to sys.path
-            importer_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'Offline_Importer')
-            if importer_path not in sys.path:
-                sys.path.insert(0, importer_path)
+            importer_path = app_root / 'Artifacts_Collectors' / 'Offline_Importer'
+            if str(importer_path) not in sys.path:
+                sys.path.insert(0, str(importer_path))
             
             # Import the GUI class
             from Artifacts_Collectors.Offline_Importer.offline_importer_gui import OfflineImporterGUI
@@ -8845,13 +9747,13 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 )
                 return
             
-            import sys
-            import os
+            from utils.path_utils import PathUtils
+            app_root = PathUtils.get_app_root()
             
             # Add Forensics Image parsing path to sys.path
-            img_parsing_path = os.path.join(os.path.dirname(__file__), 'Artifacts_Collectors', 'Forensics_Image_parsing')
-            if img_parsing_path not in sys.path:
-                sys.path.insert(0, img_parsing_path)
+            img_parsing_path = app_root / 'Artifacts_Collectors' / 'Forensics_Image_parsing'
+            if str(img_parsing_path) not in sys.path:
+                sys.path.insert(0, str(img_parsing_path))
             
             # Import the dialog class
             from image_parsing_dialog import ImageParsingDialog
@@ -8928,7 +9830,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             from Artifacts_Collectors.Offline_Importer.collection_coordinator import CollectionCoordinator
             from Artifacts_Collectors.Offline_Importer.parser_invoker import ParserInvoker
             from ui.Loading_dialog import LoadingDialog
-            from correlation_engine.config.case_configuration_manager import CaseConfigurationManager
+            from correlation_engine.config._case_coordinator_service import CaseConfigurationManager
             import hashlib
             
             # Check if artifacts are already available in index
@@ -8956,7 +9858,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     if reply == QtWidgets.QMessageBox.Yes:
                         # 1. Scan the directory with detailed LoadingDialog
                         steps = ["Scanning for artifacts", "Analyzing file types", "Preparing for parsing"]
-                        loading_dialog = LoadingDialog("SCANNING ARTIFACTS", self.main_window)
+                        active_window = QtWidgets.QApplication.activeWindow()
+                        parent = active_window if active_window else self.main_window
+                        loading_dialog = LoadingDialog("SCANNING ARTIFACTS", parent)
                         loading_dialog.set_steps(steps)
                         
                         # Apply EXACT cyberpunk styling used by live parsers (same as parse_artifacts_dialog.py line 535-560)
@@ -9159,6 +10063,9 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                           If None, refreshes all tabs.
         """
         try:
+            # Clear intelligence mappings cache so new/updated mappings are reloaded from DB
+            self._intel_mapping_cache = None
+            
             print(f"[DEBUG] ========================================")
             print(f"[DEBUG] refresh_gui_tabs_after_parsing CALLED")
             print(f"[DEBUG] artifact_types parameter: {artifact_types}")
@@ -9347,13 +10254,17 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
     
     def run_recyclebin_analysis(self):
         """Run RecycleBin analysis with loading screen and switch to RecycleBin tab"""
-        self.run_analysis_with_loading("Running Recycle Bin Analysis...", self.parse_recyclebin, run_in_thread=True)
+        result = self.run_analysis_with_loading("Running Recycle Bin Analysis...", self.parse_recyclebin, run_in_thread=True)
+        if result:
+            self.load_recyclebin_data()
         # Switch to the RecycleBin main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.RecycleBin_main_tab))
     
     def run_srum_analysis(self):
         """Run SRUM analysis with loading screen and switch to SRUM tab"""
-        self.run_analysis_with_loading("Running SRUM Analysis...", self.parse_srum, run_in_thread=True)
+        result = self.run_analysis_with_loading("Running SRUM Analysis...", self.parse_srum, run_in_thread=True)
+        if result:
+            self.load_srum_data()
         # Switch to the SRUM main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.SRUM_main_tab))
     
@@ -9631,80 +10542,53 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             raise
     
     def parse_recyclebin(self):
-        """Parse RecycleBin data with loading dialog"""
-        def _parse_recyclebin_internal():
-            try:
-                print("[RecycleBin] Starting RecycleBin collection...")
-                from Artifacts_Collectors.recyclebin_claw import parse_recycle_bin
-                case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+        """Parse RecycleBin data"""
+        try:
+            print("[RecycleBin] Starting RecycleBin collection...")
+            from Artifacts_Collectors.recyclebin_claw import parse_recycle_bin
+            case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
+            
+            # Run the RecycleBin parser with case path
+            if case_root:
+                # For case-based analysis, pass the case root path
+                db_path = parse_recycle_bin(case_path=case_root)
+            else:
+                # For live system analysis
+                db_path = parse_recycle_bin()
                 
-                # Run the RecycleBin parser with case path
-                if case_root:
-                    # For case-based analysis, pass the case root path
-                    db_path = parse_recycle_bin(case_path=case_root)
-                else:
-                    # For live system analysis
-                    db_path = parse_recycle_bin()
-                    
-                print(f"[RecycleBin] RecycleBin data collected successfully, database: {db_path}")
-                
-                # Return db_path - GUI updates will happen on main thread
-                return db_path
-            except Exception as e:
-                print(f"[RecycleBin Error] {str(e)}")
-                import traceback
-                traceback.print_exc()
-                raise
-        
-        # Use the loading dialog system with threading enabled
-        result = self.show_loading_screen_with_function(
-            "Collecting RecycleBin Data",
-            _parse_recyclebin_internal,
-            run_in_thread=True
-        )
-        
-        # Load the data into the UI on main thread after worker completes
-        if result:
-            self.load_recyclebin_data()
+            print(f"[RecycleBin] RecycleBin data collected successfully, database: {db_path}")
+            return db_path
+        except Exception as e:
+            print(f"[RecycleBin Error] {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def parse_srum(self):
-        """Parse SRUM data with loading dialog"""
-        def _parse_srum_internal():
-            try:
-                print("[SRUM] Starting SRUM collection...")
-                from Artifacts_Collectors.SRUM_Claw import parse_srum_data
-                artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
-                
-                # Run the SRUM parser with artifacts directory and detected Windows partition
-                if artifacts_dir:
-                    windows_partition = self.get_windows_partition()
-                    result = parse_srum_data(case_artifacts_dir=artifacts_dir, windows_partition=windows_partition)
-                    if result.get('success'):
-                        print(f"[SRUM] SRUM data collected successfully: {result.get('statistics', {})}")
-                    else:
-                        print(f"[SRUM] SRUM parsing completed with warnings: {result.get('errors', [])}")
+        """Parse SRUM data"""
+        try:
+            print("[SRUM] Starting SRUM collection...")
+            from Artifacts_Collectors.SRUM_Claw import parse_srum_data
+            artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
+            
+            # Run the SRUM parser with artifacts directory and detected Windows partition
+            if artifacts_dir:
+                windows_partition = self.get_windows_partition()
+                result = parse_srum_data(case_artifacts_dir=artifacts_dir, windows_partition=windows_partition)
+                if result.get('success'):
+                    print(f"[SRUM] SRUM data collected successfully: {result.get('statistics', {})}")
                 else:
-                    print("[SRUM] No artifacts directory available, skipping SRUM collection")
-                    raise Exception("No artifacts directory available for SRUM parsing")
-                
-                # Return result - GUI updates will happen on main thread
-                return result
-            except Exception as e:
-                print(f"[SRUM Error] {str(e)}")
-                import traceback
-                traceback.print_exc()
-                raise
-        
-        # Use the loading dialog system with threading enabled
-        result = self.show_loading_screen_with_function(
-            "Collecting SRUM Data",
-            _parse_srum_internal,
-            run_in_thread=True
-        )
-        
-        # Load the data into the UI on main thread after worker completes
-        if result:
-            self.load_srum_data()
+                    print(f"[SRUM] SRUM parsing completed with warnings: {result.get('errors', [])}")
+            else:
+                print("[SRUM] No artifacts directory available, skipping SRUM collection")
+                raise Exception("No artifacts directory available for SRUM parsing")
+            
+            return result
+        except Exception as e:
+            print(f"[SRUM Error] {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def load_recyclebin_data(self):
         """Load RecycleBin data from the recyclebin database"""
@@ -9751,8 +10635,8 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.RecycleBin_main_table.setUpdatesEnabled(True)
                 self.RecycleBin_main_table.setSortingEnabled(True)
                 print(f"[RecycleBin] Successfully loaded {len(rows)} records from {db_path}")
-                # Resize columns to fit content
-                self.RecycleBin_main_table.resizeColumnsToContents()
+                # Smart-hybrid column sizing
+                self.apply_dynamic_column_sizing(self.RecycleBin_main_table)
                 # Apply styles
                 self.apply_table_styles(self.RecycleBin_main_table)
             conn.close()
@@ -9761,8 +10645,46 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             import traceback
             traceback.print_exc()
     
+    def get_nice_srum_headers(self, columns):
+        """Map SQLite snake_case column names to nice title-cased UI header labels"""
+        mapping = {
+            "id": "ID",
+            "timestamp": "Timestamp",
+            "app_name": "App Name",
+            "app_path": "App Path",
+            "user_sid": "User SID",
+            "user_name": "User Name",
+            "foreground_cycle_time": "Foreground Cycle Time",
+            "background_cycle_time": "Background Cycle Time",
+            "face_time": "Face Time",
+            "foreground_context_switches": "Foreground Context Switches",
+            "background_context_switches": "Background Context Switches",
+            "foreground_bytes_read": "Foreground Bytes Read",
+            "foreground_bytes_written": "Foreground Bytes Written",
+            "foreground_num_read_operations": "Foreground Read Operations",
+            "foreground_num_write_operations": "Foreground Write Operations",
+            "foreground_number_of_flushes": "Foreground Flushes",
+            "background_bytes_read": "Background Bytes Read",
+            "background_bytes_written": "Background Bytes Written",
+            "background_num_read_operations": "Background Read Operations",
+            "background_num_write_operations": "Background Write Operations",
+            "background_number_of_flushes": "Background Flushes",
+            "interface_luid": "Interface LUID",
+            "l2_profile_id": "L2 Profile ID",
+            "l2_profile_flags": "L2 Profile Flags",
+            "connected_time": "Connected Time",
+            "connect_start_time": "Connect Start Time",
+            "bytes_sent": "Bytes Sent",
+            "bytes_received": "Bytes Received",
+            "event_timestamp": "Event Timestamp",
+            "state_transition": "State Transition",
+            "charge_level": "Charge Level",
+            "cycle_count": "Cycle Count"
+        }
+        return [mapping.get(col, col.replace('_', ' ').title()) for col in columns]
+
     def load_srum_data(self):
-        """Load all SRUM data from the SRUM database"""
+        """Load all SRUM data from the SRUM database using VirtualTableWidget"""
         try:
             # Get the database path from case configuration
             if not hasattr(self, 'case_paths') or not self.case_paths:
@@ -9784,11 +10706,26 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             
             print(f"[SRUM] Loading SRUM data from: {db_path}")
             
-            # Load each SRUM table
-            self.load_srum_application_usage(db_path)
-            self.load_srum_network_connectivity(db_path)
-            self.load_srum_network_data_usage(db_path)
-            self.load_srum_energy_usage(db_path)
+            # CRITICAL: This function MUST be called from the main GUI thread
+            from PyQt5.QtCore import QThread
+            if QThread.currentThread() != QtWidgets.QApplication.instance().thread():
+                print("[SRUM] ERROR: load_srum_data() called from worker thread! Must be called from main thread.")
+                return
+                
+            from data.base_loader import BaseDataLoader
+            srum_loader = BaseDataLoader(db_path)
+            if not srum_loader.connect():
+                print("[SRUM] Failed to connect to SRUM database")
+                return
+                
+            # Store loader to keep connection alive
+            self.srum_loader = srum_loader
+            
+            # Load each SRUM table using virtual scrolling
+            self.load_srum_application_usage(srum_loader)
+            self.load_srum_network_connectivity(srum_loader)
+            self.load_srum_network_data_usage(srum_loader)
+            self.load_srum_energy_usage(srum_loader)
             
             print("[SRUM] All SRUM data loaded successfully")
         except Exception as e:
@@ -9796,193 +10733,269 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             import traceback
             traceback.print_exc()
     
-    def load_srum_application_usage(self, db_path):
-        """Load SRUM Application Usage data"""
+    def load_srum_application_usage(self, srum_loader):
+        """Load SRUM Application Usage data using VirtualTableWidget"""
         try:
             print("[SRUM] Starting application usage loading...")
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Check if table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='srum_application_usage'")
-            if not cursor.fetchone():
+            if not srum_loader.table_exists('srum_application_usage'):
                 print("[SRUM] srum_application_usage table not found")
-                conn.close()
                 return
             
-            cursor.execute("SELECT * FROM srum_application_usage")
-            rows = cursor.fetchall()
-            print(f"[SRUM] Fetched {len(rows)} application usage rows from database")
-            
+            # Replace the old table with VirtualTableWidget on the fly
             if hasattr(self, 'SRUM_application_usage_table'):
-                print("[SRUM] Populating application usage table widget...")
-                # Disable updates during bulk loading for performance
-                self.SRUM_application_usage_table.setUpdatesEnabled(False)
-                self.SRUM_application_usage_table.setSortingEnabled(False)
+                columns = srum_loader.get_columns('srum_application_usage')
                 
-                # Set row count once instead of inserting rows one by one
-                self.SRUM_application_usage_table.setRowCount(len(rows))
+                from ui.virtual_table_widget import VirtualTableWidget
+                if not isinstance(self.SRUM_application_usage_table, VirtualTableWidget):
+                    old_table = self.SRUM_application_usage_table
+                    layout = self.verticalLayout_srum_app
+                    layout.removeWidget(old_table)
+                    old_table.deleteLater()
+                    
+                    self.SRUM_application_usage_table = VirtualTableWidget(
+                        data_loader=srum_loader,
+                        table_name='srum_application_usage',
+                        columns=columns,
+                        page_size=5000,
+                        buffer_size=10000,
+                        parent=self.SRUM_app_usage_tab
+                    )
+                    
+                    self.SRUM_application_usage_table.set_order_by('id ASC')
+                    from styles import CrowEyeStyles
+                    CrowEyeStyles.apply_table_styles(self.SRUM_application_usage_table)
+                    layout.addWidget(self.SRUM_application_usage_table)
                 
-                # Populate all cells
-                for row_index, row in enumerate(rows):
-                    if row_index % 1000 == 0:
-                        QtWidgets.QApplication.processEvents()
-                    if row_index % 10000 == 0:
-                        print(f"[SRUM] Processing row {row_index}/{len(rows)}")
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
-                        self.SRUM_application_usage_table.setItem(row_index, col_index, item)
+                # Set nice header labels
+                nice_headers = self.get_nice_srum_headers(columns)
+                self.SRUM_application_usage_table.setHorizontalHeaderLabels(nice_headers)
                 
-                # Re-enable updates and sorting
-                self.SRUM_application_usage_table.setUpdatesEnabled(True)
-                self.SRUM_application_usage_table.setSortingEnabled(True)
+                # Set up loading overlay if not exists
+                if not hasattr(self, 'SRUM_app_usage_overlay'):
+                    from ui.progress_indicator import TableLoadingOverlay
+                    self.SRUM_app_usage_overlay = TableLoadingOverlay(self.SRUM_application_usage_table)
+                    
+                    self.SRUM_application_usage_table.loading_started.connect(
+                        lambda: self.SRUM_app_usage_overlay.show_loading("Loading application usage data...")
+                    )
+                    self.SRUM_application_usage_table.loading_finished.connect(
+                        lambda: self.SRUM_app_usage_overlay.hide_loading()
+                    )
                 
-                print(f"[SRUM] Loaded {len(rows)} application usage records")
-                self.apply_table_styles(self.SRUM_application_usage_table)
+                # Load initial data chunk
+                self.SRUM_app_usage_overlay.show_loading("Loading application usage records...")
+                success = self.SRUM_application_usage_table.load_initial_data()
+                self.SRUM_app_usage_overlay.hide_loading()
+                
+                if success:
+                    total_rows = self.SRUM_application_usage_table.get_total_rows()
+                    print(f"[SRUM] Successfully loaded {total_rows:,} application usage records (virtual scrolling enabled)")
+                else:
+                    print("[SRUM] Failed to load initial application usage data")
             else:
                 print("[SRUM] SRUM_application_usage_table widget not found")
-            conn.close()
-            print("[SRUM] Application usage loading completed")
         except Exception as e:
             print(f"[SRUM] Error loading application usage: {str(e)}")
             import traceback
             traceback.print_exc()
     
-    def load_srum_network_connectivity(self, db_path):
-        """Load SRUM Network Connectivity data"""
+    def load_srum_network_connectivity(self, srum_loader):
+        """Load SRUM Network Connectivity data using VirtualTableWidget"""
         try:
             print("[SRUM] Starting network connectivity loading...")
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Check if table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='srum_network_connectivity'")
-            if not cursor.fetchone():
+            if not srum_loader.table_exists('srum_network_connectivity'):
                 print("[SRUM] srum_network_connectivity table not found")
-                conn.close()
                 return
             
-            cursor.execute("SELECT * FROM srum_network_connectivity")
-            rows = cursor.fetchall()
-            print(f"[SRUM] Fetched {len(rows)} network connectivity rows from database")
-            
+            # Replace the old table with VirtualTableWidget on the fly
             if hasattr(self, 'SRUM_network_connectivity_table'):
-                print("[SRUM] Populating network connectivity table widget...")
-                # Disable updates during bulk loading for performance
-                self.SRUM_network_connectivity_table.setUpdatesEnabled(False)
-                self.SRUM_network_connectivity_table.setSortingEnabled(False)
+                columns = srum_loader.get_columns('srum_network_connectivity')
                 
-                # Set row count once instead of inserting rows one by one
-                self.SRUM_network_connectivity_table.setRowCount(len(rows))
+                from ui.virtual_table_widget import VirtualTableWidget
+                if not isinstance(self.SRUM_network_connectivity_table, VirtualTableWidget):
+                    old_table = self.SRUM_network_connectivity_table
+                    layout = self.verticalLayout_srum_net_conn
+                    layout.removeWidget(old_table)
+                    old_table.deleteLater()
+                    
+                    self.SRUM_network_connectivity_table = VirtualTableWidget(
+                        data_loader=srum_loader,
+                        table_name='srum_network_connectivity',
+                        columns=columns,
+                        page_size=5000,
+                        buffer_size=10000,
+                        parent=self.SRUM_network_conn_tab
+                    )
+                    
+                    self.SRUM_network_connectivity_table.set_order_by('id ASC')
+                    from styles import CrowEyeStyles
+                    CrowEyeStyles.apply_table_styles(self.SRUM_network_connectivity_table)
+                    layout.addWidget(self.SRUM_network_connectivity_table)
                 
-                # Populate all cells
-                for row_index, row in enumerate(rows):
-                    if row_index % 500 == 0:
-                        QtWidgets.QApplication.processEvents()
-                    if row_index % 1000 == 0:
-                        print(f"[SRUM] Processing row {row_index}/{len(rows)}")
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
-                        self.SRUM_network_connectivity_table.setItem(row_index, col_index, item)
+                # Set nice header labels
+                nice_headers = self.get_nice_srum_headers(columns)
+                self.SRUM_network_connectivity_table.setHorizontalHeaderLabels(nice_headers)
                 
-                # Re-enable updates and sorting
-                self.SRUM_network_connectivity_table.setUpdatesEnabled(True)
-                self.SRUM_network_connectivity_table.setSortingEnabled(True)
+                # Set up loading overlay if not exists
+                if not hasattr(self, 'SRUM_net_conn_overlay'):
+                    from ui.progress_indicator import TableLoadingOverlay
+                    self.SRUM_net_conn_overlay = TableLoadingOverlay(self.SRUM_network_connectivity_table)
+                    
+                    self.SRUM_network_connectivity_table.loading_started.connect(
+                        lambda: self.SRUM_net_conn_overlay.show_loading("Loading network connectivity data...")
+                    )
+                    self.SRUM_network_connectivity_table.loading_finished.connect(
+                        lambda: self.SRUM_net_conn_overlay.hide_loading()
+                    )
                 
-                print(f"[SRUM] Loaded {len(rows)} network connectivity records")
-                self.apply_table_styles(self.SRUM_network_connectivity_table)
+                # Load initial data chunk
+                self.SRUM_net_conn_overlay.show_loading("Loading network connectivity records...")
+                success = self.SRUM_network_connectivity_table.load_initial_data()
+                self.SRUM_net_conn_overlay.hide_loading()
+                
+                if success:
+                    total_rows = self.SRUM_network_connectivity_table.get_total_rows()
+                    print(f"[SRUM] Successfully loaded {total_rows:,} network connectivity records (virtual scrolling enabled)")
+                else:
+                    print("[SRUM] Failed to load initial network connectivity data")
             else:
                 print("[SRUM] SRUM_network_connectivity_table widget not found")
-            conn.close()
-            print("[SRUM] Network connectivity loading completed")
         except Exception as e:
             print(f"[SRUM] Error loading network connectivity: {str(e)}")
             import traceback
             traceback.print_exc()
     
-    def load_srum_network_data_usage(self, db_path):
-        """Load SRUM Network Data Usage data"""
+    def load_srum_network_data_usage(self, srum_loader):
+        """Load SRUM Network Data Usage data using VirtualTableWidget"""
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Check if table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='srum_network_data_usage'")
-            if not cursor.fetchone():
+            print("[SRUM] Starting network data usage loading...")
+            if not srum_loader.table_exists('srum_network_data_usage'):
                 print("[SRUM] srum_network_data_usage table not found")
-                conn.close()
                 return
             
-            cursor.execute("SELECT * FROM srum_network_data_usage")
-            rows = cursor.fetchall()
-            
+            # Replace the old table with VirtualTableWidget on the fly
             if hasattr(self, 'SRUM_network_data_table'):
-                # Disable updates during bulk loading for performance
-                self.SRUM_network_data_table.setUpdatesEnabled(False)
-                self.SRUM_network_data_table.setSortingEnabled(False)
+                columns = srum_loader.get_columns('srum_network_data_usage')
                 
-                # Set row count once instead of inserting rows one by one
-                self.SRUM_network_data_table.setRowCount(len(rows))
+                from ui.virtual_table_widget import VirtualTableWidget
+                if not isinstance(self.SRUM_network_data_table, VirtualTableWidget):
+                    old_table = self.SRUM_network_data_table
+                    layout = self.verticalLayout_srum_net_data
+                    layout.removeWidget(old_table)
+                    old_table.deleteLater()
+                    
+                    self.SRUM_network_data_table = VirtualTableWidget(
+                        data_loader=srum_loader,
+                        table_name='srum_network_data_usage',
+                        columns=columns,
+                        page_size=5000,
+                        buffer_size=10000,
+                        parent=self.SRUM_network_data_tab
+                    )
+                    
+                    self.SRUM_network_data_table.set_order_by('id ASC')
+                    from styles import CrowEyeStyles
+                    CrowEyeStyles.apply_table_styles(self.SRUM_network_data_table)
+                    layout.addWidget(self.SRUM_network_data_table)
                 
-                # Populate all cells
-                for row_index, row in enumerate(rows):
-                    if row_index % 500 == 0:
-                        QtWidgets.QApplication.processEvents()
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
-                        self.SRUM_network_data_table.setItem(row_index, col_index, item)
+                # Set nice header labels
+                nice_headers = self.get_nice_srum_headers(columns)
+                self.SRUM_network_data_table.setHorizontalHeaderLabels(nice_headers)
                 
-                # Re-enable updates and sorting
-                self.SRUM_network_data_table.setUpdatesEnabled(True)
-                self.SRUM_network_data_table.setSortingEnabled(True)
+                # Set up loading overlay if not exists
+                if not hasattr(self, 'SRUM_net_data_overlay'):
+                    from ui.progress_indicator import TableLoadingOverlay
+                    self.SRUM_net_data_overlay = TableLoadingOverlay(self.SRUM_network_data_table)
+                    
+                    self.SRUM_network_data_table.loading_started.connect(
+                        lambda: self.SRUM_net_data_overlay.show_loading("Loading network data usage...")
+                    )
+                    self.SRUM_network_data_table.loading_finished.connect(
+                        lambda: self.SRUM_net_data_overlay.hide_loading()
+                    )
                 
-                print(f"[SRUM] Loaded {len(rows)} network data usage records")
-                self.apply_table_styles(self.SRUM_network_data_table)
-            conn.close()
+                # Load initial data chunk
+                self.SRUM_net_data_overlay.show_loading("Loading network data usage records...")
+                success = self.SRUM_network_data_table.load_initial_data()
+                self.SRUM_net_data_overlay.hide_loading()
+                
+                if success:
+                    total_rows = self.SRUM_network_data_table.get_total_rows()
+                    print(f"[SRUM] Successfully loaded {total_rows:,} network data usage records (virtual scrolling enabled)")
+                else:
+                    print("[SRUM] Failed to load initial network data usage data")
+            else:
+                print("[SRUM] SRUM_network_data_table widget not found")
         except Exception as e:
             print(f"[SRUM] Error loading network data usage: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
-    def load_srum_energy_usage(self, db_path):
-        """Load SRUM Energy Usage data"""
+    def load_srum_energy_usage(self, srum_loader):
+        """Load SRUM Energy Usage data using VirtualTableWidget"""
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Check if table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='srum_energy_usage'")
-            if not cursor.fetchone():
+            print("[SRUM] Starting energy usage loading...")
+            if not srum_loader.table_exists('srum_energy_usage'):
                 print("[SRUM] srum_energy_usage table not found")
-                conn.close()
                 return
             
-            cursor.execute("SELECT * FROM srum_energy_usage")
-            rows = cursor.fetchall()
-            
+            # Replace the old table with VirtualTableWidget on the fly
             if hasattr(self, 'SRUM_energy_usage_table'):
-                # Disable updates during bulk loading for performance
-                self.SRUM_energy_usage_table.setUpdatesEnabled(False)
-                self.SRUM_energy_usage_table.setSortingEnabled(False)
+                columns = srum_loader.get_columns('srum_energy_usage')
                 
-                # Set row count once instead of inserting rows one by one
-                self.SRUM_energy_usage_table.setRowCount(len(rows))
+                from ui.virtual_table_widget import VirtualTableWidget
+                if not isinstance(self.SRUM_energy_usage_table, VirtualTableWidget):
+                    old_table = self.SRUM_energy_usage_table
+                    layout = self.verticalLayout_srum_energy
+                    layout.removeWidget(old_table)
+                    old_table.deleteLater()
+                    
+                    self.SRUM_energy_usage_table = VirtualTableWidget(
+                        data_loader=srum_loader,
+                        table_name='srum_energy_usage',
+                        columns=columns,
+                        page_size=5000,
+                        buffer_size=10000,
+                        parent=self.SRUM_energy_usage_tab
+                    )
+                    
+                    self.SRUM_energy_usage_table.set_order_by('id ASC')
+                    from styles import CrowEyeStyles
+                    CrowEyeStyles.apply_table_styles(self.SRUM_energy_usage_table)
+                    layout.addWidget(self.SRUM_energy_usage_table)
                 
-                # Populate all cells
-                for row_index, row in enumerate(rows):
-                    if row_index % 500 == 0:
-                        QtWidgets.QApplication.processEvents()
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
-                        self.SRUM_energy_usage_table.setItem(row_index, col_index, item)
+                # Set nice header labels
+                nice_headers = self.get_nice_srum_headers(columns)
+                self.SRUM_energy_usage_table.setHorizontalHeaderLabels(nice_headers)
                 
-                # Re-enable updates and sorting
-                self.SRUM_energy_usage_table.setUpdatesEnabled(True)
-                self.SRUM_energy_usage_table.setSortingEnabled(True)
+                # Set up loading overlay if not exists
+                if not hasattr(self, 'SRUM_energy_overlay'):
+                    from ui.progress_indicator import TableLoadingOverlay
+                    self.SRUM_energy_overlay = TableLoadingOverlay(self.SRUM_energy_usage_table)
+                    
+                    self.SRUM_energy_usage_table.loading_started.connect(
+                        lambda: self.SRUM_energy_overlay.show_loading("Loading energy usage data...")
+                    )
+                    self.SRUM_energy_usage_table.loading_finished.connect(
+                        lambda: self.SRUM_energy_overlay.hide_loading()
+                    )
                 
-                print(f"[SRUM] Loaded {len(rows)} energy usage records")
-                self.apply_table_styles(self.SRUM_energy_usage_table)
-            conn.close()
+                # Load initial data chunk
+                self.SRUM_energy_overlay.show_loading("Loading energy usage records...")
+                success = self.SRUM_energy_usage_table.load_initial_data()
+                self.SRUM_energy_overlay.hide_loading()
+                
+                if success:
+                    total_rows = self.SRUM_energy_usage_table.get_total_rows()
+                    print(f"[SRUM] Successfully loaded {total_rows:,} energy usage records (virtual scrolling enabled)")
+                else:
+                    print("[SRUM] Failed to load initial energy usage data")
+            else:
+                print("[SRUM] SRUM_energy_usage_table widget not found")
         except Exception as e:
             print(f"[SRUM] Error loading energy usage: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def parse_offline_lnk_files(self):
         """Parse offline LNK files and Jump Lists"""
@@ -10307,9 +11320,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             from PyQt5.QtCore import QEventLoop
             
             # Create enhanced loading dialog
+            active_window = QtWidgets.QApplication.activeWindow()
+            parent = active_window if active_window else self.main_window
             dialog = LoadingDialog(
                 title="CROW EYE SYSTEM",
-                parent=self.main_window
+                parent=parent
             )
             
             # Define the collection steps
@@ -10359,95 +11374,14 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 
                 worker = Progress_Reporter(message_queue)
                 
-                # Connect worker signals to LoadingDialog
-                worker.simple_progress_updated.connect(lambda idx, msg: dialog.update_step(idx, msg))
-                worker.log_updated.connect(lambda msg: dialog.add_log_message(msg))
+                # Connect worker signals to LoadingDialog using QueuedConnection
+                worker.simple_progress_updated.connect(dialog.update_step, QtCore.Qt.QueuedConnection)
+                worker.log_updated.connect(dialog.add_log_message, QtCore.Qt.QueuedConnection)
                 
-                # Handle completion
-                def on_acquisition_complete(task_id, msg):
-                    dialog.show_completion("ALL ARTIFACTS COLLECTED SUCCESSFULLY")
-                    print("[Open Case] Artifact collection completed.")
-                    print("[Open Case] Loading data into GUI...")
-                    
-                    # CRITICAL: Load data in main thread after worker completes
-                    try:
-                        self.load_all_data_internal()
-                        print("[Open Case] Data loaded successfully into GUI")
-                        print("\033[92m[Live Artifacts] All live artifacts have been collected and loaded successfully\033[0m")
-                    except Exception as e:
-                        import traceback
-                        error_details = traceback.format_exc()
-                        print(f"[GUI Error] Failed to load data into UI: {str(e)}")
-                        print(f"[GUI Error Details] {error_details}")
-                        dialog.add_log_message(f"[GUI Error] {str(e)}")
-                
-                def on_acquisition_error(task_id, error_msg, traceback_str):
-                    dialog.add_log_message(f"[Error] {error_msg}")
-                    print(f"[Error] {error_msg}\n{traceback_str}")
-                
-                worker.task_error.connect(on_acquisition_error)
-                
-                # Connect cancellation
-                dialog.cancelled.connect(worker.stop)
-                dialog.cancelled.connect(cancel_event.set)
-                
-                def on_worker_finished():
-                    # Clean up worker thread
-                    if hasattr(self, '_live_worker') and self._live_worker:
-                        self._live_worker.deleteLater()
-                        self._live_worker = None
-                        
-                    # Shut down the entire Process_Manager (terminates manager server + worker)
-                    if hasattr(self, 'process_manager') and self.process_manager:
-                        self.process_manager.shutdown()
-                        self.process_manager = None
-                    # Show completion and success message
-                    QtCore.QTimer.singleShot(2500, dialog.close)
-                    
-                    def show_success():
-                        QtWidgets.QMessageBox.information(
-                            self.main_window,
-                            "Live Artifacts Collection",
-                            "All live artifacts have been collected and loaded successfully."
-                        )
-                    
-                    QtCore.QTimer.singleShot(3000, show_success)
-
-                def on_worker_finished():
-                    # Clean up worker thread
-                    if hasattr(self, '_live_worker') and self._live_worker:
-                        self._live_worker.deleteLater()
-                        self._live_worker = None
-                        
-                    # NOW load the data while the dialog is still visible
-                    try:
-                        dialog.update_step(14, "LOADING DATA INTO GUI")
-                        self.load_all_data_internal()
-                        dialog.show_completion("ALL ARTIFACTS COLLECTED AND LOADED")
-                    except Exception as e:
-                        import traceback
-                        error_details = traceback.format_exc()
-                        print(f"[GUI Error] Failed to load data into UI: {str(e)}")
-                        dialog.add_log_message(f"[GUI Error] {str(e)}")
-
-                    # Shut down the entire Process_Manager (terminates manager server + worker)
-                    if hasattr(self, 'process_manager') and self.process_manager:
-                        self.process_manager.shutdown()
-                        self.process_manager = None
-
-                    # Show completion and success message
-                    QtCore.QTimer.singleShot(2500, dialog.close)
-                    
-                    def show_success():
-                        QtWidgets.QMessageBox.information(
-                            self.main_window,
-                            "Live Artifacts Collection",
-                            "All live artifacts have been collected and loaded successfully."
-                        )
-                    
-                    QtCore.QTimer.singleShot(3000, show_success)
-
-                worker.finished.connect(on_worker_finished)
+                # Store dialog reference and connect completion/error signals
+                self._live_dialog = dialog
+                worker.task_error.connect(self._on_live_acquisition_error, QtCore.Qt.QueuedConnection)
+                worker.finished.connect(self._on_live_acquisition_finished, QtCore.Qt.QueuedConnection)
                 
                 # Store worker to prevent garbage collection
                 self._live_worker = worker
@@ -10571,9 +11505,11 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             from ui.Loading_dialog import LoadingDialog
             
             # Create enhanced loading dialog
+            active_window = QtWidgets.QApplication.activeWindow()
+            parent = active_window if active_window else self.main_window
             dialog = LoadingDialog(
                 title="CROW EYE SYSTEM",
-                parent=self.main_window
+                parent=parent
             )
             
             # Define the steps
@@ -10613,7 +11549,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 self.load_allReg_data()
                 
                 # Step 4: Loading File Activity data
-                dialog.update_step(3, "📁 LOADING FILE ACTIVITY DATA")
+                dialog.update_step(3, "LOADING FILE ACTIVITY DATA")
                 print("[File Activity] Starting to load File Activity Data...")
                 self.load_files_activity()
                 print("[File Activity] Completed loading File Activity Data")
@@ -10655,7 +11591,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 print("[RecycleBin] Completed loading RecycleBin Data")
                 
                 # Step 11: Loading SRUM data
-                dialog.update_step(10, "📊 LOADING SRUM DATA")
+                dialog.update_step(10, "LOADING SRUM DATA")
                 print("[SRUM] Starting to load SRUM Data...")
                 self.load_srum_data()
                 print("[SRUM] Completed loading SRUM Data")
@@ -10682,8 +11618,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 dialog.show_completion("ALL DATA LOADED SUCCESSFULLY")
                 print("\033[92m\nData has been loaded into the GUI Successfully\033[0m")
                 
+                def finalize_loading():
+                    dialog.close()
+                    # Ensure main window is reactivated and maximized
+                    self.main_window.setWindowState(QtCore.Qt.WindowMaximized)
+                    self.main_window.raise_()
+                    self.main_window.activateWindow()
+
                 # Keep dialog open briefly to show completion
-                QtCore.QTimer.singleShot(2000, dialog.close)
+                QtCore.QTimer.singleShot(2000, finalize_loading)
                 
             except Exception as e:
                 error_msg = f"Error loading data: {str(e)}"
@@ -10954,7 +11897,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     "JSON Files (*.json)"
                 )
                 
-            if not file_path:  # User cancelled
+            if not file_path: # User cancelled
                 return False
                 
             # Ensure file has .json extension
@@ -10991,7 +11934,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                     "CSV Files (*.csv)"
                 )
                 
-            if not file_path:  # User cancelled
+            if not file_path: # User cancelled
                 return False
                 
             # Ensure file has .csv extension
@@ -11045,7 +11988,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 QFileDialog.ShowDirsOnly
             )
             
-            if not export_dir:  # User cancelled
+            if not export_dir: # User cancelled
                 return
                 
             # Create a timestamp for the export
@@ -11153,6 +12096,65 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 f"Failed to export tables: {str(e)}"
             )
     
+    def setup_correlation_engine_menu(self):
+        """Create the Analysis > Correlation Engine menu entry + About
+        sub-action. Modeled on setup_column_visibility_menu — same guard
+        on `self.menubar` so it's safe to call at any point in init."""
+        try:
+            if not hasattr(self, 'menubar'):
+                return
+
+            # Create Analysis menu if it doesn't exist yet.
+            if not hasattr(self, 'menu_analysis'):
+                self.menu_analysis = self.menubar.addMenu("Analysis")
+
+            # Main action: launch the Correlation Engine dialog.
+            self.action_correlation_engine = QtWidgets.QAction(
+                "Correlation Engine…", self.main_window
+            )
+            self.action_correlation_engine.setToolTip(
+                "Run forensic correlation across imported feathers."
+            )
+            self.action_correlation_engine.setStatusTip(
+                "Open the Correlation Engine to load a pipeline and execute wing correlations."
+            )
+            self.action_correlation_engine.triggered.connect(self.run_correlation_analysis)
+            self.menu_analysis.addAction(self.action_correlation_engine)
+
+            # About sub-action: shows engine version + recent features.
+            self.menu_analysis.addSeparator()
+            self.action_correlation_about = QtWidgets.QAction(
+                "About Correlation Engine…", self.main_window
+            )
+            self.action_correlation_about.setToolTip(
+                "Show the engine version and recent feature additions."
+            )
+            self.action_correlation_about.triggered.connect(
+                self.show_correlation_engine_about
+            )
+            self.menu_analysis.addAction(self.action_correlation_about)
+
+        except Exception as e:
+            print(f"Error setting up Correlation Engine menu: {str(e)}")
+
+    def show_correlation_engine_about(self):
+        """Display engine version + recent-changes list as a styled
+        QMessageBox. Sources both from the module-level constants so a
+        version bump only requires editing one place."""
+        try:
+            changes = "\n".join(f" • {c}" for c in CORRELATION_ENGINE_RECENT_CHANGES)
+            QMessageBox.information(
+                self.main_window,
+                "About Correlation Engine",
+                f"Crow-Eye Correlation Engine v{CORRELATION_ENGINE_VERSION}\n"
+                f"(part of Crow-Eye v{__version__})\n\n"
+                f"Recent additions:\n{changes}\n\n"
+                "Open via Analysis → Correlation Engine to load a pipeline "
+                "and run wing correlations on imported feathers."
+            )
+        except Exception as e:
+            print(f"Error showing Correlation Engine About dialog: {str(e)}")
+
     def run_correlation_analysis(self):
         """Run correlation analysis on current case artifacts"""
         try:
@@ -11207,34 +12209,98 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 case_directory=case_root,
                 parent=self.main_window
             )
-            
-            # Show the dialog
+
+            # Show the dialog modally and capture the result
             result = self.dynamic_linking_window.exec_()
-            
+
             # If the user clicked "Run Dynamic Linking" (Accepted)
             if result == QtWidgets.QDialog.Accepted:
-                print("[Info] Dynamic Linking configuration completed. Applying changes directly...")
-                
-                # Refresh all virtual tables to show new intelligence mappings
+                print("[Info] Dynamic Linking configuration completed. Applying intelligence mappings...")
+                self._intel_mapping_cache = None  # Clear cache so tables load fresh mappings
+
+                # Release the dialog BEFORE refreshing so the engine's sqlite
+                # handle is freed and VirtualTableWidget can attach Intel DB cleanly.
                 try:
-                    # Import VirtualTableWidget locally to avoid issues
-                    from ui.virtual_table_widget import VirtualTableWidget
-                    
-                    count = 0
-                    for widget in self.main_window.findChildren(VirtualTableWidget):
-                        # Refresh all virtual tables to ensure intelligence mappings are reflected
-                        widget.refresh_data()
-                        count += 1
-                    
-                    print(f"[Info] Refreshed {count} virtual tables with new intelligence mappings.")
-                    
-                    # Also refresh regular tables with new data
-                    self.load_all_data()
-                    
+                    self.dynamic_linking_window.deleteLater()
+                except Exception:
+                    pass
+                self.dynamic_linking_window = None
+
+                # Let Qt process the dialog close before we do the refresh
+                QtWidgets.QApplication.processEvents()
+
+                # Refresh all virtual tables to reflect the new intelligence mappings,
+                # keeping a loading dialog visible for the ENTIRE update so the user
+                # isn't left looking at stale tables with no feedback. The dialog is
+                # closed only after every VirtualTableWidget has finished re-enriching.
+                # VirtualTableWidget.refresh_data() re-attaches Crow_Intelligence.db and
+                # re-runs the enriched query — no need to call load_all_data() again.
+                from ui.virtual_table_widget import VirtualTableWidget
+                from ui.Loading_dialog import LoadingDialog
+
+                # Find all virtual table widgets
+                widgets = self.main_window.findChildren(VirtualTableWidget)
+                steps = [f"Refreshing table: {w.table_name.replace('_', ' ').title()}" for w in widgets]
+                if not steps:
+                    steps = ["Updating artifact tables..."]
+
+                refresh_loading = LoadingDialog("Applying Intelligence", self.main_window)
+                refresh_loading.set_steps(steps)
+                refresh_loading.show()
+                refresh_loading.update_step(0, "Re-enriching artifact tables with new mappings...")
+                QtWidgets.QApplication.processEvents()
+
+                count = 0
+                try:
+                    for i, widget in enumerate(widgets):
+                        try:
+                            # Update step message and progress bar value
+                            refresh_loading.update_step(i, f"Re-enriching table '{widget.table_name}'...")
+                            
+                            # Re-initialise intelligence so the widget picks up
+                            # the newly populated Crow_Intelligence.db.
+                            widget._intelligence_initialized = False
+                            widget.refresh_data()
+                            
+                            # Log which table and column were updated
+                            if widget.enrichment_column:
+                                refresh_loading.add_log_message(
+                                    f"[Success] Updated table '{widget.table_name}' using column '{widget.enrichment_column}'"
+                                )
+                            else:
+                                refresh_loading.add_log_message(
+                                    f"[Success] Refreshed table '{widget.table_name}' (No enrichment column)"
+                                )
+                            count += 1
+                        except Exception as widget_err:
+                            refresh_loading.add_log_message(
+                                f"[Error] Failed to refresh table '{widget.table_name}': {widget_err}"
+                            )
+                            print(f"[Warning] Could not refresh virtual table: {widget_err}")
+                        # Keep the loading dialog responsive/on-top between tables.
+                        QtWidgets.QApplication.processEvents()
+
+                    print(f"[Info] Intelligence refresh complete: {count} virtual table(s) updated.")
+
                 except Exception as e:
-                    print(f"[Error] Failed to refresh tables after dynamic linking: {str(e)}")
-                    # Fallback to general refresh
-                    self.load_all_data()
+                    import traceback
+                    print(f"[Error] Failed to refresh virtual tables after dynamic linking: {e}")
+                    traceback.print_exc()
+                finally:
+                    # Close the dialog ONLY after every table has finished updating.
+                    refresh_loading.show_completion(f"Updated {count} table(s) with new intelligence.")
+                    QtWidgets.QApplication.processEvents()
+                    QtCore.QTimer.singleShot(900, refresh_loading.accept)
+                    refresh_loading.exec_()
+
+                return # dialog already released above
+
+            # User cancelled — just release the dialog.
+            try:
+                self.dynamic_linking_window.deleteLater()
+            except Exception:
+                pass
+            self.dynamic_linking_window = None
                 
         except Exception as e:
             print(f"[Error] Failed to open Dynamic Linking window: {str(e)}")
@@ -11299,12 +12365,12 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         
         # Create a dropdown for table selection
         self.search_tables_combo = QComboBox()
-        self.search_tables_combo.setEnabled(False)  # Initially disabled when "Search All Tables" is selected
+        self.search_tables_combo.setEnabled(False) # Initially disabled when "Search All Tables" is selected
         self.search_tables_combo.setToolTip("Select tables to include/exclude from search")
         
         # Add a button to add the selected table to the list
         self.add_table_button = QtWidgets.QPushButton("+")
-        self.add_table_button.setEnabled(False)  # Initially disabled
+        self.add_table_button.setEnabled(False) # Initially disabled
         self.add_table_button.setToolTip("Add selected table to filter list")
         self.add_table_button.clicked.connect(self.add_table_to_filter)
         
@@ -11312,7 +12378,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
         self.selected_tables_layout = QVBoxLayout()
         self.selected_tables_frame = QFrame()
         self.selected_tables_frame.setLayout(self.selected_tables_layout)
-        self.selected_tables_frame.setVisible(False)  # Initially hidden
+        self.selected_tables_frame.setVisible(False) # Initially hidden
         
         # Add the widgets to the search filter layout
         self.search_filter_layout.addWidget(self.search_mode_combo)
@@ -11340,7 +12406,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             self.search_tables_combo.setEnabled(False)
             self.add_table_button.setEnabled(False)
             self.selected_tables_frame.setVisible(False)
-        else:  # "include" or "exclude"
+        else: # "include" or "exclude"
             self.search_tables_combo.setEnabled(True)
             self.add_table_button.setEnabled(True)
             self.selected_tables_frame.setVisible(True)
@@ -11357,7 +12423,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             if isinstance(widget, QHBoxLayout):
                 label = widget.itemAt(0).widget()
                 if label.text() == table_name:
-                    return  # Table already in the list
+                    return # Table already in the list
         
         # Create a layout for this table entry
         table_layout = QHBoxLayout()
@@ -11399,7 +12465,7 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
             # Check if we have selected tables from the filter dialog
             if hasattr(self, 'selected_tables') and self.selected_tables:
                 print(f"DEBUG: Using selected tables from filter dialog: {self.selected_tables}")
-                return self.selected_tables, None  # Include only these tables
+                return self.selected_tables, None # Include only these tables
             
             # Legacy code for backward compatibility
             # Check if search_mode_combo exists
@@ -11407,10 +12473,10 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 mode = self.search_mode_combo.currentData()
             else:
                 print("DEBUG: search_mode_combo not found, defaulting to 'all' mode")
-                return None, None  # Default to searching all tables
+                return None, None # Default to searching all tables
                 
             if mode == "all":
-                return None, None  # No filtering
+                return None, None # No filtering
             
             # Get the list of selected tables
             selected_tables = []
@@ -11422,17 +12488,17 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                         selected_tables.append(label.text())
             else:
                 print("DEBUG: selected_tables_layout not found")
-                return None, None  # Default to searching all tables
+                return None, None # Default to searching all tables
             
             if mode == "include":
-                return selected_tables, None  # Include only these tables
-            else:  # mode == "exclude":
-                return None, selected_tables  # Exclude these tables
+                return selected_tables, None # Include only these tables
+            else: # mode == "exclude":
+                return None, selected_tables # Exclude these tables
         except Exception as e:
             print(f"ERROR in get_filtered_tables: {str(e)}")
             import traceback
             traceback.print_exc()
-            return None, None  # Default to searching all tables
+            return None, None # Default to searching all tables
     
     def open_filter_dialog(self):
         """Open the search filter dialog to select tables and time range"""
@@ -11683,15 +12749,15 @@ class Ui_Crow_Eye(object):  # This should be a proper Qt class, not just a plain
                 result = self.search_results[self.current_result_index]
                 
                 # Validate result format
-                if not isinstance(result, tuple) or len(result) not in [2, 3]:  # Accept both (table, row) and (table, row, col)
+                if not isinstance(result, tuple) or len(result) not in [2, 3]: # Accept both (table, row) and (table, row, col)
                     print(f"DEBUG: Invalid result format: {result}")
                     return False
                 
                 # Handle both new (table, row) and old (table, row, col) formats
                 if len(result) == 2:
                     table, row = result
-                else:  # len(result) == 3
-                    table, row, _ = result  # Ignore column
+                else: # len(result) == 3
+                    table, row, _ = result # Ignore column
                 
                 # Add to queue if not processing immediately
                 if not process_immediately:
@@ -11860,10 +12926,18 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[Correlation] Failed to initialize: {e}")
         ui.correlation_integration = None
+
+    # Add Analysis → Correlation Engine menu entry now that the integration
+    # is wired (menu action triggers run_correlation_analysis which checks
+    # the integration handle). Safe no-op if menubar isn't ready.
+    try:
+        ui.setup_correlation_engine_menu()
+        print("[Correlation] Analysis menu entry installed")
+    except Exception as e:
+        print(f"[Correlation] Menu setup failed: {e}")
     
-    # Set window state to maximized before showing
-    Crow_Eye.show()
-    Crow_Eye.setWindowState(QtCore.Qt.WindowMaximized)
+    # Set window state to maximized and show
+    Crow_Eye.showMaximized()
     
     # Connect double-click events to all table widgets
     from ui.row_detail_dialog_handler import connect_table_double_click_events
@@ -11886,7 +12960,7 @@ if __name__ == "__main__":
             print(Fore.GREEN + "[+] Initialized CaseConfigurationManager" + Fore.RESET)
         else:
             ui.case_config_manager = None
-            print(Fore.YELLOW + "⚠ CaseConfigurationManager not available" + Fore.RESET)
+            print(Fore.YELLOW + "[WARN] CaseConfigurationManager not available" + Fore.RESET)
     except Exception as e:
         print(f"[Warning] Could not initialize case configuration manager: {e}")
         ui.case_config_manager = None
@@ -11900,6 +12974,11 @@ if __name__ == "__main__":
         try:
             from ui.startup_menu import show_startup_menu
             choice = show_startup_menu(case_history_manager, Crow_Eye)
+            
+            # Reactivate main window after modal dialog closes
+            Crow_Eye.setWindowState(QtCore.Qt.WindowMaximized)
+            Crow_Eye.raise_()
+            Crow_Eye.activateWindow()
             
             if choice is None:
                 # User cancelled, exit

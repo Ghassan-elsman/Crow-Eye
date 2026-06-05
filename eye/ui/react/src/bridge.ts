@@ -7,7 +7,7 @@
  * 
  */
 
-import type { EYEBridge } from './types';
+import type { EYEBridge, EyeDialogueEntry } from './types';
 
 // Extend Window interface to include QWebChannel
 declare global {
@@ -27,6 +27,7 @@ export type QueryCompleteCallback = (responseJson: string) => void;
 export type ReportUpdatedCallback = (reportJson: string) => void;
 export type ErrorOccurredCallback = (errorMessage: string) => void;
 export type StatusUpdatedCallback = (statusMessage: string) => void;
+export type DialogueUpdatedCallback = (entryJson: string) => void;
 
 /**
  * Bridge initialization state
@@ -42,6 +43,7 @@ const signalListeners = {
   reportUpdated: [] as ReportUpdatedCallback[],
   errorOccurred: [] as ErrorOccurredCallback[],
   statusUpdated: [] as StatusUpdatedCallback[],
+  dialogueUpdated: [] as DialogueUpdatedCallback[],
 };
 
 /**
@@ -174,6 +176,19 @@ function connectSignalListeners(bridge: any) {
     });
   }
 
+  // Connect to dialogue_updated signal (Eye<->LLM conversation stream)
+  if (bridge.dialogue_updated && bridge.dialogue_updated.connect) {
+    bridge.dialogue_updated.connect((entryJson: string) => {
+      signalListeners.dialogueUpdated.forEach(callback => {
+        try {
+          callback(entryJson);
+        } catch (error) {
+          console.error('Error in dialogue_updated callback:', error);
+        }
+      });
+    });
+  }
+
   // Connect to truncation_warning signal
   if (bridge.truncation_warning && bridge.truncation_warning.connect) {
     bridge.truncation_warning.connect((warningJson: string) => {
@@ -241,6 +256,13 @@ export function onStatusUpdated(callback: StatusUpdatedCallback): () => void {
   signalListeners.statusUpdated.push(callback);
   return () => {
     signalListeners.statusUpdated = signalListeners.statusUpdated.filter(cb => cb !== callback);
+  };
+}
+
+export function onDialogueUpdated(callback: DialogueUpdatedCallback): () => void {
+  signalListeners.dialogueUpdated.push(callback);
+  return () => {
+    signalListeners.dialogueUpdated = signalListeners.dialogueUpdated.filter(cb => cb !== callback);
   };
 }
 
@@ -387,6 +409,40 @@ export async function getAvailableModelsWithQuota(): Promise<{id: string, quota:
   }
 }
 
+export interface GroupedBackendOption {
+  backend: string;
+  model_name: string;
+  label: string;
+  is_active: boolean;
+}
+
+export interface GroupedBackendResponse {
+  "Cloud API": GroupedBackendOption[];
+  "Local Server": GroupedBackendOption[];
+  "Local CLI": GroupedBackendOption[];
+}
+
+/**
+ * Get all configured or active backend connections and their models, grouped by backend type.
+ */
+export async function getGroupedBackendConnections(): Promise<GroupedBackendResponse | null> {
+  if (!window.bridge || typeof window.bridge.get_grouped_backend_connections !== 'function') {
+    return null;
+  }
+
+  try {
+    const responseJson = await window.bridge.get_grouped_backend_connections();
+    const response = JSON.parse(responseJson);
+    if (response.success && response.data) {
+      return response.data as GroupedBackendResponse;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting grouped backend connections:', error);
+    return null;
+  }
+}
+
 /**
  * Switch the actively connected AI model.
  * 
@@ -408,8 +464,51 @@ export async function switchActiveModel(modelName: string): Promise<boolean> {
 }
 
 /**
+ * Snapshot of whether the EYE is currently wired up to its AI backend.
+ * Used by the chat "EYE Synchronization" step to decide whether to proceed
+ * with the triage handshake or surface a clear disconnect message.
+ */
+export interface BackendStatus {
+  connected: boolean;
+  backend: string | null;
+  model: string | null;
+  integration_type: string | null;
+  detail: string;
+}
+
+/**
+ * Check whether the active AI backend (cloud or local) is reachable.
+ *
+ * Never throws — on bridge error returns `{ connected: false, ... }` so the
+ * caller can render a single graceful disconnect message.
+ */
+export async function getBackendStatus(): Promise<BackendStatus> {
+  const fallback: BackendStatus = {
+    connected: false,
+    backend: null,
+    model: null,
+    integration_type: null,
+    detail: 'Bridge not initialized',
+  };
+  if (!window.bridge || typeof window.bridge.get_backend_status !== 'function') {
+    return fallback;
+  }
+  try {
+    const response = await window.bridge.get_backend_status();
+    const parsed = JSON.parse(response);
+    if (parsed && parsed.success && parsed.data) {
+      return parsed.data as BackendStatus;
+    }
+    return { ...fallback, detail: parsed?.error || 'Backend status unavailable' };
+  } catch (error) {
+    console.error('Error checking backend status:', error);
+    return { ...fallback, detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * Trigger the automated forensic triage report if it doesn't exist.
- * 
+ *
  * @returns Promise resolving to JSON string with operation result
  */
 export async function initializeTriage(): Promise<string> {
@@ -454,6 +553,22 @@ export function showSettings(): void {
 }
 
 /**
+ * Open the GEP Compliance dashboard in its own OS window so the investigator
+ * can view chat, report, and compliance side by side. Falls back to the
+ * legacy URL-swap (in-app view replacement) if the PyQt bridge is unavailable
+ * (e.g. running the React build in a plain browser for development).
+ */
+export function openComplianceWindow(): void {
+  if (window.bridge && window.bridge.requestComplianceWindow) {
+    window.bridge.requestComplianceWindow();
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set('view', 'compliance');
+  window.location.href = url.toString();
+}
+
+/**
  * Pin a message to prevent it from being summarized.
  * 
  * @param messageId The ID of the message to pin
@@ -495,7 +610,7 @@ export async function unpinMessage(messageId: string): Promise<string> {
 
 /**
  * Export the truncation audit trail to a file.
- * 
+ *
  * @param outputPath The path where the audit trail should be exported
  * @returns Promise resolving to JSON string with operation result
  */
@@ -510,6 +625,457 @@ export async function exportAuditTrail(outputPath: string): Promise<string> {
   } catch (error) {
     console.error('Error exporting audit trail:', error);
     throw error;
+  }
+}
+
+/**
+ * GEP Rule 7 / Compliance dashboard: fetch the live Ghassan Elsman Protocol
+ * compliance state for all 11 rules (8 read-side rules 0-7 + 3 write-side
+ * rules 8-10 covering the correlation_create_* / correlation_edit_* tools).
+ *
+ * Returns the parsed envelope from the Python bridge:
+ *   { success: true, data: { rules: [{id, name, status, detail}, ...] }, error: null }
+ * On bridge failure, returns the same shape with success=false + error string.
+ *
+ * The frontend renders any rule id the backend emits — no enum gating —
+ * so future rule additions only require backend changes plus
+ * RULE_BLURB / RULE_GUIDANCE entries in ProtocolCompliancePanel.tsx.
+ */
+export interface GepRuleStatus {
+  id: number;
+  name: string;
+  status: 'PASS' | 'PARTIAL' | 'FAIL' | 'N-A' | string;
+  detail: string;
+}
+export interface GepComplianceResponse {
+  success: boolean;
+  data: { rules: GepRuleStatus[] } | null;
+  error: string | null;
+}
+
+export async function getGepComplianceStatus(): Promise<GepComplianceResponse> {
+  if (!window.bridge) {
+    throw new Error('Bridge not initialized. Call initializeBridge() first.');
+  }
+  try {
+    const raw = await window.bridge.get_gep_compliance_status();
+    return JSON.parse(raw) as GepComplianceResponse;
+  } catch (error) {
+    console.error('Error fetching GEP compliance status:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Activity Audit — chronological log of every query the EYE made,
+ * the evidence each tool call returned, and every change to the report. */
+export type AuditEntryType =
+  | 'user_query'
+  | 'assistant_response'
+  | 'tool_call'
+  | 'tool_result'
+  | 'report_added'
+  | 'report_edited'
+  | 'report_deleted'
+  | 'report_other';
+
+export interface ActivityAuditEntry {
+  timestamp: string;
+  type: AuditEntryType;
+  summary: string;
+  detail: string;
+  tools: string[] | null;
+  block_id: string | null;
+  iteration: number | null;
+}
+
+export interface ActivityAuditResponse {
+  success: boolean;
+  data: { entries: ActivityAuditEntry[]; count: number } | null;
+  error: string | null;
+}
+
+export async function getActivityAudit(): Promise<ActivityAuditResponse> {
+  if (!window.bridge || typeof window.bridge.get_activity_audit !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_activity_audit (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_activity_audit();
+    return JSON.parse(raw) as ActivityAuditResponse;
+  } catch (error) {
+    console.error('Error fetching activity audit:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Per-step execution history — each pipeline step (RAG lookup, tool
+ * execution, synthesis, …) with the list of every time it ran and the
+ * timestamp + status of each run. Shown in the Compliance window. */
+export interface StepRun {
+  timestamp: string;
+  status: string;            // "active" | "done" | "error"
+  iteration: number | null;
+  query: string;
+  detail: string | null;
+  tool: string | null;
+}
+
+export interface StepHistoryGroup {
+  key: string;
+  type: string;              // "thinking" | "rag" | "tool_call" | "synthesis"
+  label: string;
+  run_count: number;
+  last_status: string | null;
+  last_timestamp: string | null;
+  runs: StepRun[];
+}
+
+export interface StepHistoryResponse {
+  success: boolean;
+  data: { steps: StepHistoryGroup[]; total_runs: number } | null;
+  error: string | null;
+}
+
+export async function getStepHistory(): Promise<StepHistoryResponse> {
+  if (!window.bridge || typeof window.bridge.get_step_history !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_step_history (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_step_history();
+    return JSON.parse(raw) as StepHistoryResponse;
+  } catch (error) {
+    console.error('Error fetching step history:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Full Eye<->LLM conversation (prompts, reasoning, tool calls + results)
+ * grouped by the investigator question that produced it — shown in the
+ * Compliance window. Reuses the EyeDialogueEntry shape from types.ts. */
+export interface DialogueConversation {
+  query: string;
+  started: string;
+  entry_count: number;
+  entries: EyeDialogueEntry[];
+}
+
+export interface DialogueHistoryResponse {
+  success: boolean;
+  data: { conversations: DialogueConversation[]; total_entries: number } | null;
+  error: string | null;
+}
+
+export async function getDialogueHistory(): Promise<DialogueHistoryResponse> {
+  if (!window.bridge || typeof window.bridge.get_dialogue_history !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_dialogue_history (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_dialogue_history();
+    return JSON.parse(raw) as DialogueHistoryResponse;
+  } catch (error) {
+    console.error('Error fetching dialogue history:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Per-answer behavioral GEP compliance — for each question, whether the Eye
+ * followed the protocol (direct answer, dual output, timestamps, proactive
+ * investigation). Shown in the Compliance window. */
+export interface GepCheck {
+  id: number;
+  name: string;
+  status: 'PASS' | 'FAIL' | 'PARTIAL' | 'N-A' | string;
+  detail: string;
+}
+
+export interface GepTurn {
+  query: string;
+  timestamp: string;
+  summary: string;
+  checks: GepCheck[];
+}
+
+export interface GepTurnsResponse {
+  success: boolean;
+  data: { turns: GepTurn[]; total_turns: number } | null;
+  error: string | null;
+}
+
+export async function getGepTurns(): Promise<GepTurnsResponse> {
+  if (!window.bridge || typeof window.bridge.get_gep_turns !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_gep_turns (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_gep_turns();
+    return JSON.parse(raw) as GepTurnsResponse;
+  } catch (error) {
+    console.error('Error fetching GEP turns:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Chain-of-custody Evidence Seals — one per LLM payload — proving exactly
+ * which bytes the model saw (SHA-256 + token count + provenance + hash chain). */
+export interface EvidenceRef {
+  tool?: string;
+  database?: string;
+  table?: string;
+  sql?: string;
+  row_count?: number;
+  rowids?: any[];
+  source_path?: string;
+  record_number?: number;
+  computed_file_offsets?: { record_number: number; computed_file_offset: number; record_size: number }[];
+  row_index_range?: number[];
+}
+
+/** Explicit character range of a cut within the original message:
+ * which chars were kept (processed) vs dropped. */
+export interface CutRange {
+  unit: string;            // "chars"
+  total: number;
+  processed: [number, number];
+  dropped: [number, number];
+}
+
+export interface CutDetail {
+  action: string;
+  message_id?: string;
+  role?: string;
+  iteration?: number | null;
+  token_count: number;
+  sha256: string;
+  cut_range?: CutRange;
+  // Dropped portion: bounded inline preview + full length/hash/sidecar.
+  cut_content: string;
+  cut_content_len?: number;
+  cut_content_sha256?: string;
+  cut_content_sidecar?: string | null;
+  // Surviving portion: bounded inline preview + full length/hash/sidecar.
+  processed_content?: string;
+  processed_content_len?: number;
+  processed_content_sha256?: string;
+  processed_content_sidecar?: string | null;
+  processed_file_offsets?: any[];
+  dropped_file_offsets?: any[];
+}
+
+/** A cut_detail flattened with its parent seal's context, for the dedicated
+ * "Processed vs Dropped Payload" Compliance section. */
+export interface FlatCutDetail extends CutDetail {
+  seq?: number;
+  timestamp?: string;
+  phase?: string;
+  query?: string;
+  model?: string;
+  // Set for synthesized entries: 'assembly_budget' (system prompt / RAG / history
+  // budget trims) or 'refused' (the message the Eye refused to send).
+  source?: string;
+  payload_sha256?: string;
+  payload_sidecar?: string | null;
+  max_context_tokens?: number;
+}
+
+export interface PayloadCutDetailsResponse {
+  success: boolean;
+  data: { cuts: FlatCutDetail[]; total: number } | null;
+  error: string | null;
+}
+
+/** Full dropped/processed bytes for one cut, fetched on demand from its
+ * sidecar file (when the inline preview was bounded). */
+export interface DroppedPayloadFullResponse {
+  success: boolean;
+  data: { sha256: string; len: number; content: string } | null;
+  error: string | null;
+}
+
+export interface PayloadSeal {
+  seq: number;
+  timestamp: string;
+  phase: string;
+  iteration: number | null;
+  query: string;
+  model: string;
+  max_context_tokens: number;
+  payload_tokens: number;
+  truncated: boolean;
+  payload_sha256: string;
+  prev_seal_hash: string;
+  seal_hash: string;
+  evidence_refs: EvidenceRef[];
+  cut_details?: CutDetail[];
+}
+
+export interface PayloadSealsResponse {
+  success: boolean;
+  data: { seals: PayloadSeal[]; total_seals: number; chain_valid: boolean } | null;
+  error: string | null;
+}
+
+export async function getPayloadSeals(): Promise<PayloadSealsResponse> {
+  if (!window.bridge || typeof window.bridge.get_payload_seals !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_payload_seals (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_payload_seals();
+    return JSON.parse(raw) as PayloadSealsResponse;
+  } catch (error) {
+    console.error('Error fetching payload seals:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Chain-of-custody audit events — every context-integrity decision the Eye
+ * made (evidence preservation, self-heal summarize/drop, pin/unpin, hard
+ * refusals). Backed by EYE_Logs/truncation_audit.log. */
+export interface TruncationEvent {
+  timestamp: string;
+  action: string;   // PRESERVED | SUMMARIZED | TRUNCATED | PINNED | UNPINNED | REFUSED_OVERFLOW
+  id: string;
+  tokens: number;
+  reason: string;
+  hash: string;
+  metadata: Record<string, any>;
+}
+
+export interface TruncationEventsResponse {
+  success: boolean;
+  data: { events: TruncationEvent[]; counts: Record<string, number>; total: number } | null;
+  error: string | null;
+}
+
+export async function getTruncationEvents(): Promise<TruncationEventsResponse> {
+  if (!window.bridge || typeof window.bridge.get_truncation_events !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_truncation_events (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_truncation_events();
+    return JSON.parse(raw) as TruncationEventsResponse;
+  } catch (error) {
+    console.error('Error fetching truncation events:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Every per-payload cut (summarize / drop / tool-output cap) flattened across
+ * all seals, for the dedicated "Processed vs Dropped Payload" section. */
+export async function getPayloadCutDetails(): Promise<PayloadCutDetailsResponse> {
+  if (!window.bridge || typeof window.bridge.get_payload_cut_details !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_payload_cut_details (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_payload_cut_details();
+    return JSON.parse(raw) as PayloadCutDetailsResponse;
+  } catch (error) {
+    console.error('Error fetching payload cut details:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Fetch the COMPLETE dropped/processed bytes for one cut from its sidecar,
+ * keyed by the content SHA-256 recorded on the cut detail. */
+export async function getDroppedPayloadFull(sha256: string): Promise<DroppedPayloadFullResponse> {
+  if (!window.bridge || typeof window.bridge.get_dropped_payload_full !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_dropped_payload_full (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_dropped_payload_full(sha256);
+    return JSON.parse(raw) as DroppedPayloadFullResponse;
+  } catch (error) {
+    console.error('Error fetching dropped payload:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Fetch the COMPLETE sent payload (system prompt + history + tools + user
+ * message) for one seal, keyed by its payload SHA-256. The backend decompresses
+ * older (zstd/gzip) sidecars transparently. */
+export async function getSealedPayloadFull(sha256: string): Promise<DroppedPayloadFullResponse> {
+  if (!window.bridge || typeof window.bridge.get_sealed_payload_full !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_sealed_payload_full (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_sealed_payload_full(sha256);
+    return JSON.parse(raw) as DroppedPayloadFullResponse;
+  } catch (error) {
+    console.error('Error fetching sealed payload:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

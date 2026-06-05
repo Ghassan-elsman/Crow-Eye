@@ -91,7 +91,7 @@ class QueryInterface:
         identities = []
         for row in cursor.fetchall():
             identity = self._build_identity_with_anchors(row, filters)
-            if identity:  # Skip identities with no matching anchors
+            if identity: # Skip identities with no matching anchors
                 identities.append(identity)
         
         logger.info(f"Queried {len(identities)} identities")
@@ -1035,7 +1035,7 @@ class QueryInterface:
         # Step 3: Group nearby times using sliding window algorithm
         time_groups = []
         current_group_time = None
-        current_group_identities = []  # Use list instead of set
+        current_group_identities = [] # Use list instead of set
         time_window_delta = timedelta(minutes=time_window_minutes)
         
         for anchor_time in sorted_times:

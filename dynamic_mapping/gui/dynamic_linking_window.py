@@ -7,6 +7,8 @@ through three distinct sections: Intelligence Gathering, Bulk IOC Ingestion, and
 
 import os
 import csv
+import json
+import logging
 import sqlite3
 from typing import Optional, List, Dict, Tuple
 
@@ -23,6 +25,8 @@ from PyQt5 import QtCore, QtGui
 from dynamic_mapping.core.intelligence_engine import IntelligenceEngine
 from styles import CrowEyeStyles, Colors
 from ui.Loading_dialog import LoadingDialog
+
+logger = logging.getLogger(__name__)
 
 class CascadingSelectButton(QPushButton):
     """
@@ -129,7 +133,7 @@ class DynamicLinkingWindow(QDialog):
         
         # --- Persistence Check: Verify database initialization ---
         if not self.engine.ensure_db():
-            self.logger.error("Failed to initialize intelligence database.")
+            logger.error("Failed to initialize intelligence database.")
             
         self._init_ui()
         self._load_schema_and_data()
@@ -247,11 +251,14 @@ class DynamicLinkingWindow(QDialog):
 
         layout.addLayout(manual_row)
 
+        # Inline note that explains the same-DB/same-table requirement for the
+        # manual rule. Updated dynamically by _refresh_manual_rule_state().
+        self.manual_rule_hint = QLabel("")
+        self.manual_rule_hint.setStyleSheet("font-size: 10px; color: #f59e0b;")
+        self.manual_rule_hint.setVisible(False)
+        layout.addWidget(self.manual_rule_hint)
+
         btn_row = QHBoxLayout()
-        add_rule_btn = QPushButton("+ ADD ANOTHER ROW")
-        add_rule_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
-        add_rule_btn.clicked.connect(lambda: QMessageBox.information(self, "Note", "Standard manual rule loaded. Multiple rows being enabled..."))
-        btn_row.addWidget(add_rule_btn)
 
         self.gather_btn = QPushButton("LINK GATHERING")
         self.gather_btn.setStyleSheet(CrowEyeStyles.DYNAMIC_LINK_BUTTON)
@@ -260,6 +267,13 @@ class DynamicLinkingWindow(QDialog):
         btn_row.addWidget(self.gather_btn)
 
         layout.addLayout(btn_row)
+
+        # Re-evaluate the gather button when either manual selector changes so
+        # the user sees the disabled state + hint before pressing the button
+        # (instead of after, when _process_manual_rule would silently warn).
+        self.value_selector.selectionChanged.connect(lambda *_: self._refresh_manual_rule_state())
+        self.key_selector.selectionChanged.connect(lambda *_: self._refresh_manual_rule_state())
+
         return frame
 
     def _setup_ingestion_section(self) -> QFrame:
@@ -336,6 +350,7 @@ class DynamicLinkingWindow(QDialog):
 
         export_btn = QPushButton("EXPORT CASE INTEL")
         export_btn.setStyleSheet(CrowEyeStyles.EXPORT_BUTTON)
+        export_btn.clicked.connect(self._export_case_intel)
         act_row.addWidget(export_btn)
         layout.addLayout(act_row)
 
@@ -353,6 +368,7 @@ class DynamicLinkingWindow(QDialog):
         artifacts_dir = self.engine._find_artifacts_directory()
         if artifacts_dir:
             dbs = [f for f in os.listdir(artifacts_dir) if f.endswith('.db')]
+            failed = []
             for db in dbs:
                 db_path = os.path.join(artifacts_dir, db)
                 try:
@@ -365,8 +381,15 @@ class DynamicLinkingWindow(QDialog):
                         tables[t_name] = [r[1] for r in cursor.fetchall()]
                     self.db_schema_cache[db] = tables
                     conn.close()
-                except: pass
-        
+                except Exception as e:
+                    # Don't silently lose a known DB from the cascading selector.
+                    # The investigator should see WHY a DB is missing from the
+                    # dropdown (locked / corrupt / schema issue).
+                    logger.warning("Failed to read schema from %s: %s", db, e)
+                    failed.append(f"{db}: {e}")
+            if failed and hasattr(self, "ingest_log"):
+                self.ingest_log.append("[Schema] Could not read:\n" + "\n".join(failed))
+
         self.value_selector.set_data(self.db_schema_cache)
         self.key_selector.set_data(self.db_schema_cache)
 
@@ -374,68 +397,131 @@ class DynamicLinkingWindow(QDialog):
         self._load_mappings_into_table()
 
     def _run_link_gathering(self):
-        """Execute logic with professional loading dialog."""
+        """Execute intelligence gathering with a properly-managed loading dialog."""
         from ui.Loading_dialog import LoadingDialog
         from dynamic_mapping.rules.default_rules import DEFAULT_RULES
-        
+        from PyQt5.QtWidgets import QApplication
+
         if not self.engine.ensure_db():
             QMessageBox.critical(self, "Critical Error", "Failed to access intelligence database.")
             return
 
+        # Surface the most common silent failure: no artifacts directory means
+        # every database-backed rule will skip, and the user otherwise sees a
+        # successful run that found 0 mappings with no explanation.
+        if not self.engine._find_artifacts_directory():
+            QMessageBox.warning(
+                self,
+                "No Artifacts Found",
+                "No forensic artifacts were detected in this case.\n\n"
+                "Dynamic Linking needs at least one of:\n"
+                "  • a Target_Artifacts/ directory with .db files, or\n"
+                "  • a live_acquisition/ directory with .db files, or\n"
+                "  • .db files in the case root.\n\n"
+                "Internal rules (e.g. Well-Known SIDs) will still run, but most\n"
+                "default rules cannot extract mappings without artifacts."
+            )
+
         loading = LoadingDialog("Gathering Intelligence", self)
-        loading.show()
+
+        # Build steps dynamically to ensure the progress bar updates accurately for each rule
+        steps = ["Initializing Engine..."]
         
-        steps = ["Initializing Engine...", "Processing Default Rules..."]
-        
-        # Check for manual rule
-        has_manual = False
-        if self.value_selector.selected_db and self.key_selector.selected_db:
-            has_manual = True
-            steps.append("Processing Manual Relationship...")
-            
-        loading.set_steps(steps)
-        loading.update_step(0, "Scanning artifact directories...")
-        
-        # 1. Default Rules
-        loading.update_step(1, "Executing pre-configured pipelines...")
         rules = list(DEFAULT_RULES.keys())
+        for rule_name in rules:
+            display_name = rule_name.replace('_', ' ').title()
+            steps.append(f"Running rule: {display_name}")
+            
+        steps.append("Processing Custom Rules...")
+
+        # Check for manual rule
+        has_manual = (
+            bool(self.value_selector.selected_db) and
+            bool(self.key_selector.selected_db)
+        )
+        if has_manual:
+            steps.append("Processing Manual Relationship...")
+
+        loading.set_steps(steps)
+
+        # ---------------------  Work runs before exec_()  ---------------------
+        # We do the work while the dialog is visible (show()), keep the event
+        # loop alive via processEvents(), and then drive exec_() only for the
+        # 2-second completion pause so the timer-based accept() actually fires.
+        loading.show()
+        QApplication.processEvents()
+
+        loading.update_step(0, "Scanning artifact directories...")
+        QApplication.processEvents()
+
+        # 1. Default Rules
         total_found = 0
-        
+        step_idx = 1
+
         # Make sure the engine is ready for action
         self.engine.ensure_db()
-        
-        for i, rule_name in enumerate(rules):
-            if loading.is_cancelled(): 
+
+        cancelled = False
+        for rule_name in rules:
+            if loading.is_cancelled():
                 loading.add_log_message("[Aborted] Operation cancelled by user.")
+                cancelled = True
                 break
+            
+            display_name = rule_name.replace('_', ' ').title()
+            loading.update_step(step_idx, f"Extracting {display_name}...")
+            step_idx += 1
+            
             loading.add_log_message(f"Running rule: {rule_name}")
-            res = self.engine.gather_intelligence([rule_name])
+            # Process Qt events so the loading dialog stays responsive
+            QApplication.processEvents()
+            # custom_rules=False: run only this default rule. Custom rules are run
+            # ONCE after the loop (below) instead of being re-executed on every
+            # default-rule iteration.
+            res = self.engine.gather_intelligence([rule_name], custom_rules=False)
             found_for_rule = sum(res.values())
             total_found += found_for_rule
             if found_for_rule > 0:
                 loading.add_log_message(f"[Success] Found {found_for_rule} mappings for {rule_name}")
+            QApplication.processEvents()
+
+        # Custom rules: execute exactly once, after all default rules.
+        if not cancelled:
+            loading.update_step(step_idx, "Executing custom intelligence pipelines...")
+            step_idx += 1
             
+            loading.add_log_message("Running custom rules...")
+            QApplication.processEvents()
+            custom_res = self.engine.gather_intelligence([], custom_rules=True)
+            custom_found = sum(custom_res.values())
+            total_found += custom_found
+            if custom_found > 0:
+                loading.add_log_message(f"[Success] Found {custom_found} mappings from custom rules")
+            QApplication.processEvents()
+
         # 2. Manual Rule
         if has_manual and not loading.is_cancelled():
-            loading.update_step(2, "Extracting manual relationship data...")
+            loading.update_step(step_idx, "Extracting manual relationship data...")
+            step_idx += 1
             manual_count = self._process_manual_rule(loading)
             total_found += manual_count
-            
-        # Update the dialog terminal with the final score
+
+        # Completion summary
         loading.add_log_message(f"[Intelligence] Total unique mappings found: {total_found}")
-        loading.add_log_message(f"[UI] Synchronizing {total_found} intelligence keys to the tables...")
-        
         loading.show_completion(f"SUCCESS: {total_found} forensic relationships integrated.")
-        
-        # Finalize display and synchronization
-        self._load_mappings_into_table()
-        
-        # Auto-close after completion
-        QTimer.singleShot(3000, loading.accept)
-        
-        self.ingest_log.setPlainText(f"SYSTEM SCAN COMPLETE\n---------------------\nFound {total_found} forensic relationships.")
+        QApplication.processEvents()
+
+        # Auto-close after 2 seconds using exec_() so the QTimer can fire.
+        # The dialog is already visible (show() was called above); exec_() just
+        # takes ownership of the event loop for the brief completion pause.
+        QTimer.singleShot(2000, loading.accept)
+        loading.exec_()
+
+        # Update the live table and status bar AFTER the dialog closes.
+        self.ingest_log.setPlainText(
+            f"SYSTEM SCAN COMPLETE\n---------------------\nFound {total_found} forensic relationships."
+        )
         print(f"[IntelligenceEngine] Scan complete. Found {total_found} relationships.")
-        # Final table load just to be absolutely sure
         self._load_mappings_into_table()
 
     def _process_manual_rule(self, loading) -> int:
@@ -480,49 +566,75 @@ class DynamicLinkingWindow(QDialog):
 
     def _run_final_linking(self):
         """Finalize and apply intelligence to the current case."""
-        # The user wants it all, but only if we don't have it yet!
-        # Check if our intelligence brain is empty or already full of smarts.
         mappings = self.engine.get_all_mappings()
-        
+
         if not mappings:
             print("[IntelligenceEngine] No existing mappings found. Starting automated discovery...")
+            # _run_link_gathering manages its own loading dialog end-to-end.
             self._run_link_gathering()
         else:
-            # Refresh existing intelligence mappings
+            # Mappings already exist — show a brief refresh confirmation.
             from ui.Loading_dialog import LoadingDialog
+            from PyQt5.QtWidgets import QApplication
             loading = LoadingDialog("Refreshing Intelligence", self)
-            loading.show()
             loading.set_steps(["Synchronizing Case Context..."])
+            loading.show()
+            QApplication.processEvents()
             loading.update_step(0, "Updating intelligence mappings in view...")
             loading.show_completion("Intelligence synchronization complete.")
+            QApplication.processEvents()
+            # Auto-close after 1.5 s via exec_() so the timer can fire.
             QTimer.singleShot(1500, loading.accept)
             loading.exec_()
-        
+
         # Signal main application and close
         print("[Info] Finalizing dynamic linking. All systems go.")
         self.accept()
 
     def _load_mappings_into_table(self):
-        mappings = self.engine.get_all_mappings()
-        self.mappings_table.setRowCount(0)
-        self.mappings_table.setRowCount(len(mappings))
-        
-        for i, (val, key) in enumerate(mappings.items()):
-            self.mappings_table.setItem(i, 0, QTableWidgetItem(str(val)))
-            self.mappings_table.setItem(i, 1, QTableWidgetItem(str(key)))
-            self.mappings_table.setItem(i, 2, QTableWidgetItem("Artifact Extraction"))
-            
-        self.stats_label.setText(f"Total Mappings: {len(mappings)}")
+        # Prefer the source-bearing accessor so the SOURCE ORIGIN column reflects
+        # actual provenance (UserProfiles / IOC_File / Manual Selection / ...).
+        if hasattr(self.engine, "get_all_mappings_with_source"):
+            rows = self.engine.get_all_mappings_with_source()
+        else:  # Back-compat fallback
+            rows = [(v, k, "") for v, k in self.engine.get_all_mappings().items()]
+
+        self.mappings_table.setUpdatesEnabled(False)
+        self.mappings_table.blockSignals(True)
+        try:
+            self.mappings_table.setRowCount(0)
+            self.mappings_table.setRowCount(len(rows))
+
+            for i, (val, key, source) in enumerate(rows):
+                self.mappings_table.setItem(i, 0, QTableWidgetItem(str(val)))
+                self.mappings_table.setItem(i, 1, QTableWidgetItem(str(key)))
+                self.mappings_table.setItem(i, 2, QTableWidgetItem(str(source or "")))
+        finally:
+            self.mappings_table.blockSignals(False)
+            self.mappings_table.setUpdatesEnabled(True)
+            self.mappings_table.viewport().update()
+
+        self.stats_label.setText(f"Total Mappings: {len(rows)}")
 
     def _filter_table(self, text):
-        for row in range(self.mappings_table.rowCount()):
-            match = False
-            for col in range(2):
-                item = self.mappings_table.item(row, col)
-                if item and text.lower() in item.text().lower():
-                    match = True
-                    break
-            self.mappings_table.setRowHidden(row, not match)
+        needle = (text or "").lower()
+        col_count = self.mappings_table.columnCount()
+        
+        self.mappings_table.setUpdatesEnabled(False)
+        self.mappings_table.blockSignals(True)
+        try:
+            for row in range(self.mappings_table.rowCount()):
+                match = False
+                for col in range(col_count):
+                    item = self.mappings_table.item(row, col)
+                    if item and needle in item.text().lower():
+                        match = True
+                        break
+                self.mappings_table.setRowHidden(row, not match)
+        finally:
+            self.mappings_table.blockSignals(False)
+            self.mappings_table.setUpdatesEnabled(True)
+            self.mappings_table.viewport().update()
 
     def _delete_mappings(self):
         selected = self.mappings_table.selectedItems()
@@ -535,14 +647,111 @@ class DynamicLinkingWindow(QDialog):
 
     def _drag_enter_event(self, event):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
-        
+
     def _drop_event(self, event):
+        ioc_type = self._selected_ioc_type()
         for url in event.mimeData().urls():
-            self.engine.ingest_ioc_file(url.toLocalFile())
+            self.engine.ingest_ioc_file(url.toLocalFile(), ioc_type=ioc_type)
         self._load_mappings_into_table()
 
     def _browse_ioc(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open IOC Intel Feed", "", "Data (*.csv *.json)")
         if path:
-            self.engine.ingest_ioc_file(path)
+            self.engine.ingest_ioc_file(path, ioc_type=self._selected_ioc_type())
             self._load_mappings_into_table()
+
+    def _selected_ioc_type(self) -> str:
+        """Map the IOC type combo to the engine's ioc_type string.
+
+        "Auto-Detect" → "auto"; everything else is lower-cased so the engine can
+        use it directly as the Mapping.source value (e.g. "hash", "ip", "domain").
+        """
+        try:
+            label = self.ioc_type.currentText().strip()
+        except Exception:
+            return "auto"
+        if not label or label.lower().startswith("auto"):
+            return "auto"
+        return label.lower()
+
+    def _refresh_manual_rule_state(self) -> None:
+        """Enable / disable LINK GATHERING based on whether the two manual
+        selectors point at the same DB and table. Cross-table linking is not
+        implemented in the backend, so we surface the requirement up-front
+        instead of letting the user press the button and get a silent warning."""
+        v_db = self.value_selector.selected_db
+        v_tbl = self.value_selector.selected_table
+        k_db = self.key_selector.selected_db
+        k_tbl = self.key_selector.selected_table
+
+        # If either side is incomplete, the manual rule is just skipped on
+        # press — leave the button enabled so default rules can still run.
+        if not (v_db and v_tbl and k_db and k_tbl):
+            self.manual_rule_hint.setVisible(False)
+            self.gather_btn.setEnabled(True)
+            return
+
+        if v_db != k_db or v_tbl != k_tbl:
+            self.manual_rule_hint.setText(
+                "Manual link requires both selectors to point at the same DB and table — change one to match."
+            )
+            self.manual_rule_hint.setVisible(True)
+            self.gather_btn.setEnabled(False)
+        else:
+            self.manual_rule_hint.setVisible(False)
+            self.gather_btn.setEnabled(True)
+
+    def _export_case_intel(self) -> None:
+        """Write every mapping in this case to CSV or JSON.
+
+        Format follows the convention used by DatabaseSearchDialog._export_to_csv/_export_to_json:
+        QFileDialog for the path, then write headers + rows. JSON yields a list of
+        dicts so it can be consumed by downstream tooling without parsing.
+        """
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Case Intelligence",
+            "case_intelligence",
+            "CSV (*.csv);;JSON (*.json)",
+        )
+        if not path:
+            return
+
+        rows = self.engine.get_all_mappings_with_source() if hasattr(
+            self.engine, "get_all_mappings_with_source"
+        ) else [(v, k, "") for v, k in self.engine.get_all_mappings().items()]
+
+        ext = os.path.splitext(path)[1].lower()
+        if not ext:
+            ext = ".json" if "JSON" in (selected_filter or "") else ".csv"
+            path += ext
+
+        try:
+            if ext == ".json":
+                payload = [{"value": v, "key": k, "source": s} for (v, k, s) in rows]
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
+            else:
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["value", "key", "source"])
+                    for v, k, s in rows:
+                        writer.writerow([v, k, s])
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Exported {len(rows)} mapping(s) to:\n{path}",
+            )
+        except Exception as e:
+            logger.exception("Failed to export case intelligence")
+            QMessageBox.critical(self, "Export Failed", f"Could not write {path}:\n{e}")
+
+    def closeEvent(self, event):
+        """Release the engine's sqlite connection so repeat open/close doesn't
+        leak file handles to Crow_Intelligence.db."""
+        try:
+            if hasattr(self, "engine") and self.engine is not None:
+                self.engine.cleanup()
+        except Exception:
+            logger.exception("DynamicLinkingWindow.closeEvent: engine cleanup failed")
+        super().closeEvent(event)

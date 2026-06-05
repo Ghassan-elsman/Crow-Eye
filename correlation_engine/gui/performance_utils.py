@@ -57,7 +57,7 @@ class ProgressThrottler:
         """
         self.base_interval_ms = min_interval_ms
         self.current_interval_ms = min_interval_ms
-        self.max_interval_ms = 500  # Maximum 500ms (2 Hz) under heavy load
+        self.max_interval_ms = 500 # Maximum 500ms (2 Hz) under heavy load
         self.last_update_time = 0.0
         self._force_next = False
     
@@ -182,7 +182,7 @@ class ProgressEventQueue:
             return batch
         except Exception as e:
             logger.error(f"Error dequeuing batch: {e}", exc_info=True)
-            return []  # Return empty list on error
+            return [] # Return empty list on error
     
     def size(self) -> int:
         """Return current queue size."""
@@ -225,7 +225,7 @@ class BatchedTextWidget:
         self._flush_timer.timeout.connect(self.flush)
         self._auto_scroll_enabled = True
         self._user_scrolled = False
-        self._scroll_pending = False  # Track if scroll is already scheduled
+        self._scroll_pending = False # Track if scroll is already scheduled
         
         # Connect to scroll bar to detect manual scrolling
         if hasattr(text_widget, 'verticalScrollBar'):
@@ -337,7 +337,7 @@ class BatchedTextWidget:
     def _deferred_scroll(self):
         """Perform deferred scroll operation."""
         try:
-            self._scroll_pending = False  # Reset flag
+            self._scroll_pending = False # Reset flag
             
             if not self._auto_scroll_enabled or self._user_scrolled:
                 return
@@ -353,7 +353,7 @@ class BatchedTextWidget:
             self.text_widget.ensureCursorVisible()
         except Exception as e:
             logger.error(f"Error in deferred scroll: {e}", exc_info=True)
-            self._scroll_pending = False  # Reset flag on error
+            self._scroll_pending = False # Reset flag on error
     
     def _on_scroll_changed(self, value):
         """
@@ -508,48 +508,76 @@ class ProgressMessageBuffer:
 
 class OptimizedHeartbeat:
     """
-    An optimized heartbeat mechanism that provides visual feedback without overhead.
-    
-    This class updates only the progress bar format text (not the value) to create
-    a simple animation that indicates the system is still working. This approach
-    minimizes widget repaints and ensures minimal performance impact.
+    Lightweight visual feedback that keeps the progress bar feeling alive
+    between sparse engine progress events.
+
+    Engine progress events for the time-window correlation can be seconds
+    apart (one per window). Without continuous animation the bar value sits
+    static and looks frozen even though work is happening. This heartbeat
+    updates only the format text (cheap repaint, no value change) so the
+    user always sees motion while a real percentage is preserved.
     """
-    
+
     def __init__(self, progress_bar, interval_ms: int = 500):
         """
-        Initialize optimized heartbeat.
-        
         Args:
             progress_bar: QProgressBar to update
-            interval_ms: Update interval in milliseconds (default 500ms = 2 Hz)
+            interval_ms: Update interval in milliseconds
         """
         from PyQt5.QtCore import QTimer
-        
+
         self.progress_bar = progress_bar
         self.interval_ms = interval_ms
         self._timer = QTimer()
         self._timer.timeout.connect(self.pulse)
         self._animation_state = 0
-        self._animation_frames = ["Working.", "Working..", "Working..."]
-    
+        # Frames used when no real progress has arrived yet
+        self._idle_frames = ["Working.", "Working..", "Working..."]
+        # Animation suffix appended to a real progress label
+        self._busy_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        # Base format text set by external callers (typically
+        # _update_anchor_progress) so the heartbeat can animate around it
+        # without overwriting the percentage.
+        self._base_format: str = ""
+
+    def set_base_format(self, text: str):
+        """Set the static portion of the bar label; heartbeat animates around it."""
+        self._base_format = text or ""
+        # Immediately reflect the new base so the user doesn't wait up to
+        # interval_ms for the suffix to redraw.
+        if self._timer.isActive():
+            self.pulse()
+        else:
+            self.progress_bar.setFormat(self._base_format)
+
+    def clear_base_format(self):
+        """Forget the base format (e.g. on cancel/reset)."""
+        self._base_format = ""
+
     def start(self):
         """Start the heartbeat timer."""
         self._animation_state = 0
         self._timer.start(self.interval_ms)
         logger.debug(f"Heartbeat started with {self.interval_ms}ms interval")
-    
+
     def stop(self):
         """Stop the heartbeat timer."""
         if self._timer.isActive():
             self._timer.stop()
             logger.debug("Heartbeat stopped")
-    
+
     def pulse(self):
         """Update heartbeat indicator (called by timer)."""
-        # Cycle through animation frames
-        frame_text = self._animation_frames[self._animation_state]
-        self._animation_state = (self._animation_state + 1) % len(self._animation_frames)
-        
-        # Update only the format text, not the value
-        # This minimizes widget repaints
-        self.progress_bar.setFormat(frame_text + " %p%")
+        if self._base_format:
+            # Real progress arrived at some point — keep the percentage
+            # visible and animate a small spinner suffix so the user can
+            # tell the engine is still alive between progress events.
+            frame = self._busy_frames[self._animation_state % len(self._busy_frames)]
+            self._animation_state = (self._animation_state + 1) % len(self._busy_frames)
+            self.progress_bar.setFormat(f"{self._base_format} {frame}")
+            return
+
+        # No real progress yet — show idle animation
+        frame_text = self._idle_frames[self._animation_state % len(self._idle_frames)]
+        self._animation_state = (self._animation_state + 1) % len(self._idle_frames)
+        self.progress_bar.setFormat(frame_text)

@@ -24,18 +24,18 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ValidationError:
     """Represents a validation error with context and guidance."""
-    rule_id: Optional[str]  # Rule ID if available
-    rule_index: int  # Index in rules array
-    field: str  # Field with error
-    message: str  # Error description
-    severity: str  # "error" or "warning"
-    suggestion: str  # How to fix
+    rule_id: Optional[str] # Rule ID if available
+    rule_index: int # Index in rules array
+    field: str # Field with error
+    message: str # Error description
+    severity: str # "error" or "warning"
+    suggestion: str # How to fix
     
     def __str__(self) -> str:
         """Format error as human-readable string."""
         prefix = "ERROR" if self.severity == "error" else "WARNING"
         rule_ref = f"Rule '{self.rule_id}'" if self.rule_id else f"Rule #{self.rule_index}"
-        return f"[{prefix}] {rule_ref} - {self.field}: {self.message}\n  Suggestion: {self.suggestion}"
+        return f"[{prefix}] {rule_ref} - {self.field}: {self.message}\n Suggestion: {self.suggestion}"
 
 
 @dataclass
@@ -49,24 +49,24 @@ class ValidationResult:
     def get_report(self) -> str:
         """Get formatted error report."""
         if self.is_valid and not self.warnings:
-            return f"✓ Validation successful! {self.rules_count} rules validated."
+            return f"[OK] Validation successful! {self.rules_count} rules validated."
         
         lines = []
         
         if self.errors:
-            lines.append(f"✗ Validation failed with {len(self.errors)} error(s):\n")
+            lines.append(f"[FAIL] Validation failed with {len(self.errors)} error(s):\n")
             for error in self.errors:
                 lines.append(str(error))
                 lines.append("")
         
         if self.warnings:
-            lines.append(f"⚠ {len(self.warnings)} warning(s):\n")
+            lines.append(f"[WARN] {len(self.warnings)} warning(s):\n")
             for warning in self.warnings:
                 lines.append(str(warning))
                 lines.append("")
         
         if not self.errors:
-            lines.append(f"✓ {self.rules_count} rules validated successfully.")
+            lines.append(f"[OK] {self.rules_count} rules validated successfully.")
         
         lines.append("\nFor more information, see: Crow-Eye/configs/README.md")
         

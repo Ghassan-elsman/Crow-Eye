@@ -91,7 +91,7 @@ class ResourceManager:
         
         # Clean up remaining resources using default methods
         for resource_id, resource in resources.items():
-            if resource_id not in callbacks:  # Skip if already cleaned with callback
+            if resource_id not in callbacks: # Skip if already cleaned with callback
                 try:
                     self._default_cleanup(resource_id, resource)
                 except Exception as e:
@@ -118,7 +118,7 @@ class ResourceManager:
                 try:
                     resource.close()
                 except sqlite3.Error:
-                    pass  # Connection might already be closed
+                    pass # Connection might already be closed
             else:
                 resource.close()
         
@@ -207,7 +207,7 @@ class PartialResultsManager:
         if hasattr(correlation_result, 'matches') and correlation_result.matches:
             # Convert matches to serializable format
             serializable_matches = []
-            for match in correlation_result.matches[:1000]:  # Limit to first 1000 matches
+            for match in correlation_result.matches[:1000]: # Limit to first 1000 matches
                 match_data = {
                     'match_id': getattr(match, 'match_id', ''),
                     'timestamp': getattr(match, 'timestamp', ''),
@@ -371,7 +371,7 @@ class EnhancedCancellationManager:
         self._cleanup_callbacks: List[Callable[[], None]] = []
         
         # Progress tracking integration
-        self._progress_listeners: Set[Any] = set()  # Weak references to avoid circular deps
+        self._progress_listeners: Set[Any] = set() # Weak references to avoid circular deps
     
     def register_cancellation_callback(self, callback: Callable[[CancellationContext], None]):
         """
@@ -410,7 +410,7 @@ class EnhancedCancellationManager:
         """
         with self._lock:
             if self._cancelled:
-                return  # Already cancelled
+                return # Already cancelled
             
             self._cancelled = True
             self._cancellation_context = CancellationContext(

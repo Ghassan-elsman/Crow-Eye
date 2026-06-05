@@ -45,7 +45,7 @@ class DatabaseConnectionManager:
             
             # Create connection
             connection = sqlite3.connect(database_path)
-            connection.row_factory = sqlite3.Row  # Enable column access by name
+            connection.row_factory = sqlite3.Row # Enable column access by name
             
             # Test connection by getting record count
             cursor = connection.cursor()
@@ -157,21 +157,27 @@ class DatabaseConnectionManager:
         Returns:
             True if database is accessible, False otherwise
         """
+        conn = None
         try:
             # Check file exists
             if not Path(database_path).exists():
                 return False
-            
+
             # Try to connect and query
             conn = sqlite3.connect(database_path)
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             cursor.fetchall()
-            conn.close()
             return True
-            
-        except Exception:
+
+        except sqlite3.Error:
             return False
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
     
     def is_connected(self, feather_name: str) -> bool:
         """

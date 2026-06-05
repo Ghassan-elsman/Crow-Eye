@@ -230,7 +230,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'InventoryApplication_CrowEyeFeather',
         'source_db': 'amcache.db',
         'source_table': 'InventoryApplication',
-        'artifact_type': 'InventoryApplication',  # Enhanced: specific subtype
+        'artifact_type': 'InventoryApplication', # Enhanced: specific subtype
         'parent_type': 'AmCache',
         'exclude_last_column': False
     },
@@ -238,7 +238,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'InventoryApplicationFile_CrowEyeFeather',
         'source_db': 'amcache.db',
         'source_table': 'InventoryApplicationFile',
-        'artifact_type': 'InventoryApplicationFile',  # Enhanced: specific subtype
+        'artifact_type': 'InventoryApplicationFile', # Enhanced: specific subtype
         'parent_type': 'AmCache',
         'exclude_last_column': False
     },
@@ -246,7 +246,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'InventoryApplicationShortcut_CrowEyeFeather',
         'source_db': 'amcache.db',
         'source_table': 'InventoryApplicationShortcut',
-        'artifact_type': 'InventoryApplicationShortcut',  # Enhanced: specific subtype
+        'artifact_type': 'InventoryApplicationShortcut', # Enhanced: specific subtype
         'parent_type': 'AmCache',
         'exclude_last_column': False
     },
@@ -259,28 +259,28 @@ FEATHER_MAPPINGS: List[Dict] = [
         'artifact_type': 'LNK',
         'parent_type': 'LNK',
         'exclude_last_column': False,
-        'filter': None,  # No filter needed - dedicated table
-        'column_mapping': {'Local_Path': 'target_path'}  # Standardize for correlation
+        'filter': None, # No filter needed - dedicated table
+        'column_mapping': {'Local_Path': 'target_path'} # Standardize for correlation
     },
     {
         'name': 'AutomaticJumplist_CrowEyeFeather',
         'source_db': 'LnkDB.db',
         'source_table': 'Automatic_JumpLists',
-        'artifact_type': 'AutomaticJumplist',  # Enhanced: specific subtype
+        'artifact_type': 'AutomaticJumplist', # Enhanced: specific subtype
         'parent_type': 'Jumplists',
         'exclude_last_column': False,
-        'filter': None,  # No filter needed - dedicated table
-        'column_mapping': {'Local_Path': 'path'}  # Standardize for correlation
+        'filter': None, # No filter needed - dedicated table
+        'column_mapping': {'Local_Path': 'path'} # Standardize for correlation
     },
     {
         'name': 'CustomJumplist_CrowEyeFeather',
         'source_db': 'LnkDB.db',
         'source_table': 'Custom_JumpLists',
-        'artifact_type': 'CustomJumplist',  # Enhanced: specific subtype
+        'artifact_type': 'CustomJumplist', # Enhanced: specific subtype
         'parent_type': 'Jumplists',
         'exclude_last_column': False,
-        'filter': None,  # No filter needed - dedicated table
-        'column_mapping': {'Local_Path': 'path'}  # Standardize for correlation
+        'filter': None, # No filter needed - dedicated table
+        'column_mapping': {'Local_Path': 'path'} # Standardize for correlation
     },
     
     # ========== Event Logs (3 Feathers) ==========
@@ -288,7 +288,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'SecurityLogs_CrowEyeFeather',
         'source_db': 'Log_Claw.db',
         'source_table': 'SecurityLogs',
-        'artifact_type': 'SecurityLogs',  # Enhanced: specific subtype
+        'artifact_type': 'SecurityLogs', # Enhanced: specific subtype
         'parent_type': 'Logs',
         'exclude_last_column': False
     },
@@ -296,7 +296,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'SystemLogs_CrowEyeFeather',
         'source_db': 'Log_Claw.db',
         'source_table': 'SystemLogs',
-        'artifact_type': 'SystemLogs',  # Enhanced: specific subtype
+        'artifact_type': 'SystemLogs', # Enhanced: specific subtype
         'parent_type': 'Logs',
         'exclude_last_column': False
     },
@@ -304,7 +304,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'ApplicationLogs_CrowEyeFeather',
         'source_db': 'Log_Claw.db',
         'source_table': 'ApplicationLogs',
-        'artifact_type': 'ApplicationLogs',  # Enhanced: specific subtype
+        'artifact_type': 'ApplicationLogs', # Enhanced: specific subtype
         'parent_type': 'Logs',
         'exclude_last_column': False
     },
@@ -316,7 +316,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'mft_usn_correlated',
         'artifact_type': 'MFT',
         'parent_type': 'MFT',
-        'exclude_last_column': True  # Exclude created_at parsing timestamp
+        'exclude_last_column': True # Exclude created_at parsing timestamp
     },
     
     # ========== Prefetch (1 Feather) ==========
@@ -336,7 +336,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'recycle_bin_entries',
         'artifact_type': 'RecycleBin',
         'parent_type': 'RecycleBin',
-        'exclude_last_column': True  # Exclude parsed_at parsing timestamp
+        'exclude_last_column': True # Exclude parsed_at parsing timestamp
     },
     
     # ========== Registry (12 Feathers) - Enhanced with specific subtypes ==========
@@ -344,47 +344,47 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'BAM_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'BAM',
-        'artifact_type': 'BAM',  # Enhanced: specific subtype
+        'artifact_type': 'BAM', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True  # Exclude parsing timestamp
+        'exclude_last_column': True # Exclude parsing timestamp
     },
     {
         'name': 'InstalledSoftware_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'InstalledSoftware',
-        'artifact_type': 'InstalledSoftware',  # Enhanced: specific subtype
+        'artifact_type': 'InstalledSoftware', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True  # Exclude timestamp
+        'exclude_last_column': True # Exclude timestamp
     },
     {
         'name': 'LastSaveMRU_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'LastSaveMRU',
-        'artifact_type': 'LastSaveMRU',  # Enhanced: specific subtype
+        'artifact_type': 'LastSaveMRU', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True  # Exclude analyzed date
+        'exclude_last_column': True # Exclude analyzed date
     },
     {
         'name': 'MUICache_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'MUICache',
-        'artifact_type': 'MUICache',  # Enhanced: specific subtype
+        'artifact_type': 'MUICache', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True  # Exclude timestamp
+        'exclude_last_column': True # Exclude timestamp
     },
     {
         'name': 'OpenSaveMRU_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'OpenSaveMRU',
-        'artifact_type': 'OpenSaveMRU',  # Enhanced: specific subtype
+        'artifact_type': 'OpenSaveMRU', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True  # Exclude last column
+        'exclude_last_column': True # Exclude last column
     },
     {
         'name': 'RecentDocs_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'RecentDocs',
-        'artifact_type': 'RecentDocs',  # Enhanced: specific subtype
+        'artifact_type': 'RecentDocs', # Enhanced: specific subtype
         'parent_type': 'Registry',
         'exclude_last_column': False
     },
@@ -392,23 +392,23 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'ShellBags_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'Shellbags',
-        'artifact_type': 'ShellBags',  # Enhanced: specific subtype
+        'artifact_type': 'ShellBags', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True  # Exclude analyzed date
+        'exclude_last_column': True # Exclude analyzed date
     },
     {
         'name': 'SystemServices_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'SystemServices',
-        'artifact_type': 'SystemServices',  # Enhanced: specific subtype
+        'artifact_type': 'SystemServices', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True  # Exclude timestamp
+        'exclude_last_column': True # Exclude timestamp
     },
     {
         'name': 'TypedPaths_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'TypedPaths',
-        'artifact_type': 'TypedPaths',  # Enhanced: specific subtype
+        'artifact_type': 'TypedPaths', # Enhanced: specific subtype
         'parent_type': 'Registry',
         'exclude_last_column': False
     },
@@ -416,7 +416,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'WordWheelQuery_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'WordWheelQuery',
-        'artifact_type': 'WordWheelQuery',  # Enhanced: specific subtype
+        'artifact_type': 'WordWheelQuery', # Enhanced: specific subtype
         'parent_type': 'Registry',
         'exclude_last_column': False
     },
@@ -424,7 +424,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'UserAssist_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'UserAssist',
-        'artifact_type': 'UserAssist',  # Enhanced: specific subtype instead of generic "Registry"
+        'artifact_type': 'UserAssist', # Enhanced: specific subtype instead of generic "Registry"
         'parent_type': 'Registry',
         'exclude_last_column': False
     },
@@ -432,9 +432,9 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'AutoStartPrograms_CrowEyeFeather',
         'source_db': 'registry_data.db',
         'source_table': 'AutoStartPrograms',
-        'artifact_type': 'AutoStartPrograms',  # Enhanced: specific subtype
+        'artifact_type': 'AutoStartPrograms', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True  # Exclude timestamp
+        'exclude_last_column': True # Exclude timestamp
     },
     
     # ========== SRUM (2 Feathers) - Enhanced with specific subtypes ==========
@@ -442,7 +442,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'SRUM_ApplicationUsage_CrowEyeFeather',
         'source_db': 'srum_data.db',
         'source_table': 'srum_application_usage',
-        'artifact_type': 'SRUM_ApplicationUsage',  # Enhanced: specific subtype
+        'artifact_type': 'SRUM_ApplicationUsage', # Enhanced: specific subtype
         'parent_type': 'SRUM',
         'exclude_last_column': False
     },
@@ -450,7 +450,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'name': 'SRUM_NetworkDataUsage_CrowEyeFeather',
         'source_db': 'srum_data.db',
         'source_table': 'srum_network_data_usage',
-        'artifact_type': 'SRUM_NetworkDataUsage',  # Enhanced: specific subtype
+        'artifact_type': 'SRUM_NetworkDataUsage', # Enhanced: specific subtype
         'parent_type': 'SRUM',
         'exclude_last_column': False
     },
@@ -462,7 +462,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'shimcache_entries',
         'artifact_type': 'ShimCache',
         'parent_type': 'ShimCache',
-        'exclude_last_column': True  # Exclude parsed timestamp
+        'exclude_last_column': True # Exclude parsed timestamp
     }
 ]
 

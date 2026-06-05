@@ -367,6 +367,37 @@ class LMStudioBackend(LLMBackend):
             self.logger.error(f"Error listing LM Studio models: {e}")
             return []
     
+    def get_context_window(self) -> Optional[int]:
+        """Report the active model's context window via LM Studio's native REST
+        endpoint ``/api/v0/models``, which exposes ``loaded_context_length`` and
+        ``max_context_length`` (the OpenAI-compatible ``/v1/models`` does not).
+
+        Prefers the loaded window (the real usable size for this instance) over
+        the model's max. Best-effort: returns None on any failure (e.g. an older
+        LM Studio without ``/api/v0``). Cached per instance.
+        """
+        if getattr(self, "_context_window_cache", None):
+            return self._context_window_cache
+        try:
+            response = self.session.get(
+                f"{self.api_endpoint}/api/v0/models",
+                timeout=self.connect_timeout,
+            )
+            if response.status_code == 200:
+                models = (response.json() or {}).get("data", []) or []
+                target = (self.model_name or "").lower()
+                for m in models:
+                    if (m.get("id", "") or "").lower() == target:
+                        limit = m.get("loaded_context_length") or m.get("max_context_length")
+                        if limit:
+                            self._context_window_cache = int(limit)
+                            self.logger.info(f"LM Studio reported context window {self._context_window_cache:,} for {self.model_name}")
+                            return self._context_window_cache
+                        break
+        except Exception as e:
+            self.logger.debug(f"LM Studio context-window lookup failed: {e}")
+        return None
+
     def get_models_with_quota(self) -> List[Dict[str, str]]:
         """
         LM Studio is local, so quota is effectively unlimited.

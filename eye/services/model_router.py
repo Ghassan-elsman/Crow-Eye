@@ -59,12 +59,24 @@ class ModelRouter:
         mn = self.config.get("model_name")
         it = self.config.get("integration_type")
         
+        # Validation for required fields - expected by tests
+        if not bt:
+            raise ValueError("Backend type not specified in configuration")
+        if not mn:
+            raise ValueError("Model name not specified in configuration")
+
         try:
+            # Force re-inference if there's a clear mismatch to handle stale config after backend changes.
+            # Persistent eye_config.json often holds a stale 'integration_type' that doesn't match a new 'backend'.
+            if it and ((bt in list_supported_backends() and it != "local_cli") or \
+               (bt in ["ollama", "lm_studio", "vllm"] and it not in ["local_server", "local_api"])):
+                it = None
+
             # Infer integration_type if not explicitly provided
             if not it:
                 if bt in list_supported_backends():
                     it = "local_cli"
-                elif bt in ["ollama", "lm_studio"]:
+                elif bt in ["ollama", "lm_studio", "vllm"]:
                     it = "local_server"
                 else:
                     it = "cloud_api"
@@ -76,20 +88,40 @@ class ModelRouter:
                 if mn in [None, "", "default", "cli-default-model"]:
                     mn = profile.get("display_name", "CLI Agent")
                     self.config["model_name"] = mn
+                
+                # Check for executable_path for Ollama/CLI backends if not inferred as server
+                if bt == "ollama" and it == "local_cli" and not self.config.get("executable_path"):
+                     raise ValueError("Executable path required for Ollama backend")
+                     
                 return GenericCLIBackend(self.config.get("executable_path", ""), backend_type=bt, model_name=mn)
                 
             # --- APPROACH 2: DIRECT LOCAL SERVERS ---
             if it in ["local_server", "local_api"]:
                 if bt == "ollama": return OllamaBackend(mn, self.config.get("executable_path", ""))
-                if bt == "lm_studio": return LMStudioBackend(self.config.get("api_endpoint", ""), mn)
+                if bt == "lm_studio": 
+                    endpoint = self.config.get("api_endpoint")
+                    if not endpoint:
+                        raise ValueError("API endpoint required for LM Studio backend")
+                    return LMStudioBackend(endpoint, mn)
+                if bt == "vllm":
+                    endpoint = self.config.get("api_endpoint")
+                    if not endpoint:
+                        raise ValueError("API endpoint required for vLLM backend")
+                    return LMStudioBackend(endpoint, mn)
             
             # --- APPROACH 3: CLOUD API AGENTS ---
-            if bt == "openai": return OpenAIBackend(mn, self.credential_manager)
+            if bt == "openai": 
+                if not self.credential_manager:
+                    raise ValueError("CredentialManager required for OpenAI backend")
+                return OpenAIBackend(mn, self.credential_manager)
             if bt == "anthropic": return AnthropicBackend(mn, self.credential_manager)
             if bt == "gemini": return GeminiBackend(mn, self.credential_manager)
             
             raise ValueError(f"Unsupported forensic AI backend: {bt} (Type: {it})")
             
+        except ValueError:
+            # Re-raise ValueErrors as-is (expected by tests)
+            raise
         except Exception as e:
             self.logger.error(f"Failed to initialize backend {bt}: {e}", exc_info=True)
             if "ModuleNotFoundError" in str(e) or "ImportError" in str(e):
@@ -103,13 +135,13 @@ class ModelRouter:
     def validate_connectivity(self):
         """
         Checks if the currently active agent is online.
-        
-        This method handles two distinct approaches based on 'integration_type':
-        1. LOCAL CLI AGENTS: Checks if the executable exists and performs an 
-           'Auto-Discovery' phase to find valid models if the user hasn't selected one.
-        2. CLOUD AGENTS / OTHERS: Validates the API key and service reachability.
         """
-        is_connected = self.backend.validate_connectivity()
+        try:
+            is_connected = self.backend.validate_connectivity()
+        except Exception as e:
+            self.logger.error(f"Connectivity validation failed: {str(e)}")
+            return False
+
         integration_type = self.config.get("integration_type", "cloud_api")
         
         # --- APPROACH: LOCAL CLI AGENTS ---
@@ -124,22 +156,28 @@ class ModelRouter:
                     self.logger.info(f"Local CLI Approach: Auto-connecting to discovered model: {target}")
                     self.switch_model(target)
         
-        # --- APPROACH: CLOUD / REMOTE AGENTS ---
-        # Cloud backends typically handle their own validation during self.backend.validate_connectivity()
-                
         return is_connected
 
     def list_models(self):
         """Lists valid model options for the currently active agent."""
         return self.backend.list_models()
 
+    def get_context_window(self) -> Optional[int]:
+        """Report the active backend model's real context window (tokens), or None.
+
+        Delegates to the active backend's ``get_context_window`` (Gemini /
+        Ollama / LM Studio self-report; others return None so the caller falls
+        back to the static registry). Best-effort: never raises.
+        """
+        try:
+            return self.backend.get_context_window()
+        except Exception as e:
+            self.logger.debug(f"get_context_window failed: {e}")
+            return None
+
     def get_models_with_quota(self):
         """
         Retrieves real-time usage stats and available models for the active session.
-        
-        Approach differs by backend type:
-        - CLI AGENTS: Models are discovered via probing; quota is 'Unlimited (Local)'.
-        - CLOUD AGENTS: Models are fetched via API; quota is parsed from HTTP headers.
         """
         try:
             models = self.backend.get_models_with_quota()
@@ -156,20 +194,88 @@ class ModelRouter:
             self.logger.error(f"Error retrieving models with quota: {e}")
             return []
 
-    def switch_model(self, model_name: str):
+    def get_grouped_backend_options(self) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Updates the active model name strictly within the currently configured backend.
+        Aggregates available models from all configured backends into a 
+        grouped structure for the UI model menu.
+        """
+        groups = {
+            "Cloud API": [],
+            "Local Server": [],
+            "Local CLI": []
+        }
         
-        SECURITY NOTE: To prevent accidental data leakage or cost shifts, this method 
-        CANNOT change the Backend (Agent) type. Backend changes must be initiated 
-        manually via the EYE Settings/Wizard.
+        def add_opt(category, backend, model_name, label=None):
+            active_bt = self.config.get("backend")
+            active_mn = self.config.get("model_name")
+            is_active = (backend == active_bt and model_name == active_mn)
+            groups[category].append({
+                "backend": backend,
+                "model_name": model_name,
+                "label": label or model_name,
+                "is_active": is_active
+            })
+
+        # 1. Models from the CURRENT active backend (Live Discovery)
+        try:
+            active_bt = self.config.get("backend")
+            active_models = self.list_models()
+            
+            # Map current backend to category
+            category = "Cloud API"
+            if active_bt in ["ollama", "lm_studio", "vllm"]:
+                category = "Local Server"
+            elif active_bt in list_supported_backends():
+                category = "Local CLI"
+                
+            for m in active_models:
+                add_opt(category, active_bt, m)
+        except Exception as e:
+            self.logger.error(f"Error listing active models: {e}")
+
+        # 2. Add 'Discovery' options for other cloud backends if they have keys
+        cloud_providers = [
+            ("openai", "OpenAI"),
+            ("anthropic", "Anthropic"),
+            ("gemini", "Gemini")
+        ]
+        
+        for bt, label in cloud_providers:
+            if bt == self.config.get("backend"): continue
+            
+            # If we have a key, show a discovery option
+            key_name = f"{bt}_api_key"
+            if self.credential_manager and self.credential_manager.get_credential(key_name):
+                add_opt("Cloud API", bt, "default", f"Connect to {label}...")
+
+        # 3. Add Local Server options if not active
+        local_servers = [
+            ("ollama", "Ollama"),
+            ("lm_studio", "LM Studio"),
+            ("vllm", "vLLM")
+        ]
+        for bt, label in local_servers:
+            if bt == self.config.get("backend"): continue
+            add_opt("Local Server", bt, "default", f"Connect to {label}...")
+            
+        return groups
+
+    def switch_model(self, model_name: str, backend: Optional[str] = None):
+        """
+        Updates the active model and optionally switches the backend provider.
         """
         old_bt = self.config.get("backend")
         target_model = model_name.strip()
         
+        if backend and backend != old_bt:
+            self.logger.info(f"Switching backend from {old_bt} to {backend}")
+            self.config["backend"] = backend
+            # Reset integration_type to trigger re-inference in _initialize_backend
+            self.config["integration_type"] = None
+        
         # Update model_name for the next initialization
         self.config["model_name"] = target_model
         
-        # Re-initialize the specific backend strategy with the same agent type
+        # Re-initialize the specific backend strategy
         self.backend = self._initialize_backend()
-        self.logger.info(f"Forensic Agent {old_bt} switched to model: {target_model}")
+        self.logger.info(f"Forensic Agent switched to {self.config.get('backend')}:{target_model}")

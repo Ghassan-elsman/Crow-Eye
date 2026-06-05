@@ -27,11 +27,19 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QColor, QPalette
+try:
+    from styles import Colors # central palette for semantic colours
+except Exception:
+    class Colors: # fallback so module still imports without styles.py
+        ACCENT_BLUE = "#3B82F6"
+        SUCCESS = "#10B981"
+        ERROR = "#EF4444"
 
 from ..integration.case_specific_configuration_integration import CaseSpecificConfigurationIntegration
-from ..config.case_specific_configuration_manager import (
+from ..config._case_specific_config_service import (
     CaseSemanticMappingConfig, CaseScoringWeightsConfig, CaseConfigurationMetadata
 )
+from .crow_eye_icons import apply_status_to_label
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +53,8 @@ class CaseSpecificConfigurationDialog(QDialog):
     """
     
     # Signals
-    configuration_changed = pyqtSignal(str)  # case_id
-    case_switched = pyqtSignal(str)  # case_id
+    configuration_changed = pyqtSignal(str) # case_id
+    case_switched = pyqtSignal(str) # case_id
     
     def __init__(self, 
                  case_integration: CaseSpecificConfigurationIntegration,
@@ -105,7 +113,7 @@ class CaseSpecificConfigurationDialog(QDialog):
         current_case_layout = QHBoxLayout()
         current_case_layout.addWidget(QLabel("Current Case:"))
         self.current_case_label = QLabel("None")
-        self.current_case_label.setStyleSheet("font-weight: bold; color: blue;")
+        self.current_case_label.setStyleSheet(f"font-weight: bold; color: {Colors.ACCENT_BLUE};")
         current_case_layout.addWidget(self.current_case_label)
         current_case_layout.addStretch()
         case_selection_layout.addLayout(current_case_layout)
@@ -588,16 +596,16 @@ class CaseSpecificConfigurationDialog(QDialog):
                 # Create list item
                 item_text = f"{case_name} ({case_id})"
                 if case_info.get('has_semantic_mappings') or case_info.get('has_scoring_weights'):
-                    item_text += " ✓"
+                    item_text += " [OK]"
                 
                 item = QListWidgetItem(item_text)
                 item.setData(Qt.UserRole, case_id)
                 
                 # Color code based on configuration status
                 if case_info.get('is_current'):
-                    item.setBackground(QColor(200, 255, 200))  # Light green for current
+                    item.setBackground(QColor(200, 255, 200)) # Light green for current
                 elif case_info.get('has_semantic_mappings') and case_info.get('has_scoring_weights'):
-                    item.setBackground(QColor(255, 255, 200))  # Light yellow for fully configured
+                    item.setBackground(QColor(255, 255, 200)) # Light yellow for fully configured
                 
                 self.case_list.addItem(item)
                 self.compare_case_combo.addItem(item_text, case_id)
@@ -1046,22 +1054,22 @@ class CaseSpecificConfigurationDialog(QDialog):
             
             results = []
             if validation['valid']:
-                results.append("✅ Configuration is valid!")
+                results.append("[OK] Configuration is valid!")
                 self.validation_status_label.setText("Valid")
-                self.validation_status_label.setStyleSheet("color: green;")
+                self.validation_status_label.setStyleSheet(f"color: {Colors.SUCCESS};")
             else:
-                results.append("❌ Configuration has errors:")
+                results.append("[ERROR] Configuration has errors:")
                 for error in validation['errors']:
-                    results.append(f"  • {error}")
+                    results.append(f" • {error}")
                 self.validation_status_label.setText("Invalid")
-                self.validation_status_label.setStyleSheet("color: red;")
+                self.validation_status_label.setStyleSheet(f"color: {Colors.ERROR};")
             
             self.validation_results.setText("\n".join(results))
             
         except Exception as e:
-            self.validation_results.setText(f"❌ Validation failed: {e}")
+            apply_status_to_label(self.validation_results, "ERROR", f"Validation failed: {e}")
             self.validation_status_label.setText("Error")
-            self.validation_status_label.setStyleSheet("color: red;")
+            self.validation_status_label.setStyleSheet(f"color: {Colors.ERROR};")
     
     def _on_comparison_case_changed(self):
         """Handle comparison case selection change"""

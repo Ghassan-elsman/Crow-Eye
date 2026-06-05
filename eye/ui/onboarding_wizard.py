@@ -22,6 +22,8 @@ from PyQt5.QtGui import QPalette, QColor, QFont
 import json
 from pathlib import Path
 
+from styles import CrowEyeStyles
+
 
 class CloudAPIWarningDialog(QDialog):
     """
@@ -361,7 +363,7 @@ class OnboardingWizard(QDialog):
             }
         """
         
-        self.setStyleSheet(dialog_style)
+        self.setStyleSheet(dialog_style + "\n" + CrowEyeStyles.SCROLLBAR_STYLE)
     
     def show_welcome_screen(self):
         """

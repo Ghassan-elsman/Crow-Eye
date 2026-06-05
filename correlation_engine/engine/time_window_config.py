@@ -39,14 +39,14 @@ class TimeWindowScanningConfig:
     """
     
     # Core time window parameters
-    window_size_minutes: int = 180  # Default: 3 hours for better correlation accuracy
-    scanning_interval_minutes: Optional[int] = None  # Defaults to window_size_minutes
-    starting_epoch: Optional[datetime] = None  # Auto-detect from data (was: datetime(2000, 1, 1))
-    ending_epoch: Optional[datetime] = None  # Auto-detect from data
+    window_size_minutes: int = 180 # Default: 3 hours for better correlation accuracy
+    scanning_interval_minutes: Optional[int] = None # Defaults to window_size_minutes
+    starting_epoch: Optional[datetime] = None # Auto-detect from data (was: datetime(2000, 1, 1))
+    ending_epoch: Optional[datetime] = None # Auto-detect from data
     
     # Time range detection settings
     auto_detect_time_range: bool = True
-    max_time_range_years: int = 20  # Maximum time span to prevent false timestamps from expanding range
+    max_time_range_years: int = 20 # Maximum time span to prevent false timestamps from expanding range
     warn_on_large_range: bool = True
     
     # Empty window optimization
@@ -60,8 +60,17 @@ class TimeWindowScanningConfig:
     
     # Performance options
     parallel_window_processing: bool = False
-    max_workers: Optional[int] = None  # Auto-detect optimal worker count
+    max_workers: Optional[int] = None # Auto-detect optimal worker count
     parallel_batch_size: int = 100
+    # Phase 9: parallelism strategy selector. Defaults to 'threads' since
+    # SQLite queries release the GIL and DB I/O is the dominant cost in
+    # most cases. 'processes' bypasses the GIL for CPU-bound runs (large
+    # regex normalization workloads). 'none' forces serial execution and
+    # is the escape hatch when debugging.
+    # - 'none' : ignore parallel_window_processing; run serially
+    # - 'threads' : ThreadPoolExecutor (existing path, recommended for I/O-bound)
+    # - 'processes' : ProcessPoolExecutor (recommended for ≥50 windows of CPU work)
+    parallel_strategy: str = 'threads'
     
     # Memory management
     memory_limit_mb: int = 500
@@ -69,11 +78,23 @@ class TimeWindowScanningConfig:
     
     # Debugging and monitoring
     debug_mode: bool = False
-    progress_reporting_interval: int = 100  # Report progress every N windows
+    progress_reporting_interval: int = 100 # Report progress every N windows
+
+    # Identity grouping tunables. When set, min_feathers_override overrides
+    # wing.correlation_rules.minimum_matches in _correlate_window_records.
+    # low_confidence_review_mode surfaces sub-threshold identity groups as
+    # matches with confidence_category="Low - below threshold" so analysts
+    # can review them instead of having them silently dropped. Default
+    # changed to True so the engine never silently discards evidence —
+    # every identity that forms a group becomes a match (high- or low-
+    # confidence). Operators who want strict drops can flip it back to
+    # False explicitly.
+    min_feathers_override: Optional[int] = None
+    low_confidence_review_mode: bool = True
     
     # Wing adaptation settings
-    adapt_wing_time_window: bool = True  # Use wing's time_window_minutes
-    adapt_anchor_priority: bool = True   # Map anchor_priority to feather_priority
+    adapt_wing_time_window: bool = True # Use wing's time_window_minutes
+    adapt_anchor_priority: bool = True # Map anchor_priority to feather_priority
     
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -89,7 +110,7 @@ class TimeWindowScanningConfig:
         if self.window_size_minutes <= 0:
             raise ValueError(f"window_size_minutes must be positive, got {self.window_size_minutes}")
         
-        if self.window_size_minutes > 1440:  # 24 hours
+        if self.window_size_minutes > 1440: # 24 hours
             raise ValueError(f"window_size_minutes too large (max 1440), got {self.window_size_minutes}")
         
         # Validate scanning interval
@@ -132,7 +153,7 @@ class TimeWindowScanningConfig:
         if self.memory_limit_mb <= 0:
             raise ValueError(f"memory_limit_mb must be positive, got {self.memory_limit_mb}")
         
-        if self.memory_limit_mb > 8192:  # 8GB
+        if self.memory_limit_mb > 8192: # 8GB
             raise ValueError(f"memory_limit_mb too large (max 8192), got {self.memory_limit_mb}")
         
         # Validate record limits
@@ -311,7 +332,7 @@ class TimeWindowScanningConfig:
             starting_epoch=starting_epoch,
             ending_epoch=ending_epoch,
             auto_detect_time_range=data.get('auto_detect_time_range', True),
-            max_time_range_years=data.get('max_time_range_years', 30),  # Increased default
+            max_time_range_years=data.get('max_time_range_years', 30), # Increased default
             warn_on_large_range=data.get('warn_on_large_range', True),
             enable_quick_empty_check=data.get('enable_quick_empty_check', True),
             track_empty_window_stats=data.get('track_empty_window_stats', True),
@@ -380,20 +401,20 @@ class TimeWindowScanningConfig:
             TimeWindowScanningConfig with default settings
         """
         return cls(
-            window_size_minutes=180,  # Default: 3 hours for better correlation accuracy
-            scanning_interval_minutes=180,  # Non-overlapping by default
-            starting_epoch=None,  # Auto-detect from data
-            ending_epoch=None,  # Auto-detect from data
+            window_size_minutes=180, # Default: 3 hours for better correlation accuracy
+            scanning_interval_minutes=180, # Non-overlapping by default
+            starting_epoch=None, # Auto-detect from data
+            ending_epoch=None, # Auto-detect from data
             auto_detect_time_range=True,
-            max_time_range_years=20,  # Maximum time span to prevent false timestamps from expanding range
+            max_time_range_years=20, # Maximum time span to prevent false timestamps from expanding range
             warn_on_large_range=True,
             enable_quick_empty_check=True,
             track_empty_window_stats=True,
             enable_overlapping_windows=False,
             max_records_per_window=10000,
             enable_window_caching=True,
-            parallel_window_processing=False,  # Disabled by default for compatibility
-            max_workers=None,  # Auto-detect
+            parallel_window_processing=False, # Disabled by default for compatibility
+            max_workers=None, # Auto-detect
             parallel_batch_size=100,
             memory_limit_mb=500,
             enable_streaming_mode=True,

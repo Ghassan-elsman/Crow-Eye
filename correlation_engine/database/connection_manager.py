@@ -99,7 +99,7 @@ class DatabaseConnectionManager:
             # Open connection before use (Requirement 6.4)
             try:
                 conn = sqlite3.connect(database_path)
-                conn.row_factory = sqlite3.Row  # Enable column access by name
+                conn.row_factory = sqlite3.Row # Enable column access by name
                 
                 # Track connection
                 with self._lock:

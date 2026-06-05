@@ -45,12 +45,20 @@ class IntentEngine:
             "recent": ["eventlog", "prefetch", "jumplist", "registry", "usn"],
             "last": ["eventlog", "prefetch", "jumplist", "registry", "usn"],
             "happened": ["eventlog", "prefetch", "jumplist", "registry", "usn"],
-            "schema": ["Global_schema_databse_Refrence"],
-            "structure": ["Global_schema_databse_Refrence"],
-            "layout": ["Global_schema_databse_Refrence"],
-            "database": ["Global_schema_databse_Refrence"],
-            "table": ["Global_schema_databse_Refrence"],
-            "column": ["Global_schema_databse_Refrence"],
+            "schema": ["Global_schema_database_Reference"],
+            "database": ["Global_schema_database_Reference"],
+            "table": ["Global_schema_database_Reference"],
+            "column": ["Global_schema_database_Reference"],
+            # Eye-Describe Anatomy & Technical Guides
+            "anatomy": ["eye_describe_anatomy_index", "evidence_intelligence"],
+            "structure": ["eye_describe_anatomy_index", "Global_schema_database_Reference"],
+            "layout": ["eye_describe_anatomy_index", "Global_schema_database_Reference"],
+            "offset": ["eye_describe_anatomy_index"],
+            "byte": ["eye_describe_anatomy_index"],
+            "binary": ["eye_describe_anatomy_index"],
+            "header": ["eye_describe_anatomy_index"],
+            "guide": ["eye_describe_anatomy_index", "forensic_methodology"],
+            "describe": ["eye_describe_anatomy_index"],
             # Technical Reasoning & Intelligence
             "why": ["forensic_methodology", "evidence_intelligence"],
             "how": ["forensic_methodology", "evidence_intelligence"],
@@ -64,7 +72,31 @@ class IntentEngine:
             "proof": ["evidence_intelligence"],
             "significance": ["evidence_intelligence", "forensic_methodology"],
             "purpose": ["evidence_intelligence", "forensic_methodology"],
-            "interpretation": ["forensic_methodology"]
+            "interpretation": ["forensic_methodology"],
+            # Correlation Engine — wing/mapping authoring + diagnostics.
+            # Pull the correlation knowledge sheet when the analyst asks
+            # about wings, semantic mappings, the engine itself, the
+            # two engine strategies, multi-timestamp fan-out, why a
+            # wing returned zero matches, etc.
+            "wing": ["correlation_engine_knowledge", "forensic_methodology"],
+            "wings": ["correlation_engine_knowledge", "forensic_methodology"],
+            "semantic": ["correlation_engine_knowledge"],
+            "mapping": ["correlation_engine_knowledge"],
+            "correlation": ["correlation_engine_knowledge", "forensic_methodology"],
+            "correlate": ["correlation_engine_knowledge"],
+            "feather": ["correlation_engine_knowledge"],
+            "feathers": ["correlation_engine_knowledge"],
+            "pipeline": ["correlation_engine_knowledge"],
+            "matches": ["correlation_engine_knowledge"],
+            "minimum_matches": ["correlation_engine_knowledge"],
+            "time_window": ["correlation_engine_knowledge"],
+            "time window": ["correlation_engine_knowledge"],
+            "build a wing": ["correlation_engine_knowledge"],
+            "create a wing": ["correlation_engine_knowledge"],
+            "new wing": ["correlation_engine_knowledge"],
+            "anchor": ["correlation_engine_knowledge"],
+            "fan-out": ["correlation_engine_knowledge"],
+            "run_times": ["correlation_engine_knowledge"],
         }
 
     def detect_keywords(self, query: str) -> List[str]:

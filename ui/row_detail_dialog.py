@@ -186,7 +186,6 @@ class RowDetailDialog(QtWidgets.QDialog):
             color: #00FF7F;
             font-size: 18px;
             font-weight: bold;
-            letter-spacing: 1px;
             background-color: #1a1a2e;
             border-left: 3px solid #00BFFF;
             padding-left: 10px;

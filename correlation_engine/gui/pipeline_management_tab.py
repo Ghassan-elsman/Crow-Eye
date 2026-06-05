@@ -85,8 +85,6 @@ class PipelineManagementTab(QWidget):
                 font-size: 20px;
                 font-weight: 700;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }
         """)
         layout.addWidget(title)
@@ -161,7 +159,7 @@ class PipelineManagementTab(QWidget):
         # Apply table styles
         try:
             CrowEyeStyles.apply_table_styles(self.pipeline_table)
-        except:
+        except Exception as e:
             pass
         
         self.pipeline_table.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE + """
@@ -181,11 +179,11 @@ class PipelineManagementTab(QWidget):
         
         # Configure column widths
         header = self.pipeline_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Pipeline Name
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Wings
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Feathers
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Last Modified
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Default
+        header.setSectionResizeMode(0, QHeaderView.Stretch) # Pipeline Name
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents) # Wings
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents) # Feathers
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents) # Last Modified
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents) # Default
         
         self.pipeline_table.setMinimumHeight(300)
         
@@ -232,8 +230,13 @@ class PipelineManagementTab(QWidget):
         layout.setSpacing(15)
         layout.setContentsMargins(0, 15, 0, 0)
         
+        # Pull Crow-Eye icons in once so each button can decorate itself
+        # with the matching glyph (add / edit / copy / star / delete).
+        from .crow_eye_icons import CrowEyeIcons
+
         # Create New Pipeline button
-        self.create_btn = QPushButton("➕ Create New Pipeline")
+        self.create_btn = QPushButton("Create New Pipeline")
+        self.create_btn.setIcon(CrowEyeIcons.add())
         self.create_btn.setFixedHeight(45)
         self.create_btn.setMinimumWidth(180)
         self.create_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
@@ -244,9 +247,10 @@ class PipelineManagementTab(QWidget):
         """)
         self.create_btn.clicked.connect(self.create_pipeline)
         layout.addWidget(self.create_btn)
-        
+
         # Edit Pipeline button
-        self.edit_btn = QPushButton("✏ Edit Pipeline")
+        self.edit_btn = QPushButton("Edit Pipeline")
+        self.edit_btn.setIcon(CrowEyeIcons.edit())
         self.edit_btn.setFixedHeight(45)
         self.edit_btn.setMinimumWidth(150)
         self.edit_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
@@ -258,9 +262,10 @@ class PipelineManagementTab(QWidget):
         self.edit_btn.clicked.connect(self.edit_pipeline)
         self.edit_btn.setEnabled(False)
         layout.addWidget(self.edit_btn)
-        
+
         # Duplicate Pipeline button
-        self.duplicate_btn = QPushButton("📋 Duplicate")
+        self.duplicate_btn = QPushButton("Duplicate")
+        self.duplicate_btn.setIcon(CrowEyeIcons.copy())
         self.duplicate_btn.setFixedHeight(45)
         self.duplicate_btn.setMinimumWidth(150)
         self.duplicate_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
@@ -272,9 +277,10 @@ class PipelineManagementTab(QWidget):
         self.duplicate_btn.clicked.connect(self.duplicate_pipeline)
         self.duplicate_btn.setEnabled(False)
         layout.addWidget(self.duplicate_btn)
-        
+
         # Set as Default button
-        self.set_default_btn = QPushButton("⭐ Set as Default")
+        self.set_default_btn = QPushButton("Set as Default")
+        self.set_default_btn.setIcon(CrowEyeIcons.star())
         self.set_default_btn.setFixedHeight(45)
         self.set_default_btn.setMinimumWidth(170)
         self.set_default_btn.setStyleSheet(CrowEyeStyles.GREEN_BUTTON + """
@@ -286,9 +292,10 @@ class PipelineManagementTab(QWidget):
         self.set_default_btn.clicked.connect(self.set_default_pipeline)
         self.set_default_btn.setEnabled(False)
         layout.addWidget(self.set_default_btn)
-        
+
         # Delete Pipeline button
-        self.delete_btn = QPushButton("🗑 Delete Pipeline")
+        self.delete_btn = QPushButton("Delete Pipeline")
+        self.delete_btn.setIcon(CrowEyeIcons.delete())
         self.delete_btn.setFixedHeight(45)
         self.delete_btn.setMinimumWidth(170)
         self.delete_btn.setStyleSheet(CrowEyeStyles.RED_BUTTON + """
@@ -336,8 +343,8 @@ class PipelineManagementTab(QWidget):
         
         # Pipeline Name
         name_item = QTableWidgetItem(pipeline_data.get('pipeline_name', 'Unknown'))
-        name_item.setData(Qt.UserRole, str(pipeline_file))  # Store file path
-        name_item.setData(Qt.UserRole + 1, pipeline_data)  # Store pipeline data
+        name_item.setData(Qt.UserRole, str(pipeline_file)) # Store file path
+        name_item.setData(Qt.UserRole + 1, pipeline_data) # Store pipeline data
         self.pipeline_table.setItem(row, 0, name_item)
         
         # Wings count
@@ -358,14 +365,17 @@ class PipelineManagementTab(QWidget):
             try:
                 dt = datetime.fromisoformat(last_modified)
                 last_modified = dt.strftime("%Y-%m-%d %H:%M")
-            except:
+            except Exception as e:
                 pass
         modified_item = QTableWidgetItem(last_modified)
         self.pipeline_table.setItem(row, 3, modified_item)
         
         # Default indicator
         is_default = pipeline_data.get('config_name', '') == default_pipeline
-        default_item = QTableWidgetItem("⭐ Default" if is_default else "")
+        default_item = QTableWidgetItem("Default" if is_default else "")
+        if is_default:
+            from .crow_eye_icons import CrowEyeIcons
+            default_item.setIcon(CrowEyeIcons.star())
         default_item.setTextAlignment(Qt.AlignCenter)
         if is_default:
             default_item.setForeground(Qt.yellow)
@@ -420,7 +430,7 @@ class PipelineManagementTab(QWidget):
         if wings:
             details.append(f"<p><b>Wings ({len(wings)}):</b></p>")
             details.append("<ul>")
-            for wing in wings[:5]:  # Show first 5
+            for wing in wings[:5]: # Show first 5
                 wing_name = wing.get('wing_name', 'Unknown')
                 details.append(f"<li>{wing_name}</li>")
             if len(wings) > 5:
@@ -432,7 +442,7 @@ class PipelineManagementTab(QWidget):
         if feathers:
             details.append(f"<p><b>Feathers ({len(feathers)}):</b></p>")
             details.append("<ul>")
-            for feather in feathers[:5]:  # Show first 5
+            for feather in feathers[:5]: # Show first 5
                 feather_name = feather.get('feather_name', 'Unknown')
                 artifact_type = feather.get('artifact_type', 'Unknown')
                 details.append(f"<li>{feather_name} ({artifact_type})</li>")
@@ -518,24 +528,29 @@ class PipelineManagementTab(QWidget):
             
             # Load pipeline
             pipeline_config = PipelineConfig.load_from_file(str(pipeline_file))
-            
+
+            # Sync newly-shipped default Wings + augment with case Wings missing
+            # from the JSON, so Edit shows every Wing available in the case.
+            from ..integration.default_wings_loader import sync_and_augment_pipeline_wings
+            correlation_dir = self.case_directory / "Correlation"
+            sync_and_augment_pipeline_wings(pipeline_config, correlation_dir)
+
             # Create Pipeline Builder dialog
             dialog = QDialog(self)
             dialog.setWindowTitle(f"Edit Pipeline: {pipeline_config.pipeline_name}")
             dialog.setMinimumSize(1000, 700)
             dialog.setModal(True)
-            
+
             layout = QVBoxLayout(dialog)
-            
+
             # Create Pipeline Builder widget
             builder = PipelineBuilderWidget()
             builder.set_case_directory(str(self.case_directory))
-            
+
             # Set up config manager
-            correlation_dir = self.case_directory / "Correlation"
             config_manager = ConfigManager(str(correlation_dir))
             builder.set_config_manager(config_manager)
-            
+
             # Load pipeline into builder
             builder.load_pipeline(pipeline_config)
             
@@ -754,7 +769,7 @@ class PipelineManagementTab(QWidget):
                 with open(self.config_file, 'r') as f:
                     case_config = json.load(f)
                 return case_config.get('default_pipeline', '')
-        except:
+        except Exception as e:
             pass
         return ''
     
@@ -766,5 +781,5 @@ class PipelineManagementTab(QWidget):
         try:
             dt = datetime.fromisoformat(dt_str)
             return dt.strftime("%Y-%m-%d %H:%M")
-        except:
+        except Exception as e:
             return dt_str

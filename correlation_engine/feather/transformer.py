@@ -4,7 +4,7 @@ Handles data type conversion, validation, and transformation.
 """
 
 from datetime import datetime
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 import re
 
 
@@ -41,10 +41,10 @@ class DataTransformer:
     def is_timestamp(value: str) -> bool:
         """Check if value is a timestamp."""
         timestamp_patterns = [
-            r'\d{4}-\d{2}-\d{2}',  # YYYY-MM-DD
-            r'\d{2}/\d{2}/\d{4}',  # MM/DD/YYYY
-            r'\d{4}/\d{2}/\d{2}',  # YYYY/MM/DD
-            r'\d{2}-\d{2}-\d{4}',  # DD-MM-YYYY
+            r'\d{4}-\d{2}-\d{2}', # YYYY-MM-DD
+            r'\d{2}/\d{2}/\d{4}', # MM/DD/YYYY
+            r'\d{4}/\d{2}/\d{2}', # YYYY/MM/DD
+            r'\d{2}-\d{2}-\d{4}', # DD-MM-YYYY
         ]
         
         for pattern in timestamp_patterns:
@@ -54,14 +54,17 @@ class DataTransformer:
         return False
     
     @staticmethod
-    def normalize_timestamp(value: Any) -> str:
-        """Normalize timestamp to ISO format."""
+    def normalize_timestamp(value: Any) -> Optional[str]:
+        """Normalize timestamp to ISO format. Returns None on empty or unparseable input.
+
+        Forensic correctness: never fabricate a timestamp. Callers must treat
+        None as "unknown" rather than substituting wall-clock time.
+        """
         if not value:
-            return datetime.now().isoformat()
-        
+            return None
+
         value_str = str(value)
-        
-        # Try common formats
+
         formats = [
             '%Y-%m-%d %H:%M:%S',
             '%Y-%m-%d',
@@ -72,16 +75,15 @@ class DataTransformer:
             '%Y/%m/%d %H:%M:%S',
             '%Y/%m/%d',
         ]
-        
+
         for fmt in formats:
             try:
                 dt = datetime.strptime(value_str, fmt)
                 return dt.isoformat()
             except ValueError:
                 continue
-        
-        # If no format matches, return as is
-        return value_str
+
+        return None
     
     @staticmethod
     def convert_value(value: Any, target_type: str) -> Any:
@@ -96,10 +98,10 @@ class DataTransformer:
                 return float(value)
             elif target_type == 'DATETIME':
                 return DataTransformer.normalize_timestamp(value)
-            else:  # TEXT
+            else: # TEXT
                 return str(value)
         except (ValueError, TypeError):
-            return str(value)  # Fallback to string
+            return str(value) # Fallback to string
     
     @staticmethod
     def validate_data(data: List[Dict[str, Any]], columns: List[Dict[str, Any]]) -> tuple:

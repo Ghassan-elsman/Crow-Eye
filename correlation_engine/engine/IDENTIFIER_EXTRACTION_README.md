@@ -37,7 +37,7 @@ This implementation provides comprehensive identifier extraction and correlation
    - Extracts values and parses timestamps
    - Metadata-based and metadata-optional operation modes
 
-6. **Identifier Correlation Engine** (`identifier_correlation_engine.py`)
+6. **Identifier Correlation Engine** (`identity_state_builder.py`)
    - Builds in-memory engine state dictionary
    - Implements anchor assignment algorithm
    - Groups evidence within configurable time windows (default: 5 minutes)
@@ -288,7 +288,7 @@ Evidence rows are grouped into anchors based on timestamps:
 - `correlation_engine/engine/timestamp_parser.py`
 - `correlation_engine/engine/identity_extractor.py`
 - `correlation_engine/engine/feather_loader.py` (unified loader with identifier extraction)
-- `correlation_engine/engine/identifier_correlation_engine.py`
+- `correlation_engine/engine/identity_state_builder.py`
 - `correlation_engine/engine/database_persistence.py`
 - `correlation_engine/engine/query_interface.py`
 - `correlation_engine/engine/identifier_extraction_pipeline.py`

@@ -23,8 +23,70 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
 from correlation_engine.gui.identity_results_view import _search_semantic_data
+from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
 
 logger = logging.getLogger(__name__)
+
+
+# Raw-name and raw-path fields, loaded from the central standard fields
+# registry. Names are probed before paths so explicit "name" fields beat
+# path-derived basenames when both are present. See utils/standard_fields.
+try:
+    from utils.standard_fields import StandardFields as _SF
+    _RAW_NAME_FIELDS = _SF.category('file_paths', 'filename')
+    _RAW_PATH_FIELDS = tuple(
+        _SF.category('file_paths', 'path')
+        + _SF.category('file_paths', 'targetpath')
+        + _SF.category('file_paths', 'sourcepath')
+    )
+except Exception: # pragma: no cover - defensive fallback
+    _RAW_NAME_FIELDS = (
+        'name', 'filename', 'file_name', 'fn_filename', 'executable_name',
+        'app_name', 'Source_Name', 'original_filename', 'display_name',
+    )
+    _RAW_PATH_FIELDS = (
+        'path', 'file_path', 'app_path', 'Local_Path', 'reconstructed_path',
+        'lower_case_long_path', 'image_path', 'process_path', 'full_path',
+    )
+
+
+def _extract_raw_name_from_record(record, fallback: str) -> str:
+    """Pick the most representative raw filename out of an evidence record.
+
+    Returns the first non-empty value from the prioritized name fields; if
+    none are present, derives the basename from a path field; otherwise
+    returns ``fallback`` (typically the normalized identity name).
+    """
+    if not isinstance(record, dict):
+        return fallback
+
+    for field in _RAW_NAME_FIELDS:
+        value = record.get(field)
+        if value:
+            text = str(value).strip()
+            if text:
+                return text
+
+    for field in _RAW_PATH_FIELDS:
+        value = record.get(field)
+        if not value:
+            continue
+        path_text = str(value).strip()
+        if not path_text:
+            continue
+        if '\\' in path_text or '/' in path_text:
+            from pathlib import PurePosixPath
+            basename = PurePosixPath(path_text.replace('\\', '/')).name
+            if basename:
+                return basename
+
+    return fallback
+
+
+# Sub-identity bucketing — canonical implementation lives in
+# correlation_engine.engine.identity_grouping. Imported under the
+# pre-existing module-level alias so call sites in this file keep working.
+from correlation_engine.engine.identity_grouping import sub_identity_key as _sub_identity_key # noqa: F401
 
 
 class TimeBasedResultsViewer(QWidget):
@@ -33,31 +95,40 @@ class TimeBasedResultsViewer(QWidget):
     match_selected = pyqtSignal(dict)
     
     # Pagination settings
-    PAGE_SIZE = 100  # Load 100 windows at a time
+    PAGE_SIZE = 100 # Load 100 windows at a time
     
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Initialize centralized score configuration manager
+        # Load configuration
+        try:
+            from ...config.case_history_manager import CaseHistoryManager
+            self.case_history_manager = CaseHistoryManager()
+        except Exception as e:
+            logger.error(f"Failed to load CaseHistoryManager: {e}")
+            self.case_history_manager = None
+            
+        # Initialize centralized score configuration manager via the
+        # integrated façade so all external entry points share one route.
         # Requirements: 7.2, 8.4
-        from ..config.score_configuration_manager import ScoreConfigurationManager
-        self.score_config_manager = ScoreConfigurationManager()
+        from ..config.integrated_configuration_manager import IntegratedConfigurationManager
+        self.score_config_manager = IntegratedConfigurationManager().score_config_manager
         
-        self.time_windows = []  # List of time window data
+        self.time_windows = [] # List of time window data
         self.filtered_windows = []
         self.current_results = None
         self.current_page = 0
-        self.original_window_size_minutes = 180  # Default from scan (3 hours)
-        self.viewing_window_size_minutes = 180  # Current viewing size
-        self.all_matches = []  # Store all matches for re-grouping
+        self.original_window_size_minutes = 180 # Default from scan (3 hours)
+        self.viewing_window_size_minutes = 180 # Current viewing size
+        self.all_matches = [] # Store all matches for re-grouping
         self.scoring_enabled = False
         self.semantic_enabled = False
-        self.database_path = None  # Path to correlation_results.db
+        self.database_path = None # Path to correlation_results.db
         
         # Debounce timer for search filter
         self.search_timer = QTimer()
         self.search_timer.setSingleShot(True)
-        self.search_timer.setInterval(300)  # 300ms delay
+        self.search_timer.setInterval(300) # 300ms delay
         self.search_timer.timeout.connect(self._apply_filters)
         
         self.setup_ui()
@@ -107,7 +178,7 @@ class TimeBasedResultsViewer(QWidget):
         top_layout.addWidget(self.feathers_used_lbl)
         
         # Scoring indicator
-        self.scoring_lbl = QLabel("📊 Scoring: Off")
+        self.scoring_lbl = QLabel("Scoring: Off")
         self.scoring_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         self.scoring_lbl.setToolTip("Scoring: Off")
         top_layout.addWidget(self.scoring_lbl)
@@ -124,7 +195,7 @@ class TimeBasedResultsViewer(QWidget):
         top_layout.addWidget(search_lbl)
         
         self.identity_filter = QLineEdit()
-        self.identity_filter.setPlaceholderText("🔍 Search identity or semantic...")
+        self.identity_filter.setPlaceholderText("Search identity or semantic...")
         self.identity_filter.setMaximumWidth(250)
         self.identity_filter.setStyleSheet("""
             QLineEdit {
@@ -342,9 +413,11 @@ class TimeBasedResultsViewer(QWidget):
         self.windows_table = self._create_compact_table(["Time Range", "IDs", "Rec", "Status"])
         stats_layout.addWidget(self._wrap_table("Time Windows", self.windows_table), stretch=2)
         
-        # Feather Contribution Table
-        self.feather_table = self._create_compact_table(["Feather", "Win", "Rec", "IDs"])
-        stats_layout.addWidget(self._wrap_table("Feathers", self.feather_table), stretch=2)
+        # Feather Contribution Table — Evidence Extracted by Feather
+        self.feather_table = self._create_compact_table(["Feather", "Win", "Evidence", "IDs"])
+        self.feather_table.setToolTip("Evidence records extracted per feather, restricted to the active time range filter")
+        self.feather_group = self._wrap_table("Evidence by Feather", self.feather_table)
+        stats_layout.addWidget(self.feather_group, stretch=2)
         
         # Identity Activity Table
         self.identity_table = self._create_compact_table(["Identity", "Win", "First", "Last"])
@@ -364,9 +437,9 @@ class TimeBasedResultsViewer(QWidget):
         tree.setColumnWidth(0, 300)
         tree.setColumnWidth(1, 150)
         tree.setColumnWidth(2, 60)
-        tree.setColumnWidth(3, 350)  # Semantic column - WIDER: Increased to 350 for better readability
-        tree.setColumnWidth(4, 60)   # Records column
-        tree.setColumnWidth(5, 80)   # Artifact column
+        tree.setColumnWidth(3, 350) # Semantic column - WIDER: Increased to 350 for better readability
+        tree.setColumnWidth(4, 60) # Records column
+        tree.setColumnWidth(5, 80) # Artifact column
         
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
@@ -425,12 +498,12 @@ class TimeBasedResultsViewer(QWidget):
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setMaximumHeight(100)  # Smaller table
+        table.setMaximumHeight(100) # Smaller table
         table.setMinimumHeight(60)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(18)  # Compact rows
-        table.horizontalHeader().setFixedHeight(22)  # Compact header
+        table.verticalHeader().setDefaultSectionSize(18) # Compact rows
+        table.horizontalHeader().setFixedHeight(22) # Compact header
         table.setStyleSheet("""
             QTableWidget {
                 font-size: 8pt;
@@ -494,7 +567,7 @@ class TimeBasedResultsViewer(QWidget):
             result: CorrelationResult object
             show_progress: If False, suppresses the progress dialog (useful when parent already shows progress)
         """
-        print(f"[TimeWindowResultsView] load_from_correlation_result called with {result.total_matches} matches")
+        logger.info(f"[TimeWindowResultsView] load_from_correlation_result called with {result.total_matches} matches")
         
         # Show progress dialog if we have many windows and show_progress is True
         progress = None
@@ -530,10 +603,10 @@ class TimeBasedResultsViewer(QWidget):
             self.time_windows = self._group_matches_into_windows(self.all_matches, self.viewing_window_size_minutes, progress)
             
             if progress and progress.wasCanceled():
-                print("[TimeWindowResultsView] Loading cancelled by user")
+                logger.info("[TimeWindowResultsView] Loading cancelled by user")
                 return
             
-            print(f"[TimeWindowResultsView] Grouped into {len(self.time_windows)} time windows")
+            logger.info(f"[TimeWindowResultsView] Grouped into {len(self.time_windows)} time windows")
             
             if progress:
                 progress.setLabelText("Processing metadata...")
@@ -573,9 +646,9 @@ class TimeBasedResultsViewer(QWidget):
                 progress.setValue(90)
                 QApplication.processEvents()
             
-            print(f"[TimeWindowResultsView] Calling load_results with {len(self.time_windows)} windows")
+            logger.info(f"[TimeWindowResultsView] Calling load_results with {len(self.time_windows)} windows")
             self.load_results(results_dict)
-            print(f"[TimeWindowResultsView] load_results completed, tree has {self.results_tree.topLevelItemCount()} items")
+            logger.info(f"[TimeWindowResultsView] load_results completed, tree has {self.results_tree.topLevelItemCount()} items")
             
             if progress:
                 progress.setValue(100)
@@ -584,7 +657,7 @@ class TimeBasedResultsViewer(QWidget):
         except Exception as e:
             if progress:
                 progress.close()
-            print(f"[Error] Failed to load results: {e}")
+            logger.info(f"[Error] Failed to load results: {e}")
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, "Load Error", f"Failed to load results:\n{str(e)}")
@@ -592,7 +665,7 @@ class TimeBasedResultsViewer(QWidget):
     def set_database_path(self, db_path: str):
         """Set the database path for loading results from database."""
         self.database_path = db_path
-        print(f"[TimeWindowResultsView] Database path set to: {db_path}")
+        logger.info(f"[TimeWindowResultsView] Database path set to: {db_path}")
     
     def _get_score_interpretation(self, score: float) -> str:
         """
@@ -612,41 +685,41 @@ class TimeBasedResultsViewer(QWidget):
     def load_results_from_execution(self, execution_id: int):
         """Load results from a specific execution in the database."""
         if not self.database_path:
-            print("[TimeWindowResultsView] No database path set, cannot load from execution")
+            logger.info("[TimeWindowResultsView] No database path set, cannot load from execution")
             return
         
         try:
             from pathlib import Path
             from ..engine.database_persistence import ResultsDatabase
             
-            print(f"[TimeWindowResultsView] Loading execution {execution_id} from {self.database_path}")
+            logger.info(f"[TimeWindowResultsView] Loading execution {execution_id} from {self.database_path}")
             
             with ResultsDatabase(self.database_path) as db:
                 # Load all results for the execution
                 correlation_results = db.load_execution_results(execution_id)
                 
                 if not correlation_results:
-                    print(f"[TimeWindowResultsView] No results found for execution {execution_id}")
+                    logger.info(f"[TimeWindowResultsView] No results found for execution {execution_id}")
                     return
                 
-                print(f"[TimeWindowResultsView] Loaded {len(correlation_results)} correlation results")
+                logger.info(f"[TimeWindowResultsView] Loaded {len(correlation_results)} correlation results")
                 
                 # Use the first result or combine multiple results if needed
                 primary_result = correlation_results[0]
                 
                 # If multiple results, combine matches
                 if len(correlation_results) > 1:
-                    print(f"[TimeWindowResultsView] Combining {len(correlation_results)} result sets...")
+                    logger.info(f"[TimeWindowResultsView] Combining {len(correlation_results)} result sets...")
                     for additional_result in correlation_results[1:]:
                         primary_result.matches.extend(additional_result.matches)
                         primary_result.total_matches += additional_result.total_matches
                 
                 # Load the combined result
                 self.load_from_correlation_result(primary_result)
-                print(f"[TimeWindowResultsView] Successfully loaded execution {execution_id}")
+                logger.info(f"[TimeWindowResultsView] Successfully loaded execution {execution_id}")
                 
         except Exception as e:
-            print(f"[TimeWindowResultsView] Error loading execution {execution_id}: {e}")
+            logger.info(f"[TimeWindowResultsView] Error loading execution {execution_id}: {e}")
             import traceback
             traceback.print_exc()
     
@@ -668,7 +741,7 @@ class TimeBasedResultsViewer(QWidget):
                         try:
                             ts = datetime.strptime(ts_str[:19], fmt[:19])
                             break
-                        except:
+                        except Exception as e:
                             continue
                     else:
                         ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
@@ -676,7 +749,7 @@ class TimeBasedResultsViewer(QWidget):
                     ts = ts_str
                 else:
                     continue
-            except:
+            except Exception as e:
                 continue
             
             # Calculate window start (round down to window boundary)
@@ -703,39 +776,114 @@ class TimeBasedResultsViewer(QWidget):
         for window_key in sorted(window_map.keys()):
             window_data = window_map[window_key]
             
-            # Convert identities dict to list
+            # Convert identities dict to list. Build sub-identities by walking
+            # the RECORDS inside each match (handling both shapes that the
+            # engines emit: time-based stores feather_records[fid] = list of
+            # dicts; identity engine stores feather_records[fid] = single
+            # dict). The previous implementation only handled the dict case
+            # and never split time-based matches by raw filename, so every
+            # variant collapsed into a single sub-identity.
             identities_list = []
             for identity_name, identity_matches in window_data['identities'].items():
-                # Group by original filename (sub-identities)
-                sub_identities_map = defaultdict(list)
+                # Bucket key is a normalized form of the raw name so that
+                # trivial case + extension variants ("Chrome.exe",
+                # "chrome.exe", "Chrome.EXE", "chrome.dll") collapse to ONE
+                # sub-identity. Meaningful naming differences (version
+                # numbers, "(x86)", different base names) produce separate
+                # sub-identities. See _sub_identity_key for the rules.
+                raw_buckets = {} # sub_key -> sub_identity dict
+                raw_name_variants = defaultdict(set) # sub_key -> {raw names seen}
+
                 for match in identity_matches:
-                    # Try to extract original filename
-                    original_name = identity_name
-                    for fid, data in match.feather_records.items():
-                        if isinstance(data, dict):
-                            for field in ['name', 'filename', 'file_name', 'executable_name']:
-                                if field in data and data[field]:
-                                    original_name = str(data[field])
-                                    break
-                            if original_name != identity_name:
-                                break
-                    
-                    sub_identities_map[original_name].append(match)
-                
-                # Build sub-identities list
+                    feather_records_dict = getattr(match, 'feather_records', None) or {}
+                    for fid, data in feather_records_dict.items():
+                        # Normalize to an iterable of record dicts
+                        if isinstance(data, list):
+                            records_iter = data
+                        elif isinstance(data, dict):
+                            records_iter = [data]
+                        else:
+                            continue
+
+                        for record in records_iter:
+                            raw_name = _extract_raw_name_from_record(record, identity_name)
+                            sub_key = _sub_identity_key(raw_name) or raw_name.strip().lower()
+
+                            bucket = raw_buckets.get(sub_key)
+                            if bucket is None:
+                                bucket = {
+                                    # First raw name encountered becomes the
+                                    # display name. Variants are tracked
+                                    # separately for the UI tooltip.
+                                    'original_name': raw_name,
+                                    'sub_key': sub_key,
+                                    'matches': [],
+                                    '_match_ids_seen': set(),
+                                    'feathers_found': set(),
+                                    'records_by_feather': defaultdict(list),
+                                    'record_count': 0,
+                                }
+                                raw_buckets[sub_key] = bucket
+
+                            raw_name_variants[sub_key].add(raw_name)
+                            bucket['feathers_found'].add(fid)
+                            bucket['records_by_feather'][fid].append(record)
+                            bucket['record_count'] += 1
+                            if id(match) not in bucket['_match_ids_seen']:
+                                bucket['matches'].append(match)
+                                bucket['_match_ids_seen'].add(id(match))
+
+                # Fallback: if no records carried an extractable raw name,
+                # surface a single bucket named after the normalized identity
+                # so the UI still has something to display.
+                if not raw_buckets:
+                    fallback_key = identity_name.lower() if identity_name else ""
+                    raw_buckets[fallback_key] = {
+                        'original_name': identity_name,
+                        'sub_key': fallback_key,
+                        'matches': list(identity_matches),
+                        '_match_ids_seen': set(id(m) for m in identity_matches),
+                        'feathers_found': set(
+                            fid
+                            for m in identity_matches
+                            for fid in (getattr(m, 'feather_records', None) or {}).keys()
+                        ),
+                        'records_by_feather': defaultdict(list),
+                        'record_count': 0,
+                    }
+
                 sub_identities = []
-                for original_name, sub_matches in sub_identities_map.items():
+                for sub_key, bucket in raw_buckets.items():
+                    variants = sorted(raw_name_variants.get(sub_key, {bucket['original_name']}))
                     sub_identities.append({
-                        'original_name': original_name,
-                        'matches': sub_matches,
-                        'feathers_found': list(set(fid for m in sub_matches for fid in m.feather_records.keys()))
+                        'original_name': bucket['original_name'],
+                        'sub_key': bucket['sub_key'],
+                        # All raw-name spellings that collapsed into this
+                        # sub-identity. Lets the UI surface "Chrome.exe,
+                        # chrome.exe, Chrome.EXE" while still treating them
+                        # as a single sub-identity.
+                        'name_variants': variants,
+                        'matches': bucket['matches'],
+                        'feathers_found': sorted(bucket['feathers_found']),
+                        'records_by_feather': {fid: recs for fid, recs in bucket['records_by_feather'].items()},
+                        'record_count': bucket['record_count'],
                     })
-                
+
+                # Sort sub-identities by record count (descending) so the most
+                # active variant shows first in the tree.
+                sub_identities.sort(key=lambda s: s.get('record_count', 0), reverse=True)
+
                 identities_list.append({
                     'identity_name': identity_name,
                     'sub_identities': sub_identities,
                     'total_matches': len(identity_matches),
-                    'feathers_found': list(set(fid for m in identity_matches for fid in m.feather_records.keys()))
+                    'feathers_found': sorted(
+                        set(
+                            fid
+                            for m in identity_matches
+                            for fid in (getattr(m, 'feather_records', None) or {}).keys()
+                        )
+                    ),
                 })
             
             windows.append({
@@ -774,21 +922,21 @@ class TimeBasedResultsViewer(QWidget):
                 try:
                     from ..engine.database_persistence import ResultsDatabase
                     
-                    print(f"[TimeWindowResultsView] Loading from database: {self.database_path}")
+                    logger.info(f"[TimeWindowResultsView] Loading from database: {self.database_path}")
                     
                     with ResultsDatabase(self.database_path) as db:
                         # Get the latest execution
                         latest_execution_id = db.get_latest_execution_id()
                         
                         if latest_execution_id:
-                            print(f"[TimeWindowResultsView] Loading latest execution: {latest_execution_id}")
+                            logger.info(f"[TimeWindowResultsView] Loading latest execution: {latest_execution_id}")
                             self.load_results_from_execution(latest_execution_id)
                             return
                         else:
-                            print("[TimeWindowResultsView] No executions found in database")
+                            logger.info("[TimeWindowResultsView] No executions found in database")
                             
                 except Exception as e:
-                    print(f"[TimeWindowResultsView] Error loading from database: {e}")
+                    logger.info(f"[TimeWindowResultsView] Error loading from database: {e}")
                     import traceback
                     traceback.print_exc()
         
@@ -842,10 +990,10 @@ class TimeBasedResultsViewer(QWidget):
         
         # Update windows label with cancelled indicator
         if is_cancelled:
-            self.windows_lbl.setText(f"⚠️ {total_windows:,} ({windows_with_data}/{empty_skipped})")
+            apply_status_to_label(self.windows_lbl, "WARN", f"{total_windows:,} ({windows_with_data}/{empty_skipped})")
             self.windows_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 9pt;")
             tooltip_text = (
-                f"⚠️ EXECUTION CANCELLED\n"
+                f"[WARN] EXECUTION CANCELLED\n"
                 f"Showing partial results\n\n"
                 f"Total Windows: {total_windows:,}\n"
                 f"With Data: {windows_with_data:,}\n"
@@ -878,7 +1026,7 @@ class TimeBasedResultsViewer(QWidget):
             for fid, meta in sorted(feather_metadata.items()):
                 if isinstance(meta, dict):
                     records = meta.get('records_loaded', meta.get('records', 0))
-                    tooltip_lines.append(f"  {fid}: {records:,} records")
+                    tooltip_lines.append(f" {fid}: {records:,} records")
             self.feathers_used_lbl.setToolTip("\n".join(tooltip_lines))
         else:
             self.feathers_used_lbl.setToolTip("Feathers")
@@ -959,7 +1107,7 @@ class TimeBasedResultsViewer(QWidget):
         if not windows:
             # Empty item with 6 columns (removed Time column)
             empty_item = QTreeWidgetItem(["No time windows found", "", "", "", "", ""])
-            empty_item.setForeground(0, QBrush(QColor("#888888")))
+            empty_item.setForeground(0, QBrush(QColor("#64748B")))
             empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
             self.results_tree.addTopLevelItem(empty_item)
             return
@@ -1089,7 +1237,7 @@ class TimeBasedResultsViewer(QWidget):
             logger.error(f"Critical error in _get_semantic_value: {e}")
             return "Error"
         
-        return "-"  # Default when no semantic data available
+        return "-" # Default when no semantic data available
 
     def _create_window_item(self, window: Dict) -> QTreeWidgetItem:
         """Create time window tree item (Level 1) with visual indicators."""
@@ -1130,36 +1278,34 @@ class TimeBasedResultsViewer(QWidget):
         # Determine window type and visual indicator
         if identity_count == 0:
             # Empty window (skipped)
-            icon = "⚪"  # White circle for empty
+            icon = "" # White circle for empty
             window_type = "Empty"
-            color = QColor("#666666")  # Gray
+            color = QColor("#666666") # Gray
             tooltip = "Empty window - no activity detected (skipped during processing)"
         elif identity_count == 1:
             # Single identity window (isolated activity)
-            icon = "🔵"  # Blue circle for single identity
+            icon = "" # Blue circle for single identity
             window_type = "Isolated"
-            color = QColor("#FF9800")  # Orange
+            color = QColor("#FF9800") # Orange
             tooltip = "Single identity window - isolated activity with no temporal correlation opportunities"
         else:
             # Multi-identity window (correlation opportunity)
-            icon = "🟢"  # Green circle for correlation opportunity
+            icon = "" # Green circle for correlation opportunity
             window_type = "Correlation"
-            color = QColor("#4CAF50")  # Green
+            color = QColor("#4CAF50") # Green
             tooltip = f"Multi-identity window - {identity_count} identities active simultaneously (correlation opportunity)"
         
-        # Check if has children for expand indicator
-        has_children = bool(identities)
-        expand_indicator = "▶ " if has_children else "  "
-        
-        # Window item with expand indicator and visual indicator (6 columns - removed Time column)
+        # Window item (6 columns - removed Time). Crow-Eye clock icon marks
+        # the time-window grouping; Qt draws the native expand chevron.
         item = QTreeWidgetItem([
-            f"{expand_indicator}{icon} {time_display} ({identity_count} identities, {total_records} records) [{window_type}]",
+            f"{time_display} ({identity_count} identities, {total_records} records) [{window_type}]",
             feather_str,
             score_str,
-            "-",  # Semantic column (windows don't have semantic values)
+            "-", # Semantic column (windows don't have semantic values)
             str(total_records),
             status
         ])
+        item.setIcon(0, CrowEyeIcons.clock())
         item.setFont(0, QFont("Segoe UI", 9, QFont.Bold))
         item.setForeground(0, QBrush(color))
         item.setToolTip(0, tooltip)
@@ -1188,11 +1334,11 @@ class TimeBasedResultsViewer(QWidget):
             for sub_identity in identity.get('sub_identities', []):
                 for match in sub_identity.get('matches', []):
                     weighted_score = getattr(match, 'weighted_score', None)
-                    if isinstance(weighted_score, dict):
-                        score = weighted_score.get('score', 0)
-                        if score > 0:
-                            scores.append(score)
-        
+                    if isinstance(weighted_score, dict) and 'score' in weighted_score:
+                        s = weighted_score['score']
+                        if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                            scores.append(s)
+
         return sum(scores) / len(scores) if scores else 0.0
     
     def _create_identity_item(self, identity: Dict, window_type: str = "Unknown") -> QTreeWidgetItem:
@@ -1215,8 +1361,10 @@ class TimeBasedResultsViewer(QWidget):
         for sub in sub_identities:
             for match in sub.get('matches', []):
                 weighted_score = getattr(match, 'weighted_score', None)
-                if isinstance(weighted_score, dict) and weighted_score.get('score', 0) > 0:
-                    scores.append(weighted_score.get('score', 0))
+                if isinstance(weighted_score, dict) and 'score' in weighted_score:
+                    s = weighted_score['score']
+                    if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                        scores.append(s)
         
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
@@ -1227,19 +1375,15 @@ class TimeBasedResultsViewer(QWidget):
         # Add temporal relationship indicator
         if window_type == "Correlation":
             # This identity is part of a correlation opportunity
-            temporal_indicator = "🔗"  # Link icon for correlation
+            temporal_indicator = "" # Link icon for correlation
             tooltip = f"{identity_name} - Part of temporal correlation (multiple identities active in same window)"
         elif window_type == "Isolated":
             # This identity is isolated in its window
-            temporal_indicator = "🔸"  # Orange diamond for isolated
+            temporal_indicator = "" # Orange diamond for isolated
             tooltip = f"{identity_name} - Isolated activity (only identity in this window)"
         else:
-            temporal_indicator = "🔷"  # Blue diamond default
+            temporal_indicator = "" # Blue diamond default
             tooltip = identity_name
-        
-        # Check if has children for expand indicator
-        has_children = bool(sub_identities)
-        expand_indicator = "▶ " if has_children else "  "
         
         # Task 6.2: Check if identity has semantic data for [S] indicator with error handling
         try:
@@ -1248,25 +1392,27 @@ class TimeBasedResultsViewer(QWidget):
         except Exception as e:
             logger.warning(f"Error checking semantic indicator: {e}")
             semantic_indicator = ""
-        
-        # Identity item with expand indicator and temporal indicator (6 columns - removed Time column)
+
+        # Identity item (6 columns - removed Time). Crow-Eye target icon
+        # marks the focal identity; Qt draws the native expand chevron.
         item = QTreeWidgetItem([
-            f"{expand_indicator}{temporal_indicator} {semantic_indicator}{identity_name}" + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
+            f"{temporal_indicator} {semantic_indicator}{identity_name}" + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
             feather_str,
             score_str,
-            semantic_value,  # Semantic column with aggregated value
+            semantic_value, # Semantic column with aggregated value
             str(total_matches),
             f"{len(base_feathers)} feathers"
         ])
+        item.setIcon(0, CrowEyeIcons.target())
         item.setFont(0, QFont("Segoe UI", 8, QFont.Bold))
         
         # Color based on temporal relationship
         if window_type == "Correlation":
-            item.setForeground(0, QBrush(QColor("#4CAF50")))  # Green for correlation
+            item.setForeground(0, QBrush(QColor("#4CAF50"))) # Green for correlation
         elif window_type == "Isolated":
-            item.setForeground(0, QBrush(QColor("#FF9800")))  # Orange for isolated
+            item.setForeground(0, QBrush(QColor("#FF9800"))) # Orange for isolated
         else:
-            item.setForeground(0, QBrush(QColor("#2196F3")))  # Blue default
+            item.setForeground(0, QBrush(QColor("#2196F3"))) # Blue default
         
         item.setToolTip(0, tooltip)
         
@@ -1281,13 +1427,13 @@ class TimeBasedResultsViewer(QWidget):
         # Task 6.2: Color semantic column with error handling
         try:
             if semantic_value == "Error":
-                item.setForeground(4, QBrush(QColor("#F44336")))  # Red for errors
+                item.setForeground(4, QBrush(QColor("#F44336"))) # Red for errors
                 item.setToolTip(4, "Error retrieving semantic data")
             elif semantic_value == "Fallback":
-                item.setForeground(4, QBrush(QColor("#FF9800")))  # Orange for fallback
+                item.setForeground(4, QBrush(QColor("#FF9800"))) # Orange for fallback
                 item.setToolTip(4, "Using fallback semantic data")
             elif semantic_value != "-":
-                item.setForeground(4, QBrush(QColor("#9C27B0")))  # Purple for semantic values
+                item.setForeground(4, QBrush(QColor("#9C27B0"))) # Purple for semantic values
                 if semantic_tooltip:
                     item.setToolTip(4, semantic_tooltip)
         except Exception as e:
@@ -1362,9 +1508,9 @@ class TimeBasedResultsViewer(QWidget):
             display_value = f"{first_value} (+{len(semantic_values)-1})"
         
         # Build tooltip with all values
-        tooltip_lines = ["🏷️ Semantic Values:"]
+        tooltip_lines = ["Semantic Values:"]
         for sem_val, rule_name in semantic_values:
-            tooltip_lines.append(f"  • {rule_name}: {sem_val}")
+            tooltip_lines.append(f" • {rule_name}: {sem_val}")
         
         return (display_value, "\n".join(tooltip_lines))
     
@@ -1386,27 +1532,27 @@ class TimeBasedResultsViewer(QWidget):
         scores = []
         for match in matches:
             weighted_score = getattr(match, 'weighted_score', None)
-            if isinstance(weighted_score, dict) and weighted_score.get('score', 0) > 0:
-                scores.append(weighted_score.get('score', 0))
+            if isinstance(weighted_score, dict) and 'score' in weighted_score:
+                s = weighted_score['score']
+                if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                    scores.append(s)
         
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Check if has children for expand indicator
-        has_children = bool(matches)
-        expand_indicator = "▶ " if has_children else "  "
-        
-        # Sub-identity item with expand indicator and folder icon (6 columns - removed Time column)
+        # Sub-identity item (6 columns - removed Time). Crow-Eye link icon
+        # marks the relational sub-grouping; Qt draws the native chevron.
         item = QTreeWidgetItem([
-            f"{expand_indicator}📁 {original_name}",
+            original_name,
             feather_str,
             score_str,
-            "-",  # Semantic column - placeholder for sub-identity level
+            "-", # Semantic column - placeholder for sub-identity level
             str(len(matches)),
             f"{len(matches)} matches"
         ])
+        item.setIcon(0, CrowEyeIcons.link())
         item.setFont(0, QFont("Segoe UI", 8))
-        item.setForeground(0, QBrush(QColor("#FF9800")))  # Orange for sub-identity
+        item.setForeground(0, QBrush(QColor("#FF9800"))) # Orange for sub-identity
         
         # Color score
         if avg_score >= 0.7:
@@ -1452,16 +1598,18 @@ class TimeBasedResultsViewer(QWidget):
         # Extract semantic value from match
         semantic_value = self._get_semantic_value(match)
         
-        # Evidence item with document icon (6 columns - removed Time column)
+        # Evidence item (6 columns - removed Time column). Crow-Eye info icon
+        # marks leaf detail rows.
         item = QTreeWidgetItem([
-            f"📄 Evidence",
+            "Evidence",
             feather_str,
             score_str,
-            semantic_value,  # Semantic column
+            semantic_value, # Semantic column
             str(len(base_feathers)),
             match.anchor_artifact_type
         ])
-        item.setForeground(0, QBrush(QColor("#4CAF50")))  # Green for evidence
+        item.setIcon(0, CrowEyeIcons.info())
+        item.setForeground(0, QBrush(QColor("#4CAF50"))) # Green for evidence
         
         # Color score
         if score >= 0.7:
@@ -1486,7 +1634,7 @@ class TimeBasedResultsViewer(QWidget):
             try:
                 minutes = int(text.split()[0])
                 self._regroup_windows(minutes)
-            except:
+            except Exception as e:
                 pass
     
     def _on_custom_window_changed(self, value: int):
@@ -1499,7 +1647,7 @@ class TimeBasedResultsViewer(QWidget):
         if not self.all_matches:
             return
         
-        print(f"[TimeWindowResultsView] Re-grouping {len(self.all_matches)} matches into {new_window_size_minutes} min windows")
+        logger.info(f"[TimeWindowResultsView] Re-grouping {len(self.all_matches)} matches into {new_window_size_minutes} min windows")
         
         # Update viewing window size
         self.viewing_window_size_minutes = new_window_size_minutes
@@ -1521,7 +1669,7 @@ class TimeBasedResultsViewer(QWidget):
             self._populate_current_page()
             self._update_stats(self.current_results)
         
-        print(f"[TimeWindowResultsView] Re-grouped into {len(self.time_windows)} windows")
+        logger.info(f"[TimeWindowResultsView] Re-grouped into {len(self.time_windows)} windows")
     
     def _on_search_text_changed(self):
         """Handle search text changes with debouncing."""
@@ -1592,20 +1740,25 @@ class TimeBasedResultsViewer(QWidget):
         self.filtered_windows = filtered
         self.current_page = 0
         self._populate_current_page()
-    
+        # Stats panel must reflect the active filter (especially time range)
+        if self.current_results:
+            self._update_stats(self.current_results)
+
     def _reset_filters(self):
         """Reset all filters."""
         self.identity_filter.clear()
         self.feather_filter.setCurrentIndex(0)
         self.status_filter.setCurrentIndex(0)
-        
+
         # Reset time range to full data range
         if self.time_windows:
             self._initialize_time_range()
-        
+
         self.filtered_windows = self.time_windows.copy()
         self.current_page = 0
         self._populate_current_page()
+        if self.current_results:
+            self._update_stats(self.current_results)
     
     def _prev_page(self):
         """Go to previous page."""
@@ -1621,38 +1774,79 @@ class TimeBasedResultsViewer(QWidget):
             self._populate_current_page()
     
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
-        """Handle item click."""
-        # Toggle expand/collapse when clicking on first column (where the arrow is)
+        """Handle item click.
+
+        Sub-Identity expansion behaviour: clicking a Sub-Identity row cascades
+        the expand one level deeper than the default — it opens the Sub-Identity
+        itself AND each of its Anchor children, so the user can see the
+        underlying evidence (the "identities" beneath each anchor) in a single
+        click instead of having to expand every anchor individually. A second
+        click on an already-cascaded Sub-Identity collapses the whole subtree.
+        """
+        data = item.data(0, Qt.UserRole) or {}
+        item_type = data.get('type')
+
+        # Toggle expand/collapse when clicking on first column (where the chevron is).
         if column == 0 and item.childCount() > 0:
-            text = item.text(0)
-            if text.startswith("▶ ") or text.startswith("▼ "):
-                if item.isExpanded():
-                    item.setExpanded(False)
+            if item.isExpanded():
+                self._set_subtree_expanded(item, False)
+            else:
+                # Check if cascade expansion is enabled in settings
+                cascade_enabled = True # Default
+                if self.case_history_manager:
+                    cascade_enabled = getattr(self.case_history_manager.global_config, 'cascade_tree_expansion_enabled', True)
+
+                if cascade_enabled:
+                    if item_type == 'identity':
+                        # Cascade: open Identity + Sub-Identities + Evidence
+                        # Identity (1) -> Sub-identity (2) -> Evidence (3)
+                        self._set_subtree_expanded(item, True, max_depth=3)
+                    elif item_type == 'sub_identity':
+                        # Cascade: open Sub-Identity + every Evidence child
+                        # Sub-identity (1) -> Evidence (2)
+                        self._set_subtree_expanded(item, True, max_depth=2)
+                    elif item_type == 'window':
+                        # Cascade: open Window + Identities + Sub-Identities + Evidence
+                        # Window (1) -> Identity (2) -> Sub-identity (3) -> Evidence (4)
+                        self._set_subtree_expanded(item, True, max_depth=4)
+                    else:
+                        item.setExpanded(True)
                 else:
+                    # Standard expansion
                     item.setExpanded(True)
-                return
-        
-        data = item.data(0, Qt.UserRole)
+            if data:
+                self.match_selected.emit({'type': item_type, 'data': data.get('data', {})})
+            return
+
         if not data:
             return
-        
-        item_type = data.get('type')
-        item_data = data.get('data', {})
-        
+
         # Emit signal for external handlers
-        self.match_selected.emit({'type': item_type, 'data': item_data})
+        self.match_selected.emit({'type': item_type, 'data': data.get('data', {})})
+
+    def _set_subtree_expanded(self, item: QTreeWidgetItem, expanded: bool, max_depth: int = 8) -> None:
+        """Expand or collapse `item` and recursively apply to its descendants.
+
+        Bounded by `max_depth` to keep the operation fast on giant trees.
+        Depth 1 = just this item; depth 2 = this item + its direct children.
+        """
+        if item is None or max_depth <= 0:
+            return
+        item.setExpanded(expanded)
+        if max_depth == 1:
+            return
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is not None and child.childCount() > 0:
+                self._set_subtree_expanded(child, expanded, max_depth - 1)
     
     def _on_item_expanded(self, item: QTreeWidgetItem):
-        """Update expand indicator when item is expanded."""
-        text = item.text(0)
-        if text.startswith("▶ "):
-            item.setText(0, "▼ " + text[2:])
-    
+        """No-op: Qt rotates the native expand chevron automatically."""
+        return
+
     def _on_item_collapsed(self, item: QTreeWidgetItem):
-        """Update expand indicator when item is collapsed."""
-        text = item.text(0)
-        if text.startswith("▼ "):
-            item.setText(0, "▶ " + text[2:])
+        """No-op: Qt rotates the native expand chevron automatically."""
+        return
     
     def _on_double_click(self, item: QTreeWidgetItem, column: int):
         """Handle double-click to show details with feather-specific handling."""
@@ -1788,19 +1982,19 @@ class TimeBasedResultsViewer(QWidget):
 TIME WINDOW INDICATORS:
 ═══════════════════════════════════════════════════════════
 
-🟢 Multi-Identity Window [Correlation]
+Multi-Identity Window [Correlation]
    • Multiple identities active simultaneously in the same time window
    • Represents temporal correlation opportunities
    • Green color indicates high forensic value
    • Example: chrome.exe, notepad.exe, and cmd.exe all active at 10:00-10:05
 
-🔵 Single-Identity Window [Isolated]
+Single-Identity Window [Isolated]
    • Only one identity active in the time window
    • Isolated activity with no temporal correlation opportunities
    • Orange color indicates standalone activity
    • Example: Only firefox.exe active at 10:05-10:10
 
-⚪ Empty Window [Skipped]
+Empty Window [Skipped]
    • No activity detected in this time window
    • Skipped during processing for efficiency
    • Gray color indicates no data
@@ -1810,13 +2004,13 @@ TIME WINDOW INDICATORS:
 IDENTITY INDICATORS:
 ═══════════════════════════════════════════════════════════
 
-🔗 Correlated Identity
+Correlated Identity
    • Identity that appears in a multi-identity window
    • Part of temporal correlation with other identities
    • Green color highlights correlation opportunity
    • Shows which other identities were active simultaneously
 
-🔸 Isolated Identity
+Isolated Identity
    • Identity that appears alone in its time window
    • No temporal correlation with other identities
    • Orange color indicates isolated activity
@@ -1871,12 +2065,42 @@ stronger evidence and better temporal correlation.
         
         dialog.exec_()
 
+    def _format_active_range(self, windows: List[Dict]) -> str:
+        """Format the time span covered by ``windows`` for display in panel titles.
+
+        Falls back to the user-selected QDateTimeEdit range when the filtered
+        window list is empty (so the analyst can still see what's being asked
+        of the engine).
+        """
+        if windows:
+            starts = [w.get('start_time') for w in windows if isinstance(w.get('start_time'), datetime)]
+            ends = [w.get('end_time') for w in windows if isinstance(w.get('end_time'), datetime)]
+            if starts and ends:
+                rng_start = min(starts)
+                rng_end = max(ends)
+                return f"{rng_start.strftime('%Y-%m-%d %H:%M')} → {rng_end.strftime('%Y-%m-%d %H:%M')} ({len(windows)} win)"
+        try:
+            ts_start = self.time_start_edit.dateTime().toPyDateTime()
+            ts_end = self.time_end_edit.dateTime().toPyDateTime()
+            return f"{ts_start.strftime('%Y-%m-%d %H:%M')} → {ts_end.strftime('%Y-%m-%d %H:%M')} (0 win)"
+        except Exception:
+            return "no active range"
+
     def _update_stats(self, results: Dict):
-        """Update statistics tables."""
+        """Update statistics tables.
+
+        All four tables (Windows, Feathers, Identities, Patterns) summarize
+        ``self.filtered_windows`` so that the panel reflects the active time
+        range / feather / status / identity filters. When no filter is active,
+        ``filtered_windows`` is a copy of ``time_windows`` so behavior is the
+        same as before.
+        """
+        source_windows = self.filtered_windows or []
+
         # 1. Time Windows Table - Top 10 most active windows with visual indicators
-        active_windows = [w for w in self.time_windows if w.get('identities')]
+        active_windows = [w for w in source_windows if w.get('identities')]
         active_windows.sort(key=lambda w: w.get('total_records', 0), reverse=True)
-        
+
         self.windows_table.setRowCount(min(10, len(active_windows)))
         for row, window in enumerate(active_windows[:10]):
             start_time = window.get('start_time')
@@ -1885,68 +2109,116 @@ stronger evidence and better temporal correlation.
                 time_str = f"{start_time.strftime('%m-%d %H:%M')}-{end_time.strftime('%H:%M')}"
             else:
                 time_str = str(start_time)[:16] if start_time else ''
-            
+
             identity_count = len(window.get('identities', []))
-            
+
             # Add visual indicator
             if identity_count > 1:
-                indicator = "🟢"
+                indicator = ""
                 window_type = "Correlation"
             elif identity_count == 1:
-                indicator = "🔵"
+                indicator = ""
                 window_type = "Isolated"
             else:
-                indicator = "⚪"
+                indicator = ""
                 window_type = "Empty"
-            
+
             time_item = QTableWidgetItem(f"{indicator} {time_str}")
             time_item.setToolTip(f"{window_type} window - {identity_count} identities")
             self.windows_table.setItem(row, 0, time_item)
-            
+
             self.windows_table.setItem(row, 1, QTableWidgetItem(str(identity_count)))
             self.windows_table.setItem(row, 2, QTableWidgetItem(str(window.get('total_records', 0))))
-            
+
             status_item = QTableWidgetItem(window_type)
             if window_type == "Correlation":
                 status_item.setForeground(QBrush(QColor("#4CAF50")))
             elif window_type == "Isolated":
                 status_item.setForeground(QBrush(QColor("#FF9800")))
             self.windows_table.setItem(row, 3, status_item)
-        
-        # 2. Feather Contribution Table
+
+        # 2. Feather Contribution Table — "Evidence Extracted by Feather"
+        # Count REAL evidence records by walking each match's feather_records[fid]
+        # rather than summing identity.total_matches per feather (which over-counts).
+        # Restricted to filtered_windows so the column reflects the active range.
         feather_stats = defaultdict(lambda: {'windows': set(), 'records': 0, 'identities': set()})
-        for window in self.time_windows:
+        for window in source_windows:
+            window_key = id(window)
             for identity in window.get('identities', []):
-                for feather in identity.get('feathers_found', []):
-                    # Extract base feather name (remove _number suffix)
-                    base_name = feather.rsplit('_', 1)[0] if '_' in feather else feather
-                    feather_stats[base_name]['windows'].add(id(window))
-                    feather_stats[base_name]['records'] += identity.get('total_matches', 0)
-                    feather_stats[base_name]['identities'].add(identity.get('identity_name'))
-        
+                identity_name = identity.get('identity_name')
+                contributors_in_window = set()
+                # Prefer the per-sub-identity records_by_feather bucket built
+                # by the window-building step (correctly scoped to one raw
+                # filename). Falls back to walking match.feather_records for
+                # back-compat when the new field is missing.
+                for sub_id in identity.get('sub_identities', []):
+                    sub_records_by_feather = sub_id.get('records_by_feather')
+                    if sub_records_by_feather:
+                        for fid, records_list in sub_records_by_feather.items():
+                            base_name = fid.rsplit('_', 1)[0] if '_' in fid else fid
+                            feather_stats[base_name]['records'] += len(records_list) if records_list else 0
+                            contributors_in_window.add(base_name)
+                            feather_stats[base_name]['identities'].add(identity_name)
+                        continue
+                    for match in sub_id.get('matches', []):
+                        feather_records = getattr(match, 'feather_records', None) or {}
+                        for fid, records_value in feather_records.items():
+                            base_name = fid.rsplit('_', 1)[0] if '_' in fid else fid
+                            if isinstance(records_value, list):
+                                rec_count = len(records_value)
+                            elif isinstance(records_value, dict):
+                                rec_count = int(records_value.get('_evidence_count', 1)) if records_value else 0
+                            elif records_value:
+                                rec_count = 1
+                            else:
+                                rec_count = 0
+                            feather_stats[base_name]['records'] += rec_count
+                            contributors_in_window.add(base_name)
+                            feather_stats[base_name]['identities'].add(identity_name)
+                # If we couldn't walk matches (e.g. legacy loader path), fall back
+                # to the feathers_found list so the row still appears.
+                if not contributors_in_window:
+                    for feather in identity.get('feathers_found', []):
+                        base_name = feather.rsplit('_', 1)[0] if '_' in feather else feather
+                        contributors_in_window.add(base_name)
+                        feather_stats[base_name]['identities'].add(identity_name)
+                for base_name in contributors_in_window:
+                    feather_stats[base_name]['windows'].add(window_key)
+
         self.feather_table.setRowCount(len(feather_stats))
-        for row, (feather, stats) in enumerate(sorted(feather_stats.items(), 
-                                                       key=lambda x: x[1]['records'], 
+        for row, (feather, stats) in enumerate(sorted(feather_stats.items(),
+                                                       key=lambda x: x[1]['records'],
                                                        reverse=True)):
             self.feather_table.setItem(row, 0, QTableWidgetItem(feather))
             self.feather_table.setItem(row, 1, QTableWidgetItem(str(len(stats['windows']))))
             self.feather_table.setItem(row, 2, QTableWidgetItem(str(stats['records'])))
             self.feather_table.setItem(row, 3, QTableWidgetItem(str(len(stats['identities']))))
-        
+
+        # Surface the active range in the feather panel title and tooltip so
+        # the analyst can tell at a glance what slice of the correlation is
+        # being summarized.
+        if getattr(self, 'feather_group', None) is not None:
+            range_label = self._format_active_range(source_windows)
+            self.feather_group.setTitle(f"Evidence by Feather — {range_label}")
+            self.feather_table.setToolTip(
+                f"Evidence records extracted per feather, restricted to {range_label}. "
+                f"Win = windows containing this feather. IDs = distinct identities."
+            )
+
         # 3. Identity Activity Table
         identity_stats = defaultdict(lambda: {'windows': 0, 'first_seen': None, 'last_seen': None})
-        for window in self.time_windows:
+        for window in source_windows:
             window_time = window.get('start_time')
             for identity in window.get('identities', []):
                 identity_name = identity.get('identity_name')
                 identity_stats[identity_name]['windows'] += 1
-                
+
                 if identity_stats[identity_name]['first_seen'] is None:
                     identity_stats[identity_name]['first_seen'] = window_time
                 else:
                     if window_time < identity_stats[identity_name]['first_seen']:
                         identity_stats[identity_name]['first_seen'] = window_time
-                
+
                 if identity_stats[identity_name]['last_seen'] is None:
                     identity_stats[identity_name]['last_seen'] = window_time
                 else:
@@ -1973,19 +2245,19 @@ stronger evidence and better temporal correlation.
             self.identity_table.setItem(row, 3, QTableWidgetItem(last_str))
         
         # 4. Temporal Patterns Table with visual indicators
-        multi_identity_windows = sum(1 for w in self.time_windows if len(w.get('identities', [])) > 1)
-        single_identity_windows = sum(1 for w in self.time_windows if len(w.get('identities', [])) == 1)
-        empty_windows = sum(1 for w in self.time_windows if len(w.get('identities', [])) == 0)
-        total = len(self.time_windows)
+        multi_identity_windows = sum(1 for w in source_windows if len(w.get('identities', [])) > 1)
+        single_identity_windows = sum(1 for w in source_windows if len(w.get('identities', [])) == 1)
+        empty_windows = sum(1 for w in source_windows if len(w.get('identities', [])) == 0)
+        total = len(source_windows)
         
         patterns = [
-            ("🟢 Multi-Identity Windows", multi_identity_windows, 
+            ("Multi-Identity Windows", multi_identity_windows, 
              f"{(multi_identity_windows/total*100):.1f}%" if total > 0 else "0%",
              "Correlation opportunities - multiple identities active simultaneously"),
-            ("🔵 Single-Identity Windows", single_identity_windows, 
+            ("Single-Identity Windows", single_identity_windows, 
              f"{(single_identity_windows/total*100):.1f}%" if total > 0 else "0%",
              "Isolated activity - single identity active in window"),
-            ("⚪ Empty Windows Skipped", empty_windows, 
+            ("Empty Windows Skipped", empty_windows, 
              f"{(empty_windows/total*100):.1f}%" if total > 0 else "0%",
              "No activity detected - skipped during processing")
         ]
@@ -2001,13 +2273,13 @@ stronger evidence and better temporal correlation.
             
             # Color code with visual indicators
             if "Multi-Identity" in pattern:
-                count_item.setForeground(QBrush(QColor("#4CAF50")))  # Green - correlation opportunities
+                count_item.setForeground(QBrush(QColor("#4CAF50"))) # Green - correlation opportunities
                 pattern_item.setForeground(QBrush(QColor("#4CAF50")))
             elif "Single-Identity" in pattern:
-                count_item.setForeground(QBrush(QColor("#FF9800")))  # Orange - isolated activity
+                count_item.setForeground(QBrush(QColor("#FF9800"))) # Orange - isolated activity
                 pattern_item.setForeground(QBrush(QColor("#FF9800")))
             elif "Empty" in pattern:
-                count_item.setForeground(QBrush(QColor("#888")))  # Gray - skipped
+                count_item.setForeground(QBrush(QColor("#888"))) # Gray - skipped
                 pattern_item.setForeground(QBrush(QColor("#888")))
             
             self.patterns_table.setItem(row, 1, count_item)
@@ -2016,20 +2288,20 @@ stronger evidence and better temporal correlation.
             percentage_item.setToolTip(tooltip)
             self.patterns_table.setItem(row, 2, percentage_item)
         
-        # Update scoring indicator
-        total_scored = sum(1 for w in self.time_windows 
-                          for i in w.get('identities', []) 
-                          for s in i.get('sub_identities', []) 
-                          for m in s.get('matches', []) 
+        # Update scoring indicator (also respects the active filter)
+        total_scored = sum(1 for w in source_windows
+                          for i in w.get('identities', [])
+                          for s in i.get('sub_identities', [])
+                          for m in s.get('matches', [])
                           if getattr(m, 'weighted_score', None))
         
         if total_scored > 0:
             self.scoring_enabled = True
-            self.scoring_lbl.setText(f"📊 Scoring: On ({total_scored})")
+            self.scoring_lbl.setText(f"Scoring: On ({total_scored})")
             self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #4CAF50;")
         else:
             self.scoring_enabled = False
-            self.scoring_lbl.setText("📊 Scoring: Off")
+            self.scoring_lbl.setText("Scoring: Off")
             self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #888;")
 
 
@@ -2040,7 +2312,7 @@ class TimeWindowDetailDialog(QDialog):
         super().__init__(parent)
         self.item_type = item_type
         self.data = data
-        self.feather_id = feather_id  # For opening specific feather tab
+        self.feather_id = feather_id # For opening specific feather tab
         self.setup_ui()
     
     def setup_ui(self):
@@ -2107,7 +2379,19 @@ class TimeWindowDetailDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
-    
+
+        # GUI-polish pass: every tab / table / tree / scroll-area / text
+        # edit / group box in the dialog's content variants picks up the
+        # unified slate / cyan / emerald look. Called last so every
+        # child widget exists by the time we walk findChildren().
+        # See correlation_engine/gui/ui_styling.py.
+        try:
+            from correlation_engine.gui.ui_styling import CorrelationEngineStyles
+            CorrelationEngineStyles.apply_evidence_detail_styling(self)
+        except Exception:
+            # Styling is cosmetic — never block the dialog from opening.
+            pass
+
     def _create_header(self) -> QFrame:
         """Create header with visual indicators."""
         frame = QFrame()
@@ -2127,13 +2411,13 @@ class TimeWindowDetailDialog(QDialog):
             
             # Add visual indicator for window type
             if identity_count > 1:
-                indicator = "🟢 Multi-Identity"
+                indicator = "Multi-Identity"
                 tooltip = "Correlation window - multiple identities active simultaneously"
             elif identity_count == 1:
-                indicator = "🔵 Single-Identity"
+                indicator = "Single-Identity"
                 tooltip = "Isolated window - only one identity active"
             else:
-                indicator = "⚪ Empty"
+                indicator = "Empty"
                 tooltip = "No activity detected"
             
             indicator_lbl = QLabel(indicator)
@@ -2192,33 +2476,33 @@ class TimeWindowDetailDialog(QDialog):
         lines.append(f"{'='*50}")
         
         if identity_count == 0:
-            lines.append(f"⚪ Empty Window - No activity detected")
-            lines.append(f"   This window was skipped during processing for efficiency.")
+            lines.append(f"Empty Window - No activity detected")
+            lines.append(f" This window was skipped during processing for efficiency.")
         elif identity_count == 1:
-            lines.append(f"🔵 Single-Identity Window - Isolated Activity")
-            lines.append(f"   Only one identity was active in this time window.")
-            lines.append(f"   No temporal correlation opportunities detected.")
+            lines.append(f"Single-Identity Window - Isolated Activity")
+            lines.append(f" Only one identity was active in this time window.")
+            lines.append(f" No temporal correlation opportunities detected.")
         else:
-            lines.append(f"🟢 Multi-Identity Window - Correlation Opportunity")
-            lines.append(f"   {identity_count} identities were active simultaneously in this window.")
-            lines.append(f"   This represents a temporal correlation opportunity where multiple")
-            lines.append(f"   applications/processes were running at the same time.")
+            lines.append(f"Multi-Identity Window - Correlation Opportunity")
+            lines.append(f" {identity_count} identities were active simultaneously in this window.")
+            lines.append(f" This represents a temporal correlation opportunity where multiple")
+            lines.append(f" applications/processes were running at the same time.")
         
         lines.append(f"\n{'='*50}")
         lines.append(f"Identities in this window:")
         lines.append(f"{'='*50}")
         
         for idx, identity in enumerate(identities, 1):
-            lines.append(f"\n{idx}. 🔗 {identity.get('identity_name')}")
-            lines.append(f"   Matches: {identity.get('total_matches')}")
-            lines.append(f"   Feathers: {', '.join(identity.get('feathers_found', []))}")
+            lines.append(f"\n{idx}. {identity.get('identity_name')}")
+            lines.append(f" Matches: {identity.get('total_matches')}")
+            lines.append(f" Feathers: {', '.join(identity.get('feathers_found', []))}")
             
             # Show temporal relationship with other identities
             if identity_count > 1:
                 other_identities = [i.get('identity_name') for i in identities if i != identity]
-                lines.append(f"   Temporal Correlation With: {', '.join(other_identities[:3])}")
+                lines.append(f" Temporal Correlation With: {', '.join(other_identities[:3])}")
                 if len(other_identities) > 3:
-                    lines.append(f"      ... and {len(other_identities) - 3} more")
+                    lines.append(f" ... and {len(other_identities) - 3} more")
         
         # Feather contribution analysis
         if identities:
@@ -2234,10 +2518,10 @@ class TimeWindowDetailDialog(QDialog):
                     feather_identity_map[feather].append(identity.get('identity_name'))
             
             for feather, identity_names in sorted(feather_identity_map.items()):
-                lines.append(f"\n  📊 {feather}:")
-                lines.append(f"     Contributed to {len(identity_names)} identities:")
+                lines.append(f"\n {feather}:")
+                lines.append(f" Contributed to {len(identity_names)} identities:")
                 for name in identity_names:
-                    lines.append(f"       • {name}")
+                    lines.append(f" • {name}")
         
         text.setPlainText("\n".join(lines))
         layout.addWidget(text)
@@ -2275,7 +2559,7 @@ class TimeWindowDetailDialog(QDialog):
         """)
         
         # Collect all evidence rows grouped by feather
-        feather_records = {}  # feather_id -> list of evidence rows
+        feather_records = {} # feather_id -> list of evidence rows
         all_matches = []
         timestamps = []
         
@@ -2301,7 +2585,7 @@ class TimeWindowDetailDialog(QDialog):
         
         # Tab 1: Summary
         summary_tab = self._create_identity_summary_tab(sub_identities, all_matches, timestamps, feather_records)
-        tabs.addTab(summary_tab, "📊 Summary")
+        tabs.addTab(summary_tab, "Summary")
         
         # Per-feather tabs
         for fid in sorted(feather_records.keys()):
@@ -2434,7 +2718,7 @@ class TimeWindowDetailDialog(QDialog):
         table.setHorizontalHeaderLabels(cols)
         table.setRowCount(len(records))
         table.setAlternatingRowColors(True)
-        table.setSortingEnabled(True)  # Enable column sorting
+        table.setSortingEnabled(True) # Enable column sorting
         
         for row, rec in enumerate(records):
             table.setItem(row, 0, QTableWidgetItem(str(rec.get('timestamp', ''))[:19]))
@@ -2446,7 +2730,7 @@ class TimeWindowDetailDialog(QDialog):
                 val = str(data.get(key, ''))
                 display_val = val[:80] + "..." if len(val) > 80 else val
                 item = QTableWidgetItem(display_val)
-                item.setToolTip(val)  # Full value in tooltip
+                item.setToolTip(val) # Full value in tooltip
                 table.setItem(row, col, item)
         
         # Enable column resizing
@@ -2531,7 +2815,7 @@ class TimeWindowDetailDialog(QDialog):
         table.setHorizontalHeaderLabels(cols)
         table.setRowCount(len(records))
         table.setAlternatingRowColors(True)
-        table.setSortingEnabled(True)  # Enable column sorting
+        table.setSortingEnabled(True) # Enable column sorting
         
         for row, rec in enumerate(records):
             # Identity column
@@ -2546,7 +2830,7 @@ class TimeWindowDetailDialog(QDialog):
                 val = str(data.get(key, ''))
                 display_val = val[:80] + "..." if len(val) > 80 else val
                 item = QTableWidgetItem(display_val)
-                item.setToolTip(val)  # Full value in tooltip
+                item.setToolTip(val) # Full value in tooltip
                 table.setItem(row, col, item)
         
         # Enable column resizing
@@ -2603,7 +2887,7 @@ class TimeWindowDetailDialog(QDialog):
         # Check if we have semantic_data to display
         if has_semantic_data:
             # Add Semantic Mappings section
-            semantic_group = QGroupBox("🔍 Semantic Mappings")
+            semantic_group = QGroupBox("Semantic Mappings")
             semantic_group.setStyleSheet("""
                 QGroupBox { 
                     font-size: 10pt; font-weight: bold; color: #00FFFF;
@@ -2681,7 +2965,7 @@ class TimeWindowDetailDialog(QDialog):
         # Check if we have feather_records to display
         if has_feather_records:
             # Add Feather Records section
-            feather_group = QGroupBox("📋 Feather Records")
+            feather_group = QGroupBox("Feather Records")
             feather_group.setStyleSheet("""
                 QGroupBox { 
                     font-size: 10pt; font-weight: bold; color: #00FFFF;
@@ -2791,8 +3075,8 @@ class TimeWindowDetailDialog(QDialog):
         # Columns: Record 1 | Record 2 | ... | Record N
         # Rows: Field names (shown in vertical header)
         table = QTableWidget()
-        table.setRowCount(len(all_keys))  # Each field is a row
-        table.setColumnCount(len(records))  # One column per record
+        table.setRowCount(len(all_keys)) # Each field is a row
+        table.setColumnCount(len(records)) # One column per record
         
         # Set headers
         headers = [f"Record {i+1}" if len(records) > 1 else "Value" for i in range(len(records))]
@@ -2817,12 +3101,12 @@ class TimeWindowDetailDialog(QDialog):
                         display_val = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
                     
                     item = QTableWidgetItem(display_val)
-                    item.setToolTip(str(value))  # Full value in tooltip
+                    item.setToolTip(str(value)) # Full value in tooltip
                     table.setItem(row, col, item)
         
         # Enable column resizing
         for i in range(len(records)):
-            table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch)  # Value columns
+            table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch) # Value columns
         
         # Add row selection highlighting
         table.setSelectionBehavior(QTableWidget.SelectRows)

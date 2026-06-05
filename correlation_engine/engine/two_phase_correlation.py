@@ -43,27 +43,44 @@ class Phase1ErrorHandler:
         self.debug_mode = debug_mode
         self.failed_feathers = []
         self.failed_windows = []
-    
+        # Track identity-grouping crashes separately so the analyst can
+        # distinguish "this feather has no identities" (legitimate) from
+        # "identity extraction errored on this feather" (data loss).
+        # Previously these were indistinguishable — both returned {}.
+        self.identity_grouping_errors: list = []
+
     def handle_feather_query_error(self, feather_id: str, feather_name: str, error: Exception):
         """Handle error when querying a feather - skip and continue"""
         self.failed_feathers.append((feather_id, feather_name, str(error)))
         logger.warning(f"[Phase1] Skipping feather '{feather_name}' due to query error: {error}")
         if self.debug_mode:
             logger.debug(traceback.format_exc())
-    
+
     def handle_identity_grouping_error(self, feather_id: str, error: Exception):
-        """Handle error when grouping records by identity - return empty"""
+        """Handle error when grouping records by identity - return empty.
+
+        Records the failure on `self.identity_grouping_errors` so the
+        executor's summary can surface it; the return value stays `{}`
+        so callers that treat empty-dict as "no identities found"
+        continue to work unchanged.
+        """
+        self.identity_grouping_errors.append({
+            'feather_id': feather_id,
+            'error': str(error),
+            'error_type': type(error).__name__,
+        })
         logger.warning(f"[Phase1] Failed to group identities for feather {feather_id}: {error}")
         if self.debug_mode:
             logger.debug(traceback.format_exc())
         return {}
-    
+
     def get_summary(self) -> dict:
         """Get summary of errors encountered"""
         return {
             'failed_feathers': len(self.failed_feathers),
             'failed_windows': len(self.failed_windows),
-            'feather_details': self.failed_feathers
+            'feather_details': self.failed_feathers,
+            'identity_grouping_errors': list(self.identity_grouping_errors),
         }
 
 
@@ -667,16 +684,16 @@ class TwoPhaseProgressTracker:
         logger.info(f"TWO-PHASE CORRELATION COMPLETE")
         logger.info(f"{'='*70}")
         logger.info(f"\nPhase 1 (Data Collection):")
-        logger.info(f"  Windows processed: {summary['phase1']['windows_processed']:,}")
-        logger.info(f"  Feathers found: {summary['phase1']['feathers_found']:,}")
-        logger.info(f"  Records collected: {summary['phase1']['records_found']:,}")
-        logger.info(f"  Duration: {self._format_time(summary['phase1']['duration_seconds'])}")
+        logger.info(f" Windows processed: {summary['phase1']['windows_processed']:,}")
+        logger.info(f" Feathers found: {summary['phase1']['feathers_found']:,}")
+        logger.info(f" Records collected: {summary['phase1']['records_found']:,}")
+        logger.info(f" Duration: {self._format_time(summary['phase1']['duration_seconds'])}")
         
         if summary['phase2']['windows_processed'] > 0:
             logger.info(f"\nPhase 2 (Correlation Processing):")
-            logger.info(f"  Windows analyzed: {summary['phase2']['windows_processed']:,}")
-            logger.info(f"  Correlations found: {summary['phase2']['matches_found']:,}")
-            logger.info(f"  Duration: {self._format_time(summary['phase2']['duration_seconds'])}")
+            logger.info(f" Windows analyzed: {summary['phase2']['windows_processed']:,}")
+            logger.info(f" Correlations found: {summary['phase2']['matches_found']:,}")
+            logger.info(f" Duration: {self._format_time(summary['phase2']['duration_seconds'])}")
         
         logger.info(f"\nTotal Duration: {self._format_time(summary['total_duration_seconds'])}")
         logger.info(f"{'='*70}\n")

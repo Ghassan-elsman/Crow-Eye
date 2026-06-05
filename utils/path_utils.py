@@ -98,3 +98,30 @@ class PathUtils:
         # Normalize to backslash first as it's the registry standard
         norm_path = reg_path.replace('/', '\\')
         return [p for p in norm_path.split('\\') if p]
+
+    @staticmethod
+    def get_app_root() -> Path:
+        """
+        Returns the root directory of the application.
+        Handles both normal Python execution and PyInstaller bundled EXE execution.
+        Use this for accessing bundled assets (icons, default configs, etc.).
+        """
+        if getattr(sys, 'frozen', False):
+            # Running as a bundled EXE
+            return Path(sys._MEIPASS)
+        else:
+            # Running as a script (assumes this file is in project_root/utils/)
+            return Path(__file__).resolve().parent.parent
+
+    @staticmethod
+    def get_executable_dir() -> Path:
+        """
+        Returns the directory where the actual executable resides.
+        Use this for saving user data, logs, and custom configurations.
+        """
+        if getattr(sys, 'frozen', False):
+            # Path where the .exe file is located
+            return Path(sys.executable).parent
+        else:
+            # When running as script, this is the same as app root
+            return PathUtils.get_app_root()

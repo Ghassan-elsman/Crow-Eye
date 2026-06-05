@@ -553,9 +553,9 @@ class ProgressTrackingIntegration:
         # Log final statistics
         if self.debug_mode:
             logger.info("Correlation completed with final statistics:")
-            logger.info(f"  Engine type: {self.current_engine_type}")
-            logger.info(f"  Semantic stats: {self.semantic_stats}")
-            logger.info(f"  Scoring stats: {self.scoring_stats}")
+            logger.info(f" Engine type: {self.current_engine_type}")
+            logger.info(f" Semantic stats: {self.semantic_stats}")
+            logger.info(f" Scoring stats: {self.scoring_stats}")
     
     def get_terminal_logger(self) -> Optional[TerminalProgressLogger]:
         """Get the terminal progress logger instance"""

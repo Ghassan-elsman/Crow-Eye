@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 class MappingSource:
     """Information about a discovered mapping source."""
     path: Path
-    format: str  # 'yaml', 'json', 'python'
-    scope: str  # 'global', 'wing', 'built-in'
+    format: str # 'yaml', 'json', 'python'
+    scope: str # 'global', 'wing', 'built-in'
     wing_id: Optional[str] = None
-    priority: int = 0  # Higher = higher priority
+    priority: int = 0 # Higher = higher priority
 
 
 class SemanticMappingDiscovery:
@@ -100,7 +100,7 @@ class SemanticMappingDiscovery:
         if self.debug_mode:
             logger.info(f"Discovered {len(self.discovered_sources)} mapping sources")
             for source in self.discovered_sources:
-                logger.debug(f"  - {source.scope}: {source.path} (priority={source.priority})")
+                logger.debug(f" - {source.scope}: {source.path} (priority={source.priority})")
         
         return self.discovered_sources
     

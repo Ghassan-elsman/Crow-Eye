@@ -23,7 +23,7 @@ from ..config import PipelineConfig, FeatherConfig, WingConfig
 class ConfigurationLibraryWidget(QWidget):
     """Widget for browsing and managing configuration library"""
     
-    config_selected = pyqtSignal(object)  # Emits config object
+    config_selected = pyqtSignal(object) # Emits config object
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -292,12 +292,12 @@ class ConfigurationLibraryWidget(QWidget):
         # Get current tab
         current_tab = self.tab_widget.currentIndex()
         
-        if current_tab == 0:  # Pipelines
+        if current_tab == 0: # Pipelines
             self._filter_list(self.pipelines_list, search_text, None)
-        elif current_tab == 1:  # Feathers
+        elif current_tab == 1: # Feathers
             artifact_type = None if type_filter == "All Types" else type_filter
             self._filter_list(self.feathers_list, search_text, artifact_type)
-        elif current_tab == 2:  # Wings
+        elif current_tab == 2: # Wings
             self._filter_list(self.wings_list, search_text, None)
     
     def _filter_list(self, list_widget: QListWidget, search_text: str, artifact_type: Optional[str]):
@@ -456,7 +456,7 @@ class ConfigurationLibraryWidget(QWidget):
             elif config_type == "feather":
                 data['feather_name'] += f" (Copy {counter})" if counter > 1 else " (Copy)"
                 data['config_name'] = new_path.stem
-            else:  # wing
+            else: # wing
                 data['wing_name'] += f" (Copy {counter})" if counter > 1 else " (Copy)"
                 data['config_name'] = new_path.stem
             
@@ -556,7 +556,7 @@ class ConfigurationLibraryWidget(QWidget):
     def _on_tab_changed(self, index: int):
         """Handle tab change"""
         # Update type filter visibility
-        self.type_filter.setVisible(index == 1)  # Show only for feathers tab
+        self.type_filter.setVisible(index == 1) # Show only for feathers tab
         
         # Reapply filters
         self._apply_filters()

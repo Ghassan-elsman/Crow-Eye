@@ -177,7 +177,7 @@ class PerformanceBenchmark:
             try:
                 engine_func(test_config)
             except Exception:
-                pass  # Ignore warmup errors
+                pass # Ignore warmup errors
         
         # Run actual benchmark iterations
         for iteration in range(self.config.iterations_per_test):
@@ -234,7 +234,7 @@ class PerformanceBenchmark:
         # Return average of successful results
         successful_results = [r for r in results if r.success]
         if not successful_results:
-            return results[0]  # Return failed result
+            return results[0] # Return failed result
         
         # Calculate averages
         avg_result = BenchmarkResult(
@@ -242,9 +242,9 @@ class PerformanceBenchmark:
             configuration=test_config,
             execution_time_seconds=statistics.mean([r.execution_time_seconds for r in successful_results]),
             memory_peak_mb=statistics.mean([r.memory_peak_mb for r in successful_results]),
-            records_processed=successful_results[0].records_processed,  # Should be same for all
+            records_processed=successful_results[0].records_processed, # Should be same for all
             matches_found=int(statistics.mean([r.matches_found for r in successful_results])),
-            windows_processed=successful_results[0].windows_processed,  # Should be same for all
+            windows_processed=successful_results[0].windows_processed, # Should be same for all
             records_per_second=statistics.mean([r.records_per_second for r in successful_results]),
             memory_per_1k_records_mb=statistics.mean([r.memory_per_1k_records_mb for r in successful_results]),
             complexity_validation=all(r.complexity_validation for r in successful_results),
@@ -259,7 +259,7 @@ class PerformanceBenchmark:
         # Simple validation: time per record should be reasonable for O(N)
         if report.total_records_processed > 0 and report.total_duration_seconds:
             time_per_record_ms = (report.total_duration_seconds * 1000) / report.total_records_processed
-            return time_per_record_ms < 1.0  # Less than 1ms per record
+            return time_per_record_ms < 1.0 # Less than 1ms per record
         
         return False
     
@@ -278,7 +278,7 @@ class PerformanceBenchmark:
         
         # Analyze advantages
         complexity_advantage = tw_result.complexity_validation and not anchor_result.complexity_validation
-        scalability_advantage = speed_improvement > 1.2  # At least 20% faster
+        scalability_advantage = speed_improvement > 1.2 # At least 20% faster
         
         # Determine overall winner
         if speed_improvement > 1.2 and memory_improvement > 1.0:

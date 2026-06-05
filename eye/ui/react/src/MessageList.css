@@ -1,5 +1,22 @@
 /* ===== Message List ===== */
 
+/* Retained "Show the Eye's thinking" transcript toggle under an answer. */
+.eye-dialogue-retained {
+  margin-top: 10px;
+  border-top: 1px solid #1f2530;
+  padding-top: 8px;
+}
+.eye-dialogue-toggle {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+}
+.eye-dialogue-toggle:hover { color: #e6edf3; }
+
 .message-list {
   display: flex;
   flex-direction: column;

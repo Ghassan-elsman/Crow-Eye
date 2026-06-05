@@ -24,6 +24,7 @@ from typing import Optional
 
 from correlation_engine.engine.data_structures import Identity
 from correlation_engine.gui.timeline_widget import TimelineWidget
+from correlation_engine.gui.ui_styling import CorrelationEngineStyles
 
 
 class IdentityDetailDialog(QDialog):
@@ -45,6 +46,10 @@ class IdentityDetailDialog(QDialog):
         self.identity = identity
         self.setup_ui()
         self.load_data()
+        # GUI-polish pass: unified slate / cyan / emerald look across
+        # the dialog frame, tab widget, tables, trees, group boxes,
+        # scroll area, and text edits. See ui_styling.py.
+        CorrelationEngineStyles.apply_evidence_detail_styling(self)
     
     def setup_ui(self):
         """Setup dialog UI with tabs."""

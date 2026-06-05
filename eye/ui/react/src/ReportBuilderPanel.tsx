@@ -25,62 +25,12 @@ import {
 } from '@dnd-kit/sortable';
 import { initializeBridge, onReportUpdated, getBridge } from './bridge';
 import ReportBlockComponent from './ReportBlockComponent';
+import ErrorBoundary from './ErrorBoundary';
+import { IconFileText, IconDownload, IconClipboardList } from './Icons';
 import './ReportBuilderPanel.css';
 
-/**
- * Report block types matching Python backend
- */
-interface ReportBlock {
-  block_id: string;
-  block_type: 'text' | 'table' | 'image' | 'reference' | 'chat' | 'chart';
-  metadata: {
-    timestamp: string;
-    author?: string;
-    last_modified?: string;
-    last_modified_by?: string;
-  };
-}
 
-interface TextBlock extends ReportBlock {
-  block_type: 'text';
-  title: string;
-  markdown_content: string;
-}
-
-interface TableBlock extends ReportBlock {
-  block_type: 'table';
-  sql_query: string;
-  columns: string[];
-  rows: Record<string, any>[];
-  caption: string;
-}
-
-interface ImageBlock extends ReportBlock {
-  block_type: 'image';
-  image_path: string;
-  caption: string;
-}
-
-interface ReferenceBlock extends ReportBlock {
-  block_type: 'reference';
-  reference_text: string;
-  source_link: string;
-}
-
-interface ChatBlock extends ReportBlock {
-  block_type: 'chat';
-  messages: { role: string; content: string }[];
-}
-
-interface ChartBlock extends ReportBlock {
-  block_type: 'chart';
-  chart_type: 'bar' | 'line' | 'pie';
-  title: string;
-  labels: string[];
-  datasets: { label: string; data: number[] }[];
-}
-
-type AnyBlock = TextBlock | TableBlock | ImageBlock | ReferenceBlock | ChatBlock | ChartBlock;
+import type { AnyBlock } from './types';
 
 /**
  * Report state structure from Python backend
@@ -306,16 +256,28 @@ const ReportBuilderPanel: React.FC = () => {
       {/* Toolbar */}
       <div className="report-toolbar">
         <div className="toolbar-left">
+          <div className="report-eyebrow">
+            <IconClipboardList size={11} />
+            <span>Crow-Eye / Forensic Output</span>
+          </div>
           <h2 className="report-title">Forensic Investigation Report</h2>
           <div className="report-meta">
-            <span className="block-count">{blocks.length} blocks</span>
-            <span className="separator">•</span>
-            <span className="last-updated">
-              Last updated: {new Date(lastModified).toLocaleString()}
+            <span className={`status-pill ${blocks.length === 0 ? 'is-empty' : 'is-active'}`}>
+              <span className="status-dot" />
+              {blocks.length === 0 ? 'Awaiting evidence' : 'Live'}
             </span>
+            <span className="block-count">{blocks.length} {blocks.length === 1 ? 'block' : 'blocks'}</span>
+            {lastModified && (
+              <>
+                <span className="separator">•</span>
+                <span className="last-updated">
+                  Last updated {new Date(lastModified).toLocaleString()}
+                </span>
+              </>
+            )}
           </div>
         </div>
-        
+
         <div className="toolbar-right">
           <button
             onClick={() => handleExport('html')}
@@ -323,28 +285,28 @@ const ReportBuilderPanel: React.FC = () => {
             className="export-button export-html"
             title="Export as HTML"
           >
-            <span className="button-icon">📄</span>
-            HTML
+            <IconFileText size={13} />
+            <span>HTML</span>
           </button>
-          
+
           <button
             onClick={() => handleExport('pdf')}
             disabled={isExporting || blocks.length === 0}
             className="export-button export-pdf"
             title="Export as PDF"
           >
-            <span className="button-icon">📑</span>
-            PDF
+            <IconDownload size={13} />
+            <span>PDF</span>
           </button>
-          
+
           <button
             onClick={() => handleExport('markdown')}
             disabled={isExporting || blocks.length === 0}
             className="export-button export-markdown"
             title="Export as Markdown"
           >
-            <span className="button-icon">📝</span>
-            Markdown
+            <IconFileText size={13} />
+            <span>Markdown</span>
           </button>
         </div>
       </div>
@@ -394,12 +356,13 @@ const ReportBuilderPanel: React.FC = () => {
             >
               <div className="blocks-container">
                 {blocks.map((block) => (
-                  <ReportBlockComponent
-                    key={block.block_id}
-                    block={block}
-                    onDelete={handleBlockDelete}
-                    onUpdate={handleBlockUpdate}
-                  />
+                  <ErrorBoundary key={block.block_id} componentName={`Report Block (${block.block_type})`}>
+                    <ReportBlockComponent
+                      block={block}
+                      onDelete={handleBlockDelete}
+                      onUpdate={handleBlockUpdate}
+                    />
+                  </ErrorBoundary>
                 ))}
               </div>
             </SortableContext>

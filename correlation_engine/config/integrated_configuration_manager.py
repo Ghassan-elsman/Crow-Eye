@@ -167,7 +167,7 @@ class IntegratedConfigurationManager:
         self.effective_config: IntegratedConfiguration = IntegratedConfiguration()
         
         # Configuration change listeners
-        self.change_listeners: List[callable] = []
+        self.change_listeners: List[Callable] = []
         
         # Load global configuration
         self._load_global_configuration()
@@ -430,7 +430,7 @@ class IntegratedConfigurationManager:
                 weighted_scoring=WeightedScoringConfig(**scoring_dict),
                 progress_tracking=ProgressTrackingConfig(**progress_dict),
                 engine_selection=EngineSelectionConfig(**engine_dict),
-                case_specific=self.current_case_config,  # Keep as object, not dict
+                case_specific=self.current_case_config, # Keep as object, not dict
                 version=self.global_config.version,
                 created_date=self.global_config.created_date,
                 last_modified=datetime.now().isoformat()
@@ -737,7 +737,7 @@ class IntegratedConfigurationManager:
     
     def _notify_configuration_change(self):
         """Notify all listeners of configuration change with error isolation"""
-        old_config = None  # We don't have old config stored, so pass None
+        old_config = None # We don't have old config stored, so pass None
         new_config = self.effective_config
         
         for listener in self.change_listeners:
@@ -812,7 +812,7 @@ class IntegratedConfigurationManager:
                     
                     # Log specific resolutions for debugging
                     for log_entry in conflict_resolution['resolution_log']:
-                        logger.debug(f"  {log_entry}")
+                        logger.debug(f" {log_entry}")
                 
                 # Return the resolved configuration from the conflict resolver
                 # The resolver updates self.effective_config, so we return that
@@ -842,34 +842,34 @@ class IntegratedConfigurationManager:
             summary = self.get_configuration_summary()
             
             logger.info("Configuration Summary:")
-            logger.info(f"  Global config loaded: {summary['global_config_loaded']}")
-            logger.info(f"  Case config loaded: {summary['case_config_loaded']}")
-            logger.info(f"  Current case: {summary['current_case_id']}")
-            logger.info(f"  Configuration version: {summary['configuration_version']}")
-            logger.info(f"  Last modified: {summary['last_modified']}")
+            logger.info(f" Global config loaded: {summary['global_config_loaded']}")
+            logger.info(f" Case config loaded: {summary['case_config_loaded']}")
+            logger.info(f" Current case: {summary['current_case_id']}")
+            logger.info(f" Configuration version: {summary['configuration_version']}")
+            logger.info(f" Last modified: {summary['last_modified']}")
             
             logger.info("\nFeature Status:")
-            logger.info(f"  Semantic mapping: {'enabled' if summary['semantic_mapping_enabled'] else 'disabled'}")
-            logger.info(f"  Weighted scoring: {'enabled' if summary['weighted_scoring_enabled'] else 'disabled'}")
-            logger.info(f"  Progress tracking: {'enabled' if summary['progress_tracking_enabled'] else 'disabled'}")
+            logger.info(f" Semantic mapping: {'enabled' if summary['semantic_mapping_enabled'] else 'disabled'}")
+            logger.info(f" Weighted scoring: {'enabled' if summary['weighted_scoring_enabled'] else 'disabled'}")
+            logger.info(f" Progress tracking: {'enabled' if summary['progress_tracking_enabled'] else 'disabled'}")
             
             if summary['case_config_loaded']:
                 logger.info("\nCase-Specific Overrides:")
-                logger.info(f"  Case-specific mappings: {'enabled' if summary['case_specific_mappings'] else 'disabled'}")
-                logger.info(f"  Case-specific scoring: {'enabled' if summary['case_specific_scoring'] else 'disabled'}")
+                logger.info(f" Case-specific mappings: {'enabled' if summary['case_specific_mappings'] else 'disabled'}")
+                logger.info(f" Case-specific scoring: {'enabled' if summary['case_specific_scoring'] else 'disabled'}")
             
             # Log configuration file paths
             config = self.get_effective_configuration()
             logger.info("\nConfiguration Paths:")
-            logger.info(f"  Global config: {self.global_config_path}")
-            logger.info(f"  Semantic mappings: {config.semantic_mapping.global_mappings_path}")
+            logger.info(f" Global config: {self.global_config_path}")
+            logger.info(f" Semantic mappings: {config.semantic_mapping.global_mappings_path}")
             
             if self.current_case_config:
-                logger.info(f"  Case config: {self.case_configs_dir / f'{self.current_case_config.case_id}.json'}")
+                logger.info(f" Case config: {self.case_configs_dir / f'{self.current_case_config.case_id}.json'}")
                 if self.current_case_config.semantic_mappings_path:
-                    logger.info(f"  Case semantic mappings: {self.current_case_config.semantic_mappings_path}")
+                    logger.info(f" Case semantic mappings: {self.current_case_config.semantic_mappings_path}")
                 if self.current_case_config.scoring_weights_path:
-                    logger.info(f"  Case scoring weights: {self.current_case_config.scoring_weights_path}")
+                    logger.info(f" Case scoring weights: {self.current_case_config.scoring_weights_path}")
             
             logger.info("="*60)
             
@@ -969,7 +969,7 @@ class IntegratedConfigurationManager:
     def reset_to_defaults(self, reset_case_specific: bool = False):
         """
         Reset configuration to defaults.
-        
+
         Args:
             reset_case_specific: Whether to also reset case-specific configuration
         """
@@ -977,16 +977,213 @@ class IntegratedConfigurationManager:
             # Reset global configuration
             self.global_config = IntegratedConfiguration()
             self._save_global_configuration()
-            
+
             # Reset case-specific configuration if requested
             if reset_case_specific:
                 self.current_case_config = None
-            
+
             # Update effective configuration
             self._update_effective_configuration()
-            
+
             logger.info("Reset configuration to defaults")
-            
+
         except Exception as e:
             logger.error(f"Failed to reset configuration: {e}")
             raise
+
+    # ------------------------------------------------------------------
+    # Case configuration file operations (façade over _case_config_file_service)
+    # ------------------------------------------------------------------
+    # The previous design exposed `CaseConfigurationFileManager` as a public class.
+    # As part of the configuration-manager consolidation, that class now lives in
+    # the private module `_case_config_file_service.py` and is only accessed
+    # through this façade. Callers should import IntegratedConfigurationManager
+    # and call the methods below — they should never import the file service
+    # directly.
+
+    @property
+    def case_files(self):
+        """Lazy-initialised case configuration file service (internal helper).
+
+        Reads and writes per-case configuration files (semantic mappings,
+        scoring weights, metadata) under ``cases/{case_id}/``. The service is
+        cached so subsequent calls return the same instance.
+        """
+        svc = getattr(self, "_case_file_service", None)
+        if svc is None:
+            from correlation_engine.config._case_config_file_service import (
+                CaseConfigurationFileManager,
+            )
+            # The service expects a `cases_directory`; mirror what the legacy
+            # CaseConfigurationManager passed in so on-disk layout is unchanged.
+            svc = CaseConfigurationFileManager(cases_directory="cases")
+            self._case_file_service = svc
+        return svc
+
+    def get_case_config_file_statistics(self) -> Dict[str, Any]:
+        """Return summary statistics about case configuration files on disk."""
+        return self.case_files.get_configuration_statistics()
+
+    def archive_old_case_configs(self, days_old: int = 30) -> int:
+        """Archive case configuration files older than `days_old` days.
+
+        Returns the number of files archived.
+        """
+        return self.case_files.archive_old_configurations(days_old=days_old)
+
+    def cleanup_empty_case_directories(self) -> int:
+        """Remove empty ``cases/<case_id>/`` directories. Returns count removed."""
+        return self.case_files.cleanup_empty_case_directories()
+
+    def validate_case_config_file(self, file_path, file_type: str) -> Dict[str, Any]:
+        """Validate a case configuration file. Returns a result dict with
+        ``valid``, ``errors``, ``warnings``."""
+        return self.case_files.validate_configuration_file(file_path, file_type)
+
+    def repair_case_config_file(self, file_path, file_type: str) -> bool:
+        """Attempt to repair a malformed case configuration file in-place.
+        Returns True on success."""
+        return self.case_files.repair_configuration_file(file_path, file_type)
+
+    def get_case_config_file_names(self) -> Dict[str, str]:
+        """Return the mapping of ``{config_type: filename}`` used by the case
+        directory layout (e.g. {'semantic_mappings': 'semantic_mappings.json'})."""
+        return dict(self.case_files.config_files)
+
+    # ------------------------------------------------------------------
+    # Per-case semantic/scoring configuration (façade over
+    # _case_specific_config_service)
+    # ------------------------------------------------------------------
+    # Per-case semantic mappings, scoring weights, and metadata used to live in
+    # the public class ``CaseSpecificConfigurationManager``. As part of the
+    # configuration-manager consolidation that class is now a private service;
+    # callers should reach it through the methods below.
+
+    @property
+    def case_specific(self):
+        """Lazy-initialised per-case configuration service (internal helper)."""
+        svc = getattr(self, "_case_specific_service", None)
+        if svc is None:
+            from correlation_engine.config._case_specific_config_service import (
+                CaseSpecificConfigurationManager,
+            )
+            svc = CaseSpecificConfigurationManager(cases_directory="cases")
+            self._case_specific_service = svc
+        return svc
+
+    # Case directory + metadata ----------------------------------------
+    def create_case_directory(self, case_id: str):
+        """Create the ``cases/<case_id>/`` directory tree for a new case."""
+        return self.case_specific.create_case_directory(case_id)
+
+    def get_case_directory(self, case_id: str):
+        """Return the ``cases/<case_id>/`` Path for an existing case."""
+        return self.case_specific.get_case_directory(case_id)
+
+    def case_exists(self, case_id: str) -> bool:
+        """Return True if a case directory exists for ``case_id``."""
+        return self.case_specific.case_exists(case_id)
+
+    def list_cases(self) -> List[str]:
+        """Return a list of case IDs known on disk."""
+        return self.case_specific.list_cases()
+
+    def get_case_metadata(self, case_id: str):
+        """Load and return ``CaseConfigurationMetadata`` for a case, or None."""
+        return self.case_specific.get_case_metadata(case_id)
+
+    def save_case_metadata(self, metadata) -> bool:
+        """Persist a ``CaseConfigurationMetadata`` object."""
+        return self.case_specific.save_case_metadata(metadata)
+
+    # Per-case semantic mappings ---------------------------------------
+    def has_case_semantic_mappings(self, case_id: str) -> bool:
+        """Return True if the case has a semantic_mappings.json on disk."""
+        return self.case_specific.has_semantic_mappings(case_id)
+
+    def load_case_semantic_mappings(self, case_id: str):
+        """Load and return ``CaseSemanticMappingConfig`` for ``case_id``, or None."""
+        return self.case_specific.load_case_semantic_mappings(case_id)
+
+    def save_case_semantic_mappings(self, config) -> bool:
+        """Persist a ``CaseSemanticMappingConfig``."""
+        return self.case_specific.save_case_semantic_mappings(config)
+
+    def create_default_case_semantic_mappings(self, case_id: str, case_name: str = ""):
+        """Build (and write) a default semantic-mapping config for a new case."""
+        return self.case_specific.create_default_semantic_mappings(case_id, case_name)
+
+    # Per-case scoring weights -----------------------------------------
+    def has_case_scoring_weights(self, case_id: str) -> bool:
+        """Return True if the case has a scoring_weights.json on disk."""
+        return self.case_specific.has_scoring_weights(case_id)
+
+    def load_case_scoring_weights(self, case_id: str):
+        """Load and return ``CaseScoringWeightsConfig`` for ``case_id``, or None."""
+        return self.case_specific.load_case_scoring_weights(case_id)
+
+    def save_case_scoring_weights(self, config) -> bool:
+        """Persist a ``CaseScoringWeightsConfig``."""
+        return self.case_specific.save_case_scoring_weights(config)
+
+    def create_default_case_scoring_weights(self, case_id: str, case_name: str = ""):
+        """Build (and write) a default scoring-weights config for a new case."""
+        return self.case_specific.create_default_scoring_weights(case_id, case_name)
+
+    # Whole-case operations --------------------------------------------
+    def delete_case_configuration(self, case_id: str, backup: bool = True) -> bool:
+        """Delete a case configuration (optionally backing it up first)."""
+        return self.case_specific.delete_case_configuration(case_id, backup=backup)
+
+    def copy_case_configuration(self, source_case_id: str, target_case_id: str,
+                                target_case_name: str = "") -> bool:
+        """Copy a complete case configuration from source to target."""
+        return self.case_specific.copy_case_configuration(
+            source_case_id, target_case_id, target_case_name
+        )
+
+    def backup_case_configuration(self, case_id: str) -> bool:
+        """Create a timestamped backup of a case's configuration."""
+        return self.case_specific.backup_case_configuration(case_id)
+
+    def export_case_configuration(self, case_id: str, export_path: str) -> bool:
+        """Export a case's configuration to ``export_path``."""
+        return self.case_specific.export_case_configuration(case_id, export_path)
+
+    def import_case_configuration(self, import_path: str,
+                                  target_case_id: Optional[str] = None) -> bool:
+        """Import a case configuration from ``import_path``."""
+        return self.case_specific.import_case_configuration(
+            import_path, target_case_id=target_case_id
+        )
+
+    def validate_case_configuration(self, case_id: str) -> Dict[str, Any]:
+        """Validate every config file for a case. Returns a result dict."""
+        return self.case_specific.validate_case_configuration(case_id)
+
+    def clear_case_cache(self, case_id: Optional[str] = None):
+        """Clear the in-memory cache for a specific case or all cases."""
+        return self.case_specific.clear_cache(case_id)
+
+    # ------------------------------------------------------------------
+    # Centralised scoring configuration (façade over ScoreConfigurationManager)
+    # ------------------------------------------------------------------
+    # ScoreConfigurationManager is a thread-safe singleton owning the
+    # CentralizedScoreConfig used by both correlation engines and the result
+    # viewers. We expose it as a property here so callers can reach it through
+    # the integrated façade without importing the singleton class directly.
+    # The singleton itself stays where it is — merging its thread-safety logic
+    # into this class would be unnecessary risk.
+
+    @property
+    def score_config_manager(self):
+        """Singleton ScoreConfigurationManager reachable via the integrated façade.
+
+        Equivalent to constructing ``ScoreConfigurationManager()`` directly
+        (the class enforces singleton semantics), but routed through the
+        façade so callers only need one import.
+        """
+        from correlation_engine.config.score_configuration_manager import (
+            ScoreConfigurationManager,
+        )
+        return ScoreConfigurationManager()

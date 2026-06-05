@@ -16,7 +16,7 @@
   - [Abstract Interfaces (`base_engine.py`, `integration/interfaces.py`)](#abstract-interfaces-base_enginepy-integrationinterfacespy)
   - [Engine Orchestration (`engine_selector.py`, `pipeline/pipeline_executor.py`, `pipeline/pipeline_loader.py`, `config/pipeline_config.py`)](#engine-orchestration-engine_selectorpy-pipelinepipeline_executorpy-pipelinepipeline_loaderpy-configpipeline_configpy)
   - [Data Loading & Processing (`feather_loader.py`)](#data-loading--processing-feather_loaderpy)
-  - [Identity & Temporal Management (`identity_extractor.py`, `identity_validator.py`, `identifier_correlation_engine.py`, `identifier_extraction_pipeline.py`, `time_based_engine.py`, `two_phase_correlation.py`, `timestamp_parser.py`, `weighted_scoring.py`)](#identity--temporal-management-identity_extractorpy-identity_validatorpy-identifier_correlation_enginepy-identifier_extraction_pipelinepy-time_based_enginepy-two_phase_correlationpy-timestamp_parserpy-weighted_scoringpy)
+  - [Identity & Temporal Management (`identity_extractor.py`, `identity_validator.py`, `identity_state_builder.py`, `identifier_extraction_pipeline.py`, `time_based_engine.py`, `two_phase_correlation.py`, `timestamp_parser.py`, `weighted_scoring.py`)](#identity--temporal-management-identity_extractorpy-identity_validatorpy-identity_state_builderpy-identifier_extraction_pipelinepy-time_based_enginepy-two_phase_correlationpy-timestamp_parserpy-weighted_scoringpy)
   - [Result Management (`correlation_result.py`, `query_interface.py`, `database_persistence.py`)](#result-management-correlation_resultpy-query_interfacepy-database_persistencepy)
   - [Integrated Services (`integration/semantic_mapping_integration.py`, `integration/weighted_scoring_integration.py`)](#integrated-services-integrationsemantic_mapping_integrationpy-integrationweighted_scoring_integrationpy)
   - [Monitoring & Error Handling (`integration/integration_monitor.py`, `integration/integration_error_handler.py`, `performance_monitor.py`, `performance_analysis.py`, `progress_tracking.py`, `error_handling_coordinator.py`, `cancellation_support.py`, `memory_manager.py`, `correlation_statistics.py`, `parallel_window_processor.py`)](#monitoring--error-handling-integrationintegration_monitorpy-integrationintegration_error_handlerpy-performance_monitorpy-performance_analysispy-progress_trackingpy-error_handling_coordinatorpy-cancellation_supportpy-memory_managerpy-correlation_statisticspy-parallel_window_processorpy)
@@ -32,7 +32,7 @@
   - [engine_selector.py](#engine_selectorpy)
   - [error_handling_coordinator.py](#error_handling_coordinatorpy)
   - [feather_loader.py](#feather_loaderpy)
-  - [identifier_correlation_engine.py](#identifier_correlation_enginepy)
+  - [identity_state_builder.py](#identity_state_builderpy)
   - [identifier_extraction_pipeline.py](#identifier_extraction_pipelinepy)
   - [IDENTIFIER_EXTRACTION_README.md](#identifier_extraction_readmemd)
   - [identity_based_engine_adapter.py](#identity_based_engine_adapterpy)
@@ -242,6 +242,10 @@ graph TD
 
 ```
 
+| **Default Engine**           | No                                                                                                                                                                   | **Yes (Default in `PipelineConfig`)**                                                                                                                                                      |
+| **Identity Case-Sensitivity** | Basic normalization.                                                                                                                                                 | **Intelligent Handling:** Case-sensitive for specific types (SIDs, Hashes, POSIX paths) via `_CASE_SENSITIVE_IDENTITY_TYPES`; case-insensitive for Windows paths and usernames.               |
+| **Reliability Measures**     | `try...finally` resource management, specific exception handling, `ResilientTimestampParser`.                                                                         | Atomic configuration saving (`os.replace`), `try...finally` for DB connections, `ResilientTimestampParser`, specific exception handling.                                                   |
+| **Communication**            | Tiered: `logging` for internal logic, `print()` for real-time progress updates.                                                                                      | Tiered: `logging` for internal logic, `print()` for real-time progress updates.                                                                                                             |
 | **Primary Grouping Mechanism** | **Fixed Time Windows First:** Divides the entire forensic timeline into predefined, fixed-size, and potentially overlapping time windows (`time_window_minutes`, `scanning_interval_minutes`).                                                                    | **Identities First:** Groups *all* evidence by a common, normalized identity (`identity_extractor.py`) across the entire dataset, regardless of initial temporal proximity.                        |
 | **Correlation within Group** | **Cross-Feather Matching within Windows:** Within each fixed time window, it efficiently queries and processes records from *different feathers* that share a common "identity" (extracted via `_extract_identity_from_record`) and meet minimum feather requirements. | **Temporal Anchors within Identities:** *Within each grouped identity's timeline*, it then clusters chronologically proximate events (`_create_temporal_anchors` in `identity_based_engine_adapter.py`) into "anchors" based on a specified `time_window_minutes`. |
 | **Data Access Strategy**     | **Optimized Window-Centric Queries:** Leverages `OptimizedFeatherQuery` and `WindowQueryManager` (both in `time_based_engine.py`) to retrieve records specifically for each time window.                                                                              | **Hash-Based Identity-Centric Collection:** Loads all relevant records, then organizes them into identities using a hash-based index (`identity_index`) for `O(1)` average-case lookup/addition.   |
@@ -252,7 +256,7 @@ graph TD
 | **Performance Driver**       | `O(N log N)` complexity driven by efficient, indexed database range queries and orchestration of many distinct time windows. `log N` from database indexing.               | `O(N log N)` complexity from initial global sorting of all timestamped evidence (`_create_temporal_anchors`) before identity-specific temporal clustering. `log N` from sorting.              |
 | **Semantic Mapping**         | Primarily in a post-correlation phase, but can apply some pre-filtering if configured.                                                                                | Integrated directly within the process (`semantic_mapping_integration.py`) with robust error handling and fallback strategies.                                                                   |
 | **Scoring**                  | Utilizes `weighted_scoring.py` directly.                                                                                                                           | Integrated via `weighted_scoring_integration.py` for case-specific configuration, validation, and advanced interpretation.                                                                         |
-| **Key Components**           | `time_based_engine.py`, `two_phase_correlation.py`, `parallel_window_processor.py`, `memory_manager.py`                                                               | `identity_based_engine_adapter.py`, `identifier_correlation_engine.py`, `identity_extractor.py`, `identity_validator.py`, `identifier_extraction_pipeline.py`, `query_interface.py`                  |
+| **Key Components**           | `time_based_engine.py`, `two_phase_correlation.py`, `parallel_window_processor.py`, `memory_manager.py`                                                               | `identity_based_engine_adapter.py`, `identity_state_builder.py`, `identity_extractor.py`, `identity_validator.py`, `identifier_extraction_pipeline.py`, `query_interface.py`                  |
 
 ---
 
@@ -265,12 +269,14 @@ Choosing the correct engine is crucial for optimal performance and relevant resu
 | Criterion                 | Time-Window Scanning Engine (TWSE)                                                 | Identity-Based Correlation Engine (IBCE)                                                  |
 | :------------------------ | :--------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------- |
 | **Primary Goal**          | Discover all temporal relationships; broad timeline reconstruction.                | Trace specific entity activity; deep dive into a particular application, user, or file.   |
+| **Status**                | Optional engine.                                                                   | **Default engine.**                                                                        |
 | **Dataset Size**          | Any size; particularly efficient for datasets requiring extensive temporal slicing. | Large datasets (`> 1,000` records) where robust identity tracking is paramount.            |
 | **Focus of Analysis**     | "What happened when?" in a general sense, across all available evidence.           | "What did *this entity* do over time?" Focus on the lifecycle of specific identities.     |
 | **Memory Footprint**      | Excellent, especially for very large `N` due to `WindowDataStorage` spilling.      | Excellent, near-constant memory for very large `N` due to `StreamingMatchWriter`.         |
 | **Performance**           | High performance through parallel window processing and aggressive empty-window skipping. | High performance through optimized identity grouping and dynamic temporal clustering within identities. |
-| **Identity Management**   | Identifies identities within time windows; secondary to temporal grouping.         | **Core Strength**: Aggressive normalization, validation, and tracking of unique identities. |
+| **Identity Management**   | Identifies identities within time windows; secondary to temporal grouping.         | **Core Strength**: Aggressive normalization, validation, and tracking of unique identities with type-aware case-sensitivity. |
 | **Semantic Analysis**     | Applied effectively in a post-correlation phase.                                   | Integrated directly into the correlation process, enabling richer match context.            |
+| **Scoring**               | Authoritative `CentralizedScoreConfig`.                                            | Authoritative `CentralizedScoreConfig`.                                                   |
 | **Use Cases**             | General timeline creation, anomaly detection across entire datasets, broad event mapping. | Tracing malware execution, user activity profiling, application usage patterns, focused incident response. |
 
 #### Dataset Size Thresholds & Recommendations
@@ -391,7 +397,7 @@ graph TD
         extract_identities --> validate_identities(Validate Identities<br/>identity_validator.py)
         validate_identities --> process_identities{Process Each Identity}
         
-        process_identities -- For Each Identity --> build_in_memory_state(Build In-Memory State<br/>identifier_correlation_engine.py)
+        process_identities -- For Each Identity --> build_in_memory_state(Build In-Memory State<br/>identity_state_builder.py)
         build_in_memory_state --> assign_anchors(Assign Temporal Anchors)
         assign_anchors --> stream_results(Stream Results to Database<br/>database_persistence.py)
         stream_results --> apply_semantic_mapping(Apply Semantic Mapping<br/>semantic_mapping_integration.py)
@@ -427,7 +433,7 @@ The engine's architecture is a sophisticated orchestration of several specialize
 
 1.  **Identity Extraction and Normalization (`identity_extractor.py`)**: This foundational step ensures consistency. Values (e.g., filenames, paths) are converted to a standard format (lowercase, consistent path separators). This enables accurate grouping of records that refer to the same logical entity but may have different textual representations.
 2.  **Identity Validation (`identity_validator.py`)**: To prevent noise and false positives, extracted identity values are rigorously validated. This filters out non-meaningful data such as boolean strings, pure numeric values, very short strings, or values without alphanumeric characters, ensuring that only high-quality identifiers contribute to the correlation.
-3.  **In-Memory Correlation State (`identifier_correlation_engine.py`)**: This module builds and manages the core in-memory state of the engine. It processes extracted values from feather data to create and manage:
+3.  **In-Memory Correlation State (`identity_state_builder.py`)**: This module builds and manages the core in-memory state of the engine. It processes extracted values from feather data to create and manage:
     *   **Identities**: Logical entities representing a file, application, or user.
     *   **Anchors**: Temporal groupings of evidence for a specific identity, representing a distinct execution or activity window.
     *   **EvidenceRows**: References to the original feather data associated with an anchor.
@@ -441,7 +447,7 @@ The engine's architecture is a sophisticated orchestration of several specialize
 ### Key Components
 
 *   **`identity_based_engine_adapter.py`**: This is the primary implementation of the `BaseCorrelationEngine` for the Identity-Based strategy. It acts as an adapter, wrapping the `IdentifierCorrelationEngine` and integrating it with other services like semantic mapping, weighted scoring, and progress tracking. It orchestrates the identity processing, anchor creation, streaming to the database, and the final Identity Semantic Phase.
-*   **`identifier_correlation_engine.py`**: Builds and manages the in-memory state (Identities, Anchors, EvidenceRows) for identity-based correlation. It processes extracted values and clusters them temporally within each identity.
+*   **`identity_state_builder.py`**: Builds and manages the in-memory state (Identities, Anchors, EvidenceRows) for identity-based correlation. It processes extracted values and clusters them temporally within each identity.
 *   **`identity_extractor.py`**: Responsible for normalizing values (names, paths) and generating consistent identity keys, which is critical for accurate grouping.
 *   **`identity_validator.py`**: Filters out noisy or non-meaningful identity values (e.g., boolean strings, numeric-only values) to ensure high-quality identifiers.
 *   **`identifier_extraction_pipeline.py`**: Orchestrates the entire end-to-end workflow of identity extraction, correlation, and persistence. It ties together the `FeatherLoader`, `IdentifierCorrelationEngine`, and `DatabasePersistence`.
@@ -531,7 +537,7 @@ This component is responsible for efficiently accessing and preparing forensic a
         -   Integrates with `identity_extractor.py` and `identity_validator.py` for pre-processing steps.
     -   **Role in Architecture**: Abstracts the complexities of feather data access, providing a consistent stream of processed records to both correlation engines.
 
-### Identity & Temporal Management (`identity_extractor.py`, `identity_validator.py`, `identifier_correlation_engine.py`, `identifier_extraction_pipeline.py`, `time_based_engine.py`, `two_phase_correlation.py`, `timestamp_parser.py`, `weighted_scoring.py`)
+### Identity & Temporal Management (`identity_extractor.py`, `identity_validator.py`, `identity_state_builder.py`, `identifier_extraction_pipeline.py`, `time_based_engine.py`, `two_phase_correlation.py`, `timestamp_parser.py`, `weighted_scoring.py`)
 
 These components form the core logic for identifying entities, validating their significance, and managing their temporal relationships within the correlation process. This includes the direct implementation of engine logic as well as supporting utilities.
 
@@ -549,7 +555,7 @@ These components form the core logic for identifying entities, validating their 
         -   `is_valid_identity()`: Checks for boolean strings, pure numeric values, empty/short strings, and absence of alphanumeric characters.
         -   `should_validate_field()`: Supports context-aware validation by allowing specific fields (e.g., 'guid', 'event_id') to bypass strict numeric/boolean checks.
     -   **Role in Architecture**: Enhances the quality of correlation by preventing irrelevant or misleading values from being treated as significant identities.
--   **`identifier_correlation_engine.py`**:
+-   **`identity_state_builder.py`**:
     -   **Purpose**: Implements the core in-memory processing logic for the Identity-Based Correlation Engine.
     -   **Key Functionalities**:
         -   `IdentifierCorrelationEngine`: Processes `ExtractedValues` from feather rows.
@@ -820,7 +826,7 @@ This section provides a detailed breakdown of each Python file within the `Crow-
     -   Integrates with `identity_extractor.py` and `identity_validator.py` for pre-processing steps.
 -   **Role in Architecture**: Abstracts the complexities of feather data access, providing a consistent stream of processed records to both correlation engines.
 
-### `identifier_correlation_engine.py`
+### `identity_state_builder.py`
 
 -   **Purpose**: Implements the core in-memory processing logic for the Identity-Based Correlation Engine.
 -   **Key Functionalities**:
@@ -840,7 +846,7 @@ This section provides a detailed breakdown of each Python file within the `Crow-
 ### `IDENTIFIER_EXTRACTION_README.md`
 
 -   **Purpose**: Provides a detailed, up-to-date overview of the Identifier Extraction and Correlation Engine (which is the Identity-Based Correlation Engine).
--   **Key Content**: Describes architecture, core components (`data_structures.py`, `identity_extractor.py`, `identifier_correlation_engine.py`, `database_persistence.py`, `query_interface.py`, `identifier_extraction_pipeline.py`), database schema, usage examples, in-memory engine state structure, anchor assignment algorithm, column detection patterns, supported timestamp formats, design principles, and implemented requirements.
+-   **Key Content**: Describes architecture, core components (`data_structures.py`, `identity_extractor.py`, `identity_state_builder.py`, `database_persistence.py`, `query_interface.py`, `identifier_extraction_pipeline.py`), database schema, usage examples, in-memory engine state structure, anchor assignment algorithm, column detection patterns, supported timestamp formats, design principles, and implemented requirements.
 -   **Role in Architecture**: This document serves as the primary detailed specification for the Identity-Based Correlation Engine and its supporting modules. Its content has been systematically integrated into the relevant sections of this `ENGINE_DOCUMENTATION.md`.
 
 ### `identity_based_engine_adapter.py`
@@ -945,11 +951,11 @@ This section provides a detailed breakdown of each Python file within the `Crow-
 
 ### `timestamp_parser.py`
 
--   **Purpose**: Provides robust and flexible parsing for a wide array of timestamp formats.
+-   **Purpose**: Provides robust and flexible parsing for a wide array of forensic timestamp formats.
 -   **Key Functionalities**:
-    -   `TimestampParser`: Handles ISO 8601, Unix epoch, Windows FILETIME, and custom formats.
-    -   Includes validation for forensic relevance (e.g., within 1990-2050 range) and graceful error handling for unparseable values.
--   **Role in Architecture**: A critical utility for ensuring all time-related data from diverse sources is accurately normalized, which is fundamental for any temporal correlation.
+    -   `ResilientTimestampParser`: The centralized component for all engines, handling ISO 8601, Unix epoch, Windows FILETIME, and custom formats.
+    -   Includes validation for forensic relevance (e.g., within 1990-2050 range) and graceful error handling for unparseable values without using bare except clauses.
+-   **Role in Architecture**: A critical utility for ensuring all time-related data from diverse sources is accurately normalized. All engines delegate parsing to this resilient component to ensure compatibility and robustness.
 
 ### `two_phase_correlation.py`
 
@@ -1060,7 +1066,7 @@ This section outlines common scenarios where you might need to modify the engine
 2.  **Modifying Correlation Logic within TWSE**:
     *   **Files**: `time_based_engine.py` (main logic), `two_phase_correlation.py` (window processing), `feather_loader.py` (data extraction).
 3.  **Modifying Correlation Logic within IBCE**:
-    *   **Files**: `identity_based_engine_adapter.py` (main logic), `identifier_correlation_engine.py` (in-memory state), `identity_extractor.py` (normalization), `identity_validator.py` (validation).
+    *   **Files**: `identity_based_engine_adapter.py` (main logic), `identity_state_builder.py` (in-memory state), `identity_extractor.py` (normalization), `identity_validator.py` (validation).
 4.  **Changing Timestamp Parsing Rules**:
     *   **Files**: `timestamp_parser.py`.
 5.  **Adjusting Weighted Scoring Algorithm**:

@@ -1405,8 +1405,6 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 font-weight: 600;
                 font-size: 10px;
                 font-family: 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
                 min-width: 60px;
                 min-height: 24px;
             }}
@@ -1474,8 +1472,6 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 font-weight: 600;
                 font-size: 10px;
                 font-family: 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
             }}
             QHeaderView::section:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1527,8 +1523,6 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 font-weight: 600;
                 font-size: 11px;
                 font-family: 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
             }}
             QHeaderView::section:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -5026,8 +5020,6 @@ class SavedSearchesDialog(QtWidgets.QDialog):
                 font-weight: 600;
                 font-size: 11px;
                 font-family: 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
             }}
             QPushButton {{
                 background-color: {Colors.ACCENT_BLUE};

@@ -132,7 +132,7 @@ SEMANTIC_MAPPING_TOOLTIPS = {
     'reset_button': (
         "Reset all semantic mappings to default values. "
         "This will restore common Windows Event IDs and system event mappings. "
-        "⚠ This action cannot be undone!"
+        "[WARN] This action cannot be undone!"
     ),
 }
 
@@ -194,8 +194,8 @@ SCORING_BREAKDOWN_TOOLTIPS = {
     ),
     
     'status_column': (
-        "✓ = Feather matched (found records within time window)\n"
-        "✗ = Feather did not match (no records found)"
+        "[OK] = Feather matched (found records within time window)\n"
+        "[FAIL] = Feather did not match (no records found)"
     ),
     
     'weight_column_breakdown': (
@@ -309,7 +309,7 @@ AUTO_FEATHER_GENERATION_TOOLTIPS = {
     
     'cancel_button': (
         "Cancel Feather generation. "
-        "⚠ Partially generated Feathers will be incomplete and may not work correctly."
+        "[WARN] Partially generated Feathers will be incomplete and may not work correctly."
     ),
 }
 
@@ -433,13 +433,13 @@ EXAMPLES = {
         'description': (
             "Weighted scoring assigns forensic strength values to each Feather:\n\n"
             "Tier 1 - Direct Execution Evidence:\n"
-            "  • Prefetch (0.40) - Strongest evidence of execution\n"
-            "  • ShimCache (0.25) - Strong execution indicator\n\n"
+            " • Prefetch (0.40) - Strongest evidence of execution\n"
+            " • ShimCache (0.25) - Strong execution indicator\n\n"
             "Tier 2 - Strong Supporting Evidence:\n"
-            "  • AmCache (0.15) - Application installation/execution\n\n"
+            " • AmCache (0.15) - Application installation/execution\n\n"
             "Tier 3 - User-Triggered Traces:\n"
-            "  • LNK files (0.10) - User accessed file\n"
-            "  • Jumplists (0.10) - Recent application usage\n\n"
+            " • LNK files (0.10) - User accessed file\n"
+            " • Jumplists (0.10) - Recent application usage\n\n"
             "If Prefetch + ShimCache + AmCache match:\n"
             "Score = 0.40 + 0.25 + 0.15 = 0.80 → 'Confirmed Execution'"
         ),
@@ -450,17 +450,17 @@ EXAMPLES = {
         'description': (
             "Common semantic mappings:\n\n"
             "Windows Security Events:\n"
-            "  • 4624 → 'User Login'\n"
-            "  • 4634 → 'User Logoff'\n"
-            "  • 4688 → 'Process Creation'\n"
-            "  • 4800 → 'Session Locked'\n\n"
+            " • 4624 → 'User Login'\n"
+            " • 4634 → 'User Logoff'\n"
+            " • 4688 → 'Process Creation'\n"
+            " • 4800 → 'Session Locked'\n\n"
             "System Events:\n"
-            "  • 6005 → 'System Startup'\n"
-            "  • 6006 → 'System Shutdown'\n"
-            "  • 1074 → 'System Restart'\n\n"
+            " • 6005 → 'System Startup'\n"
+            " • 6006 → 'System Shutdown'\n"
+            " • 1074 → 'System Restart'\n\n"
             "Registry Status Codes:\n"
-            "  • 0x00000000 → 'Success'\n"
-            "  • 0xC0000001 → 'Unsuccessful'"
+            " • 0x00000000 → 'Success'\n"
+            " • 0xC0000001 → 'Unsuccessful'"
         ),
     },
 }

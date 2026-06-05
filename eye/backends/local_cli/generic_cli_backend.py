@@ -39,6 +39,7 @@ import logging
 import json
 import re
 import os
+import shutil
 from typing import Dict, List, Any, Optional
 from eye.backends.base import LLMBackend
 from eye.backends.local_cli.cli_profiles import get_profile
@@ -62,6 +63,50 @@ class GenericCLIBackend(LLMBackend):
         self.model_name = model_name
         self.profile = get_profile(backend_type)
         self.logger = logging.getLogger(self.__class__.__name__)
+
+    def _resolve_executable(self) -> str:
+        """
+        Return a path subprocess can actually launch.
+
+        On Windows an npm-style launcher is installed as three siblings
+        (e.g. ``gemini``, ``gemini.cmd``, ``gemini.ps1``). The extension-less
+        one is a POSIX shell script that cmd.exe cannot run, so if the user
+        pointed us at it (or at a bare command on PATH) we resolve to a
+        runnable sibling. Already-extensioned and non-Windows paths pass
+        through unchanged.
+        """
+        path = self.executable_path or ""
+        if not path or os.name != 'nt':
+            return path
+        if path.lower().endswith(('.exe', '.cmd', '.bat', '.ps1')):
+            return path
+        # Full path to an extension-less shim: prefer a runnable sibling.
+        for ext in ('.cmd', '.exe', '.bat', '.ps1'):
+            if os.path.exists(path + ext):
+                return path + ext
+        # Bare command (e.g. "gemini"): let PATH/PATHEXT resolve it.
+        resolved = shutil.which(path)
+        return resolved or path
+
+    def _build_command(self, args: List[str]) -> tuple:
+        """
+        Build ``(cmd, shell)`` for the resolved launcher type.
+
+        We never rely on ``shell=True``: cmd.exe cannot execute .ps1 scripts
+        and mangles quoting. Instead each launcher type gets an explicit,
+        stdin-transparent invocation:
+          - .ps1        -> powershell -File <script> <args>
+          - .cmd / .bat -> cmd /c <script> <args>
+          - .exe / unix -> <exe> <args>
+        Piped stdin flows through all three to the underlying node/binary.
+        """
+        exe = self._resolve_executable()
+        lower = (exe or "").lower()
+        if os.name == 'nt' and lower.endswith('.ps1'):
+            return (["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", exe, *args], False)
+        if os.name == 'nt' and lower.endswith(('.cmd', '.bat')):
+            return (["cmd", "/c", exe, *args], False)
+        return ([exe, *args], False)
 
     def generate(self, system_prompt: str, user_message: str, tools: Optional[List[Dict]] = None, history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -108,31 +153,34 @@ class GenericCLIBackend(LLMBackend):
 
             # --- 2. COMMAND CONSTRUCTION ---
             # We use profiles to determine which flags (e.g., -m, --model) the agent expects.
-            cmd = [self.executable_path]
+            # NOTE: build only the ARGS here; the executable + launcher strategy
+            # (.exe / .cmd / .ps1) is resolved in _build_command() below.
+            args: List[str] = []
             m_flag = self.profile.get("model_flag")
-            
+
             # Only add model flag if we have a specific, non-generic model name
             is_generic = self.model_name in [None, "", "default", "cli-default-model"] or "CLI Agent" in str(self.model_name)
             if m_flag and not is_generic:
-                cmd.extend([m_flag, self.model_name])
-                
+                args.extend([m_flag, self.model_name])
+
             s_flag = self.profile.get("system_flag")
             if s_flag:
-                cmd.extend([s_flag, system_instruction])
+                args.extend([s_flag, system_instruction])
             else:
                 # Fallback: Prepend system instruction to text_block if no system flag is supported
                 text_block = system_instruction + text_block
-                
-            cmd.extend(self.profile.get("default_flags", []))
-            
+
+            args.extend(self.profile.get("default_flags", []))
+
             stdin_input = text_block if self.profile.get("use_stdin") else None
-            
+
             # --- 3. SUBPROCESS EXECUTION ---
-            # On Windows, .bat and .cmd files need shell=True to run properly
-            # WINDOWS NOTE: If the path points to a script (.bat/.cmd) rather than 
-            # a compiled .exe, shell=True is mandatory for proper execution.
+            # Resolve the launcher type so each runs correctly: .exe directly,
+            # .cmd/.bat via cmd.exe, .ps1 via PowerShell, extension-less npm shims
+            # via a runnable sibling. This replaces the old shell=True heuristic
+            # that could not execute a .ps1 launcher through cmd.exe.
             is_windows = os.name == 'nt'
-            use_shell = is_windows and not self.executable_path.lower().endswith('.exe')
+            cmd, use_shell = self._build_command(args)
 
             process = subprocess.Popen(
                 cmd,
@@ -276,10 +324,38 @@ class GenericCLIBackend(LLMBackend):
             raise
 
     def validate_connectivity(self) -> bool:
-        """Verifies if the executable is reachable and functioning."""
+        """
+        Verify the configured executable actually runs.
+
+        Unlike a naive "did it throw?" check, this resolves the launcher,
+        confirms an explicit path exists, then runs a real probe and requires
+        a clean exit code — so a missing or unrunnable path (including a .ps1
+        that cmd.exe cannot execute) fails honestly instead of reporting a
+        false success.
+        """
         try:
-            subprocess.run([self.executable_path, "--help"], capture_output=True, text=True, timeout=10, shell=True)
-            return True
+            exe = self._resolve_executable()
+
+            # If the user gave a filesystem path (not a bare PATH command),
+            # the resolved launcher must exist on disk.
+            looks_like_path = any(sep and sep in self.executable_path for sep in (os.sep, os.altsep))
+            if looks_like_path and not os.path.exists(exe):
+                self.logger.error(f"CLI executable not found: {self.executable_path} (resolved: {exe})")
+                return False
+
+            # Probe with the correct launcher. Prefer --version, fall back to --help.
+            for probe in (["--version"], ["--help"]):
+                cmd, sh = self._build_command(probe)
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, shell=sh)
+                except FileNotFoundError:
+                    self.logger.error(f"CLI launcher not runnable: {cmd[0]}")
+                    return False
+                if result.returncode == 0:
+                    return True
+
+            self.logger.error(f"CLI probe failed (non-zero exit) for {exe}")
+            return False
         except Exception as e:
             self.logger.error(f"Validation failed for CLI backend: {e}")
             return False
@@ -326,7 +402,8 @@ class GenericCLIBackend(LLMBackend):
         # --- SPECIALIZED DISCOVERY: Ollama ---
         if "ollama" in self.executable_path.lower() or self.backend_type == "ollama":
             try:
-                result = subprocess.run([self.executable_path, "list"], capture_output=True, text=True, shell=True, timeout=5)
+                cmd, sh = self._build_command(["list"])
+                result = subprocess.run(cmd, capture_output=True, text=True, shell=sh, timeout=5)
                 if result.returncode == 0:
                     lines = result.stdout.strip().split('\n')
                     if len(lines) > 1: # Skip header
@@ -344,8 +421,8 @@ class GenericCLIBackend(LLMBackend):
             m_flag = self.profile.get("model_flag")
             if m_flag:
                 # Trigger a deliberate 'invalid model' error to probe the help message
-                probe_cmd = [self.executable_path, m_flag, "detect-available-models-probe", "-p", "list models"]
-                result = subprocess.run(probe_cmd, capture_output=True, text=True, shell=True, timeout=3)
+                probe_cmd, sh = self._build_command([m_flag, "detect-available-models-probe", "-p", "list models"])
+                result = subprocess.run(probe_cmd, capture_output=True, text=True, shell=sh, timeout=3)
                 
                 combined_output = result.stdout + result.stderr
                 pattern = self.profile.get("model_pattern", r"((?:gemini|meta|mistral|claude|gpt)-[a-z0-9.-]+[a-z0-9.-]*)")

@@ -32,22 +32,22 @@ class PipelineConfig:
     wing_configs: List[WingConfig] = field(default_factory=list)
     
     # Execution settings
-    auto_create_feathers: bool = True  # Automatically create feathers from configs
-    auto_run_correlation: bool = True  # Automatically run correlation after feathers
+    auto_create_feathers: bool = True # Automatically create feathers from configs
+    auto_run_correlation: bool = True # Automatically run correlation after feathers
     
     # NEW: Engine selection and filtering
-    engine_type: str = "time_window_scanning"  # "time_window_scanning" or "identity_based"
-    time_period_start: Optional[str] = None  # ISO format datetime string
-    time_period_end: Optional[str] = None  # ISO format datetime string
-    identity_filters: Optional[List[str]] = None  # List of identity patterns (for identity engine)
-    identity_filter_case_sensitive: bool = False  # Case-sensitive identity matching
+    engine_type: str = "time_window_scanning" # "time_window_scanning" or "identity_based"
+    time_period_start: Optional[str] = field(default_factory=lambda: (datetime.now() - __import__('datetime').timedelta(days=365)).isoformat()) # ISO format datetime string
+    time_period_end: Optional[str] = field(default_factory=lambda: datetime.now().isoformat()) # ISO format datetime string
+    identity_filters: Optional[List[str]] = None # List of identity patterns (for identity engine)
+    identity_filter_case_sensitive: bool = False # Case-sensitive identity matching
     
     # NEW: Semantic mapping and scoring configuration
-    semantic_mapping_config: Optional[Dict[str, Any]] = None  # Semantic mapping settings
-    weighted_scoring_config: Optional[Dict[str, Any]] = None  # Weighted scoring settings (legacy)
+    semantic_mapping_config: Optional[Dict[str, Any]] = None # Semantic mapping settings
+    weighted_scoring_config: Optional[Dict[str, Any]] = None # Weighted scoring settings (legacy)
     
     # Identity Semantic Phase configuration (Requirements 6.2, 6.3, 6.4, 6.5)
-    identity_semantic_phase_enabled: bool = True  # Enable identity-level semantic mapping in final analysis phase
+    identity_semantic_phase_enabled: bool = True # Enable identity-level semantic mapping in final analysis phase
     
     # Pipeline-specific semantic rules (advanced multi-value rules with AND/OR logic)
     semantic_rules: List[Dict[str, Any]] = field(default_factory=list)
@@ -56,27 +56,17 @@ class PipelineConfig:
     scoring_config: Dict[str, Any] = field(default_factory=lambda: {
         'enabled': True,
         'use_weighted_scoring': True,
-        'thresholds': {
-            'low': 0.3,
-            'medium': 0.5,
-            'high': 0.7,
-            'critical': 0.9
-        },
-        'default_tier_weights': {
-            'tier1': 1.0,   # Primary evidence (Logs, Prefetch)
-            'tier2': 0.8,   # Secondary evidence (Registry, AmCache)
-            'tier3': 0.6,   # Supporting evidence (LNK, Jumplists)
-            'tier4': 0.4    # Contextual evidence (MFT, USN)
-        }
+        'thresholds': __import__('correlation_engine.config.centralized_score_config', fromlist=['CentralizedScoreConfig']).CentralizedScoreConfig.get_default().thresholds,
+        'default_tier_weights': __import__('correlation_engine.config.centralized_score_config', fromlist=['CentralizedScoreConfig']).CentralizedScoreConfig.get_default().tier_weights
     })
     
-    debug_mode: bool = False  # Enable debug output
-    verbose_logging: bool = False  # Enable verbose logging
+    debug_mode: bool = False # Enable debug output
+    verbose_logging: bool = False # Enable verbose logging
     
     # Output settings
     output_directory: str = ""
     generate_report: bool = True
-    report_format: str = "html"  # "html", "pdf", "json"
+    report_format: str = "html" # "html", "pdf", "json"
     
     # Metadata
     created_date: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -101,18 +91,18 @@ class PipelineConfig:
             'wing_configs': [w.to_dict() for w in self.wing_configs],
             'auto_create_feathers': self.auto_create_feathers,
             'auto_run_correlation': self.auto_run_correlation,
-            'engine_type': self.engine_type,  # NEW
-            'time_period_start': self.time_period_start,  # NEW
-            'time_period_end': self.time_period_end,  # NEW
-            'identity_filters': self.identity_filters,  # NEW
-            'identity_filter_case_sensitive': self.identity_filter_case_sensitive,  # NEW
-            'semantic_mapping_config': self.semantic_mapping_config,  # NEW
-            'weighted_scoring_config': self.weighted_scoring_config,  # NEW (legacy)
-            'identity_semantic_phase_enabled': self.identity_semantic_phase_enabled,  # Identity Semantic Phase
-            'semantic_rules': self.semantic_rules,  # Pipeline-specific semantic rules
-            'scoring_config': self.scoring_config,  # Pipeline-level scoring configuration
-            'debug_mode': self.debug_mode,  # NEW
-            'verbose_logging': self.verbose_logging,  # NEW
+            'engine_type': self.engine_type, # NEW
+            'time_period_start': self.time_period_start, # NEW
+            'time_period_end': self.time_period_end, # NEW
+            'identity_filters': self.identity_filters, # NEW
+            'identity_filter_case_sensitive': self.identity_filter_case_sensitive, # NEW
+            'semantic_mapping_config': self.semantic_mapping_config, # NEW
+            'weighted_scoring_config': self.weighted_scoring_config, # NEW (legacy)
+            'identity_semantic_phase_enabled': self.identity_semantic_phase_enabled, # Identity Semantic Phase
+            'semantic_rules': self.semantic_rules, # Pipeline-specific semantic rules
+            'scoring_config': self.scoring_config, # Pipeline-level scoring configuration
+            'debug_mode': self.debug_mode, # NEW
+            'verbose_logging': self.verbose_logging, # NEW
             'output_directory': self.output_directory,
             'generate_report': self.generate_report,
             'report_format': self.report_format,
@@ -152,11 +142,11 @@ class PipelineConfig:
         
         # NEW: Provide defaults for backward compatibility
         if 'engine_type' not in data:
-            data['engine_type'] = 'time_based'
+            data['engine_type'] = 'time_window_scanning'
         if 'time_period_start' not in data:
-            data['time_period_start'] = None
+            data['time_period_start'] = (datetime.now() - __import__('datetime').timedelta(days=365)).isoformat()
         if 'time_period_end' not in data:
-            data['time_period_end'] = None
+            data['time_period_end'] = datetime.now().isoformat()
         if 'identity_filters' not in data:
             data['identity_filters'] = None
         if 'identity_filter_case_sensitive' not in data:
@@ -170,25 +160,15 @@ class PipelineConfig:
         if 'verbose_logging' not in data:
             data['verbose_logging'] = False
         if 'identity_semantic_phase_enabled' not in data:
-            data['identity_semantic_phase_enabled'] = True  # Enabled by default
+            data['identity_semantic_phase_enabled'] = True # Enabled by default
         if 'semantic_rules' not in data:
             data['semantic_rules'] = []
         if 'scoring_config' not in data:
             data['scoring_config'] = {
                 'enabled': True,
                 'use_weighted_scoring': True,
-                'thresholds': {
-                    'low': 0.3,
-                    'medium': 0.5,
-                    'high': 0.7,
-                    'critical': 0.9
-                },
-                'default_tier_weights': {
-                    'tier1': 1.0,
-                    'tier2': 0.8,
-                    'tier3': 0.6,
-                    'tier4': 0.4
-                }
+                'thresholds': __import__('correlation_engine.config.centralized_score_config', fromlist=['CentralizedScoreConfig']).CentralizedScoreConfig.get_default().thresholds,
+                'default_tier_weights': __import__('correlation_engine.config.centralized_score_config', fromlist=['CentralizedScoreConfig']).CentralizedScoreConfig.get_default().tier_weights
             }
         
         return cls(**data)

@@ -48,9 +48,11 @@ class ForensicHandlers:
             return {"success": False, "error": "Missing database_name or sql_query"}
             
         res = self.cm.database_service.execute_query(db, sql)
-        
-        # Apply TOON compression if row count > 50 to protect AI context limits
-        if res.get("row_count", 0) > 50:
+
+        # Compress only when the result is large enough to threaten the context
+        # window. Below this, the model sees EVERY row so its chat answer is
+        # complete (the system-prompt TOON docs document this same threshold).
+        if res.get("row_count", 0) > 200:
             return self._apply_toon_compression(res)
         return res
 
@@ -65,13 +67,37 @@ class ForensicHandlers:
 
         # but apply a safe hard limit for the AI's "back-of-napkin" memory if needed
         return {
+            # Preserve success so the pipeline's status step (result.get("success"))
+            # does not mislabel a successful large query as an "error".
+            "success": results.get("success", True),
             "columns": results.get("columns", []),
             "rows": sample_rows,             # The AI sees this in context
             "full_rows": full_rows,          # The UI Data Viewer (bridge) sees this
             "row_count": results.get("row_count"),
             "compressed": True,
-            "toon_summary": f"Data compressed for context efficiency. Total rows: {results.get('row_count')}. Showing first/last 10 for AI analysis. Full data is available in the UI Data Viewer."
+            "toon_summary": (
+                f"COMPRESSED RESULT — this is a SAMPLE, not the full data. "
+                f"Total rows: {results.get('row_count')}; only the first 10 and last 10 are shown here. "
+                f"Do NOT present this sample as the complete result. For any answer that needs ALL rows "
+                f"(enumeration, per-category counts, a full timeline), call analyze_large_dataset (map-reduce "
+                f"over the whole result), or report_add_data_table (persists the FULL result to the report), "
+                f"or re-query with a tighter WHERE/LIMIT. Always state the true total row count."
+            )
         }
+
+    def handle_analyze_large_dataset(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Map-Reduce analysis over a WHOLE large artifact (no silent truncation)."""
+        db = params.get("database_name")
+        sql = params.get("sql_query")
+        instruction = params.get("instruction")
+        if not db or not sql or not instruction:
+            return {"success": False, "error": "Missing database_name, sql_query, or instruction."}
+        from eye.services.map_reduce_service import MapReduceService
+        try:
+            budget = int(params.get("chunk_token_budget", 3000) or 3000)
+        except (TypeError, ValueError):
+            budget = 3000
+        return MapReduceService(self.cm).analyze(db, sql, instruction, chunk_token_budget=budget)
 
     def handle_get_schema(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get table schema information for database discovery."""
@@ -169,6 +195,34 @@ class ForensicHandlers:
             
         return self.cm.internet_search_service.search(query)
 
+    def handle_fetch_web_content(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handler for fetching specific forensic technical pages (Anatomy)."""
+        url = params.get("url")
+        if not url:
+            return {"success": False, "error": "URL is required."}
+            
+        # Security: allow only http(s) URLs whose HOST is an approved forensic/
+        # anatomy domain. Hostname matching (exact or subdomain), NOT substring —
+        # a substring check let "crow-eye.com.attacker.com" or
+        # "evil.test/?x=github.com" through (SSRF), and an unrestricted scheme let
+        # "file://" read local files.
+        domain_whitelist = ["crow-eye.com", "loldrivers.io", "lolbas-project.github.io", "github.com", "microsoft.com", "msdn.microsoft.com", "learn.microsoft.com"]
+
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in ("http", "https") or not host:
+            return {
+                "success": False,
+                "error": "Access Denied: only http(s) URLs are permitted.",
+            }
+        if not any(host == d or host.endswith("." + d) for d in domain_whitelist):
+            return {
+                "success": False,
+                "error": "Access Denied: URL host not in forensic whitelist. Only technical/anatomy domains are permitted for deep analysis.",
+            }
+
+        return self.cm.internet_search_service.fetch_page_content(url)
+
     def handle_switch_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Switch the active LLM model."""
         model_name = params.get("model_name")
@@ -176,7 +230,19 @@ class ForensicHandlers:
             return {"success": False, "error": "Missing model_name parameter."}
             
         self.cm.model_router.switch_model(model_name)
-        return {"success": True, "message": f"Successfully switched to model: {model_name}"}
+        # Re-size the context window to the new model so a larger backend isn't
+        # left capped at the previous model's (or default) limit, and rescale
+        # the per-component token budget to match the new window.
+        self.cm.max_total_tokens = self.cm._resolve_context_window(
+            getattr(self.cm, "default_max_total_tokens", 64000)
+        )
+        self.cm.token_budget = self.cm._resolve_token_budget()
+        return {
+            "success": True,
+            "message": f"Successfully switched to model: {model_name}",
+            "max_total_tokens": self.cm.max_total_tokens,
+            "token_budget": self.cm.token_budget,
+        }
 
     def handle_query_threat_intel(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Query external threat intelligence (VirusTotal) for indicator reputation."""

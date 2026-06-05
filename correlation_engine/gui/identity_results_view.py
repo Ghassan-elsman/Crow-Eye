@@ -25,6 +25,13 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 
+# Sub-identity bucketing — canonical implementation lives in
+# correlation_engine.engine.identity_grouping. Aliased here so call sites
+# in this module keep working unchanged.
+from correlation_engine.engine.identity_grouping import sub_identity_key as _sub_identity_key # noqa: F401
+from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
+
+
 def _search_semantic_data(semantic_data: dict, search_term: str) -> bool:
     """
     Search for a term in semantic data structures.
@@ -84,7 +91,7 @@ class IdentityResultsView(QWidget):
     match_selected = pyqtSignal(dict)
     
     # Pagination settings
-    PAGE_SIZE = 100  # Load 100 identities at a time
+    PAGE_SIZE = 100 # Load 100 identities at a time
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -95,10 +102,18 @@ class IdentityResultsView(QWidget):
         self.scoring_enabled = False
         self.semantic_enabled = False
         
+        # Load configuration
+        try:
+            from ...config.case_history_manager import CaseHistoryManager
+            self.case_history_manager = CaseHistoryManager()
+        except Exception as e:
+            logger.error(f"Failed to load CaseHistoryManager: {e}")
+            self.case_history_manager = None
+        
         # Debounce timer for search filter
         self.search_timer = QTimer()
         self.search_timer.setSingleShot(True)
-        self.search_timer.setInterval(300)  # 300ms delay
+        self.search_timer.setInterval(300) # 300ms delay
         self.search_timer.timeout.connect(self._apply_filters)
         
         self.setup_ui()
@@ -106,8 +121,8 @@ class IdentityResultsView(QWidget):
     def setup_ui(self):
         """Setup compact UI with labeled filters."""
         # Print version stamp to console
-        print(f"[IdentityResultsView] VERSION: {self.SEMANTIC_FIX_VERSION}")
-        print(f"[IdentityResultsView] Semantic fix is ACTIVE")
+        logger.info(f"[IdentityResultsView] VERSION: {self.SEMANTIC_FIX_VERSION}")
+        logger.info(f"[IdentityResultsView] Semantic fix is ACTIVE")
         
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(4)
@@ -148,7 +163,7 @@ class IdentityResultsView(QWidget):
         top_layout.addWidget(self.feathers_used_lbl)
         
         # Scoring indicator
-        self.scoring_lbl = QLabel("📊 Scoring: Off")
+        self.scoring_lbl = QLabel("Scoring: Off")
         self.scoring_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.scoring_lbl)
         
@@ -164,7 +179,7 @@ class IdentityResultsView(QWidget):
         top_layout.addWidget(search_lbl)
         
         self.identity_filter = QLineEdit()
-        self.identity_filter.setPlaceholderText("🔍 Search name or semantic value...")
+        self.identity_filter.setPlaceholderText("Search name or semantic value...")
         self.identity_filter.setMaximumWidth(250)
         self.identity_filter.setStyleSheet("""
             QLineEdit {
@@ -359,10 +374,10 @@ class IdentityResultsView(QWidget):
         
         tree.setColumnWidth(0, 280)
         tree.setColumnWidth(1, 150)
-        tree.setColumnWidth(2, 60)  # Score column
-        tree.setColumnWidth(3, 350)  # Semantic column - WIDER: Increased to 350 for better readability
-        tree.setColumnWidth(4, 40)  # Evidence count
-        tree.setColumnWidth(5, 80)  # Artifact
+        tree.setColumnWidth(2, 60) # Score column
+        tree.setColumnWidth(3, 350) # Semantic column - WIDER: Increased to 350 for better readability
+        tree.setColumnWidth(4, 40) # Evidence count
+        tree.setColumnWidth(5, 80) # Artifact
         
         tree.setAlternatingRowColors(True)
         tree.itemDoubleClicked.connect(self._on_double_click)
@@ -419,12 +434,12 @@ class IdentityResultsView(QWidget):
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setMaximumHeight(100)  # Smaller table
+        table.setMaximumHeight(100) # Smaller table
         table.setMinimumHeight(60)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(18)  # Compact rows
-        table.horizontalHeader().setFixedHeight(22)  # Compact header
+        table.verticalHeader().setDefaultSectionSize(18) # Compact rows
+        table.horizontalHeader().setFixedHeight(22) # Compact header
         table.setStyleSheet("""
             QTableWidget {
                 font-size: 8pt;
@@ -499,7 +514,7 @@ class IdentityResultsView(QWidget):
             result: CorrelationResult object
             show_progress: If False, suppresses the progress dialog (useful when parent already shows progress)
         """
-        print(f"[IdentityResultsView] load_from_correlation_result called with {result.total_matches} matches")
+        logger.info(f"[IdentityResultsView] load_from_correlation_result called with {result.total_matches} matches")
         
         # Show progress dialog if we have many matches and show_progress is True
         progress = None
@@ -519,10 +534,10 @@ class IdentityResultsView(QWidget):
             identities = self._convert_matches(result.matches, progress)
             
             if progress and progress.wasCanceled():
-                print("[IdentityResultsView] Loading cancelled by user")
+                logger.info("[IdentityResultsView] Loading cancelled by user")
                 return
             
-            print(f"[IdentityResultsView] Converted to {len(identities)} identities")
+            logger.info(f"[IdentityResultsView] Converted to {len(identities)} identities")
             
             # Use feather_metadata from result if available (contains records_loaded and identities_found)
             feather_metadata = result.feather_metadata if hasattr(result, 'feather_metadata') and result.feather_metadata else {}
@@ -575,9 +590,9 @@ class IdentityResultsView(QWidget):
                 progress.setValue(90)
                 QApplication.processEvents()
             
-            print(f"[IdentityResultsView] Calling load_results with {len(identities)} identities, {total_anchors} anchors")
+            logger.info(f"[IdentityResultsView] Calling load_results with {len(identities)} identities, {total_anchors} anchors")
             self.load_results(results_dict)
-            print(f"[IdentityResultsView] load_results completed, tree has {self.results_tree.topLevelItemCount()} items")
+            logger.info(f"[IdentityResultsView] load_results completed, tree has {self.results_tree.topLevelItemCount()} items")
             
             if progress:
                 progress.setValue(100)
@@ -586,7 +601,7 @@ class IdentityResultsView(QWidget):
         except Exception as e:
             if progress:
                 progress.close()
-            print(f"[Error] Failed to load results: {e}")
+            logger.info(f"[Error] Failed to load results: {e}")
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, "Load Error", f"Failed to load results:\n{str(e)}")
@@ -597,7 +612,7 @@ class IdentityResultsView(QWidget):
         
         # Debug: Check if matches is iterable and has items
         if not matches:
-            print(f"[IdentityResultsView] _convert_matches: No matches provided (matches is {type(matches)})")
+            logger.info(f"[IdentityResultsView] _convert_matches: No matches provided (matches is {type(matches)})")
             return []
         
         total_matches = len(matches)
@@ -608,7 +623,7 @@ class IdentityResultsView(QWidget):
             
             # Update progress every 100 matches
             if progress and match_count % 100 == 0:
-                percentage = int((match_count / total_matches) * 80)  # 0-80% for processing
+                percentage = int((match_count / total_matches) * 80) # 0-80% for processing
                 progress.setValue(percentage)
                 progress.setLabelText(f"Loading identity data: {match_count}/{total_matches} identities...")
                 QApplication.processEvents()
@@ -618,7 +633,7 @@ class IdentityResultsView(QWidget):
             
             # Debug first few matches
             if match_count <= 3:
-                print(f"[IdentityResultsView] Match {match_count}: app={getattr(match, 'matched_application', 'N/A')}, "
+                logger.info(f"[IdentityResultsView] Match {match_count}: app={getattr(match, 'matched_application', 'N/A')}, "
                       f"path={getattr(match, 'matched_file_path', 'N/A')}, "
                       f"records={len(getattr(match, 'feather_records', {}))}")
             
@@ -634,8 +649,8 @@ class IdentityResultsView(QWidget):
                 identity_map[main_app] = {
                     'identity_id': main_app,
                     'identity_type': 'name',
-                    'primary_name': display_name,  # Clean, readable display name
-                    'sub_identities': {},  # original_name -> sub_identity data
+                    'primary_name': display_name, # Clean, readable display name
+                    'sub_identities': {}, # original_name -> sub_identity data
                     'feathers_found': set()
                 }
             
@@ -677,15 +692,22 @@ class IdentityResultsView(QWidget):
                     if original_name != raw_app:
                         break
             
-            # Create or get sub-identity
-            if original_name not in identity_map[main_app]['sub_identities']:
-                identity_map[main_app]['sub_identities'][original_name] = {
+            # Bucket by a normalized sub-identity key so trivial variants
+            # collapse: "Chrome.exe", "chrome.exe", "Chrome.EXE" all bucket
+            # into one sub-identity, while distinct names / versions /
+            # qualifiers keep separate buckets.
+            sub_key = _sub_identity_key(original_name) or original_name.strip().lower()
+            if sub_key not in identity_map[main_app]['sub_identities']:
+                identity_map[main_app]['sub_identities'][sub_key] = {
                     'original_name': original_name,
+                    'sub_key': sub_key,
+                    'name_variants': set(),
                     'anchors': [],
                     'feathers_found': set()
                 }
-            
-            sub_identity = identity_map[main_app]['sub_identities'][original_name]
+
+            sub_identity = identity_map[main_app]['sub_identities'][sub_key]
+            sub_identity['name_variants'].add(original_name)
             sub_identity['feathers_found'].update(match.feather_records.keys())
             
             # Get anchor metadata if available (from streaming mode)
@@ -724,20 +746,57 @@ class IdentityResultsView(QWidget):
             }
             sub_identity['anchors'].append(anchor)
         
-        # Convert to list format
+        # Convert to list format and compute identity-level overall scores
         result = []
         for identity in identity_map.values():
             identity['feathers_found'] = list(identity['feathers_found'])
-            # Convert sub_identities dict to list
+            # Convert sub_identities dict to list and finalize set-typed fields
             sub_list = []
             for sub in identity['sub_identities'].values():
                 sub['feathers_found'] = list(sub['feathers_found'])
+                if 'name_variants' in sub and isinstance(sub['name_variants'], set):
+                    sub['name_variants'] = sorted(sub['name_variants'])
                 sub_list.append(sub)
             identity['sub_identities'] = sub_list
+
+            # Aggregate overall score across all evidence (all anchors in all sub-identities)
+            all_scores = []
+            for sub in sub_list:
+                for anchor in sub.get('anchors', []):
+                    ws = anchor.get('weighted_score')
+                    if isinstance(ws, dict) and 'score' in ws:
+                        s = ws['score']
+                        if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                            all_scores.append(s)
+            if not all_scores:
+                for anchor in identity.get('anchors', []):
+                    ws = anchor.get('weighted_score')
+                    if isinstance(ws, dict) and 'score' in ws:
+                        s = ws['score']
+                        if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                            all_scores.append(s)
+
+            avg = sum(all_scores) / len(all_scores) if all_scores else 0.0
+            mx = max(all_scores) if all_scores else 0.0
+            if avg >= 0.7:
+                interp = "High"
+            elif avg >= 0.4:
+                interp = "Medium"
+            elif avg > 0:
+                interp = "Low"
+            else:
+                interp = "None"
+            identity['overall_score'] = {
+                'average': avg,
+                'max': mx,
+                'evidence_count': len(all_scores),
+                'interpretation': interp
+            }
+
             result.append(identity)
         
         # Debug: Show conversion summary
-        print(f"[IdentityResultsView] _convert_matches: Processed {match_count} matches -> {len(result)} identities")
+        logger.info(f"[IdentityResultsView] _convert_matches: Processed {match_count} matches -> {len(result)} identities")
         
         return result
     
@@ -778,12 +837,12 @@ class IdentityResultsView(QWidget):
         # Extract just the APPNAME.EXE part before the hash
         # Pattern: ends with space + 8 hex chars + .pf
         # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
-        #           "chrome.exe AF43252D.pf" → "chrome.exe"
+        # "chrome.exe AF43252D.pf" → "chrome.exe"
         if result.lower().endswith('.pf'):
             # Check if there's a space followed by hex hash before .pf
             match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
             if match:
-                result = match.group(1)  # Extract just the app name part
+                result = match.group(1) # Extract just the app name part
         
         # Step 0: Remove ~ and everything after it (FIRST - before any other processing)
         # This handles cases like "CHROME~1.EXE", "file~123.txt"
@@ -813,8 +872,8 @@ class IdentityResultsView(QWidget):
         # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
         # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
         # This prevents removing numbers that are part of the name (e.g., "chrome1")
-        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result)  # Requires space/underscore
-        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result)  # OR explicit v prefix without space
+        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result) # Requires space/underscore
+        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result) # OR explicit v prefix without space
         
         # Step 5: AGGRESSIVE NORMALIZATION for grouping
         # Convert to lowercase first
@@ -882,12 +941,12 @@ class IdentityResultsView(QWidget):
         # Extract just the APPNAME.EXE part before the hash
         # Pattern: ends with space + 8 hex chars + .pf
         # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
-        #           "chrome.exe AF43252D.pf" → "chrome.exe"
+        # "chrome.exe AF43252D.pf" → "chrome.exe"
         if result.lower().endswith('.pf'):
             # Check if there's a space followed by hex hash before .pf
             match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
             if match:
-                result = match.group(1)  # Extract just the app name part
+                result = match.group(1) # Extract just the app name part
         
         # Step 0: Remove ~ and everything after it (FIRST)
         if '~' in result:
@@ -914,8 +973,8 @@ class IdentityResultsView(QWidget):
         # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
         # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
         # This prevents removing numbers that are part of the name (e.g., "chrome1")
-        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result)  # Requires space/underscore
-        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result)  # OR explicit v prefix without space
+        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result) # Requires space/underscore
+        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result) # OR explicit v prefix without space
         
         # Step 5: Clean up trailing special characters
         result = result.rstrip(' _-.')
@@ -936,7 +995,7 @@ class IdentityResultsView(QWidget):
         # Update identity label with cancelled indicator
         identity_count = stats.get('total_identities', len(self.identities))
         if is_cancelled:
-            self.identities_lbl.setText(f"⚠️ Identities: {identity_count:,} (Cancelled)")
+            apply_status_to_label(self.identities_lbl, "WARN", f"Identities: {identity_count:,} (Cancelled)")
             self.identities_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 9pt;")
             self.identities_lbl.setToolTip("Execution was cancelled by user. Showing partial results.")
         else:
@@ -958,7 +1017,7 @@ class IdentityResultsView(QWidget):
                                     reverse=True):
                 records = meta.get('records_loaded', meta.get('records', 0))
                 identities = meta.get('identities_found', 0)
-                tooltip_lines.append(f"  {fid}: {records:,} records, {identities} identities")
+                tooltip_lines.append(f" {fid}: {records:,} records, {identities} identities")
             self.feathers_used_lbl.setToolTip("\n".join(tooltip_lines))
         
         self.feathers_used_lbl.setText(f"Feathers: {feathers_used}")
@@ -999,7 +1058,7 @@ class IdentityResultsView(QWidget):
         if not identities:
             # Show a message when there are no results (6 columns - removed Time)
             empty_item = QTreeWidgetItem(["No correlation matches found", "", "", "", "", ""])
-            empty_item.setForeground(0, QBrush(QColor("#888888")))
+            empty_item.setForeground(0, QBrush(QColor("#64748B")))
             empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
             self.results_tree.addTopLevelItem(empty_item)
             return
@@ -1074,8 +1133,12 @@ class IdentityResultsView(QWidget):
         feather_str = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
         sub_count = len(sub_identities) if sub_identities else 0
         
-        # Calculate average score for identity
-        avg_score = self._calculate_identity_score(identity)
+        # Use pre-computed overall score (falls back to on-the-fly calculation)
+        overall = identity.get('overall_score')
+        if overall:
+            avg_score = overall.get('average', 0.0)
+        else:
+            avg_score = self._calculate_identity_score(identity)
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
         # Task 6.2: Get aggregated semantic value for identity with error handling
@@ -1085,10 +1148,6 @@ class IdentityResultsView(QWidget):
             logger.error(f"Error getting identity semantic value: {e}")
             semantic_value, semantic_tooltip = "Error", "Error retrieving semantic data"
         
-        # Check if has children for expand indicator
-        has_children = bool(sub_identities) or bool(identity.get('anchors', []))
-        expand_indicator = "▶ " if has_children else "  "
-        
         # Task 6.2: Check if identity has semantic data for [S] indicator with error handling
         try:
             has_semantic = semantic_value not in ["-", "Error", "Fallback", None, ""]
@@ -1096,37 +1155,39 @@ class IdentityResultsView(QWidget):
         except Exception as e:
             logger.warning(f"Error checking semantic indicator: {e}")
             semantic_indicator = ""
-        
-        # Main identity item with expand indicator and blue diamond icon (6 columns - removed Time)
+
+        # Main identity item (6 columns - removed Time). Per-row icon comes
+        # from CrowEyeIcons; Qt draws its own expand chevron when children exist.
         item = QTreeWidgetItem([
-            f"{expand_indicator}🔷 {semantic_indicator}{name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
-            feather_str, 
+            f"{semantic_indicator}{name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
+            feather_str,
             score_str,
-            semantic_value,  # Semantic column with aggregated value
-            str(total_evidence), 
+            semantic_value, # Semantic column with aggregated value
+            str(total_evidence),
             f"{total_anchors} anchors"
         ])
+        item.setIcon(0, CrowEyeIcons.target())
         item.setFont(0, QFont("Segoe UI", 9, QFont.Bold))
         item.setForeground(0, QBrush(QColor("#2196F3")))
         
         # Color score based on value
         if avg_score >= 0.7:
-            item.setForeground(2, QBrush(QColor("#4CAF50")))  # Green - high score
+            item.setForeground(2, QBrush(QColor("#4CAF50"))) # Green - high score
         elif avg_score >= 0.4:
-            item.setForeground(2, QBrush(QColor("#FF9800")))  # Orange - medium score
+            item.setForeground(2, QBrush(QColor("#FF9800"))) # Orange - medium score
         elif avg_score > 0:
-            item.setForeground(2, QBrush(QColor("#F44336")))  # Red - low score
+            item.setForeground(2, QBrush(QColor("#F44336"))) # Red - low score
         
         # Task 6.2: Color semantic column with error handling
         try:
             if semantic_value == "Error":
-                item.setForeground(3, QBrush(QColor("#F44336")))  # Red for errors
+                item.setForeground(3, QBrush(QColor("#F44336"))) # Red for errors
                 item.setToolTip(3, "Error retrieving semantic data")
             elif semantic_value == "Fallback":
-                item.setForeground(3, QBrush(QColor("#FF9800")))  # Orange for fallback
+                item.setForeground(3, QBrush(QColor("#FF9800"))) # Orange for fallback
                 item.setToolTip(3, "Using fallback semantic data")
             elif semantic_value != "-":
-                item.setForeground(3, QBrush(QColor("#9C27B0")))  # Purple for semantic values
+                item.setForeground(3, QBrush(QColor("#9C27B0"))) # Purple for semantic values
                 if semantic_tooltip:
                     item.setToolTip(3, semantic_tooltip)
         except Exception as e:
@@ -1147,26 +1208,26 @@ class IdentityResultsView(QWidget):
         return item
     
     def _calculate_identity_score(self, identity: Dict) -> float:
-        """Calculate average weighted score for an identity."""
+        """Calculate average weighted score for an identity across all evidence."""
         scores = []
         sub_identities = identity.get('sub_identities', [])
-        
+
         if sub_identities:
             for sub in sub_identities:
                 for anchor in sub.get('anchors', []):
-                    weighted_score = anchor.get('weighted_score', {})
-                    if isinstance(weighted_score, dict):
-                        score = weighted_score.get('score', 0)
-                        if score > 0:
-                            scores.append(score)
+                    weighted_score = anchor.get('weighted_score')
+                    if isinstance(weighted_score, dict) and 'score' in weighted_score:
+                        s = weighted_score['score']
+                        if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                            scores.append(s)
         else:
             for anchor in identity.get('anchors', []):
-                weighted_score = anchor.get('weighted_score', {})
-                if isinstance(weighted_score, dict):
-                    score = weighted_score.get('score', 0)
-                    if score > 0:
-                        scores.append(score)
-        
+                weighted_score = anchor.get('weighted_score')
+                if isinstance(weighted_score, dict) and 'score' in weighted_score:
+                    s = weighted_score['score']
+                    if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                        scores.append(s)
+
         return sum(scores) / len(scores) if scores else 0.0
     
     def _get_identity_semantic_value(self, identity: Dict) -> tuple:
@@ -1230,9 +1291,9 @@ class IdentityResultsView(QWidget):
             display_value = f"{first_value} (+{len(semantic_values)-1})"
         
         # Build tooltip with all values
-        tooltip_lines = ["🏷️ Semantic Values:"]
+        tooltip_lines = ["Semantic Values:"]
         for sem_val, rule_name in semantic_values:
-            tooltip_lines.append(f"  • {rule_name}: {sem_val}")
+            tooltip_lines.append(f" • {rule_name}: {sem_val}")
         
         return (display_value, "\n".join(tooltip_lines))
     
@@ -1354,7 +1415,7 @@ class IdentityResultsView(QWidget):
             logger.error(f"Critical error in _get_semantic_value: {e}")
             return "Error"
         
-        return "-"  # Default when no semantic data available
+        return "-" # Default when no semantic data available
     
     def _create_sub_identity_item(self, sub_identity: Dict) -> QTreeWidgetItem:
         """Create sub-identity tree item (original filename)."""
@@ -1366,9 +1427,11 @@ class IdentityResultsView(QWidget):
         for a in anchors:
             feathers.update(a.get('feathers', []))
             evidence += a.get('evidence_count', len(a.get('evidence_rows', [])))
-            weighted_score = a.get('weighted_score', {})
-            if isinstance(weighted_score, dict) and weighted_score.get('score', 0) > 0:
-                scores.append(weighted_score.get('score', 0))
+            weighted_score = a.get('weighted_score')
+            if isinstance(weighted_score, dict) and 'score' in weighted_score:
+                s = weighted_score['score']
+                if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                    scores.append(s)
         
         # Group feathers by base name (remove numeric suffix)
         base_feathers = set()
@@ -1382,21 +1445,19 @@ class IdentityResultsView(QWidget):
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Check if has children for expand indicator
-        has_children = bool(anchors)
-        expand_indicator = "▶ " if has_children else "  "
-        
-        # Sub-identity item with expand indicator and folder icon (orange/yellow) - 6 columns (removed Time)
+        # Sub-identity item (6 columns - removed Time). Crow-Eye link icon
+        # marks relational sub-grouping; Qt's expand chevron handles children.
         item = QTreeWidgetItem([
-            f"{expand_indicator}📁 {original_name}",
+            original_name,
             feather_str,
             score_str,
-            "-",  # Semantic column (sub-identities don't have semantic values)
+            "-", # Semantic column (sub-identities don't have semantic values)
             str(evidence),
             f"{len(anchors)} anchors"
         ])
+        item.setIcon(0, CrowEyeIcons.link())
         item.setFont(0, QFont("Segoe UI", 8))
-        item.setForeground(0, QBrush(QColor("#FF9800")))  # Orange for sub-identity
+        item.setForeground(0, QBrush(QColor("#FF9800"))) # Orange for sub-identity
         
         # Color score
         if avg_score >= 0.7:
@@ -1462,30 +1523,28 @@ class IdentityResultsView(QWidget):
         if record_count > 0:
             artifact_info = f"{artifact_info} ({record_count} rec)"
         
-        # Check if has children for expand indicator
-        evidence_rows = anchor.get('evidence_rows', [])
-        has_children = bool(evidence_rows)
-        expand_indicator = "▶ " if has_children else "  "
-        
         feather_display = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
-        
+
+        # Anchor row — Crow-Eye star icon marks "pinned/significant" anchor;
+        # Qt's native chevron handles expand state for evidence children.
         item = QTreeWidgetItem([
-            f"{expand_indicator}⏱️ Anchor",
+            "Anchor",
             feather_display,
             score_str,
-            semantic_value,  # New semantic column
+            semantic_value, # New semantic column
             str(count),
             artifact_info
         ])
+        item.setIcon(0, CrowEyeIcons.star())
         item.setForeground(0, QBrush(QColor("#FFC107")))
         
         # Color score and add tooltip
         if score >= 0.7:
-            item.setForeground(2, QBrush(QColor("#4CAF50")))  # Green
+            item.setForeground(2, QBrush(QColor("#4CAF50"))) # Green
         elif score >= 0.4:
-            item.setForeground(2, QBrush(QColor("#FF9800")))  # Orange
+            item.setForeground(2, QBrush(QColor("#FF9800"))) # Orange
         elif score > 0:
-            item.setForeground(2, QBrush(QColor("#F44336")))  # Red
+            item.setForeground(2, QBrush(QColor("#F44336"))) # Red
         
         # Build comprehensive tooltip
         tooltip_lines = []
@@ -1498,24 +1557,24 @@ class IdentityResultsView(QWidget):
         
         # Add scoring information
         if score > 0:
-            tooltip_lines.append(f"\n📊 Scoring:")
-            tooltip_lines.append(f"  Score: {score:.3f}")
+            tooltip_lines.append(f"\nScoring:")
+            tooltip_lines.append(f" Score: {score:.3f}")
             if interpretation:
-                tooltip_lines.append(f"  {interpretation}")
+                tooltip_lines.append(f" {interpretation}")
         
         # Add confidence information
         confidence_score = anchor.get('confidence_score')
         confidence_category = anchor.get('confidence_category')
         if confidence_score is not None:
-            tooltip_lines.append(f"  Confidence: {confidence_score:.2f} ({confidence_category or 'Unknown'})")
+            tooltip_lines.append(f" Confidence: {confidence_score:.2f} ({confidence_category or 'Unknown'})")
         
         # Add semantic data if available
         semantic_data = anchor.get('semantic_data')
         if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
-            tooltip_lines.append(f"\n🔗 Semantic Mapping:")
+            tooltip_lines.append(f"\nSemantic Mapping:")
             for key, value in semantic_data.items():
                 if not key.startswith('_') and value:
-                    tooltip_lines.append(f"  {key}: {value}")
+                    tooltip_lines.append(f" {key}: {value}")
         
         if tooltip_lines:
             item.setToolTip(0, "\n".join(tooltip_lines))
@@ -1575,60 +1634,107 @@ class IdentityResultsView(QWidget):
                     semantic_value = str(value)
                     break
         
-        # 6 columns - removed Time column
+        # 6 columns - removed Time column. Evidence rows are leaves: no
+        # expand chevron, but the Crow-Eye info icon marks them as detail rows.
         item = QTreeWidgetItem([
-            f"📄 {original_name}" + (" 🔍" if has_semantic else ""),
+            f"{original_name}" + (" " if has_semantic else ""),
             evidence.get('feather_id', ''),
-            "-",  # Score column (evidence doesn't have individual scores)
-            semantic_value,  # New semantic column
+            "-", # Score column (evidence doesn't have individual scores)
+            semantic_value, # New semantic column
             "1",
             evidence.get('artifact', '-')
         ])
+        item.setIcon(0, CrowEyeIcons.info())
         item.setForeground(0, QBrush(QColor("#4CAF50")))
         
         # Add semantic tooltip if available
         if has_semantic:
             tooltip_lines = ["Semantic Information:"]
             for field, value in semantic_info.items():
-                tooltip_lines.append(f"  {field}: {value}")
+                tooltip_lines.append(f" {field}: {value}")
             item.setToolTip(0, "\n".join(tooltip_lines))
         
         item.setData(0, Qt.UserRole, {'type': 'evidence', 'data': evidence})
         return item
     
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
-        """Handle item click to show scoring details."""
-        # Toggle expand/collapse when clicking on first column (where the arrow is)
+        """Handle item click to show scoring details.
+
+        Sub-Identity expansion behaviour: clicking a Sub-Identity row cascades
+        the expand one level deeper than the default — it opens the Sub-Identity
+        itself AND each of its Anchor children, so the user can see the
+        underlying evidence (the "identities" beneath each anchor) in a single
+        click instead of having to expand every anchor individually. A second
+        click on an already-cascaded Sub-Identity collapses the whole subtree.
+        """
+        data = item.data(0, Qt.UserRole) or {}
+        item_type = data.get('type')
+
+        # Toggle expand/collapse when clicking on first column (where the chevron is).
         if column == 0 and item.childCount() > 0:
-            text = item.text(0)
-            if text.startswith("▶ ") or text.startswith("▼ "):
-                if item.isExpanded():
-                    item.setExpanded(False)
+            if item.isExpanded():
+                # Collapse the whole subtree so the next click re-opens
+                # cleanly with a single cascade.
+                self._set_subtree_expanded(item, False)
+            else:
+                # Check if cascade expansion is enabled in settings
+                cascade_enabled = True # Default
+                if self.case_history_manager:
+                    cascade_enabled = getattr(self.case_history_manager.global_config, 'cascade_tree_expansion_enabled', True)
+
+                if cascade_enabled:
+                    if item_type == 'identity':
+                        # Cascade: open Identity + Sub-Identities + Anchors + Evidence
+                        # Identity (1) -> Sub-identity (2) -> Anchor (3) -> Evidence (4)
+                        self._set_subtree_expanded(item, True, max_depth=4)
+                    elif item_type == 'sub_identity':
+                        # Cascade: open Sub-Identity + every Anchor child + Evidence
+                        # Sub-identity (1) -> Anchor (2) -> Evidence (3)
+                        self._set_subtree_expanded(item, True, max_depth=3)
+                    else:
+                        item.setExpanded(True)
                 else:
+                    # Standard expansion
                     item.setExpanded(True)
-                return
-        
-        data = item.data(0, Qt.UserRole)
+            # After toggling, still fire the selection signal so the
+            # detail panel updates to match the row the user clicked.
+            if data:
+                self.match_selected.emit({'type': item_type, 'data': data.get('data', {})})
+            return
+
         if not data:
             return
-        
-        item_type = data.get('type')
-        item_data = data.get('data', {})
-        
+
         # Emit signal for external handlers
-        self.match_selected.emit({'type': item_type, 'data': item_data})
+        self.match_selected.emit({'type': item_type, 'data': data.get('data', {})})
+
+    def _set_subtree_expanded(self, item: QTreeWidgetItem, expanded: bool, max_depth: int = 8) -> None:
+        """Expand or collapse `item` and recursively apply to its descendants.
+
+        Bounded by `max_depth` to keep the operation fast on giant trees.
+        Depth 1 = just this item; depth 2 = this item + its direct children;
+        etc. The triangle indicator in column 0 is updated by Qt's
+        itemExpanded / itemCollapsed signals, which fire as we walk.
+        """
+        if item is None or max_depth <= 0:
+            return
+        item.setExpanded(expanded)
+        if max_depth == 1:
+            return
+        for i in range(item.childCount()):
+            child = item.child(i)
+            # Only descend into nodes that actually have children — saves work
+            # on leaf evidence rows that can never expand.
+            if child is not None and child.childCount() > 0:
+                self._set_subtree_expanded(child, expanded, max_depth - 1)
     
     def _on_item_expanded(self, item: QTreeWidgetItem):
-        """Update expand indicator when item is expanded."""
-        text = item.text(0)
-        if text.startswith("▶ "):
-            item.setText(0, "▼ " + text[2:])
-    
+        """No-op: Qt rotates the native expand chevron automatically."""
+        return
+
     def _on_item_collapsed(self, item: QTreeWidgetItem):
-        """Update expand indicator when item is collapsed."""
-        text = item.text(0)
-        if text.startswith("▼ "):
-            item.setText(0, "▶ " + text[2:])
+        """No-op: Qt rotates the native expand chevron automatically."""
+        return
     
     def _update_stats(self, results: Dict):
         """Update statistics tables (Types, Roles, Scores only - feather stats are in Summary)."""
@@ -1672,9 +1778,9 @@ class IdentityResultsView(QWidget):
             if sub_identities:
                 for sub in sub_identities:
                     for a in sub.get('anchors', []):
-                        ws = a.get('weighted_score', {})
-                        if isinstance(ws, dict) and ws.get('score', 0) > 0:
-                            score = ws.get('score', 0)
+                        ws = a.get('weighted_score')
+                        if isinstance(ws, dict) and 'score' in ws and isinstance(ws['score'], (int, float)) and 0.0 <= ws['score'] <= 1.0:
+                            score = ws['score']
                             if score >= 0.7:
                                 score_ranges['High (≥0.7)'] += 1
                             elif score >= 0.4:
@@ -1685,9 +1791,9 @@ class IdentityResultsView(QWidget):
                             score_ranges['No Score'] += 1
             else:
                 for a in i.get('anchors', []):
-                    ws = a.get('weighted_score', {})
-                    if isinstance(ws, dict) and ws.get('score', 0) > 0:
-                        score = ws.get('score', 0)
+                    ws = a.get('weighted_score')
+                    if isinstance(ws, dict) and 'score' in ws and isinstance(ws['score'], (int, float)) and 0.0 <= ws['score'] <= 1.0:
+                        score = ws['score']
                         if score >= 0.7:
                             score_ranges['High (≥0.7)'] += 1
                         elif score >= 0.4:
@@ -1701,11 +1807,11 @@ class IdentityResultsView(QWidget):
         total_scored = score_ranges['High (≥0.7)'] + score_ranges['Medium (0.4-0.7)'] + score_ranges['Low (<0.4)']
         if total_scored > 0:
             self.scoring_enabled = True
-            self.scoring_lbl.setText(f"📊 Scoring: On ({total_scored})")
+            self.scoring_lbl.setText(f"Scoring: On ({total_scored})")
             self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #4CAF50;")
         else:
             self.scoring_enabled = False
-            self.scoring_lbl.setText("📊 Scoring: Off")
+            self.scoring_lbl.setText("Scoring: Off")
             self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #888;")
         
         # Populate scoring table
@@ -1927,7 +2033,7 @@ class IdentityDetailDialog(QDialog):
         """)
         
         # Collect all evidence rows grouped by feather
-        feather_records = {}  # feather_id -> list of evidence rows
+        feather_records = {} # feather_id -> list of evidence rows
         all_anchors = []
         timestamps = []
         
@@ -1956,7 +2062,7 @@ class IdentityDetailDialog(QDialog):
         
         # Tab 1: Summary - REMOVED per user request
         # summary_tab = self._create_summary_tab(sub_identities, all_anchors, timestamps, feather_records)
-        # tabs.addTab(summary_tab, "📊 Summary")
+        # tabs.addTab(summary_tab, "Summary")
         
         # Per-feather tabs (now the only tabs)
         for fid in sorted(feather_records.keys()):
@@ -2082,14 +2188,14 @@ class IdentityDetailDialog(QDialog):
         # Header - compact, takes minimal space
         header = QLabel(f"<b>{feather_id}</b> - {len(records)} records")
         header.setStyleSheet("font-size: 9pt; color: #aaa; padding: 4px;")
-        header.setMaximumHeight(30)  # Limit header height
+        header.setMaximumHeight(30) # Limit header height
         layout.addWidget(header)
         
         # Search box - compact, takes minimal space
         search_box = QLineEdit()
         search_box.setPlaceholderText("Search records...")
         search_box.setStyleSheet("padding: 4px; font-size: 8pt;")
-        search_box.setMaximumHeight(30)  # Limit search box height
+        search_box.setMaximumHeight(30) # Limit search box height
         layout.addWidget(search_box)
         
         # Collect all unique keys from all records
@@ -2106,7 +2212,7 @@ class IdentityDetailDialog(QDialog):
         table.setHorizontalHeaderLabels(cols)
         table.setRowCount(len(records))
         table.setAlternatingRowColors(True)
-        table.setSortingEnabled(True)  # Enable column sorting
+        table.setSortingEnabled(True) # Enable column sorting
         
         # Set size policy to expand and fill available space
         from PyQt5.QtWidgets import QSizePolicy
@@ -2122,7 +2228,7 @@ class IdentityDetailDialog(QDialog):
                 val = str(data.get(key, ''))
                 display_val = val[:80] + "..." if len(val) > 80 else val
                 item = QTableWidgetItem(display_val)
-                item.setToolTip(val)  # Full value in tooltip
+                item.setToolTip(val) # Full value in tooltip
                 table.setItem(row, col, item)
         
         # Enable column resizing
@@ -2152,7 +2258,7 @@ class IdentityDetailDialog(QDialog):
         
         # Add table with stretch factor to take most of the space
         # The stretch factor makes the table expand to fill available space
-        layout.addWidget(table, stretch=10)  # High stretch factor = takes most space
+        layout.addWidget(table, stretch=10) # High stretch factor = takes most space
         
         return widget
     
@@ -2278,7 +2384,7 @@ class IdentityDetailDialog(QDialog):
         # Check if we have semantic_data to display
         if has_semantic_data:
             # Add Semantic Mappings section
-            semantic_group = QGroupBox("🔍 Semantic Mappings")
+            semantic_group = QGroupBox("Semantic Mappings")
             semantic_group.setStyleSheet("""
                 QGroupBox { 
                     font-size: 9pt; font-weight: bold; color: #2196F3;
@@ -2350,7 +2456,7 @@ class IdentityDetailDialog(QDialog):
         # Check if we have feather_records to display
         if has_feather_records:
             # Add Feather Records section
-            feather_group = QGroupBox("📋 Feather Records")
+            feather_group = QGroupBox("Feather Records")
             feather_group.setStyleSheet("""
                 QGroupBox { 
                     font-size: 9pt; font-weight: bold; color: #aaa;
@@ -2450,8 +2556,8 @@ class IdentityDetailDialog(QDialog):
         # Columns: Record 1 | Record 2 | ... | Record N
         # Rows: Field names (shown in vertical header)
         table = QTableWidget()
-        table.setRowCount(len(all_keys))  # Each field is a row
-        table.setColumnCount(len(records))  # One column per record
+        table.setRowCount(len(all_keys)) # Each field is a row
+        table.setColumnCount(len(records)) # One column per record
         
         # Set headers
         headers = [f"Record {i+1}" if len(records) > 1 else "Value" for i in range(len(records))]
@@ -2476,12 +2582,12 @@ class IdentityDetailDialog(QDialog):
                         display_val = str(value)[:100] + "..." if len(str(value)) > 100 else str(value)
                     
                     item = QTableWidgetItem(display_val)
-                    item.setToolTip(str(value))  # Full value in tooltip
+                    item.setToolTip(str(value)) # Full value in tooltip
                     table.setItem(row, col, item)
         
         # Enable column resizing
         for i in range(len(records)):
-            table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch)  # Value columns
+            table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch) # Value columns
         
         # Add row selection highlighting
         table.setSelectionBehavior(QTableWidget.SelectRows)

@@ -13,7 +13,7 @@ from .base_engine import BaseCorrelationEngine, FilterConfig
 
 class EngineType:
     """Engine type constants"""
-    TIME_WINDOW_SCANNING = "time_window_scanning"  # New O(N) time-window scanning engine
+    TIME_WINDOW_SCANNING = "time_window_scanning" # O(N log N) time-window scanning engine
     IDENTITY_BASED = "identity_based"
 
 
@@ -40,13 +40,13 @@ class EngineSelector:
         engines = EngineSelector.get_available_engines()
         for engine_info in engines:
             engine_type, name, desc, complexity, use_cases, supports_id_filter, integration_features = engine_info
-            print(f"{name}: {desc}")
-            print(f"Integration features: {integration_features}")
+            logger.info(f"{name}: {desc}")
+            logger.info(f"Integration features: {integration_features}")
     """
     
     @staticmethod
-    def create_engine(config: any, 
-                     engine_type: str = EngineType.TIME_WINDOW_SCANNING,
+    def create_engine(config: any,
+                     engine_type: str = EngineType.IDENTITY_BASED,
                      filters: Optional[FilterConfig] = None) -> BaseCorrelationEngine:
         """
         Create correlation engine based on type (legacy method for backward compatibility).
@@ -252,11 +252,11 @@ class EngineSelector:
         Example:
             engines = EngineSelector.get_available_engines()
             for engine_type, name, desc, complexity, use_cases, supports_id, features in engines:
-                print(f"{name} ({complexity})")
-                print(f"  {desc}")
-                print(f"  Best for: {', '.join(use_cases)}")
-                print(f"  Identity Filter: {'Yes' if supports_id else 'No'}")
-                print(f"  Integration Features: {list(features.keys())}")
+                logger.info(f"{name} ({complexity})")
+                logger.info(f" {desc}")
+                logger.info(f" Best for: {', '.join(use_cases)}")
+                logger.info(f" Identity Filter: {'Yes' if supports_id else 'No'}")
+                logger.info(f" Integration Features: {list(features.keys())}")
         """
         engines = []
         
@@ -276,7 +276,7 @@ class EngineSelector:
                 "Memory-constrained systems",
                 "Any timestamp format support"
             ],
-            False,  # Does not support identity filtering
+            False, # Does not support identity filtering
             time_window_features
         ))
         
@@ -296,7 +296,7 @@ class EngineSelector:
                 "Performance-critical analysis",
                 "Relationship mapping"
             ],
-            True,  # Supports identity filtering
+            True, # Supports identity filtering
             identity_features
         ))
         

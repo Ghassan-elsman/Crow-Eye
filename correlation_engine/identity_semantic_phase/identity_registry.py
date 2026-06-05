@@ -19,19 +19,20 @@ class RecordReference:
     feather_id: str
     record_index: int
     original_record: Dict[str, Any]
-    wing_id: Optional[str] = None  # Track which wing this record came from
-    wing_name: Optional[str] = None  # Track wing name for context
+    wing_id: Optional[str] = None # Track which wing this record came from
+    wing_name: Optional[str] = None # Track wing name for context
 
 
 @dataclass
 class IdentityRecord:
     """Record representing a unique identity and its associated data"""
     identity_value: str
-    identity_type: str  # e.g., "file_path", "process_name", "user_id"
+    identity_type: str # e.g., "file_path", "process_name", "user_id"
     record_references: List[RecordReference] = field(default_factory=list)
     semantic_data: Optional[Dict[str, Any]] = None
-    processing_status: str = "pending"  # pending, processed, error
+    processing_status: str = "pending" # pending, processed, error
     error_message: Optional[str] = None
+    overall_score: Optional[Dict[str, Any]] = None # {max, average, evidence_count, interpretation}
     
     def add_record_reference(self, reference: RecordReference):
         """Add a record reference to this identity"""
@@ -138,19 +139,41 @@ class IdentityRegistry:
         else:
             # Existing identity - merge record references (deduplication)
             existing = self._identities[identity_key]
-            
+
             # Track existing record references to avoid duplicates
             existing_refs = {
                 (ref.match_id, ref.feather_id, ref.record_index)
                 for ref in existing.record_references
             }
-            
+
             # Add only new record references
             for ref in identity.record_references:
                 ref_key = (ref.match_id, ref.feather_id, ref.record_index)
                 if ref_key not in existing_refs:
                     existing.add_record_reference(ref)
                     self._total_records += 1
+
+            # Merge semantic_data: caller wins iff existing has none. Otherwise
+            # keep existing (it's already authoritative) and warn so the caller
+            # knows their data was dropped. Prevents silent loss of pre-processed
+            # IdentityRecords passed to add_identity().
+            if identity.semantic_data is not None:
+                if existing.semantic_data is None:
+                    existing.semantic_data = identity.semantic_data
+                    # If the caller's record was processed, reflect that status
+                    if identity.processing_status == 'processed':
+                        old_status = existing.processing_status
+                        existing.processing_status = 'processed'
+                        if old_status in self._identities_by_status:
+                            self._identities_by_status[old_status].discard(identity_key)
+                        self._identities_by_status['processed'].add(identity_key)
+                else:
+                    logger.warning(
+                        f"[IdentityRegistry] add_identity for '{identity_key}': "
+                        f"incoming semantic_data dropped (existing already populated). "
+                        f"Caller had keys={list(identity.semantic_data.keys())}, "
+                        f"existing has keys={list(existing.semantic_data.keys())}"
+                    )
     
     def get_unique_identities(self) -> List[str]:
         """
@@ -291,18 +314,42 @@ class IdentityRegistry:
     def get_pending_identities(self) -> List[IdentityRecord]:
         """
         Get identities that haven't been processed yet.
-        
+
         Task 17.1: Optimized using status index for O(1) filtering instead of O(n) scan
-        
+        Note: Falls back to full scan if status index is inconsistent (mirrors
+        get_processed_identities so the semantic phase doesn't silently skip work).
+
         Returns:
             List of pending IdentityRecord objects
-            
+
         Requirements: 13.1, 13.3
         Property 17: Identity-Level Semantic Processing
         """
-        # Task 17.1: Use status index for efficient filtering
         pending_keys = self._identities_by_status.get('pending', set())
-        return [self._identities[key] for key in pending_keys if key in self._identities]
+        pending_from_index = [
+            self._identities[key] for key in pending_keys if key in self._identities
+        ]
+
+        # Fallback: if status index looks empty but identities exist, scan for
+        # any pending-status records the index missed and rebuild the index.
+        if not pending_from_index and self._identities:
+            pending_from_scan = [
+                identity for identity in self._identities.values()
+                if identity.processing_status == 'pending'
+            ]
+            if pending_from_scan:
+                if self.debug_mode:
+                    logger.warning(
+                        f"[Identity Registry] Status index inconsistent: found "
+                        f"{len(pending_from_scan)} pending identities via scan but 0 via index"
+                    )
+                self._identities_by_status['pending'] = {
+                    self._get_identity_key(identity.identity_value, identity.identity_type)
+                    for identity in pending_from_scan
+                }
+                return pending_from_scan
+
+        return pending_from_index
     
     def get_processed_identities(self) -> List[IdentityRecord]:
         """
@@ -425,19 +472,38 @@ class IdentityRegistry:
         self._identity_count = 0
         self._total_records = 0
     
+    # Identity types whose values are inherently case-sensitive and must NOT
+    # be lowercased before key construction. Examples: hashes (case differs
+    # but value is the same byte string only by convention), SIDs, GUIDs,
+    # and POSIX path identities harvested from non-Windows artifacts.
+    _CASE_SENSITIVE_IDENTITY_TYPES = frozenset({
+        'hash', 'md5', 'sha1', 'sha256', 'sha512',
+        'sid', 'guid', 'uuid',
+        'posix_path', # explicit POSIX paths from cross-platform artifacts
+        'token',
+    })
+
     def _get_identity_key(self, identity_value: str, identity_type: str) -> str:
         """
         Generate unique key for identity lookup.
-        
+
+        Case-handling: identity types in _CASE_SENSITIVE_IDENTITY_TYPES preserve
+        case (hashes, SIDs, GUIDs, POSIX paths). All other types — including
+        Windows file paths, registry keys, process names — are lowercased to
+        match Windows' case-insensitive filesystem semantics.
+
         Args:
             identity_value: Identity value
             identity_type: Identity type
-            
+
         Returns:
             Composite key string
         """
-        # Normalize identity value for consistent lookup
-        normalized_value = identity_value.lower().strip()
+        stripped = identity_value.strip()
+        if identity_type in self._CASE_SENSITIVE_IDENTITY_TYPES:
+            normalized_value = stripped
+        else:
+            normalized_value = stripped.lower()
         return f"{identity_type}:{normalized_value}"
     
     def __len__(self) -> int:

@@ -1,0 +1,185 @@
+{
+  "config_name": "persistence_mechanisms_correlation",
+  "wing_name": "Persistence Mechanisms Correlation",
+  "wing_id": "default_wing_persistence_001",
+  "description": "Detects adversary autostart and persistence on the host by correlating Run/RunOnce keys, scheduled services, and the actual on-disk + run-time evidence that the persistent binary lives and executes. Uses a tiered approach with autostart-registry evidence (AutoStartPrograms, SystemServices) weighted highest, supporting execution evidence (Prefetch, Amcache InventoryApplication) next, and drop-time + service-install audit events as confirming context.",
+  "proves": "An adversary established a persistent autostart on the host",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-05-18T00:00:00Z",
+  "last_modified": "2026-05-18T00:00:00Z",
+  "version": "1.0",
+
+  "feathers": [
+    {
+      "feather_config_name": "AutoStartPrograms_CrowEyeFeather",
+      "feather_database_path": "feathers/AutoStartPrograms_CrowEyeFeather.db",
+      "artifact_type": "AutoStartPrograms",
+      "feather_id": "autostart",
+      "weight": 0.40,
+      "tier": 1,
+      "tier_name": "Autostart registry evidence"
+    },
+    {
+      "feather_config_name": "SystemServices_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemServices_CrowEyeFeather.db",
+      "artifact_type": "SystemServices",
+      "feather_id": "services",
+      "weight": 0.25,
+      "tier": 1,
+      "tier_name": "Autostart registry evidence"
+    },
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.10,
+      "tier": 2,
+      "tier_name": "Persistent binary actually ran"
+    },
+    {
+      "feather_config_name": "InventoryApplication_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplication_CrowEyeFeather.db",
+      "artifact_type": "InventoryApplication",
+      "feather_id": "amcache_app",
+      "weight": 0.10,
+      "tier": 2,
+      "tier_name": "Software inventory evidence"
+    },
+    {
+      "feather_config_name": "InstalledSoftware_CrowEyeFeather",
+      "feather_database_path": "feathers/InstalledSoftware_CrowEyeFeather.db",
+      "artifact_type": "InstalledSoftware",
+      "feather_id": "installed",
+      "weight": 0.05,
+      "tier": 2,
+      "tier_name": "Software inventory evidence"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "File-system drop evidence"
+    },
+    {
+      "feather_config_name": "SystemLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemLogs_CrowEyeFeather.db",
+      "artifact_type": "SystemLogs",
+      "feather_id": "system_logs",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "Service install audit (7045)"
+    }
+  ],
+
+  "time_window_minutes": 180,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "AutoStartPrograms",
+    "SystemServices",
+    "Prefetch",
+    "InventoryApplication",
+    "MFT",
+    "SystemLogs"
+  ],
+  "use_weighted_scoring": true,
+
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed":  { "min": 0.70, "label": "Confirmed Persistence" },
+      "probable":   { "min": 0.40, "label": "Probable Persistence" },
+      "weak":       { "min": 0.20, "label": "Weak / Partial Persistence" },
+      "not_proven": { "min": 0.00, "label": "Not Proven" }
+    }
+  },
+
+  "semantic_rules": [
+    {
+      "rule_id": "pers_run_key",
+      "name": "Run / RunOnce Autostart Entry",
+      "semantic_value": "Run Key Persistence",
+      "description": "AutoStartPrograms entry indicates a binary is configured to run at logon/boot. Severity is 'info' because most autostart entries are legitimate (Discord, OneDrive, vendor utilities); tagging every entry as high-severity would drown the analyst in false-positive alerts. The wing's weighted scoring layer escalates the rating when combined with other persistence indicators.",
+      "conditions": [
+        { "feather_id": "autostart", "field_name": "command", "operator": "wildcard", "value": "*" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "persistence",
+      "severity": "info"
+    },
+    {
+      "rule_id": "pers_service_install",
+      "name": "Service-Based Persistence",
+      "semantic_value": "Service Persistence",
+      "description": "A service is registered to launch a binary. Severity is 'info' because every Windows install has hundreds of legitimate services; tagging each as high-severity would be a sea of false positives. Suspicious services need additional context (unsigned binary, unusual path, recent install date) to warrant escalation.",
+      "conditions": [
+        { "feather_id": "services", "field_name": "image_path", "operator": "wildcard", "value": "*" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "persistence",
+      "severity": "info"
+    },
+    {
+      "rule_id": "pers_confirmed_runs",
+      "name": "Autostart Binary Confirmed to Have Run (AND)",
+      "semantic_value": "Persistent Binary Executed",
+      "description": "AutoStartPrograms entry AND Prefetch for the same image confirms the persistent binary actually ran. Severity is 'low' because most autostart-listed binaries are expected to run (that's their purpose); the combined evidence is informative but not on its own a critical alert.",
+      "conditions": [
+        { "feather_id": "autostart", "field_name": "command",          "operator": "wildcard", "value": "*" },
+        { "feather_id": "prefetch",  "field_name": "executable_name", "operator": "wildcard", "value": "*" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "persistence",
+      "severity": "low"
+    },
+    {
+      "rule_id": "pers_service_install_event",
+      "name": "Service Install Event Logged",
+      "semantic_value": "Service Install (7045/4697)",
+      "description": "System or Security log records a service installation",
+      "conditions": [
+        { "feather_id": "system_logs", "field_name": "EventID", "operator": "equals", "value": "7045" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "persistence",
+      "severity": "high"
+    },
+    {
+      "rule_id": "pers_inventory_match",
+      "name": "Persistent Binary in Software Inventory (OR)",
+      "semantic_value": "Inventory Cross-Reference",
+      "description": "Amcache InventoryApplication OR InstalledSoftware records the persistent binary",
+      "conditions": [
+        { "feather_id": "amcache_app", "field_name": "name", "operator": "wildcard", "value": "*" },
+        { "feather_id": "installed",   "field_name": "name", "operator": "wildcard", "value": "*" }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "persistence",
+      "severity": "info"
+    }
+  ],
+
+  "tags": [
+    "persistence",
+    "default",
+    "weighted",
+    "ir"
+  ],
+  "case_types": [
+    "intrusion",
+    "malware",
+    "apt"
+  ]
+}

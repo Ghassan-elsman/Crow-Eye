@@ -234,8 +234,9 @@ semantic_result = {"Application": "chrome.exe"}
 - Error handling and user feedback
 
 **Files to Work On**:
-- `gui/correlation_results_view.py`
-- `gui/identity_results_view.py`
+- `gui/results_viewer.py` (`DynamicResultsTabWidget` — the orchestrator)
+- `gui/identity_results_view.py` (identity-centric tree)
+- `gui/timebased_results_viewer.py` (time-window tree)
 - `gui/pipeline_management_tab.py`
 
 **Skills Needed**: PyQt5, Python, UI/UX design
@@ -263,6 +264,23 @@ semantic_result = {"Application": "chrome.exe"}
 
 ---
 
+#### 9. Testing and Quality Assurance
+**Goal**: Improve test coverage and quality
+
+**What's Needed**:
+- Write unit tests for core components
+- Create integration tests
+- Add performance benchmarks
+- Test with diverse artifact datasets
+- Document test cases
+
+**Files to Work On**:
+- Create test files in `tests/` directory
+- Add test data in `tests/data/`
+
+**Skills Needed**: Python testing (pytest), test design
+
+---
 
 ## How to Contribute
 
@@ -473,6 +491,67 @@ logger.error("Error that needs attention")
 
 ## Testing Guidelines
 
+### Unit Tests
+
+Create unit tests for individual functions and classes:
+
+```python
+# tests/test_identity_extractor.py
+import pytest
+from correlation_engine.engine.identity_correlation_engine import IdentityCorrelationEngine
+
+def test_extract_identity_from_prefetch():
+    """Test identity extraction from Prefetch artifact"""
+    engine = IdentityCorrelationEngine()
+    
+    record = {
+        'artifact': 'Prefetch',
+        'executable_name': 'CHROME.EXE',
+        'path': 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'last_executed': '2024-01-15 10:30:00'
+    }
+    
+    name, path, hash_val, identity_type = engine.extract_identity_info(record)
+    
+    assert name == 'CHROME.EXE'
+    assert 'chrome.exe' in path.lower()
+    assert identity_type in ['name', 'path', 'hash', 'composite']
+```
+
+### Integration Tests
+
+Test component interactions:
+
+```python
+# tests/test_correlation_workflow.py
+def test_complete_correlation_workflow():
+    """Test complete workflow from feather creation to correlation"""
+    # Create test feathers
+    # Create test wing
+    # Execute correlation
+    # Verify results
+    pass
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=correlation_engine
+
+# Run specific test file
+pytest tests/test_identity_extractor.py
+
+# Run specific test
+pytest tests/test_identity_extractor.py::test_extract_identity_from_prefetch
+```
+
+---
+
+## Documentation Guidelines
 
 ### Code Documentation
 

@@ -49,7 +49,7 @@ class SearchResult:
     match_text: str
     context: str
     confidence: float
-    highlight_positions: List[Tuple[int, int]]  # Start, end positions for highlighting
+    highlight_positions: List[Tuple[int, int]] # Start, end positions for highlighting
 
 
 @dataclass
@@ -81,9 +81,9 @@ class TimeBasedSearchWidget(QWidget):
     """
     
     # Signals
-    search_results_updated = pyqtSignal(list)  # List[SearchResult]
-    result_selected = pyqtSignal(object)  # SearchResult
-    highlight_requested = pyqtSignal(str, list)  # Text, highlight positions
+    search_results_updated = pyqtSignal(list) # List[SearchResult]
+    result_selected = pyqtSignal(object) # SearchResult
+    highlight_requested = pyqtSignal(str, list) # Text, highlight positions
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -101,11 +101,11 @@ class TimeBasedSearchWidget(QWidget):
         
         # Highlighting colors
         self.highlight_colors = {
-            SearchType.TEXT: QColor(255, 255, 0, 100),      # Yellow
-            SearchType.SEMANTIC: QColor(0, 255, 0, 100),    # Green
-            SearchType.TEMPORAL: QColor(0, 150, 255, 100),  # Blue
-            SearchType.PATTERN: QColor(255, 150, 0, 100),   # Orange
-            SearchType.COMBINED: QColor(255, 0, 255, 100)   # Magenta
+            SearchType.TEXT: QColor(255, 255, 0, 100), # Yellow
+            SearchType.SEMANTIC: QColor(0, 255, 0, 100), # Green
+            SearchType.TEMPORAL: QColor(0, 150, 255, 100), # Blue
+            SearchType.PATTERN: QColor(255, 150, 0, 100), # Orange
+            SearchType.COMBINED: QColor(255, 0, 255, 100) # Magenta
         }
         
         self._init_ui()
@@ -152,13 +152,18 @@ class TimeBasedSearchWidget(QWidget):
         search_layout.addWidget(self.search_type_combo)
         
         # Search button
-        search_btn = QPushButton("🔍 Search")
-        search_btn.setMaximumWidth(80)
+        from .crow_eye_icons import CrowEyeIcons
+
+        search_btn = QPushButton("Search")
+        search_btn.setIcon(CrowEyeIcons.search())
+        search_btn.setMaximumWidth(110)
         search_btn.clicked.connect(self._trigger_search)
         search_layout.addWidget(search_btn)
-        
-        # Clear button
-        clear_btn = QPushButton("✖")
+
+        # Clear button — Crow-Eye delete icon (no text needed at this size).
+        clear_btn = QPushButton("")
+        clear_btn.setIcon(CrowEyeIcons.delete())
+        clear_btn.setToolTip("Clear search")
         clear_btn.setMaximumWidth(30)
         clear_btn.clicked.connect(self.clear_search)
         search_layout.addWidget(clear_btn)
@@ -180,7 +185,7 @@ class TimeBasedSearchWidget(QWidget):
         options_layout.addStretch()
         
         # Advanced toggle
-        self.advanced_toggle = QPushButton("⚙️ Advanced")
+        self.advanced_toggle = QPushButton("Advanced")
         self.advanced_toggle.setCheckable(True)
         self.advanced_toggle.setMaximumWidth(100)
         self.advanced_toggle.toggled.connect(self._toggle_advanced_options)
@@ -193,7 +198,7 @@ class TimeBasedSearchWidget(QWidget):
     def _create_advanced_options(self) -> QWidget:
         """Create advanced search options section."""
         section = QGroupBox("Advanced Options")
-        section.setVisible(False)  # Initially hidden
+        section.setVisible(False) # Initially hidden
         
         layout = QFormLayout(section)
         
@@ -263,12 +268,15 @@ class TimeBasedSearchWidget(QWidget):
         # Navigation buttons
         nav_layout = QHBoxLayout()
         
-        self.prev_btn = QPushButton("◀ Previous")
+        from .crow_eye_icons import CrowEyeIcons
+        self.prev_btn = QPushButton("Previous")
+        self.prev_btn.setIcon(CrowEyeIcons.prev())
         self.prev_btn.setEnabled(False)
         self.prev_btn.clicked.connect(self._navigate_previous)
         nav_layout.addWidget(self.prev_btn)
         
-        self.next_btn = QPushButton("Next ▶")
+        self.next_btn = QPushButton("Next")
+        self.next_btn.setIcon(CrowEyeIcons.next())
         self.next_btn.setEnabled(False)
         self.next_btn.clicked.connect(self._navigate_next)
         nav_layout.addWidget(self.next_btn)
@@ -276,7 +284,7 @@ class TimeBasedSearchWidget(QWidget):
         nav_layout.addStretch()
         
         # Export results
-        export_btn = QPushButton("📄 Export Results")
+        export_btn = QPushButton("Export Results")
         export_btn.clicked.connect(self._export_results)
         nav_layout.addWidget(export_btn)
         
@@ -334,12 +342,18 @@ class TimeBasedSearchWidget(QWidget):
     def _toggle_advanced_options(self, visible: bool):
         """Toggle advanced options visibility."""
         self.advanced_options.setVisible(visible)
-        self.advanced_toggle.setText("⚙️ Advanced ▼" if visible else "⚙️ Advanced ▶")
+        # Toggle the Crow-Eye chevron between collapsed (right-pointing)
+        # and expanded (down-pointing) states; text stays "Advanced".
+        from .crow_eye_icons import CrowEyeIcons
+        self.advanced_toggle.setText("Advanced")
+        self.advanced_toggle.setIcon(
+            CrowEyeIcons.expand() if visible else CrowEyeIcons.collapse()
+        )
     
     def _trigger_delayed_search(self):
         """Trigger search with delay for debouncing."""
         self.search_timer.stop()
-        self.search_timer.start(300)  # 300ms delay
+        self.search_timer.start(300) # 300ms delay
     
     def _trigger_search(self):
         """Trigger immediate search."""
@@ -368,7 +382,7 @@ class TimeBasedSearchWidget(QWidget):
         # Add to history
         if query not in self.search_history:
             self.search_history.append(query)
-            if len(self.search_history) > 50:  # Limit history size
+            if len(self.search_history) > 50: # Limit history size
                 self.search_history.pop(0)
         
         # Emit results
@@ -543,7 +557,7 @@ class TimeBasedSearchWidget(QWidget):
                             'positions': [(match.start(), match.end())]
                         })
                 except re.error:
-                    pass  # Invalid regex
+                    pass # Invalid regex
             else:
                 if query.whole_words:
                     pattern = r'\b' + re.escape(search_text) + r'\b'
@@ -619,8 +633,8 @@ class TimeBasedSearchWidget(QWidget):
         
         # Date pattern matching
         date_patterns = [
-            r'\d{4}-\d{2}-\d{2}',  # YYYY-MM-DD
-            r'\d{2}:\d{2}',        # HH:MM
+            r'\d{4}-\d{2}-\d{2}', # YYYY-MM-DD
+            r'\d{2}:\d{2}', # HH:MM
         ]
         
         for pattern in date_patterns:
@@ -653,7 +667,7 @@ class TimeBasedSearchWidget(QWidget):
         )
         
         # Populate results list
-        for i, result in enumerate(self.current_results[:100]):  # Limit display
+        for i, result in enumerate(self.current_results[:100]): # Limit display
             item_text = (
                 f"{result.anchor_time.strftime('%H:%M:%S')} | "
                 f"{result.identity_value[:30]}{'...' if len(result.identity_value) > 30 else ''} | "
@@ -670,7 +684,7 @@ class TimeBasedSearchWidget(QWidget):
             self.results_list.addItem(item)
         
         # Update navigation buttons
-        self.prev_btn.setEnabled(False)  # Will be implemented with result navigation
+        self.prev_btn.setEnabled(False) # Will be implemented with result navigation
         self.next_btn.setEnabled(len(self.current_results) > 1)
     
     def _on_result_selected(self, item: QListWidgetItem):

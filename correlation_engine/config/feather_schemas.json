@@ -1,0 +1,216 @@
+{
+  "_doc": [
+    "Per-feather-table metadata used by the correlation engine.",
+    "Keys are SQLite table names (NOT artifact_type / wing IDs).",
+    "Adding a new parser table = one entry here. No engine code change.",
+    "",
+    "Fields:",
+    "  artifact_type                  Logical category (matches artifact_types.json IDs).",
+    "  primary_timestamp_column       Column the engine indexes + uses for window queries.",
+    "  secondary_timestamp_columns    Additional time fields surfaced for analysis.",
+    "  multi_timestamp_json_columns   JSON list-of-timestamps columns. Each row fans",
+    "                                 out to one virtual record per timestamp.",
+    "  identity_columns_preferred     Field-extraction priority for raw identity.",
+    "  table_kind                     Coarse category for downstream tooling."
+  ],
+
+  "prefetch_data": {
+    "artifact_type": "Prefetch",
+    "primary_timestamp_column": "last_executed",
+    "secondary_timestamp_columns": ["created_on", "modified_on", "accessed_on"],
+    "multi_timestamp_json_columns": [
+      {"column": "run_times", "format": "datetime_string"}
+    ],
+    "identity_columns_preferred": ["executable_name", "filename"],
+    "table_kind": "execution_evidence"
+  },
+
+  "InventoryApplicationFile": {
+    "artifact_type": "AmCache",
+    "primary_timestamp_column": "link_date",
+    "identity_columns_preferred": ["name", "original_file_name", "lower_case_long_path"],
+    "table_kind": "execution_evidence"
+  },
+
+  "InventoryApplication": {
+    "artifact_type": "AmCache",
+    "primary_timestamp_column": "install_date",
+    "identity_columns_preferred": ["name", "publisher"],
+    "table_kind": "installation_evidence"
+  },
+
+  "shimcache_entries": {
+    "artifact_type": "ShimCache",
+    "primary_timestamp_column": "last_modified",
+    "identity_columns_preferred": ["filename", "path"],
+    "table_kind": "execution_evidence"
+  },
+
+  "LNK_Files": {
+    "artifact_type": "LNK",
+    "primary_timestamp_column": "Time_Modification",
+    "secondary_timestamp_columns": ["Time_Creation", "Time_Access"],
+    "identity_columns_preferred": ["Source_Name", "Local_Path"],
+    "table_kind": "user_activity"
+  },
+
+  "Automatic_JumpLists": {
+    "artifact_type": "Jumplists",
+    "primary_timestamp_column": "Time_Modification",
+    "secondary_timestamp_columns": ["Time_Creation", "Time_Access"],
+    "identity_columns_preferred": ["Source_Name", "AppDesc", "Local_Path"],
+    "table_kind": "user_activity"
+  },
+
+  "Custom_JumpLists": {
+    "artifact_type": "Jumplists",
+    "primary_timestamp_column": "Time_Modification",
+    "secondary_timestamp_columns": ["Time_Creation", "Time_Access"],
+    "identity_columns_preferred": ["Source_Name", "AppDesc", "Local_Path"],
+    "table_kind": "user_activity"
+  },
+
+  "journal_events": {
+    "artifact_type": "USN",
+    "primary_timestamp_column": "timestamp",
+    "secondary_timestamp_columns": ["inserted_at"],
+    "identity_columns_preferred": ["filename"],
+    "table_kind": "filesystem_metadata"
+  },
+
+  "SystemLogs": {
+    "artifact_type": "Logs",
+    "primary_timestamp_column": "EventTimestampUTC",
+    "identity_columns_preferred": ["Source", "EventID"],
+    "table_kind": "event_log"
+  },
+
+  "ApplicationLogs": {
+    "artifact_type": "Logs",
+    "primary_timestamp_column": "EventTimestampUTC",
+    "identity_columns_preferred": ["Source", "EventID"],
+    "table_kind": "event_log"
+  },
+
+  "SecurityLogs": {
+    "artifact_type": "Logs",
+    "primary_timestamp_column": "EventTimestampUTC",
+    "identity_columns_preferred": ["Source", "EventID"],
+    "table_kind": "event_log"
+  },
+
+  "srum_application_usage": {
+    "artifact_type": "SRUM",
+    "primary_timestamp_column": "timestamp",
+    "identity_columns_preferred": ["app_name", "app_path"],
+    "table_kind": "resource_usage"
+  },
+
+  "UserAssist": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "last_execution",
+    "secondary_timestamp_columns": ["timestamp"],
+    "identity_columns_preferred": ["program_path"],
+    "table_kind": "execution_evidence"
+  },
+
+  "BAM": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "last_execution",
+    "identity_columns_preferred": ["app_name", "process_path", "name"],
+    "table_kind": "execution_evidence"
+  },
+
+  "MUICache": {
+    "artifact_type": "Registry",
+    "identity_columns_preferred": ["app_name", "app_path"],
+    "table_kind": "user_activity"
+  },
+
+  "Shellbags": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "modified_date",
+    "secondary_timestamp_columns": ["created_date", "accessed_date"],
+    "identity_columns_preferred": ["file_name", "parent_path"],
+    "table_kind": "user_activity"
+  },
+
+  "OpenSaveMRU": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "access_date",
+    "identity_columns_preferred": ["file_name", "name", "file_path"],
+    "table_kind": "user_activity"
+  },
+
+  "InstalledSoftware": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "install_date",
+    "secondary_timestamp_columns": ["timestamp"],
+    "identity_columns_preferred": ["display_name"],
+    "table_kind": "installation_evidence"
+  },
+
+  "SystemServices": {
+    "artifact_type": "Registry",
+    "identity_columns_preferred": ["service_name", "display_name", "image_path"],
+    "table_kind": "system_state"
+  },
+
+  "AutoStartPrograms": {
+    "artifact_type": "Registry",
+    "identity_columns_preferred": ["program_name", "command"],
+    "table_kind": "system_state"
+  },
+
+  "TypedPaths": {
+    "artifact_type": "Registry",
+    "identity_columns_preferred": ["data", "name"],
+    "table_kind": "user_activity"
+  },
+
+  "USBDevices": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "last_connected",
+    "identity_columns_preferred": ["friendly_name"],
+    "table_kind": "device_evidence"
+  },
+
+  "BrowserHistory": {
+    "artifact_type": "Browser",
+    "primary_timestamp_column": "timestamp",
+    "identity_columns_preferred": ["title"],
+    "table_kind": "user_activity"
+  },
+
+  "recycle_bin_entries": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "deletion_time",
+    "identity_columns_preferred": ["original_filename", "original_path"],
+    "table_kind": "filesystem_metadata"
+  },
+
+  "mft_records": {
+    "artifact_type": "MFT",
+    "primary_timestamp_column": "created_time",
+    "secondary_timestamp_columns": ["modified_time", "accessed_time", "mft_modified_time"],
+    "identity_columns_preferred": ["file_name"],
+    "table_kind": "filesystem_metadata"
+  },
+
+  "mft_usn_correlated": {
+    "artifact_type": "MFT",
+    "primary_timestamp_column": "si_creation_time",
+    "secondary_timestamp_columns": [
+      "si_modification_time",
+      "si_access_time",
+      "si_mft_entry_change_time",
+      "fn_creation_time",
+      "fn_modification_time",
+      "fn_access_time",
+      "fn_mft_entry_change_time",
+      "usn_timestamp"
+    ],
+    "identity_columns_preferred": ["fn_filename", "reconstructed_path"],
+    "table_kind": "filesystem_metadata"
+  }
+}

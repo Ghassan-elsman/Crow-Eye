@@ -58,9 +58,9 @@ class FeatherAutoRegistrationService:
         
         # Check common wrong locations
         wrong_locations = [
-            self.case_directory / "config" / "feathers",  # Old location
-            self.case_directory / "databases",  # Alternative location
-            self.case_directory,  # Root case directory
+            self.case_directory / "config" / "feathers", # Old location
+            self.case_directory / "databases", # Alternative location
+            self.case_directory, # Root case directory
         ]
         
         for wrong_location in wrong_locations:
@@ -73,8 +73,8 @@ class FeatherAutoRegistrationService:
         
         # Database not found in any expected location
         print(f"[Feather Location] WARNING: Database not found in expected locations")
-        print(f"[Feather Location]   Original path: {database_path}")
-        print(f"[Feather Location]   Expected location: {expected_path}")
+        print(f"[Feather Location] Original path: {database_path}")
+        print(f"[Feather Location] Expected location: {expected_path}")
         return database_path, False
     
     def register_new_feather(self, database_path: str, artifact_type: str,
@@ -109,7 +109,7 @@ class FeatherAutoRegistrationService:
         
         # Generate feather configuration with resolved path
         feather_config = self.generate_feather_config(
-            database_path=resolved_path,  # Use resolved path
+            database_path=resolved_path, # Use resolved path
             artifact_type=artifact_type,
             detection_method=detection_method,
             confidence=confidence
@@ -156,9 +156,9 @@ class FeatherAutoRegistrationService:
             else:
                 # Database exists but not in correct location - use original path but warn
                 print(f"[Feather Registration] WARNING: Database not in expected location")
-                print(f"[Feather Registration]   Expected: {expected_feathers_dir}")
-                print(f"[Feather Registration]   Found: {db_path.parent}")
-                print(f"[Feather Registration]   Using original path: {db_path}")
+                print(f"[Feather Registration] Expected: {expected_feathers_dir}")
+                print(f"[Feather Registration] Found: {db_path.parent}")
+                print(f"[Feather Registration] Using original path: {db_path}")
         
         # Generate config name from database filename and timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -172,14 +172,15 @@ class FeatherAutoRegistrationService:
         date_range_start = None
         date_range_end = None
         
+        conn = None
         try:
-            conn = sqlite3.connect(str(db_path))  # Use resolved path
+            conn = sqlite3.connect(str(db_path)) # Use resolved path
             cursor = conn.cursor()
-            
+
             # Get record count
             cursor.execute("SELECT COUNT(*) FROM feather_data")
             total_records = cursor.fetchone()[0]
-            
+
             # Try to get date range
             try:
                 cursor.execute("SELECT MIN(timestamp), MAX(timestamp) FROM feather_data")
@@ -187,19 +188,23 @@ class FeatherAutoRegistrationService:
                 if date_range[0] and date_range[1]:
                     date_range_start = date_range[0]
                     date_range_end = date_range[1]
-            except:
-                pass  # Date range is optional
-            
-            conn.close()
-        except Exception as e:
+            except sqlite3.Error:
+                pass # Date range is optional
+        except sqlite3.Error as e:
             print(f"Warning: Could not read database metadata from {db_path}: {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
         
         # Create feather configuration with resolved path
         feather_config = FeatherConfig(
             config_name=config_name,
             feather_name=feather_name,
             artifact_type=artifact_type,
-            source_database=str(db_path),  # Use resolved path
+            source_database=str(db_path), # Use resolved path
             source_table="feather_data",
             selected_columns=["timestamp", "application", "file_path", "event_data"],
             column_mapping={
@@ -210,7 +215,7 @@ class FeatherAutoRegistrationService:
             },
             timestamp_column="timestamp",
             timestamp_format="%Y-%m-%d %H:%M:%S",
-            output_database=str(db_path),  # Use resolved path
+            output_database=str(db_path), # Use resolved path
             total_records=total_records,
             date_range_start=date_range_start,
             date_range_end=date_range_end,
@@ -283,34 +288,38 @@ class FeatherAutoRegistrationService:
         Returns:
             Tuple of (is_valid, error_message)
         """
+        conn = None
         try:
             db_path = Path(database_path)
-            
+
             if not db_path.exists():
                 return False, "Database file not found"
-            
+
             # Try to connect and check for feather_data table
             conn = sqlite3.connect(database_path)
             cursor = conn.cursor()
-            
+
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='feather_data'")
             if not cursor.fetchone():
-                conn.close()
                 return False, "Database does not contain 'feather_data' table"
-            
+
             # Check for required columns
             cursor.execute("PRAGMA table_info(feather_data)")
             columns = [row[1] for row in cursor.fetchall()]
-            
+
             required_columns = ["timestamp"]
             missing_columns = [col for col in required_columns if col not in columns]
-            
-            conn.close()
-            
+
             if missing_columns:
                 return False, f"Missing required columns: {', '.join(missing_columns)}"
-            
+
             return True, None
-            
-        except Exception as e:
+
+        except sqlite3.Error as e:
             return False, str(e)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass

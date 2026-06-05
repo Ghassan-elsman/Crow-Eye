@@ -25,7 +25,7 @@ class SemanticFilterPanel(QWidget):
     """
     
     # Signal emitted when filters are applied
-    filters_applied = pyqtSignal(object)  # QueryFilters object
+    filters_applied = pyqtSignal(object) # QueryFilters object
     
     def __init__(self, parent=None):
         """Initialize semantic filter panel."""

@@ -20,13 +20,13 @@ from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
-from ..config.case_specific_configuration_manager import (
-    CaseSpecificConfigurationManager, 
-    CaseSemanticMappingConfig, 
+from ..config._case_specific_config_service import (
+    CaseSpecificConfigurationManager,
+    CaseSemanticMappingConfig,
     CaseScoringWeightsConfig,
     CaseConfigurationMetadata
 )
-from ..config.case_configuration_file_manager import CaseConfigurationFileManager
+from ..config._case_config_file_service import CaseConfigurationFileManager
 from ..config.semantic_mapping import SemanticMappingManager, SemanticMapping
 from ..integration.weighted_scoring_integration import WeightedScoringIntegration
 from ..config.integrated_configuration_manager import IntegratedConfigurationManager
@@ -195,7 +195,7 @@ class CaseSpecificConfigurationIntegration:
             for mapping_data in config.mappings:
                 mapping = SemanticMapping(**mapping_data)
                 mapping.scope = "case"
-                mapping.wing_id = config.case_id  # Use case_id as wing_id for case-specific mappings
+                mapping.wing_id = config.case_id # Use case_id as wing_id for case-specific mappings
                 self.semantic_mapping_manager.add_mapping(mapping)
             
             logger.info(f"Applied {len(config.mappings)} case-specific semantic mappings for case {config.case_id}")
@@ -597,7 +597,7 @@ class CaseSpecificConfigurationIntegration:
                 with open(import_path, 'r') as f:
                     data = json.load(f)
                 imported_case = data.get('case_id')
-            except:
+            except Exception as e:
                 pass
         
         if imported_case == self.state.current_case_id:

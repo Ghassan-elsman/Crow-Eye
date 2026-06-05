@@ -24,7 +24,7 @@ class ProgressEvent:
     
     Provides real-time feedback about correlation progress to registered listeners.
     """
-    event_type: str  # "anchor_collection", "correlation_start", "anchor_progress", "summary"
+    event_type: str # "anchor_collection", "correlation_start", "anchor_progress", "summary"
     timestamp: datetime
     data: Dict[str, Any]
 
@@ -40,7 +40,7 @@ class DuplicateInfo:
     original_match_id: Optional[str]
     original_anchor_feather: Optional[str]
     original_anchor_time: Optional[datetime]
-    duplicate_count: int  # How many times this pattern was seen
+    duplicate_count: int # How many times this pattern was seen
 
 
 @dataclass(frozen=True)
@@ -56,8 +56,8 @@ class MatchSet:
     non-anchor record combinations.
     """
     anchor_feather_id: str
-    anchor_record_id: str  # Using record's unique identifier (e.g., rowid or composite key)
-    non_anchor_records: FrozenSet[Tuple[str, str]]  # (feather_id, record_id)
+    anchor_record_id: str # Using record's unique identifier (e.g., rowid or composite key)
+    non_anchor_records: FrozenSet[Tuple[str, str]] # (feather_id, record_id)
     
     # NEW: Track original match for duplicates
     original_match_id: Optional[str] = None
@@ -83,7 +83,7 @@ class MatchSet:
 class CorrelationEngine:
     """Core correlation engine"""
     
-    def __init__(self, debug_mode: bool = True):  # Changed default to True
+    def __init__(self, debug_mode: bool = True): # Changed default to True
         """
         Initialize correlation engine.
         
@@ -91,18 +91,18 @@ class CorrelationEngine:
             debug_mode: If True, include detailed debug logging and stack traces
         """
         self.feather_loaders: Dict[str, FeatherLoader] = {}
-        self.timestamp_columns: Dict[str, str] = {}  # Cache: feather_id -> timestamp_column_name
-        self.detected_columns: Dict[str, Any] = {}  # Cache: feather_id -> DetectedColumns
-        self.seen_match_sets: Dict[str, str] = {}  # NEW: Track seen match sets (hash -> original_match_id)
-        self.duplicate_info: Dict[str, DuplicateInfo] = {}  # NEW: Track duplicate information (match_id -> DuplicateInfo)
-        self.duplicates_prevented: int = 0  # Counter for duplicate matches prevented
-        self.duplicates_by_feather: Dict[str, int] = {}  # Track duplicates per feather
-        self.matches_failed_validation: int = 0  # Counter for matches that failed validation
+        self.timestamp_columns: Dict[str, str] = {} # Cache: feather_id -> timestamp_column_name
+        self.detected_columns: Dict[str, Any] = {} # Cache: feather_id -> DetectedColumns
+        self.seen_match_sets: Dict[str, str] = {} # NEW: Track seen match sets (hash -> original_match_id)
+        self.duplicate_info: Dict[str, DuplicateInfo] = {} # NEW: Track duplicate information (match_id -> DuplicateInfo)
+        self.duplicates_prevented: int = 0 # Counter for duplicate matches prevented
+        self.duplicates_by_feather: Dict[str, int] = {} # Track duplicates per feather
+        self.matches_failed_validation: int = 0 # Counter for matches that failed validation
         self.debug_mode: bool = debug_mode
-        self.weighted_scoring_engine = WeightedScoringEngine()  # Weighted scoring engine
-        self.semantic_manager = SemanticMappingManager()  # NEW: Semantic mapping manager
-        self.progress_listeners: List = []  # NEW: List of progress event listeners
-        self.time_period_filter = None  # NEW: Time period filter (FilterConfig)
+        self.weighted_scoring_engine = WeightedScoringEngine() # Weighted scoring engine
+        self.semantic_manager = SemanticMappingManager() # NEW: Semantic mapping manager
+        self.progress_listeners: List = [] # NEW: List of progress event listeners
+        self.time_period_filter = None # NEW: Time period filter (FilterConfig)
         
         # FORENSIC TIMESTAMP PATTERNS - Comprehensive detection for ALL artifact types
         # This ensures we NEVER skip a feather with valid timestamps
@@ -111,12 +111,12 @@ class CorrelationEngine:
             'timestamp', 'eventtimestamputc', 'focus_time',
             # ShimCache patterns
             'last_modified', 'last_modified_readable', 'modified_time', 'modification_time',
-            # AmCache patterns  
+            # AmCache patterns 
             'install_date', 'link_date', 'first_install_date', 'install_time', 'link_time',
             # LNK & Jumplist patterns (case-sensitive variations)
             'time_access', 'time_creation', 'time_modification',
-            'access_time', 'creation_time', 'modification_time',
-            'accessed_time', 'created_time', 'modified_time',
+            'access_time', 'creation_time',
+            'accessed_time', 'created_time',
             # Prefetch patterns
             'last_run_time', 'execution_time', 'run_time', 'exec_time', 'last_execution',
             # SRUM patterns
@@ -234,7 +234,6 @@ class CorrelationEngine:
             result.duplicates_prevented = self.duplicates_prevented
             result.duplicates_by_feather = self.duplicates_by_feather.copy()
             result.matches_failed_validation = self.matches_failed_validation
-            result.matches_failed_validation = self.matches_failed_validation
             
             # Add performance metrics
             total_time = time.time() - start_time
@@ -310,7 +309,7 @@ class CorrelationEngine:
         
         # Validate minimum_matches vs available feathers
         total_feathers = len(wing.feathers)
-        available_non_anchor_feathers = total_feathers - 1  # Subtract 1 for anchor
+        available_non_anchor_feathers = total_feathers - 1 # Subtract 1 for anchor
         
         if rules.minimum_matches > available_non_anchor_feathers:
             errors.append(
@@ -532,7 +531,7 @@ class CorrelationEngine:
         })
         
         all_anchors = []
-        anchors_per_feather = {}  # Track anchors per feather
+        anchors_per_feather = {} # Track anchors per feather
         
         for feather_id, records in filtered_records.items():
             if not records:
@@ -545,7 +544,7 @@ class CorrelationEngine:
             
             if not timestamp_columns:
                 if self.debug_mode:
-                    # print(f"[Correlation]   • {feather_id} ({artifact_type}): 0 anchors (no valid timestamp columns)")
+                    # print(f"[Correlation] • {feather_id} ({artifact_type}): 0 anchors (no valid timestamp columns)")
                     pass
                 anchors_per_feather[feather_id] = 0
                 self._emit_progress_event("anchor_collection", {
@@ -591,13 +590,13 @@ class CorrelationEngine:
             # Enhanced logging for forensic audit trail (only in debug mode)
             if self.debug_mode:
                 if feather_anchor_count > 0:
-                    # print(f"[Correlation]   • {feather_id} ({artifact_type}): {feather_anchor_count} anchors (using {primary_timestamp_col})")
+                    # print(f"[Correlation] • {feather_id} ({artifact_type}): {feather_anchor_count} anchors (using {primary_timestamp_col})")
                     pass
                     if invalid_timestamps > 0:
-                        # print(f"[Correlation]     └─ Filtered {invalid_timestamps} invalid timestamps")
+                        # print(f"[Correlation] └─ Filtered {invalid_timestamps} invalid timestamps")
                         pass
                 else:
-                    # print(f"[Correlation]   • {feather_id} ({artifact_type}): 0 anchors (all timestamps invalid)")
+                    # print(f"[Correlation] • {feather_id} ({artifact_type}): 0 anchors (all timestamps invalid)")
                     pass
             
             # Emit anchor collection event
@@ -633,8 +632,8 @@ class CorrelationEngine:
         
         # STEP 2: For each anchor, find matching records from OTHER feathers
         invalid_timestamps_count = 0
-        PROGRESS_INTERVAL = 100  # Emit summary progress every 100 anchors
-        ANCHOR_PROGRESS_INTERVAL = 50  # Emit anchor progress every 50 anchors
+        PROGRESS_INTERVAL = 100 # Emit summary progress every 100 anchors
+        ANCHOR_PROGRESS_INTERVAL = 50 # Emit anchor progress every 50 anchors
         
         if self.debug_mode:
             # print(f"[DEBUG] Starting correlation with {total_anchors} total anchors")
@@ -717,7 +716,7 @@ class CorrelationEngine:
                 
                 # If validation removed records, check if we still meet minimum matches
                 # NOTE: minimum_matches counts ONLY non-anchor feathers
-                non_anchor_count = len(validated_records) - 1  # Subtract 1 for anchor
+                non_anchor_count = len(validated_records) - 1 # Subtract 1 for anchor
                 if non_anchor_count < rules.minimum_matches:
                     # Match no longer meets threshold after validation
                     self.matches_failed_validation += 1
@@ -810,16 +809,16 @@ class CorrelationEngine:
         # Log statistics
         if self.debug_mode:
             # print(f"[DEBUG] Correlation complete:")
-            # print(f"[DEBUG]   - Total anchor records: {total_anchors}")
-            # print(f"[DEBUG]   - Invalid timestamps: {invalid_timestamps_count}")
-            # print(f"[DEBUG]   - Matches found: {len(matches)}")
-            # print(f"[DEBUG]   - Duplicates prevented: {self.duplicates_prevented}")
+            # print(f"[DEBUG] - Total anchor records: {total_anchors}")
+            # print(f"[DEBUG] - Invalid timestamps: {invalid_timestamps_count}")
+            # print(f"[DEBUG] - Matches found: {len(matches)}")
+            # print(f"[DEBUG] - Duplicates prevented: {self.duplicates_prevented}")
             pass
             if self.duplicates_by_feather:
-                # print(f"[DEBUG]   - Duplicates by feather:")
+                # print(f"[DEBUG] - Duplicates by feather:")
                 pass
                 for feather_id, count in sorted(self.duplicates_by_feather.items()):
-                    # print(f"[DEBUG]     • {feather_id}: {count} duplicates")
+                    # print(f"[DEBUG] • {feather_id}: {count} duplicates")
                     pass
         
         if invalid_timestamps_count > 0:
@@ -960,13 +959,13 @@ class CorrelationEngine:
                 # Case-insensitive pattern matching
                 if pattern.lower() in col_name.lower():
                     potential_columns.append((col_name, pattern))
-                    break  # Found match for this pattern, move to next
+                    break # Found match for this pattern, move to next
         
         if self.debug_mode and potential_columns:
             # print(f"[DEBUG] {feather_id}: Found {len(potential_columns)} potential timestamp columns")
             pass
-            for col_name, pattern in potential_columns[:5]:  # Show first 5
-                # print(f"[DEBUG] {feather_id}:   • {col_name} (matched pattern: {pattern})")
+            for col_name, pattern in potential_columns[:5]: # Show first 5
+                # print(f"[DEBUG] {feather_id}: • {col_name} (matched pattern: {pattern})")
                 pass
         
         # Validate each potential column by checking actual data
@@ -988,12 +987,12 @@ class CorrelationEngine:
                 valid_columns.append((col_name, valid_count, total_checked, percentage))
                 
                 if self.debug_mode:
-                    # print(f"[DEBUG] {feather_id}: ✅ {col_name} has {valid_count}/{total_checked} valid timestamps ({percentage:.1f}%)")
+                    # print(f"[DEBUG] {feather_id}: [OK] {col_name} has {valid_count}/{total_checked} valid timestamps ({percentage:.1f}%)")
                     pass
         
         if not valid_columns:
             if self.debug_mode:
-                # print(f"[DEBUG] {feather_id}: ❌ No valid timestamp columns found")
+                # print(f"[DEBUG] {feather_id}: [ERROR] No valid timestamp columns found")
                 pass
             return []
         
@@ -1005,10 +1004,10 @@ class CorrelationEngine:
         
         if self.debug_mode:
             best_col, best_valid, best_total, best_pct = valid_columns[0]
-            # print(f"[DEBUG] {feather_id}: 🎯 Selected '{best_col}' as primary timestamp column ({best_valid}/{best_total} valid, {best_pct:.1f}%)")
+            # print(f"[DEBUG] {feather_id}: Selected '{best_col}' as primary timestamp column ({best_valid}/{best_total} valid, {best_pct:.1f}%)")
             pass
             if len(valid_columns) > 1:
-                # print(f"[DEBUG] {feather_id}: 📋 {len(valid_columns)-1} backup timestamp columns available")
+                # print(f"[DEBUG] {feather_id}: {len(valid_columns)-1} backup timestamp columns available")
                 pass
         
         return result
@@ -1051,12 +1050,12 @@ class CorrelationEngine:
             numeric_value = float(timestamp_str)
             
             # Windows FILETIME (100-nanosecond intervals since 1601-01-01)
-            if numeric_value > 10000000000000:  # Very large number
+            if numeric_value > 10000000000000: # Very large number
                 # Convert FILETIME to Unix timestamp
                 unix_timestamp = (numeric_value - 116444736000000000) / 10000000
                 parsed_time = datetime.fromtimestamp(unix_timestamp)
             # Unix timestamp in milliseconds
-            elif numeric_value > 10000000000:  # Likely milliseconds
+            elif numeric_value > 10000000000: # Likely milliseconds
                 parsed_time = datetime.fromtimestamp(numeric_value / 1000)
             # Unix timestamp in seconds
             elif numeric_value > 0:
@@ -1069,17 +1068,17 @@ class CorrelationEngine:
                 else:
                     parsed_time = None
         except (ValueError, OSError, OverflowError):
-            pass  # Not a numeric timestamp, try string formats
+            pass # Not a numeric timestamp, try string formats
         
         # Try ISO format variations
         try:
             # Handle 'Z' timezone indicator
             parsed_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-        except:
+        except (ValueError, TypeError):
             try:
                 # Try without timezone
                 parsed_time = datetime.fromisoformat(timestamp_str)
-            except:
+            except (ValueError, TypeError):
                 pass
         
         # Try common datetime formats
@@ -1097,14 +1096,14 @@ class CorrelationEngine:
                 "%Y-%m-%dT%H:%M:%S",
                 "%Y-%m-%dT%H:%M:%SZ",
                 "%Y-%m-%dT%H:%M:%S.%f",
-                "%a %b %d %H:%M:%S %Y",  # "Mon Jan 01 12:00:00 2024"
+                "%a %b %d %H:%M:%S %Y", # "Mon Jan 01 12:00:00 2024"
             ]
             
             for fmt in formats_to_try:
                 try:
                     parsed_time = datetime.strptime(timestamp_str, fmt)
                     break
-                except:
+                except (ValueError, TypeError):
                     continue
         
         # Validate parsed datetime
@@ -1166,7 +1165,7 @@ class CorrelationEngine:
                     if isinstance(timestamps, list) and timestamps:
                         # Create a separate record for each timestamp
                         for ts in timestamps:
-                            if ts:  # Skip empty timestamps
+                            if ts: # Skip empty timestamps
                                 expanded_record = record.copy()
                                 expanded_record[timestamp_col] = ts
                                 # Add metadata to track this is an expanded record
@@ -1186,16 +1185,16 @@ class CorrelationEngine:
         # Log expansion statistics
         if len(expanded_records) > len(records):
             expansion_ratio = len(expanded_records) / len(records) if records else 0
-            print(f"    [Timestamp Expansion] {feather_id}: {len(records)} → {len(expanded_records)} records ({expansion_ratio:.1f}x)")
+            print(f" [Timestamp Expansion] {feather_id}: {len(records)} → {len(expanded_records)} records ({expansion_ratio:.1f}x)")
             
             if self.debug_mode:
                 # Show sample of expanded records
                 sample_original = [r for r in records if r.get(timestamp_col, '').strip().startswith('[')][:2]
                 for orig in sample_original:
                     print(f"[DEBUG] Sample expansion for {feather_id}:")
-                    print(f"[DEBUG]   Original: {orig.get(timestamp_col)[:100]}...")
+                    print(f"[DEBUG] Original: {orig.get(timestamp_col)[:100]}...")
                     expanded_count = len([r for r in expanded_records if r.get('_original_timestamp_array') == orig.get(timestamp_col)])
-                    print(f"[DEBUG]   Expanded to: {expanded_count} records")
+                    print(f"[DEBUG] Expanded to: {expanded_count} records")
         
         return expanded_records
     
@@ -1243,16 +1242,16 @@ class CorrelationEngine:
         
         # Log filter statistics
         if len(filtered) < len(records):
-            # print(f"    [Time Period Filter] {feather_id}: {len(records)} → {len(filtered)} records")
+            # print(f" [Time Period Filter] {feather_id}: {len(records)} → {len(filtered)} records")
             pass
             if skipped_invalid > 0:
-                # print(f"      • Skipped {skipped_invalid} records with invalid timestamps")
+                # print(f" • Skipped {skipped_invalid} records with invalid timestamps")
                 pass
             if skipped_before_start > 0:
-                # print(f"      • Skipped {skipped_before_start} records before start time")
+                # print(f" • Skipped {skipped_before_start} records before start time")
                 pass
             if skipped_after_end > 0:
-                # print(f"      • Skipped {skipped_after_end} records after end time")
+                # print(f" • Skipped {skipped_after_end} records after end time")
                 pass
         
         return filtered
@@ -1359,7 +1358,7 @@ class CorrelationEngine:
                 anchor_time,
                 records,
                 time_window_minutes,
-                feather_id  # Pass feather_id for timestamp column detection
+                feather_id # Pass feather_id for timestamp column detection
             )
             
             if candidates:
@@ -1376,12 +1375,12 @@ class CorrelationEngine:
         best_match = {anchor_feather_id: anchor_record}
         for feather_id, candidate_records in candidates_by_feather.items():
             if candidate_records:
-                best_match[feather_id] = candidate_records[0]  # Closest record
+                best_match[feather_id] = candidate_records[0] # Closest record
         
         # Check if best match meets minimum threshold
         # NOTE: minimum_matches counts ONLY non-anchor feathers
         # The anchor is always included but not counted
-        non_anchor_count = len(best_match) - 1  # Subtract 1 for anchor
+        non_anchor_count = len(best_match) - 1 # Subtract 1 for anchor
         if non_anchor_count >= minimum_matches:
             matches.append(best_match)
         
@@ -1408,11 +1407,11 @@ class CorrelationEngine:
                         
                         # Check if this creates a valid match
                         # NOTE: minimum_matches counts ONLY non-anchor feathers
-                        non_anchor_count = len(alt_match) - 1  # Subtract 1 for anchor
+                        non_anchor_count = len(alt_match) - 1 # Subtract 1 for anchor
                         if non_anchor_count >= minimum_matches:
                             matches.append(alt_match)
         
-        return matches[:max_matches_per_anchor]  # Enforce limit
+        return matches[:max_matches_per_anchor] # Enforce limit
     
     def _calculate_enhanced_score(self, match_records: Dict[str, Dict[str, Any]],
                                  anchor_time: datetime,
@@ -1474,7 +1473,7 @@ class CorrelationEngine:
             app = record.get('application')
             path = record.get('file_path')
             if app:
-                applications.append(app.lower())  # Case-insensitive comparison
+                applications.append(app.lower()) # Case-insensitive comparison
             if path:
                 file_paths.append(path.lower())
         
@@ -1494,7 +1493,7 @@ class CorrelationEngine:
         
         # Calculate field similarity
         # (app_matches + path_matches) / (2 × feather_count)
-        total_possible_matches = 2 * feather_count  # 2 fields × feather_count
+        total_possible_matches = 2 * feather_count # 2 fields × feather_count
         actual_matches = app_matches + path_matches
         field_similarity_score = actual_matches / total_possible_matches if total_possible_matches > 0 else 0.0
         
@@ -1548,7 +1547,7 @@ class CorrelationEngine:
         time_window_seconds = time_window_minutes * 60
         if time_window_seconds > 0:
             time_tightness = 1.0 - (time_spread_seconds / time_window_seconds)
-            time_tightness = max(0.0, min(1.0, time_tightness))  # Clamp to 0-1
+            time_tightness = max(0.0, min(1.0, time_tightness)) # Clamp to 0-1
         else:
             time_tightness = 1.0
         
@@ -1574,7 +1573,7 @@ class CorrelationEngine:
             total_fields += 1
             most_common_app = max(set(applications), key=applications.count)
             app_consistency = applications.count(most_common_app) / len(applications)
-            if app_consistency >= 0.8:  # 80% or more match
+            if app_consistency >= 0.8: # 80% or more match
                 matching_fields += 1
         
         # Check file path consistency
@@ -1582,7 +1581,7 @@ class CorrelationEngine:
             total_fields += 1
             most_common_path = max(set(file_paths), key=file_paths.count)
             path_consistency = file_paths.count(most_common_path) / len(file_paths)
-            if path_consistency >= 0.8:  # 80% or more match
+            if path_consistency >= 0.8: # 80% or more match
                 matching_fields += 1
         
         # Calculate field consistency
@@ -1593,7 +1592,7 @@ class CorrelationEngine:
         
         # Calculate final confidence score
         confidence_score = (0.5 * time_tightness) + (0.5 * field_consistency)
-        confidence_score = max(0.0, min(1.0, confidence_score))  # Ensure 0-1 range
+        confidence_score = max(0.0, min(1.0, confidence_score)) # Ensure 0-1 range
         
         # Determine confidence category
         if confidence_score > 0.8:
@@ -1876,7 +1875,7 @@ class CorrelationEngine:
             candidate_counts=candidate_counts,
             algorithm_version="2.0",
             wing_config_hash=wing_config_hash,
-            semantic_data=semantic_data  # NEW: Add semantic data
+            semantic_data=semantic_data # NEW: Add semantic data
         )
     
     def _validate_match_integrity(self, match: CorrelationMatch, wing: Wing) -> Tuple[bool, List[str]]:
@@ -1939,11 +1938,18 @@ class CorrelationEngine:
         return is_valid, errors
     
     def _cleanup_loaders(self):
-        """Cleanup feather loaders"""
+        """Cleanup feather loaders.
+
+        Disconnects every loader, suppressing only the specific errors that
+        loader cleanup is allowed to raise (sqlite/IO during teardown).
+        Anything else (KeyboardInterrupt, MemoryError, programming bugs)
+        propagates so it isn't silently swallowed.
+        """
+        import sqlite3 as _sqlite3
         for loader in self.feather_loaders.values():
             try:
                 loader.disconnect()
-            except:
+            except (_sqlite3.Error, OSError, AttributeError):
                 pass
-        
+
         self.feather_loaders.clear()

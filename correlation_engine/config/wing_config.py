@@ -10,22 +10,23 @@ from typing import List, Dict, Optional
 
 # Import centralized score configuration manager
 from .score_configuration_manager import ScoreConfigurationManager
+from .eye_authorship import EyeAuthorship
 
 
 @dataclass
 class WingFeatherReference:
     """Reference to a feather used in a wing"""
-    feather_config_name: str  # Name of the feather config
-    feather_database_path: str  # Path to the feather database
+    feather_config_name: str # Name of the feather config
+    feather_database_path: str # Path to the feather database
     artifact_type: str
-    feather_id: str  # ID used in the wing
-    table_name: Optional[str] = None  # Optional: Override table name
-    artifact_type_override: Optional[str] = None  # Optional: Override artifact type
+    feather_id: str # ID used in the wing
+    table_name: Optional[str] = None # Optional: Override table name
+    artifact_type_override: Optional[str] = None # Optional: Override artifact type
     
     # Weighted scoring fields
-    weight: float = 0.0  # Weight for weighted scoring (0.0 - 1.0)
-    tier: int = 0  # Tier number for grouping (1-4)
-    tier_name: str = ""  # Human-readable tier name
+    weight: float = 0.0 # Weight for weighted scoring (0.0 - 1.0)
+    tier: int = 0 # Tier number for grouping (1-4)
+    tier_name: str = "" # Human-readable tier name
 
 
 def _get_anchor_priority_from_registry() -> List[str]:
@@ -52,27 +53,27 @@ class WingConfig:
     
     # Wing definition
     description: str
-    proves: str  # What this wing proves
+    proves: str # What this wing proves
     author: str
     
     # Feathers used
     feathers: List[WingFeatherReference] = field(default_factory=list)
     
     # Correlation rules
-    time_window_minutes: int = 180  # Default: 3 hours for better correlation accuracy
+    time_window_minutes: int = 180 # Default: 3 hours for better correlation accuracy
     minimum_matches: int = 1
     
     # Filters (wing-level)
     target_application: str = ""
     target_file_path: str = ""
     target_event_id: str = ""
-    apply_to: str = "all"  # "all" or "specific"
+    apply_to: str = "all" # "all" or "specific"
     
     # Anchor priority
     anchor_priority: List[str] = field(default_factory=lambda: _get_anchor_priority_from_registry())
     
     # Weighted scoring configuration - ENABLED BY DEFAULT
-    use_weighted_scoring: bool = True  # Default to True for better correlation accuracy
+    use_weighted_scoring: bool = True # Default to True for better correlation accuracy
     # NOTE: Local scoring dict maintained for backward compatibility
     # New code should use get_score_thresholds() and get_tier_weights() methods
     scoring: Dict = field(default_factory=lambda: {
@@ -84,10 +85,10 @@ class WingConfig:
             'critical': 0.9
         },
         'default_tier_weights': {
-            'tier1': 1.0,   # Primary evidence (Logs, Prefetch)
-            'tier2': 0.8,   # Secondary evidence (Registry, AmCache)
-            'tier3': 0.6,   # Supporting evidence (LNK, Jumplists)
-            'tier4': 0.4    # Contextual evidence (MFT, USN)
+            'tier1': 1.0, # Primary evidence (Logs, Prefetch)
+            'tier2': 0.8, # Secondary evidence (Registry, AmCache)
+            'tier3': 0.6, # Supporting evidence (LNK, Jumplists)
+            'tier4': 0.4 # Contextual evidence (MFT, USN)
         }
     })
     
@@ -102,7 +103,14 @@ class WingConfig:
     # Tags and categorization
     tags: List[str] = field(default_factory=list)
     case_types: List[str] = field(default_factory=list)
-    
+
+    # EYE agent provenance — populated when EYE creates / edits the wing.
+    # ``None`` for human-authored or built-in wings (back-compat). The
+    # correlation_edit_wing handler refuses to mutate a wing whose
+    # ``eye_authorship`` is ``None`` or whose ``created_by`` does not
+    # start with ``"eye"``. See correlation_engine/config/eye_authorship.py.
+    eye_authorship: Optional[EyeAuthorship] = None
+
     # Centralized score configuration manager (not serialized)
     _score_config_manager: Optional[ScoreConfigurationManager] = field(default=None, init=False, repr=False)
     
@@ -172,11 +180,11 @@ class WingConfig:
             feather_refs = []
             for i, f in enumerate(data['feathers']):
                 if isinstance(f, dict):
-                    print(f"[WingConfig]   Feather {i+1}: {f.get('feather_id', 'unknown')}")
+                    print(f"[WingConfig] Feather {i+1}: {f.get('feather_id', 'unknown')}")
                     
                     # Handle Wing Creator JSON format (uses database_filename)
                     if 'database_filename' in f and 'feather_database_path' not in f:
-                        f = f.copy()  # Don't modify original
+                        f = f.copy() # Don't modify original
                         f['feather_database_path'] = f.pop('database_filename')
                     
                     # Handle missing feather_config_name (use feather_id as fallback)
@@ -185,15 +193,15 @@ class WingConfig:
                     
                     # Ensure required fields exist
                     if 'feather_database_path' not in f:
-                        print(f"[WingConfig]   WARNING: Feather {i+1} missing feather_database_path!")
+                        print(f"[WingConfig] WARNING: Feather {i+1} missing feather_database_path!")
                     if 'artifact_type' not in f:
-                        print(f"[WingConfig]   WARNING: Feather {i+1} missing artifact_type!")
+                        print(f"[WingConfig] WARNING: Feather {i+1} missing artifact_type!")
                     
                     # Filter out unexpected keys
                     valid_keys = {
                         'feather_config_name', 'feather_database_path', 'artifact_type',
                         'feather_id', 'table_name', 'artifact_type_override',
-                        'weight', 'tier', 'tier_name'  # Weighted scoring fields
+                        'weight', 'tier', 'tier_name' # Weighted scoring fields
                     }
                     filtered_f = {k: v for k, v in f.items() if k in valid_keys}
                     
@@ -259,29 +267,30 @@ class WingConfig:
             data['use_weighted_scoring'] = True
             print(f"[WingConfig] Enabled weighted scoring by default")
         
-        # Load default semantic rules for default wings
-        # This ensures default wings ALWAYS have the latest semantic rules
+        # Load default semantic rules for any default wing — discovered by
+        # matching wing_id against the wing_id embedded in every JSON file
+        # under the default_wings folder. Previously this only fired for two
+        # hardcoded wing IDs; new defaults would have silently received [].
         wing_id = data.get('wing_id', '')
-        if wing_id in ['default_wing_execution_001', 'default_wing_activity_001']:
-            # Always load semantic rules from default wing files for default wings
+        if wing_id:
             try:
-                from pathlib import Path
-                default_wings_dir = Path(__file__).parent.parent / "integration" / "default_wings"
-                
-                # Map wing_id to filename
-                wing_files = {
-                    'default_wing_execution_001': 'Execution_Proof_Correlation.json',
-                    'default_wing_activity_001': 'User_Activity_Correlation.json'
-                }
-                
-                wing_file = default_wings_dir / wing_files.get(wing_id, '')
-                if wing_file.exists():
-                    import json as json_module
-                    with open(wing_file, 'r') as f:
-                        default_data = json_module.load(f)
-                        if 'semantic_rules' in default_data and default_data['semantic_rules']:
-                            data['semantic_rules'] = default_data['semantic_rules']
-                            print(f"[WingConfig] Loaded {len(data['semantic_rules'])} default semantic rules for {wing_id}")
+                from ..integration.default_wings_loader import DefaultWingsLoader
+                import json as json_module
+
+                default_wings_dir = DefaultWingsLoader.get_default_wings_directory()
+                for wing_filename in DefaultWingsLoader.get_default_wing_files():
+                    wing_file = default_wings_dir / wing_filename
+                    try:
+                        with open(wing_file, 'r') as f:
+                            default_data = json_module.load(f)
+                    except Exception:
+                        continue
+                    if default_data.get('wing_id') != wing_id:
+                        continue
+                    if default_data.get('semantic_rules'):
+                        data['semantic_rules'] = default_data['semantic_rules']
+                        print(f"[WingConfig] Loaded {len(data['semantic_rules'])} default semantic rules for {wing_id}")
+                    break
             except Exception as e:
                 print(f"[WingConfig] Could not load default semantic rules: {e}")
         
@@ -292,7 +301,20 @@ class WingConfig:
         # Ensure required fields have defaults
         if 'config_name' not in data and 'wing_name' in data:
             data['config_name'] = data['wing_name'].lower().replace(' ', '_')
-        
+
+        # Rehydrate EYE authorship if present (legacy wings have no
+        # eye_authorship key at all — from_dict returns None for that).
+        if 'eye_authorship' in data:
+            raw = data['eye_authorship']
+            data['eye_authorship'] = (
+                raw if isinstance(raw, EyeAuthorship) else EyeAuthorship.from_dict(raw)
+            )
+
+        # Drop any unexpected top-level keys to keep cls(**data) safe
+        # against forward-compatible schema additions in saved files.
+        valid = {f.name for f in cls.__dataclass_fields__.values() if f.init}
+        data = {k: v for k, v in data.items() if k in valid}
+
         return cls(**data)
     
     @classmethod

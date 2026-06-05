@@ -91,7 +91,7 @@ class PipelineLoader:
         if not load_status.is_complete:
             load_status.partial_load_info = PartialLoadInfo(
                 feathers_loaded=[fc.config_name for fc in feather_configs],
-                feathers_failed=[],  # Track failed ones
+                feathers_failed=[], # Track failed ones
                 wings_loaded=[wc.config_name for wc in wing_configs],
                 wings_failed=[]
             )

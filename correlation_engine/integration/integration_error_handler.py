@@ -28,21 +28,21 @@ class IntegrationComponent(Enum):
 
 class ErrorSeverity(Enum):
     """Error severity levels"""
-    CRITICAL = "critical"  # System cannot continue
-    HIGH = "high"         # Major functionality impacted
-    MEDIUM = "medium"     # Some functionality impacted
-    LOW = "low"          # Minor impact, degraded performance
-    INFO = "info"        # Informational, no impact
+    CRITICAL = "critical" # System cannot continue
+    HIGH = "high" # Major functionality impacted
+    MEDIUM = "medium" # Some functionality impacted
+    LOW = "low" # Minor impact, degraded performance
+    INFO = "info" # Informational, no impact
 
 
 class FallbackStrategy(Enum):
     """Available fallback strategies"""
-    RAW_VALUES = "raw_values"                    # Use raw technical values
-    SIMPLE_COUNT = "simple_count"                # Use simple count-based scoring
-    BASIC_LOGGING = "basic_logging"              # Use basic console logging
-    DEFAULT_CONFIG = "default_config"            # Use default configuration
-    DISABLE_FEATURE = "disable_feature"          # Disable the feature entirely
-    RETRY_WITH_DEFAULTS = "retry_with_defaults"  # Retry with default settings
+    RAW_VALUES = "raw_values" # Use raw technical values
+    SIMPLE_COUNT = "simple_count" # Use simple count-based scoring
+    BASIC_LOGGING = "basic_logging" # Use basic console logging
+    DEFAULT_CONFIG = "default_config" # Use default configuration
+    DISABLE_FEATURE = "disable_feature" # Disable the feature entirely
+    RETRY_WITH_DEFAULTS = "retry_with_defaults" # Retry with default settings
 
 
 @dataclass
@@ -68,8 +68,8 @@ class FallbackResult:
     success: bool
     result: Any = None
     message: str = ""
-    performance_impact: str = "none"  # none, low, medium, high
-    functionality_impact: str = "none"  # none, degraded, limited, disabled
+    performance_impact: str = "none" # none, low, medium, high
+    functionality_impact: str = "none" # none, degraded, limited, disabled
 
 
 @dataclass
@@ -766,7 +766,7 @@ class IntegrationErrorHandler:
                 self.processed_items = processed_items
                 if self.total_items > 0:
                     percentage = (processed_items / self.total_items) * 100
-                    logger.info(f"Progress: {processed_items}/{self.total_items} ({percentage:.1f}%)")
+                    print(f"Progress: {processed_items}/{self.total_items} ({percentage:.1f}%)")
             
             def complete_tracking(self, **kwargs):
                 if self.start_time:
@@ -983,7 +983,7 @@ class IntegrationErrorHandler:
                     'message': attempt.message,
                     'timestamp': attempt.timestamp.isoformat()
                 }
-                for attempt in self.recovery_attempts[-10:]  # Last 10 attempts
+                for attempt in self.recovery_attempts[-10:] # Last 10 attempts
             ]
         }
         

@@ -78,10 +78,13 @@ class AnthropicBackend(LLMBackend):
                     final_history.append(msg)
             
             api_params = {
-                "model": self.model_name, 
-                "max_tokens": 4096, 
+                "model": self.model_name,
+                "max_tokens": 4096,
                 "system": final_system,
-                "messages": final_history
+                "messages": final_history,
+                # Explicit request timeout so a hung provider cannot freeze the
+                # worker thread (parity with Ollama/LM Studio).
+                "timeout": 120,
             }
             if tools:
                 # Claude uses 'input_schema' instead of 'parameters' - we're translating

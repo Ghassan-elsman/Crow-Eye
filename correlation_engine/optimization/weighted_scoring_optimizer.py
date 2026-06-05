@@ -446,7 +446,7 @@ class OptimizedWeightedScoringEngine:
         try:
             import ast
             interpretation_config = ast.literal_eval(interpretation_config_str)
-        except:
+        except Exception as e:
             interpretation_config = {}
         
         return self.base_engine._interpret_score(score, interpretation_config)

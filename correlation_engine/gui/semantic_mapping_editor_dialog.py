@@ -27,7 +27,16 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 
+try:
+    from styles import Colors # central palette for semantic colours
+except Exception:
+    class Colors: # fallback so module still imports without styles.py
+        SUCCESS = "#10B981"
+        WARNING = "#F59E0B"
+        ERROR = "#EF4444"
+
 from ..config.semantic_mapping import SemanticMapping
+from .crow_eye_icons import apply_status_to_label
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +97,7 @@ class SemanticMappingEditorDialog(QDialog):
     """
     
     # Signal emitted when mapping is saved
-    mapping_saved = pyqtSignal(dict)  # mapping data
+    mapping_saved = pyqtSignal(dict) # mapping data
     
     def __init__(self, mapping_data: Optional[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
@@ -441,10 +450,10 @@ class SemanticMappingEditorDialog(QDialog):
         self.test_data_edit.setMaximumHeight(150)
         self.test_data_edit.setPlaceholderText(
             '{\n'
-            '  "EventID": "4624",\n'
-            '  "LogonType": "2",\n'
-            '  "Status": "0x0",\n'
-            '  "ProcessName": "chrome.exe"\n'
+            ' "EventID": "4624",\n'
+            ' "LogonType": "2",\n'
+            ' "Status": "0x0",\n'
+            ' "ProcessName": "chrome.exe"\n'
             '}'
         )
         test_layout.addWidget(self.test_data_edit)
@@ -578,7 +587,7 @@ class SemanticMappingEditorDialog(QDialog):
     def _on_basic_field_changed(self):
         """Handle basic field changes"""
         # Auto-generate preview when basic fields change
-        if self.tab_widget.currentIndex() == 3:  # Preview tab
+        if self.tab_widget.currentIndex() == 3: # Preview tab
             self._generate_preview()
     
     def _on_pattern_changed(self):
@@ -622,16 +631,16 @@ class SemanticMappingEditorDialog(QDialog):
         
         if not pattern:
             self.pattern_status_label.setText("No pattern to validate")
-            self.pattern_status_label.setStyleSheet("color: orange;")
+            self.pattern_status_label.setStyleSheet(f"color: {Colors.WARNING};")
             return
         
         try:
             re.compile(pattern, re.IGNORECASE)
-            self.pattern_status_label.setText("✓ Pattern is valid")
-            self.pattern_status_label.setStyleSheet("color: green;")
+            apply_status_to_label(self.pattern_status_label, "OK", "Pattern is valid")
+            self.pattern_status_label.setStyleSheet(f"color: {Colors.SUCCESS};")
         except re.error as e:
-            self.pattern_status_label.setText(f"✗ Invalid pattern: {e}")
-            self.pattern_status_label.setStyleSheet("color: red;")
+            apply_status_to_label(self.pattern_status_label, "FAIL", f"Invalid pattern: {e}")
+            self.pattern_status_label.setStyleSheet(f"color: {Colors.ERROR};")
     
     def _test_pattern(self):
         """Test the pattern against test input"""
@@ -640,20 +649,20 @@ class SemanticMappingEditorDialog(QDialog):
         
         if not pattern or not test_value:
             self.test_result_label.setText("Enter pattern and test value")
-            self.test_result_label.setStyleSheet("color: orange;")
+            self.test_result_label.setStyleSheet(f"color: {Colors.WARNING};")
             return
         
         try:
             compiled_pattern = re.compile(pattern, re.IGNORECASE)
             if compiled_pattern.search(test_value):
-                self.test_result_label.setText("✓ Pattern matches")
-                self.test_result_label.setStyleSheet("color: green;")
+                apply_status_to_label(self.test_result_label, "OK", "Pattern matches")
+                self.test_result_label.setStyleSheet(f"color: {Colors.SUCCESS};")
             else:
-                self.test_result_label.setText("✗ Pattern does not match")
-                self.test_result_label.setStyleSheet("color: red;")
+                apply_status_to_label(self.test_result_label, "FAIL", "Pattern does not match")
+                self.test_result_label.setStyleSheet(f"color: {Colors.ERROR};")
         except re.error as e:
-            self.test_result_label.setText(f"✗ Pattern error: {e}")
-            self.test_result_label.setStyleSheet("color: red;")
+            apply_status_to_label(self.test_result_label, "FAIL", f"Pattern error: {e}")
+            self.test_result_label.setStyleSheet(f"color: {Colors.ERROR};")
     
     def _add_condition(self):
         """Add a new condition row"""
@@ -708,29 +717,29 @@ class SemanticMappingEditorDialog(QDialog):
         
         # Basic information
         preview_lines.append("Basic Information:")
-        preview_lines.append(f"  Source: {mapping_data.get('source', 'Not specified')}")
-        preview_lines.append(f"  Field: {mapping_data.get('field', 'Not specified')}")
-        preview_lines.append(f"  Technical Value: {mapping_data.get('technical_value', 'Not specified')}")
-        preview_lines.append(f"  Semantic Value: {mapping_data.get('semantic_value', 'Not specified')}")
+        preview_lines.append(f" Source: {mapping_data.get('source', 'Not specified')}")
+        preview_lines.append(f" Field: {mapping_data.get('field', 'Not specified')}")
+        preview_lines.append(f" Technical Value: {mapping_data.get('technical_value', 'Not specified')}")
+        preview_lines.append(f" Semantic Value: {mapping_data.get('semantic_value', 'Not specified')}")
         
         if mapping_data.get('description'):
-            preview_lines.append(f"  Description: {mapping_data['description']}")
+            preview_lines.append(f" Description: {mapping_data['description']}")
         
         preview_lines.append("")
         
         # Classification
         preview_lines.append("Classification:")
-        preview_lines.append(f"  Artifact Type: {mapping_data.get('artifact_type', 'Not specified')}")
-        preview_lines.append(f"  Category: {mapping_data.get('category', 'Not specified')}")
-        preview_lines.append(f"  Severity: {mapping_data.get('severity', 'info')}")
-        preview_lines.append(f"  Confidence: {mapping_data.get('confidence', 1.0)}")
+        preview_lines.append(f" Artifact Type: {mapping_data.get('artifact_type', 'Not specified')}")
+        preview_lines.append(f" Category: {mapping_data.get('category', 'Not specified')}")
+        preview_lines.append(f" Severity: {mapping_data.get('severity', 'info')}")
+        preview_lines.append(f" Confidence: {mapping_data.get('confidence', 1.0)}")
         preview_lines.append("")
         
         # Pattern matching
         if mapping_data.get('pattern'):
             preview_lines.append("Pattern Matching:")
-            preview_lines.append(f"  Pattern: {mapping_data['pattern']}")
-            preview_lines.append("  Matching Type: Regex pattern")
+            preview_lines.append(f" Pattern: {mapping_data['pattern']}")
+            preview_lines.append(" Matching Type: Regex pattern")
         else:
             preview_lines.append("Matching Type: Exact match")
         
@@ -741,9 +750,9 @@ class SemanticMappingEditorDialog(QDialog):
         if conditions:
             preview_lines.append("Conditions:")
             logic = mapping_data.get('logic', 'AND')
-            preview_lines.append(f"  Logic: {logic}")
+            preview_lines.append(f" Logic: {logic}")
             for i, condition in enumerate(conditions):
-                preview_lines.append(f"  {i+1}. {condition.get('field')} {condition.get('operator')} {condition.get('value')}")
+                preview_lines.append(f" {i+1}. {condition.get('field')} {condition.get('operator')} {condition.get('value')}")
         else:
             preview_lines.append("Conditions: None")
         
@@ -751,11 +760,11 @@ class SemanticMappingEditorDialog(QDialog):
         
         # Scope
         preview_lines.append("Scope:")
-        preview_lines.append(f"  Scope: {mapping_data.get('scope', 'global')}")
+        preview_lines.append(f" Scope: {mapping_data.get('scope', 'global')}")
         if mapping_data.get('wing_id'):
-            preview_lines.append(f"  Wing ID: {mapping_data['wing_id']}")
+            preview_lines.append(f" Wing ID: {mapping_data['wing_id']}")
         if mapping_data.get('pipeline_id'):
-            preview_lines.append(f"  Pipeline ID: {mapping_data['pipeline_id']}")
+            preview_lines.append(f" Pipeline ID: {mapping_data['pipeline_id']}")
         
         self.preview_text.setPlainText("\n".join(preview_lines))
     
@@ -766,7 +775,7 @@ class SemanticMappingEditorDialog(QDialog):
             test_data_text = self.test_data_edit.toPlainText()
             if not test_data_text:
                 self.test_mapping_result_label.setText("Enter test data")
-                self.test_mapping_result_label.setStyleSheet("color: orange;")
+                self.test_mapping_result_label.setStyleSheet(f"color: {Colors.WARNING};")
                 return
             
             test_data = json.loads(test_data_text)
@@ -781,8 +790,8 @@ class SemanticMappingEditorDialog(QDialog):
             matches_conditions = mapping.evaluate_conditions(test_data)
             
             if matches_value and matches_conditions:
-                self.test_mapping_result_label.setText("✓ Mapping matches test data")
-                self.test_mapping_result_label.setStyleSheet("color: green;")
+                apply_status_to_label(self.test_mapping_result_label, "OK", "Mapping matches test data")
+                self.test_mapping_result_label.setStyleSheet(f"color: {Colors.SUCCESS};")
             else:
                 reasons = []
                 if not matches_value:
@@ -790,15 +799,15 @@ class SemanticMappingEditorDialog(QDialog):
                 if not matches_conditions:
                     reasons.append("conditions not met")
                 
-                self.test_mapping_result_label.setText(f"✗ Mapping doesn't match: {', '.join(reasons)}")
-                self.test_mapping_result_label.setStyleSheet("color: red;")
+                apply_status_to_label(self.test_mapping_result_label, "FAIL", f"Mapping doesn't match: {', '.join(reasons)}")
+                self.test_mapping_result_label.setStyleSheet(f"color: {Colors.ERROR};")
             
         except json.JSONDecodeError:
-            self.test_mapping_result_label.setText("✗ Invalid JSON in test data")
-            self.test_mapping_result_label.setStyleSheet("color: red;")
+            apply_status_to_label(self.test_mapping_result_label, "FAIL", "Invalid JSON in test data")
+            self.test_mapping_result_label.setStyleSheet(f"color: {Colors.ERROR};")
         except Exception as e:
-            self.test_mapping_result_label.setText(f"✗ Test error: {e}")
-            self.test_mapping_result_label.setStyleSheet("color: red;")
+            apply_status_to_label(self.test_mapping_result_label, "FAIL", f"Test error: {e}")
+            self.test_mapping_result_label.setStyleSheet(f"color: {Colors.ERROR};")
     
     def _load_template(self):
         """Load mapping from template"""

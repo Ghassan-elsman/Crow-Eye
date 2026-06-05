@@ -55,42 +55,57 @@ The **gui/** directory provides all user interface components for the correlatio
 
 ---
 
-### correlation_results_view.py
+### ~~correlation_results_view.py~~ *(removed)*
 
-**Purpose**: Display correlation results in table format.
-
-**Key Classes**:
-- `CorrelationResultsView`: Results table view
-
-**Features**:
-- Display matches in table
-- Sort by columns
-- Filter results
-- Export to CSV/JSON
-- View match details
-
-**Dependencies**: `engine/correlation_result.py`
-
-**Impact**: MEDIUM - Primary results view
+**Status**: Deleted in the gui consolidation — zero instantiations, superseded by the dual `IdentityResultsView` + `TimeBasedResultsViewer` split hosted by `DynamicResultsTabWidget`.
 
 ---
 
-### hierarchical_results_view.py
+### ~~hierarchical_results_view.py~~ *(removed)*
 
-**Purpose**: Display correlation results in tree/hierarchical format.
+**Status**: Deleted in the gui consolidation — zero instantiations. Was an unfinished prototype that overlapped with the active tree-based viewers.
+
+---
+
+### identity_results_view.py
+
+**Purpose**: Identity-centric tree view of correlation results.
+
+**Tree shape**: `Identity → Sub-Identity → Anchor → Evidence`
 
 **Key Classes**:
-- `HierarchicalResultsView`: Tree view of results
+- `IdentityResultsView`: Main widget
 
 **Features**:
-- Group by anchor feather
-- Expand/collapse groups
-- Drill down into matches
-- Show match relationships
+- Group matches by identity (name, path, hash, composite key)
+- Pagination (100 identities/page)
+- Compact single-row filter, semantic search, weighted scoring display
+- **Cascade expand**: clicking a Sub-Identity opens its anchors and underlying evidence in one click
 
-**Dependencies**: `engine/correlation_result.py`
+**Dependencies**: `engine/correlation_result.py`, `results_tab_widget.py`
 
-**Impact**: MEDIUM - Alternative results view
+**Impact**: HIGH — primary identity-results view
+
+---
+
+### timebased_results_viewer.py
+
+**Purpose**: Time-window tree view of correlation results.
+
+**Tree shape**: `Time Window → Identity → Sub-Identity → Anchor → Evidence`
+
+**Key Classes**:
+- `TimeBasedResultsViewer`: Main widget
+
+**Features**:
+- Group matches by user-adjustable time window (default 3 h)
+- Dynamic re-grouping when window size changes
+- Shares semantic search with the Identity view
+- **Cascade expand** behaviour identical to the Identity view
+
+**Dependencies**: `engine/correlation_result.py`, `identity_results_view.py` (for `_search_semantic_data`)
+
+**Impact**: HIGH — primary time-based results view
 
 ---
 

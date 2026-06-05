@@ -37,9 +37,9 @@ class SemanticMappingStats:
 
 # Global statistics accumulator to prevent multiple summaries
 _global_semantic_stats = SemanticMappingStats()
-_stats_lock = False  # Simple flag to prevent concurrent access
-_last_print_time = None  # Track when we last printed to avoid spam
-_print_threshold = 1000  # Only print when we have significant data
+_stats_lock = False # Simple flag to prevent concurrent access
+_last_print_time = None # Track when we last printed to avoid spam
+_print_threshold = 1000 # Only print when we have significant data
 
 
 class SemanticMappingIntegration(ISemanticMappingIntegration):
@@ -237,7 +237,7 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
         
         start_time = time.time()
         enhanced_results = []
-        self.stats = SemanticMappingStats()  # Reset stats
+        self.stats = SemanticMappingStats() # Reset stats
         
         # Task 6.1: Enhanced graceful degradation for semantic mapping failures
         # Requirements: 7.1, 7.2, 7.3 - Ensure correlation continues even if semantic mapping fails
@@ -357,13 +357,13 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                     
                     semantic_info[field_name] = {
                         'semantic_value': mapping.semantic_value,
-                        'technical_value': actual_technical_value,  # Actual value from record
+                        'technical_value': actual_technical_value, # Actual value from record
                         'description': mapping.description,
                         'category': mapping.category,
                         'severity': mapping.severity,
                         'confidence': mapping.confidence,
                         'mapping_source': mapping.mapping_source,
-                        'rule_name': getattr(mapping, 'source', field_name)  # Rule name for display
+                        'rule_name': getattr(mapping, 'source', field_name) # Rule name for display
                     }
                     
                     # Update statistics
@@ -382,7 +382,7 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             else:
                 # No mappings found - count unmapped fields
                 for field_name in record.keys():
-                    if not field_name.startswith('_'):  # Skip internal fields
+                    if not field_name.startswith('_'): # Skip internal fields
                         self.stats.unmapped_fields += 1
                 
                 # Create minimal semantic info for unmapped fields
@@ -414,13 +414,13 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
                             
                             semantic_info[field_name] = {
                                 'semantic_value': mapping.semantic_value,
-                                'technical_value': actual_technical_value,  # Actual value from record
+                                'technical_value': actual_technical_value, # Actual value from record
                                 'description': mapping.description,
                                 'category': mapping.category,
                                 'severity': mapping.severity,
                                 'confidence': mapping.confidence,
                                 'mapping_source': mapping.mapping_source,
-                                'rule_name': getattr(mapping, 'source', field_name)  # Rule name for display
+                                'rule_name': getattr(mapping, 'source', field_name) # Rule name for display
                             }
                             self.stats.mappings_applied += 1
                         
@@ -462,16 +462,16 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
         
         # For each field in the record, create a basic fallback semantic mapping
         for field_name, field_value in original_record.items():
-            if not field_name.startswith('_'):  # Skip internal fields
+            if not field_name.startswith('_'): # Skip internal fields
                 fallback_semantic_info[field_name] = {
-                    'semantic_value': str(field_value),  # Use raw value as semantic value
-                    'technical_value': str(field_value),  # Include technical value for consistency
+                    'semantic_value': str(field_value), # Use raw value as semantic value
+                    'technical_value': str(field_value), # Include technical value for consistency
                     'description': f'Raw value (semantic mapping failed: {error_message})',
                     'category': 'unknown',
                     'severity': 'info',
-                    'confidence': 0.0,  # Zero confidence for fallback
+                    'confidence': 0.0, # Zero confidence for fallback
                     'mapping_source': 'fallback',
-                    'rule_name': 'fallback'  # Indicate this is a fallback mapping
+                    'rule_name': 'fallback' # Indicate this is a fallback mapping
                 }
         
         fallback_record['_semantic_mappings'] = fallback_semantic_info
@@ -579,7 +579,7 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
         mapped_fields = 0
         
         for field_name, field_value in record.items():
-            if not field_name.startswith('_'):  # Skip internal fields
+            if not field_name.startswith('_'): # Skip internal fields
                 total_fields += 1
                 
                 if field_name in semantic_info:
@@ -646,15 +646,15 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             mapping_rate = (self.stats.mappings_applied / self.stats.total_records_processed) * 100
             
             logger.info(f"Semantic mapping statistics:")
-            logger.info(f"  Records processed: {self.stats.total_records_processed}")
-            logger.info(f"  Mappings applied: {self.stats.mappings_applied}")
-            logger.info(f"  Mapping rate: {mapping_rate:.1f}%")
-            logger.info(f"  Pattern matches: {self.stats.pattern_matches}")
-            logger.info(f"  Exact matches: {self.stats.exact_matches}")
+            logger.info(f" Records processed: {self.stats.total_records_processed}")
+            logger.info(f" Mappings applied: {self.stats.mappings_applied}")
+            logger.info(f" Mapping rate: {mapping_rate:.1f}%")
+            logger.info(f" Pattern matches: {self.stats.pattern_matches}")
+            logger.info(f" Exact matches: {self.stats.exact_matches}")
             
             if self.case_specific_enabled:
-                logger.info(f"  Global mappings used: {self.stats.global_mappings_used}")
-                logger.info(f"  Case-specific mappings used: {self.stats.case_specific_mappings_used}")
+                logger.info(f" Global mappings used: {self.stats.global_mappings_used}")
+                logger.info(f" Case-specific mappings used: {self.stats.case_specific_mappings_used}")
     
     def _accumulate_global_stats(self):
         """Accumulate stats globally without printing - TASK 4 FIX"""
@@ -679,8 +679,8 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             # Only print summary when we have accumulated significant data or enough time has passed
             current_time = time.time()
             time_threshold_met = (_last_print_time is None or 
-                                (current_time - _last_print_time) > 120)  # 2 minutes instead of 1
-            data_threshold_met = _global_semantic_stats.total_records_processed >= (_print_threshold * 5)  # 5x higher threshold
+                                (current_time - _last_print_time) > 120) # 2 minutes instead of 1
+            data_threshold_met = _global_semantic_stats.total_records_processed >= (_print_threshold * 5) # 5x higher threshold
             
             # TASK 4 FIX: Much more restrictive printing - only print if we have significant mappings OR errors
             should_print = ((data_threshold_met and _global_semantic_stats.mappings_applied > 0) or 
@@ -972,7 +972,7 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             if not self.config_manager:
                 validation_result['warnings'].append("No configuration manager available")
                 validation_result['recommendations'].append("Ensure configuration manager is properly initialized")
-                validation_result['enabled'] = True  # Default to enabled
+                validation_result['enabled'] = True # Default to enabled
                 return validation_result
             
             # Check if configuration exists
@@ -980,7 +980,7 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             if not config:
                 validation_result['warnings'].append("Semantic mapping configuration not found")
                 validation_result['recommendations'].append("Create semantic mapping configuration in config files")
-                validation_result['enabled'] = True  # Default to enabled
+                validation_result['enabled'] = True # Default to enabled
                 return validation_result
             
             validation_result['config_found'] = True
@@ -1108,27 +1108,27 @@ class SemanticMappingIntegration(ISemanticMappingIntegration):
             validation = self.validate_configuration()
             
             print("[SEMANTIC] Configuration Status:")
-            print(f"[SEMANTIC]   Valid: {'Yes' if validation['valid'] else 'No'}")
-            print(f"[SEMANTIC]   Enabled: {'Yes' if validation['enabled'] else 'No'}")
-            print(f"[SEMANTIC]   Config Found: {'Yes' if validation['config_found'] else 'No'}")
-            print(f"[SEMANTIC]   Manager Healthy: {'Yes' if validation['manager_healthy'] else 'No'}")
-            print(f"[SEMANTIC]   Rules: {validation['rules_count']}")
-            print(f"[SEMANTIC]   Mappings: {validation['mappings_count']}")
+            print(f"[SEMANTIC] Valid: {'Yes' if validation['valid'] else 'No'}")
+            print(f"[SEMANTIC] Enabled: {'Yes' if validation['enabled'] else 'No'}")
+            print(f"[SEMANTIC] Config Found: {'Yes' if validation['config_found'] else 'No'}")
+            print(f"[SEMANTIC] Manager Healthy: {'Yes' if validation['manager_healthy'] else 'No'}")
+            print(f"[SEMANTIC] Rules: {validation['rules_count']}")
+            print(f"[SEMANTIC] Mappings: {validation['mappings_count']}")
             
             if validation['errors']:
                 print("[SEMANTIC] Errors:")
                 for error in validation['errors']:
-                    print(f"[SEMANTIC]   ❌ {error}")
+                    print(f"[SEMANTIC] [ERROR] {error}")
             
             if validation['warnings']:
                 print("[SEMANTIC] Warnings:")
                 for warning in validation['warnings']:
-                    print(f"[SEMANTIC]   ⚠️  {warning}")
+                    print(f"[SEMANTIC] [WARN] {warning}")
             
             if validation['recommendations']:
                 print("[SEMANTIC] Recommendations:")
                 for rec in validation['recommendations']:
-                    print(f"[SEMANTIC]   💡 {rec}")
+                    print(f"[SEMANTIC] Tip: {rec}")
                     
         except Exception as e:
             print(f"[SEMANTIC] ERROR: Could not print configuration status: {e}")

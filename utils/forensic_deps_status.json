@@ -1,0 +1,44 @@
+{
+  "pycdlib": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-06-06T00:29:27.947572",
+    "platform": "Windows"
+  },
+  "dissect.target": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-06-06T00:29:28.033933",
+    "platform": "Windows"
+  },
+  "dissect.volume": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-06-06T00:29:28.035176",
+    "platform": "Windows"
+  },
+  "google-genai": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-06-06T00:29:28.036346",
+    "platform": "Windows"
+  },
+  "openai": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-06-06T00:29:28.037541",
+    "platform": "Windows"
+  },
+  "anthropic": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-06-06T00:29:28.038685",
+    "platform": "Windows"
+  },
+  "zstandard": {
+    "status": "success",
+    "message": "Already installed",
+    "timestamp": "2026-06-05T23:34:14.059004",
+    "platform": "Windows"
+  }
+}

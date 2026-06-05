@@ -234,8 +234,9 @@ semantic_result = {"Application": "chrome.exe"}
 - Error handling and user feedback
 
 **Files to Work On**:
-- `gui/correlation_results_view.py`
-- `gui/identity_results_view.py`
+- `gui/results_viewer.py` (`DynamicResultsTabWidget` — the orchestrator)
+- `gui/identity_results_view.py` (identity-centric tree)
+- `gui/timebased_results_viewer.py` (time-window tree)
 - `gui/pipeline_management_tab.py`
 
 **Skills Needed**: PyQt5, Python, UI/UX design

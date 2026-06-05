@@ -1,0 +1,189 @@
+{
+  "config_name": "usb_removable_media_correlation",
+  "wing_name": "USB / Removable Media Correlation",
+  "wing_id": "default_wing_usb_001",
+  "description": "Detects evidence that external storage (USB drives, removable media) was attached and used. Uses a tiered approach with LNK header evidence (Volume Serial Number + drive type = Removable) and ShellBags removable-folder navigation weighted highest, followed by recent-path MRUs and JumpLists, with file-system CREATE/RENAME on removable volumes as supporting context.",
+  "proves": "External / removable media was attached and used on the host",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-05-18T00:00:00Z",
+  "last_modified": "2026-05-18T00:00:00Z",
+  "version": "1.0",
+
+  "feathers": [
+    {
+      "feather_config_name": "LNK_CrowEyeFeather",
+      "feather_database_path": "feathers/LNK_CrowEyeFeather.db",
+      "artifact_type": "LNK",
+      "feather_id": "lnk",
+      "weight": 0.30,
+      "tier": 1,
+      "tier_name": "LNK header VSN + drive type"
+    },
+    {
+      "feather_config_name": "ShellBags_CrowEyeFeather",
+      "feather_database_path": "feathers/ShellBags_CrowEyeFeather.db",
+      "artifact_type": "ShellBags",
+      "feather_id": "shellbags",
+      "weight": 0.20,
+      "tier": 1,
+      "tier_name": "Removable folder navigation"
+    },
+    {
+      "feather_config_name": "AutomaticJumplist_CrowEyeFeather",
+      "feather_database_path": "feathers/AutomaticJumplist_CrowEyeFeather.db",
+      "artifact_type": "AutomaticJumplist",
+      "feather_id": "jumplist_auto",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Recent path on removable volume"
+    },
+    {
+      "feather_config_name": "OpenSaveMRU_CrowEyeFeather",
+      "feather_database_path": "feathers/OpenSaveMRU_CrowEyeFeather.db",
+      "artifact_type": "OpenSaveMRU",
+      "feather_id": "opensavemru",
+      "weight": 0.10,
+      "tier": 2,
+      "tier_name": "Drive-letter MRU"
+    },
+    {
+      "feather_config_name": "LastSaveMRU_CrowEyeFeather",
+      "feather_database_path": "feathers/LastSaveMRU_CrowEyeFeather.db",
+      "artifact_type": "LastSaveMRU",
+      "feather_id": "lastsavemru",
+      "weight": 0.10,
+      "tier": 2,
+      "tier_name": "Drive-letter Save MRU"
+    },
+    {
+      "feather_config_name": "RecycleBin_CrowEyeFeather",
+      "feather_database_path": "feathers/RecycleBin_CrowEyeFeather.db",
+      "artifact_type": "RecycleBin",
+      "feather_id": "recyclebin",
+      "weight": 0.05,
+      "tier": 2,
+      "tier_name": "Recycle Bin context"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.10,
+      "tier": 3,
+      "tier_name": "File-system CREATE on removable"
+    }
+  ],
+
+  "time_window_minutes": 180,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "LNK",
+    "ShellBags",
+    "AutomaticJumplist",
+    "OpenSaveMRU",
+    "LastSaveMRU",
+    "RecycleBin",
+    "MFT"
+  ],
+  "use_weighted_scoring": true,
+
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed":  { "min": 0.70, "label": "Confirmed USB Use" },
+      "probable":   { "min": 0.40, "label": "Probable USB Use" },
+      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
+      "not_proven": { "min": 0.00, "label": "Not Proven" }
+    }
+  },
+
+  "semantic_rules": [
+    {
+      "rule_id": "usb_lnk_removable_vsn",
+      "name": "LNK Targets Removable Drive (VSN)",
+      "semantic_value": "Removable Drive Reference",
+      "description": "LNK header drive_type = Removable, with Volume Serial Number identifying the specific device",
+      "conditions": [
+        { "feather_id": "lnk", "field_name": "drive_type", "operator": "equals", "value": "Removable" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "removable_media",
+      "severity": "high"
+    },
+    {
+      "rule_id": "usb_shellbag_removable",
+      "name": "Folder Opened on Removable Drive",
+      "semantic_value": "Removable Folder Navigation",
+      "description": "ShellBags entry on a removable drive — user actually opened folders on the device",
+      "conditions": [
+        { "feather_id": "shellbags", "field_name": "shell_item_type", "operator": "contains", "value": "Drive" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "removable_media",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "usb_mru_drive_letter",
+      "name": "Recent File Save / Open on Non-System Drive (OR)",
+      "semantic_value": "MRU on Removable Drive",
+      "description": "OpenSaveMRU or LastSaveMRU references a drive letter outside C:",
+      "conditions": [
+        { "feather_id": "opensavemru", "field_name": "file_path", "operator": "wildcard", "value": "*" },
+        { "feather_id": "lastsavemru", "field_name": "file_path", "operator": "wildcard", "value": "*" }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "removable_media",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "usb_confirmed_use",
+      "name": "Confirmed Removable Device Use (AND)",
+      "semantic_value": "Confirmed USB Use",
+      "description": "LNK to removable drive AND ShellBags navigation to same drive AND MFT/USN file activity within the window — full chain",
+      "conditions": [
+        { "feather_id": "lnk",       "field_name": "drive_type", "operator": "equals",   "value": "Removable" },
+        { "feather_id": "shellbags", "field_name": "drive_letter","operator": "wildcard", "value": "*" },
+        { "feather_id": "mft_usn",   "field_name": "path",        "operator": "wildcard", "value": "*" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "removable_media",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "usb_jumplist_path",
+      "name": "JumpList Entry on Removable Path",
+      "semantic_value": "Recent Path on Removable",
+      "description": "AutomaticJumplist recorded an open of a file on a non-system drive",
+      "conditions": [
+        { "feather_id": "jumplist_auto", "field_name": "path", "operator": "wildcard", "value": "*" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "removable_media",
+      "severity": "info"
+    }
+  ],
+
+  "tags": [
+    "usb",
+    "removable_media",
+    "default",
+    "weighted",
+    "data_exfiltration"
+  ],
+  "case_types": [
+    "data_exfiltration",
+    "ip_theft",
+    "insider_threat",
+    "chain_of_custody"
+  ]
+}

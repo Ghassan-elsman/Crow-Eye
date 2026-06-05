@@ -208,23 +208,34 @@ class MFTRecord:
     standard_info: Optional[MFTAttribute] = None
     file_names: List[MFTAttribute] = field(default_factory=list)
     data_attributes: List[MFTAttribute] = field(default_factory=list)
-    
+
     # Extended attributes
     object_id: Optional[MFTAttribute] = None
     security_descriptor: Optional[MFTAttribute] = None
     reparse_point: Optional[MFTAttribute] = None
     attribute_list: Optional[MFTAttribute] = None
-    
+    volume_name: Optional[MFTAttribute] = None
+    volume_info: Optional[MFTAttribute] = None
+    ea_info: Optional[MFTAttribute] = None
+    ea: Optional[MFTAttribute] = None
+    index_roots: List[MFTAttribute] = field(default_factory=list)
+    logged_utility_streams: List[MFTAttribute] = field(default_factory=list)
+
     # Extension record tracking for fragmented entries
     extension_records: List[int] = field(default_factory=list)
     has_extension_records: bool = False
-    
+    base_record_ref: int = 0  # Non-zero => this record is an extension of base_record_ref
+
+    # Header-derived metadata not currently surfaced through individual attributes
+    hard_link_count: int = 0
+    lsn: int = 0
+
     # Computed fields
     primary_filename: str = ""
     file_extension: str = ""
     file_size: int = 0
     file_attributes: int = 0
-    
+
     # ADS (Alternate Data Streams) information
     has_ads: bool = False
     ads_count: int = 0
@@ -294,12 +305,13 @@ class StandardInformationParser(MFTAttributeParser):
             raise MFTParsingError(f"Standard Information attribute too short: {len(attr_data)} bytes")
         
         try:
-            # Parse timestamps (8 bytes each, FILETIME format)
+            # FILETIME order per libfsntfs / flatcap NTFS docs:
+            # 0x00 Created, 0x08 Modified, 0x10 MFT Entry Modified, 0x18 Accessed.
             created = self._parse_filetime(attr_data[0:8])
             modified = self._parse_filetime(attr_data[8:16])
-            accessed = self._parse_filetime(attr_data[16:24])
-            mft_modified = self._parse_filetime(attr_data[24:32])
-            
+            mft_modified = self._parse_filetime(attr_data[16:24])
+            accessed = self._parse_filetime(attr_data[24:32])
+
             # Parse flags and attributes
             flags = struct.unpack('<I', attr_data[32:36])[0]
             max_versions = struct.unpack('<I', attr_data[36:40])[0]
@@ -381,12 +393,13 @@ class FileNameParser(MFTAttributeParser):
                 
 
             
-            # Parse timestamps
+            # FILETIME order per libfsntfs / flatcap NTFS docs (parent ref is at 0x00..0x07):
+            # 0x08 Created, 0x10 Modified, 0x18 MFT Entry Modified, 0x20 Accessed.
             created = self._parse_filetime(attr_data[8:16])
             modified = self._parse_filetime(attr_data[16:24])
-            accessed = self._parse_filetime(attr_data[24:32])
-            mft_modified = self._parse_filetime(attr_data[32:40])
-            
+            mft_modified = self._parse_filetime(attr_data[24:32])
+            accessed = self._parse_filetime(attr_data[32:40])
+
             # Parse file information
             allocated_size = struct.unpack('<Q', attr_data[40:48])[0]
             real_size = struct.unpack('<Q', attr_data[48:56])[0]
@@ -548,23 +561,290 @@ class AttributeListParser(MFTAttributeParser):
             raw_data=attr_data
         )
 
+class ObjectIdParser(MFTAttributeParser):
+    """Parser for $OBJECT_ID (0x40). Extracts the file's 128-bit Object ID
+    and the optional Birth Volume / Birth Object / Birth Domain IDs (16 B each)."""
+
+    def can_parse(self, attr_type: int) -> bool:
+        return attr_type == NTFSConstants.ATTR_OBJECT_ID
+
+    def parse(self, attr_type: int, attr_data: bytes, resident: bool) -> MFTAttribute:
+        data = {'resident': resident, 'size': len(attr_data)}
+        try:
+            if len(attr_data) >= 16:
+                data['object_id'] = self._format_guid(attr_data[0:16])
+            if len(attr_data) >= 32:
+                data['birth_volume_id'] = self._format_guid(attr_data[16:32])
+            if len(attr_data) >= 48:
+                data['birth_object_id'] = self._format_guid(attr_data[32:48])
+            if len(attr_data) >= 64:
+                data['birth_domain_id'] = self._format_guid(attr_data[48:64])
+        except Exception as e:
+            logger.debug(f"Error parsing $OBJECT_ID: {e}")
+        return MFTAttribute(attr_type=attr_type, attr_name="$OBJECT_ID",
+                            resident=resident, data=data, raw_data=attr_data)
+
+    @staticmethod
+    def _format_guid(b: bytes) -> Optional[str]:
+        if not b or len(b) != 16:
+            return None
+        try:
+            d1 = struct.unpack('<I', b[0:4])[0]
+            d2 = struct.unpack('<H', b[4:6])[0]
+            d3 = struct.unpack('<H', b[6:8])[0]
+            return ("{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-"
+                    "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}").format(
+                d1, d2, d3, b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15])
+        except Exception:
+            return None
+
+
+class ReparsePointParser(MFTAttributeParser):
+    """Parser for $REPARSE_POINT (0xC0). Decodes the reparse tag and, for the
+    common Microsoft tags (symlink / mount point / AppExecLink), the embedded
+    substitute and print names."""
+
+    REPARSE_TAG_NAMES = {
+        NTFSConstants.REPARSE_TAG_MOUNT_POINT: "MountPoint",
+        NTFSConstants.REPARSE_TAG_SYMLINK: "Symlink",
+        NTFSConstants.REPARSE_TAG_DEDUP: "Dedup",
+        NTFSConstants.REPARSE_TAG_APPEXECLINK: "AppExecLink",
+        0xA0000017: "WIM",
+        0x80000017: "WOF",
+        0x80000018: "OneDrive",
+        0xA0000019: "WSL",
+        0x80000023: "AF_UNIX",
+    }
+
+    def can_parse(self, attr_type: int) -> bool:
+        return attr_type == NTFSConstants.ATTR_REPARSE_POINT
+
+    def parse(self, attr_type: int, attr_data: bytes, resident: bool) -> MFTAttribute:
+        data = {'resident': resident, 'size': len(attr_data)}
+        if len(attr_data) < 8:
+            return MFTAttribute(attr_type=attr_type, attr_name="$REPARSE_POINT",
+                                resident=resident, data=data, raw_data=attr_data)
+        try:
+            tag = struct.unpack('<I', attr_data[0:4])[0]
+            data_len = struct.unpack('<H', attr_data[4:6])[0]
+            data['tag'] = tag
+            data['tag_hex'] = f"0x{tag:08X}"
+            data['tag_name'] = self.REPARSE_TAG_NAMES.get(tag, "Unknown")
+            data['reparse_data_length'] = data_len
+
+            if tag == NTFSConstants.REPARSE_TAG_SYMLINK and len(attr_data) >= 20:
+                sub_off = struct.unpack('<H', attr_data[8:10])[0]
+                sub_len = struct.unpack('<H', attr_data[10:12])[0]
+                pri_off = struct.unpack('<H', attr_data[12:14])[0]
+                pri_len = struct.unpack('<H', attr_data[14:16])[0]
+                flags = struct.unpack('<I', attr_data[16:20])[0]
+                pb = attr_data[20:]
+                data['flags'] = flags
+                data['substitute_name'] = self._slice_utf16(pb, sub_off, sub_len)
+                data['print_name'] = self._slice_utf16(pb, pri_off, pri_len)
+            elif tag == NTFSConstants.REPARSE_TAG_MOUNT_POINT and len(attr_data) >= 16:
+                sub_off = struct.unpack('<H', attr_data[8:10])[0]
+                sub_len = struct.unpack('<H', attr_data[10:12])[0]
+                pri_off = struct.unpack('<H', attr_data[12:14])[0]
+                pri_len = struct.unpack('<H', attr_data[14:16])[0]
+                pb = attr_data[16:]
+                data['substitute_name'] = self._slice_utf16(pb, sub_off, sub_len)
+                data['print_name'] = self._slice_utf16(pb, pri_off, pri_len)
+            elif tag == NTFSConstants.REPARSE_TAG_APPEXECLINK and len(attr_data) > 8:
+                # 4-byte version, then null-separated UTF-16LE strings
+                body = attr_data[8:]
+                try:
+                    text = body.decode('utf-16le', errors='replace')
+                    parts = [p for p in text.split('\x00') if p]
+                    if parts:
+                        data['package'] = parts[0] if len(parts) > 0 else None
+                        data['entry'] = parts[1] if len(parts) > 1 else None
+                        data['target'] = parts[2] if len(parts) > 2 else None
+                        data['app_user_model_id'] = parts[3] if len(parts) > 3 else None
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"Error parsing $REPARSE_POINT: {e}")
+
+        return MFTAttribute(attr_type=attr_type, attr_name="$REPARSE_POINT",
+                            resident=resident, data=data, raw_data=attr_data)
+
+    @staticmethod
+    def _slice_utf16(buf: bytes, offset: int, length: int) -> Optional[str]:
+        if offset < 0 or length <= 0 or offset + length > len(buf):
+            return None
+        try:
+            return buf[offset:offset + length].decode('utf-16le', errors='replace')
+        except Exception:
+            return None
+
+
+class VolumeNameParser(MFTAttributeParser):
+    """Parser for $VOLUME_NAME (0x60). Only meaningful on MFT record 3 ($Volume)."""
+
+    def can_parse(self, attr_type: int) -> bool:
+        return attr_type == NTFSConstants.ATTR_VOLUME_NAME
+
+    def parse(self, attr_type: int, attr_data: bytes, resident: bool) -> MFTAttribute:
+        data = {'resident': resident, 'size': len(attr_data)}
+        try:
+            data['volume_label'] = attr_data.decode('utf-16le', errors='replace').rstrip('\x00')
+        except Exception as e:
+            logger.debug(f"Error parsing $VOLUME_NAME: {e}")
+        return MFTAttribute(attr_type=attr_type, attr_name="$VOLUME_NAME",
+                            resident=resident, data=data, raw_data=attr_data)
+
+
+class VolumeInformationParser(MFTAttributeParser):
+    """Parser for $VOLUME_INFORMATION (0x70). Holds NTFS major/minor version
+    and volume flags (bit 0 = DIRTY)."""
+
+    VOLUME_FLAG_DIRTY = 0x0001
+    VOLUME_FLAG_RESIZE_LOG = 0x0002
+    VOLUME_FLAG_UPGRADE_ON_MOUNT = 0x0004
+    VOLUME_FLAG_MOUNTED_ON_NT4 = 0x0008
+    VOLUME_FLAG_DELETE_USN = 0x0010
+    VOLUME_FLAG_REPAIR_OBJECT_IDS = 0x0020
+    VOLUME_FLAG_MODIFIED_BY_CHKDSK = 0x8000
+
+    def can_parse(self, attr_type: int) -> bool:
+        return attr_type == NTFSConstants.ATTR_VOLUME_INFORMATION
+
+    def parse(self, attr_type: int, attr_data: bytes, resident: bool) -> MFTAttribute:
+        data = {'resident': resident, 'size': len(attr_data)}
+        try:
+            if len(attr_data) >= 12:
+                major = attr_data[8]
+                minor = attr_data[9]
+                flags = struct.unpack('<H', attr_data[10:12])[0]
+                data['ntfs_version'] = f"{major}.{minor}"
+                data['volume_flags'] = flags
+                data['volume_flags_hex'] = f"0x{flags:04X}"
+                data['is_dirty'] = bool(flags & self.VOLUME_FLAG_DIRTY)
+                data['modified_by_chkdsk'] = bool(flags & self.VOLUME_FLAG_MODIFIED_BY_CHKDSK)
+        except Exception as e:
+            logger.debug(f"Error parsing $VOLUME_INFORMATION: {e}")
+        return MFTAttribute(attr_type=attr_type, attr_name="$VOLUME_INFORMATION",
+                            resident=resident, data=data, raw_data=attr_data)
+
+
+class EaInformationParser(MFTAttributeParser):
+    """Parser for $EA_INFORMATION (0xD0). Summary header for OS/2-style EAs."""
+
+    def can_parse(self, attr_type: int) -> bool:
+        return attr_type == NTFSConstants.ATTR_EA_INFORMATION
+
+    def parse(self, attr_type: int, attr_data: bytes, resident: bool) -> MFTAttribute:
+        data = {'resident': resident, 'size': len(attr_data)}
+        try:
+            if len(attr_data) >= 8:
+                data['packed_ea_size'] = struct.unpack('<H', attr_data[0:2])[0]
+                data['ea_count'] = struct.unpack('<H', attr_data[2:4])[0]
+                data['unpacked_ea_size'] = struct.unpack('<I', attr_data[4:8])[0]
+        except Exception as e:
+            logger.debug(f"Error parsing $EA_INFORMATION: {e}")
+        return MFTAttribute(attr_type=attr_type, attr_name="$EA_INFORMATION",
+                            resident=resident, data=data, raw_data=attr_data)
+
+
+class EaParser(MFTAttributeParser):
+    """Parser for $EA (0xE0). Walks the chain of EA entries and collects names."""
+
+    def can_parse(self, attr_type: int) -> bool:
+        return attr_type == NTFSConstants.ATTR_EA
+
+    def parse(self, attr_type: int, attr_data: bytes, resident: bool) -> MFTAttribute:
+        data = {'resident': resident, 'size': len(attr_data), 'entries': []}
+        try:
+            offset = 0
+            # Each EA entry: 4 B next_entry_offset, 1 B flags, 1 B name_len,
+            # 2 B value_len, then name (ASCII) + value (raw).
+            while offset + 8 <= len(attr_data):
+                next_off = struct.unpack('<I', attr_data[offset:offset + 4])[0]
+                flags = struct.unpack('<B', attr_data[offset + 4:offset + 5])[0]
+                name_len = struct.unpack('<B', attr_data[offset + 5:offset + 6])[0]
+                value_len = struct.unpack('<H', attr_data[offset + 6:offset + 8])[0]
+                name_start = offset + 8
+                name = ''
+                if name_start + name_len <= len(attr_data):
+                    try:
+                        name = attr_data[name_start:name_start + name_len].decode(
+                            'ascii', errors='replace')
+                    except Exception:
+                        name = ''
+                if name:
+                    data['entries'].append({
+                        'name': name, 'flags': flags, 'value_len': value_len
+                    })
+                if next_off <= 0 or offset + next_off > len(attr_data):
+                    break
+                offset += next_off
+        except Exception as e:
+            logger.debug(f"Error parsing $EA: {e}")
+        return MFTAttribute(attr_type=attr_type, attr_name="$EA",
+                            resident=resident, data=data, raw_data=attr_data)
+
+
+class IndexRootParser(MFTAttributeParser):
+    """Parser for $INDEX_ROOT (0x90). Captures the indexed attribute type and
+    notes the root header so directory presence is detectable downstream."""
+
+    def can_parse(self, attr_type: int) -> bool:
+        return attr_type == NTFSConstants.ATTR_INDEX_ROOT
+
+    def parse(self, attr_type: int, attr_data: bytes, resident: bool) -> MFTAttribute:
+        data = {'resident': resident, 'size': len(attr_data)}
+        try:
+            if len(attr_data) >= 16:
+                data['indexed_attribute_type'] = struct.unpack('<I', attr_data[0:4])[0]
+                data['collation_rule'] = struct.unpack('<I', attr_data[4:8])[0]
+                data['index_record_size'] = struct.unpack('<I', attr_data[8:12])[0]
+                data['clusters_per_index'] = struct.unpack('<b', attr_data[12:13])[0]
+        except Exception as e:
+            logger.debug(f"Error parsing $INDEX_ROOT: {e}")
+        return MFTAttribute(attr_type=attr_type, attr_name="$INDEX_ROOT",
+                            resident=resident, data=data, raw_data=attr_data)
+
+
+class LoggedUtilityStreamParser(MFTAttributeParser):
+    """Parser for $LOGGED_UTILITY_STREAM (0x100). Records presence; named $EFS
+    (EFS encryption) and $TXF_DATA (transactional NTFS) streams are common."""
+
+    def can_parse(self, attr_type: int) -> bool:
+        return attr_type == NTFSConstants.ATTR_LOGGED_UTILITY_STREAM
+
+    def parse(self, attr_type: int, attr_data: bytes, resident: bool) -> MFTAttribute:
+        data = {'resident': resident, 'size': len(attr_data)}
+        return MFTAttribute(attr_type=attr_type, attr_name="$LOGGED_UTILITY_STREAM",
+                            resident=resident, data=data, raw_data=attr_data)
+
+
 class AttributeParserRegistry:
     """Registry for MFT attribute parsers"""
-    
+
     def __init__(self):
         self._parsers: List[MFTAttributeParser] = []
         self._register_default_parsers()
-    
+
     def _register_default_parsers(self):
         """Register default attribute parsers"""
         self.register(StandardInformationParser())
         self.register(FileNameParser())
         self.register(DataAttributeParser())
-    
+        self.register(AttributeListParser())
+        self.register(ObjectIdParser())
+        self.register(ReparsePointParser())
+        self.register(VolumeNameParser())
+        self.register(VolumeInformationParser())
+        self.register(EaInformationParser())
+        self.register(EaParser())
+        self.register(IndexRootParser())
+        self.register(LoggedUtilityStreamParser())
+
     def register(self, parser: MFTAttributeParser):
         """Register a new attribute parser"""
         self._parsers.append(parser)
-    
+
     def get_parser(self, attr_type: int) -> Optional[MFTAttributeParser]:
         """Get a parser for the given attribute type"""
         for parser in self._parsers:
@@ -728,6 +1008,113 @@ class DatabaseManager:
         except sqlite3.Error as e:
             raise DatabaseError(f"Failed to create schema: {e}")
     
+    @staticmethod
+    def _classify_data_type(data_attr: MFTAttribute) -> str:
+        """Map a $DATA attribute to the data_type column value.
+
+        Default unnamed stream -> 'Default'.
+        Named streams (ADS) -> 'ADS' by default, or a more specific tag for
+        well-known stream names so analysts can filter on the type quickly.
+        """
+        name = (data_attr.attr_name or '').strip()
+        if not name:
+            return 'Default'
+        lower = name.lower()
+        if 'zone.identifier' in lower:
+            return 'Zone.Identifier'
+        if 'objectid' in lower:
+            return 'ObjectID'
+        if 'encryptable' in lower:
+            return 'Encrypted'
+        if 'thumbnails' in lower or 'thumbnail' in lower:
+            return 'Thumbnail'
+        return 'ADS'
+
+    @staticmethod
+    def _extra_attr_rows(record: 'MFTRecord') -> List[tuple]:
+        """Build extra rows for mft_data_attributes that represent NTFS attributes
+        which don't have their own table. Each row reuses the existing columns:
+            (record_number, file_name, volume_letter, attribute_name, resident, size, data_type)
+        with conventions:
+            - data_type carries the attribute kind (ObjectID / Reparse:<sub> /
+              VolumeName / VolumeInfo / EaInfo / EA / IndexRoot /
+              LoggedUtilStream / Hardlinks / ExtensionOf).
+            - attribute_name carries the human-readable identifier of that
+              attribute (a GUID, a reparse target path, a volume label, etc.).
+            - size carries an attribute-specific number (raw size, reparse tag,
+              EA count, hardlink count, base record number).
+
+        Schema is NOT modified; downstream consumers only need to be aware that
+        rows with non-'Default'/'ADS' data_types are descriptive metadata, not
+        actual stream content.
+        """
+        out: List[tuple] = []
+        rn, fn, vl = record.record_number, record.primary_filename, record.volume_letter
+
+        if record.object_id is not None:
+            d = record.object_id.data or {}
+            guid = d.get('object_id') or ''
+            out.append((rn, fn, vl, guid, 1, d.get('size', 0), 'ObjectID'))
+
+        if record.reparse_point is not None:
+            d = record.reparse_point.data or {}
+            tag_name = d.get('tag_name', 'Unknown')
+            target = (d.get('substitute_name') or d.get('print_name')
+                      or d.get('target') or d.get('package') or '')
+            out.append((rn, fn, vl, target, 1, d.get('tag', 0),
+                        f'Reparse:{tag_name}'))
+
+        if record.volume_name is not None:
+            d = record.volume_name.data or {}
+            label = d.get('volume_label', '')
+            out.append((rn, fn, vl, label, 1, d.get('size', 0), 'VolumeName'))
+
+        if record.volume_info is not None:
+            d = record.volume_info.data or {}
+            descriptor = (f"NTFS {d.get('ntfs_version', '?.?')} "
+                          f"flags={d.get('volume_flags_hex', '0x0000')}"
+                          f"{' DIRTY' if d.get('is_dirty') else ''}")
+            out.append((rn, fn, vl, descriptor, 1,
+                        d.get('volume_flags', 0), 'VolumeInfo'))
+
+        if record.ea_info is not None:
+            d = record.ea_info.data or {}
+            label = (f"count={d.get('ea_count', 0)} "
+                     f"packed={d.get('packed_ea_size', 0)} "
+                     f"unpacked={d.get('unpacked_ea_size', 0)}")
+            out.append((rn, fn, vl, label, 1,
+                        d.get('packed_ea_size', 0), 'EaInfo'))
+
+        if record.ea is not None:
+            d = record.ea.data or {}
+            entries = d.get('entries', [])
+            names = ','.join(e.get('name', '') for e in entries if e.get('name'))
+            out.append((rn, fn, vl, names, 1, len(entries), 'EA'))
+
+        for ir in record.index_roots:
+            d = ir.data or {}
+            index_name = d.get('stream_name') or d.get('index_name') or ''
+            out.append((rn, fn, vl, index_name, 1, d.get('size', 0), 'IndexRoot'))
+
+        for lu in record.logged_utility_streams:
+            d = lu.data or {}
+            stream_name = d.get('stream_name') or ''
+            out.append((rn, fn, vl, stream_name, 1, d.get('size', 0),
+                        'LoggedUtilStream'))
+
+        # Hard-link count >1 is rare and forensically interesting; only persist
+        # when non-trivial so we don't fill the DB with hardlinks=1 rows.
+        if record.hard_link_count and record.hard_link_count > 1:
+            out.append((rn, fn, vl, f"hardlinks={record.hard_link_count}",
+                        1, record.hard_link_count, 'Hardlinks'))
+
+        # Surface base-record reference so extension records can be traced.
+        if record.base_record_ref:
+            out.append((rn, fn, vl, f"base_rec={record.base_record_ref}",
+                        1, record.base_record_ref, 'ExtensionOf'))
+
+        return out
+
     def insert_mft_record(self, record: MFTRecord):
         """Insert an MFT record into the database"""
         if not self.connection:
@@ -762,7 +1149,17 @@ class DatabaseManager:
             # Insert data attributes
             for data_attr in record.data_attributes:
                 self._insert_data_attribute(record, data_attr)
-                
+
+            # Insert synthesized rows for non-$DATA NTFS attributes so they land
+            # in the same table without altering the schema.
+            for row in self._extra_attr_rows(record):
+                self.connection.execute("""
+                    INSERT INTO mft_data_attributes (
+                        record_number, file_name, volume_letter,
+                        attribute_name, resident, size, data_type
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, row)
+
         except sqlite3.Error as e:
             raise DatabaseError(f"Failed to insert MFT record {record.record_number}: {e}")
     
@@ -831,14 +1228,23 @@ class DatabaseManager:
                         fn_data.get('allocated_size', 0), fn_data.get('real_size', 0)
                     ))
                 
-                # Data attributes data
+                # Data attributes data — write each $DATA stream with a
+                # properly-classified data_type so the bulk path matches the
+                # single-row insert behaviour.
                 for data_attr in record.data_attributes:
                     data_info = data_attr.data
                     data_attributes_data.append((
-                        record.record_number, record.primary_filename, record.volume_letter, data_attr.attr_name,
+                        record.record_number, record.primary_filename, record.volume_letter,
+                        data_attr.attr_name,
                         1 if data_info.get('resident', False) else 0,
-                        data_info.get('size', 0)
+                        data_info.get('size', 0),
+                        self._classify_data_type(data_attr)
                     ))
+                # Synthesized rows for non-$DATA NTFS attributes (ObjectID,
+                # Reparse:*, VolumeName, VolumeInfo, EaInfo, EA, IndexRoot,
+                # LoggedUtilStream, Hardlinks, ExtensionOf).  All share the same
+                # 7-column shape as $DATA so we extend the same list.
+                data_attributes_data.extend(self._extra_attr_rows(record))
             
             # Bulk insert main records
             if main_records_data:
@@ -870,12 +1276,13 @@ class DatabaseManager:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, file_names_data)
             
-            # Bulk insert data attributes
+            # Bulk insert data attributes + synthesized non-$DATA attribute rows
             if data_attributes_data:
                 self.connection.executemany("""
                     INSERT INTO mft_data_attributes (
-                        record_number, file_name, volume_letter, attribute_name, resident, size
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        record_number, file_name, volume_letter,
+                        attribute_name, resident, size, data_type
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, data_attributes_data)
             
             # Commit the transaction to ensure records are saved before anomaly flushing
@@ -947,24 +1354,7 @@ class DatabaseManager:
     def _insert_data_attribute(self, record: MFTRecord, data_attr: MFTAttribute):
         """Insert data attribute"""
         data_info = data_attr.data
-        
-        # Determine data type based on attribute name and content
-        data_type = "Default"
-        if data_attr.attr_name and data_attr.attr_name != "":
-            # This is an Alternate Data Stream
-            data_type = "ADS"
-            
-            # Check for common ADS types
-            lower_name = data_attr.attr_name.lower()
-            if "zone.identifier" in lower_name:
-                data_type = "Zone.Identifier"
-            elif "objectid" in lower_name:
-                data_type = "ObjectID"
-            elif "encryptable" in lower_name:
-                data_type = "Encrypted"
-            elif "thumbnails" in lower_name:
-                data_type = "Thumbnail"
-        
+        data_type = self._classify_data_type(data_attr)
         logger.debug(f"Inserting DATA attribute for record {record.record_number}: {data_attr.attr_name}, type: {data_type}, size: {data_info.get('size', 0)}")
         
         try:
@@ -1482,12 +1872,18 @@ class MFTParser:
             if raw_data[0:4] != NTFSConstants.MFT_RECORD_SIGNATURE:
                 return None
             
-            # Parse record header
+            # Parse record header.  Layout per libfsntfs / flatcap NTFS docs:
+            #   0x08 LSN (8 B), 0x10 sequence (2 B), 0x12 hardlink count (2 B),
+            #   0x14 first attr offset, 0x16 flags, 0x20 base record file ref.
+            lsn = struct.unpack('<Q', raw_data[8:16])[0]
             sequence_number = struct.unpack('<H', raw_data[16:18])[0]
+            hard_link_count = struct.unpack('<H', raw_data[18:20])[0]
             flags = struct.unpack('<H', raw_data[22:24])[0]
             in_use = bool(flags & NTFSConstants.RECORD_IN_USE)
             is_directory = bool(flags & NTFSConstants.RECORD_IS_DIRECTORY)
-            
+            base_ref_raw = struct.unpack('<Q', raw_data[32:40])[0]
+            base_record_ref = base_ref_raw & 0xFFFFFFFFFFFF  # lower 48 bits
+
             # Create MFT record
             record = MFTRecord(
                 record_number=record_number,
@@ -1495,32 +1891,34 @@ class MFTParser:
                 in_use=in_use,
                 is_directory=is_directory,
                 flags=flags,
-                sequence_number=sequence_number
+                sequence_number=sequence_number,
+                hard_link_count=hard_link_count,
+                lsn=lsn,
+                base_record_ref=base_record_ref
             )
-            
+
             # Parse attributes
             self._parse_attributes(record, raw_data)
-            
+
             # Set computed fields
             record.primary_filename = record.get_primary_filename()
             record.file_extension = os.path.splitext(record.primary_filename)[1].lower().lstrip('.')
-            
-            # Calculate file size from data attributes - consider both resident and non-resident
+
+            # Calculate file size from data attributes - consider both resident and non-resident.
+            # The default unnamed $DATA stream now has attr_name == "" thanks to the stream-name
+            # extraction in _parse_single_attribute.
             for data_attr in record.data_attributes:
-                # For resident attributes, use the actual data size
                 if data_attr.data.get('resident'):
                     record.file_size += data_attr.data.get('size', 0)
-                # For non-resident attributes, use the logical size if available
-                elif not data_attr.attr_name:  # Unnamed default data stream
+                elif not data_attr.attr_name:
                     record.file_size = data_attr.data.get('size', 0)
-            
-            # Detect Alternate Data Streams (ADS) - correctly identify named data streams
+
+            # Detect Alternate Data Streams: $DATA attrs whose stream name is non-empty.
             ads_count = 0
             for data_attr in record.data_attributes:
-                # ADS are identified by named data streams (not the unnamed default stream)
-                if data_attr.attr_name and data_attr.attr_name != "":
+                if data_attr.attr_name:  # default stream now has empty attr_name
                     ads_count += 1
-            
+
             record.has_ads = ads_count > 0
             record.ads_count = ads_count
 
@@ -1566,20 +1964,36 @@ class MFTParser:
         try:
             if offset + 16 > len(raw_data):
                 return None
-            
+
             # Read attribute header
             attr_type = struct.unpack('<I', raw_data[offset:offset+4])[0]
             attr_length = struct.unpack('<I', raw_data[offset+4:offset+8])[0]
             resident = struct.unpack('<B', raw_data[offset+8:offset+9])[0] == 0
-            
+            name_length = struct.unpack('<B', raw_data[offset+9:offset+10])[0]
+            name_offset_field = struct.unpack('<H', raw_data[offset+10:offset+12])[0]
+
             if offset + attr_length > len(raw_data):
                 return None
-            
+
+            # Extract attribute stream name (UTF-16LE). Empty for default unnamed
+            # streams; non-empty for ADS ($DATA "Zone.Identifier" etc.), the $I30
+            # index on directories, and the $EFS / $TXF_DATA logged streams.
+            stream_name = ""
+            if name_length > 0 and name_offset_field > 0:
+                name_start = offset + name_offset_field
+                name_end = name_start + (name_length * 2)
+                if name_end <= len(raw_data):
+                    try:
+                        stream_name = raw_data[name_start:name_end].decode(
+                            'utf-16le', errors='replace')
+                    except Exception:
+                        stream_name = ""
+
             # Get attribute data
             if resident:
                 data_offset = struct.unpack('<H', raw_data[offset+20:offset+22])[0]
                 data_length = struct.unpack('<I', raw_data[offset+16:offset+20])[0]
-                
+
                 if offset + data_offset + data_length <= len(raw_data):
                     attr_data = raw_data[offset + data_offset:offset + data_offset + data_length]
                 else:
@@ -1587,50 +2001,79 @@ class MFTParser:
             else:
                 # Non-resident attribute - simplified handling
                 attr_data = raw_data[offset+16:offset+attr_length]
-            
-            # Debug logging for DATA attributes
-            if attr_type == NTFSConstants.ATTR_DATA:
-                logger.debug(f"Found DATA attribute: resident={resident}, data_length={len(attr_data)}")
-            
+
             # Use registered parser
             parser = self.attr_registry.get_parser(attr_type)
             if parser:
                 parsed_attr = parser.parse(attr_type, attr_data, resident)
-                if attr_type == NTFSConstants.ATTR_DATA:
-                    logger.debug(f"Parsed DATA attribute: {parsed_attr.attr_name if parsed_attr else 'None'}")
-                return parsed_attr
             else:
-                # Generic attribute
-                generic_attr = MFTAttribute(
+                parsed_attr = MFTAttribute(
                     attr_type=attr_type,
                     attr_name=f"ATTR_0x{attr_type:02X}",
                     resident=resident,
                     data={'size': len(attr_data)},
                     raw_data=attr_data if resident else None
                 )
+
+            # Carry the stream name into the parsed attribute. For $DATA this is
+            # the ADS name (or empty for the default stream) — overriding
+            # attr_name lets the ADS detection in _parse_mft_record count only
+            # truly named streams. For $INDEX_ROOT / $LOGGED_UTILITY_STREAM the
+            # stream name is useful diagnostic data ($I30, $EFS, $TXF_DATA).
+            if parsed_attr is not None:
+                parsed_attr.data['stream_name'] = stream_name
                 if attr_type == NTFSConstants.ATTR_DATA:
-                    logger.debug(f"Created generic DATA attribute: {generic_attr.attr_name}")
-                return generic_attr
-                
+                    parsed_attr.attr_name = stream_name  # empty for default stream
+                elif stream_name and attr_type in (
+                    NTFSConstants.ATTR_INDEX_ROOT,
+                    NTFSConstants.ATTR_INDEX_ALLOCATION,
+                    NTFSConstants.ATTR_LOGGED_UTILITY_STREAM,
+                    NTFSConstants.ATTR_BITMAP,
+                ):
+                    parsed_attr.data['index_name'] = stream_name
+
+            return parsed_attr
+
         except Exception as e:
             logger.debug(f"Error parsing attribute at offset {offset}: {e}")
             return None
     
     def _categorize_attribute(self, record: MFTRecord, attr: MFTAttribute):
         """Categorize and store attribute in appropriate record field"""
-        if attr.attr_type == NTFSConstants.ATTR_STANDARD_INFORMATION:
+        t = attr.attr_type
+        C = NTFSConstants
+        if t == C.ATTR_STANDARD_INFORMATION:
             record.standard_info = attr
-        elif attr.attr_type == NTFSConstants.ATTR_FILE_NAME:
+        elif t == C.ATTR_ATTRIBUTE_LIST:
+            record.attribute_list = attr
+            # Capture extension record numbers so they can be cross-referenced later.
+            for ext in (attr.data or {}).get('extension_records', []):
+                ext_rec = ext.get('extension_record')
+                if ext_rec and ext_rec != record.record_number:
+                    record.extension_records.append(ext_rec)
+                    record.has_extension_records = True
+        elif t == C.ATTR_FILE_NAME:
             record.file_names.append(attr)
-        elif attr.attr_type == NTFSConstants.ATTR_DATA:
+        elif t == C.ATTR_DATA:
             record.data_attributes.append(attr)
-            logger.debug(f"Added DATA attribute to record {record.record_number}: {attr.attr_name}, total data attrs: {len(record.data_attributes)}")
-        elif attr.attr_type == NTFSConstants.ATTR_OBJECT_ID:
+        elif t == C.ATTR_OBJECT_ID:
             record.object_id = attr
-        elif attr.attr_type == NTFSConstants.ATTR_SECURITY_DESCRIPTOR:
+        elif t == C.ATTR_SECURITY_DESCRIPTOR:
             record.security_descriptor = attr
-        elif attr.attr_type == NTFSConstants.ATTR_REPARSE_POINT:
+        elif t == C.ATTR_VOLUME_NAME:
+            record.volume_name = attr
+        elif t == C.ATTR_VOLUME_INFORMATION:
+            record.volume_info = attr
+        elif t == C.ATTR_INDEX_ROOT:
+            record.index_roots.append(attr)
+        elif t == C.ATTR_REPARSE_POINT:
             record.reparse_point = attr
+        elif t == C.ATTR_EA_INFORMATION:
+            record.ea_info = attr
+        elif t == C.ATTR_EA:
+            record.ea = attr
+        elif t == C.ATTR_LOGGED_UTILITY_STREAM:
+            record.logged_utility_streams.append(attr)
     
     def _update_statistics(self, record: MFTRecord):
         """Update parsing statistics"""

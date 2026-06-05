@@ -613,10 +613,32 @@ class BaseDataLoader(EnrichmentMixin):
                 print(f"[Verification] Data Layer | Table: {table_name} | Checking for intelligence on column: {enrichment_col}")
                 
                 # Append WHERE and ORDER BY to the enriched query
+                # Prefix bare column names with the table alias to avoid
+                # ambiguity with Intel.Mapping columns (e.g. 'source').
+                import re
+                alias = f"{table_name[:3]}_tbl"
                 if where:
-                    data_query += f" WHERE {where}"
+                    prefixed_where = where
+                    search_cols = columns if columns else self.get_columns(table_name)
+                    if search_cols:
+                        for col in search_cols:
+                            prefixed_where = re.sub(
+                                rf'\b{re.escape(col)}\b',
+                                f'"{alias}".{col}',
+                                prefixed_where
+                            )
+                    data_query += f" WHERE {prefixed_where}"
                 if order_by:
-                    data_query += f" ORDER BY {order_by}"
+                    prefixed_order = order_by
+                    search_cols = columns if columns else self.get_columns(table_name)
+                    if search_cols:
+                        for col in search_cols:
+                            prefixed_order = re.sub(
+                                rf'\b{re.escape(col)}\b',
+                                f'"{alias}".{col}',
+                                prefixed_order
+                            )
+                    data_query += f" ORDER BY {prefixed_order}"
             else:
                 # Default data retrieval query
                 data_query = f'SELECT rowid as _rowid_, {select_cols} FROM "{table_name}"'
@@ -974,18 +996,37 @@ class BaseDataLoader(EnrichmentMixin):
 
     def _detect_intelligence(self):
         """
-        Try to find the intelligence database in the same directory.
-        Because every data loader deserves a brain.
+        Try to find Crow_Intelligence.db near the artifact database.
+
+        The file structure is:
+            <case_root>/
+                Crow_Intelligence.db          ← what we need
+                Target_Artifacts/
+                    registry_data.db          ← self.db_path
+                    amcache.db
+                    ...
+
+        So we need to search ONE level above the artifact DB's directory
+        (i.e., the case root), not in the same folder as the DB.
         """
         try:
             if not self.db_path:
                 return
-            case_dir = os.path.dirname(str(self.db_path))
-            if os.path.exists(os.path.join(case_dir, "Crow_Intelligence.db")):
-                self.set_intelligence_db_path(case_dir)
-                self.logger.debug(f"BaseDataLoader: Detected intelligence at {case_dir}")
+
+            db_dir = os.path.dirname(str(self.db_path))
+
+            # Check the same directory first (covers edge cases where DBs are at root)
+            for candidate_dir in [db_dir, os.path.dirname(db_dir)]:
+                intel_path = os.path.join(candidate_dir, "Crow_Intelligence.db")
+                if os.path.exists(intel_path):
+                    self.set_intelligence_db_path(candidate_dir)
+                    self.logger.debug(
+                        f"BaseDataLoader: Detected intelligence at {intel_path}"
+                    )
+                    return
         except Exception:
             pass
+
 
     def _get_best_enrichment_column(self, table_name: str, current_columns: Optional[List[str]] = None) -> Optional[str]:
         """

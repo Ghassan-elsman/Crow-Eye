@@ -31,12 +31,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from functools import lru_cache
 
+from .eye_authorship import EyeAuthorship
+
 logger = logging.getLogger(__name__)
 
 # Global pattern cache for compiled regex patterns
 _GLOBAL_PATTERN_CACHE: Dict[str, Optional[re.Pattern]] = {}
-_PATTERN_CACHE_LOCK = threading.Lock()  # Thread-safe lock for pattern cache access
-_PATTERN_CACHE_MAX_SIZE = 1000  # Maximum cache size to prevent memory issues
+_PATTERN_CACHE_LOCK = threading.Lock() # Thread-safe lock for pattern cache access
+_PATTERN_CACHE_MAX_SIZE = 1000 # Maximum cache size to prevent memory issues
 
 
 def compile_pattern_cached(pattern: str) -> Optional[re.Pattern]:
@@ -113,7 +115,7 @@ def compile_pattern_cached(pattern: str) -> Optional[re.Pattern]:
 # Global FTS5 field alias index (singleton)
 _FIELD_ALIAS_FTS = None
 _FTS_INIT_LOCK = threading.Lock()
-_FTS_INITIALIZATION_FAILED = False  # Track if FTS5 initialization failed
+_FTS_INITIALIZATION_FAILED = False # Track if FTS5 initialization failed
 
 
 def _initialize_fts5_at_module_load():
@@ -201,7 +203,14 @@ class FieldAliasFTS:
         """Load default field aliases from the original hardcoded dictionary."""
         # Comprehensive alias mappings for forensic field names
         # Load aliases from JSON files
-        config_dir = Path(__file__).parent.parent.parent / "config" / "standard_fields"
+        # Use PathUtils for robust root resolution in EXE mode (Requirement 11.2)
+        try:
+            from utils.path_utils import PathUtils
+            app_root = PathUtils.get_app_root()
+            config_dir = app_root / "config" / "standard_fields"
+        except ImportError:
+            # Fallback if PathUtils is not accessible
+            config_dir = Path(__file__).parent.parent.parent / "config" / "standard_fields"
         
         # Files to load
         json_files = [
@@ -268,7 +277,7 @@ class FieldAliasFTS:
                             (alias, canonical, category)
                         )
                     except sqlite3.IntegrityError:
-                        pass  # Duplicate alias, skip
+                        pass # Duplicate alias, skip
             
             self.conn.commit()
     
@@ -346,7 +355,7 @@ class FieldAliasFTS:
             result = self.conn.execute(query, [field_name] + record_keys).fetchone()
             
             if result:
-                return result[1]  # Return the matching alias from record
+                return result[1] # Return the matching alias from record
             
             return None
     
@@ -433,7 +442,14 @@ class SemanticMapping:
     scope: str = "global"
     wing_id: Optional[str] = None
     pipeline_id: Optional[str] = None
-    
+
+    # EYE agent provenance — populated when EYE creates / edits the
+    # mapping. None for built-in / human-authored mappings. The
+    # correlation_edit_semantic_mapping handler refuses to mutate any
+    # mapping whose eye_authorship is None or whose created_by does not
+    # start with "eye". See correlation_engine/config/eye_authorship.py.
+    eye_authorship: Optional[EyeAuthorship] = None
+
     # Compiled pattern cache (not serialized)
     _compiled_pattern: Optional[re.Pattern] = field(default=None, init=False, repr=False)
     
@@ -448,7 +464,7 @@ class SemanticMapping:
             return
             
         if self._compiled_pattern:
-            return  # Already compiled
+            return # Already compiled
         
         # Use global compile_pattern_cached function
         self._compiled_pattern = compile_pattern_cached(self.pattern)
@@ -519,8 +535,59 @@ class SemanticMapping:
             elif operator == "contains":
                 if expected_value.lower() not in str(actual_value).lower():
                     return False
-        
+
         return True
+
+    # ------------------------------------------------------------------ #
+    # JSON / YAML round-trip helpers
+    # ------------------------------------------------------------------ #
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict for persistence. Drops compiled-pattern cache."""
+        return {
+            'source': self.source,
+            'field': self.field,
+            'technical_value': self.technical_value,
+            'semantic_value': self.semantic_value,
+            'description': self.description,
+            'artifact_type': self.artifact_type,
+            'category': self.category,
+            'severity': self.severity,
+            'pattern': self.pattern,
+            'conditions': list(self.conditions),
+            'confidence': self.confidence,
+            'mapping_source': self.mapping_source,
+            'scope': self.scope,
+            'wing_id': self.wing_id,
+            'pipeline_id': self.pipeline_id,
+            'eye_authorship': self.eye_authorship.to_dict() if self.eye_authorship else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'SemanticMapping':
+        """Rehydrate from a dict produced by :meth:`to_dict`."""
+        raw_auth = data.get('eye_authorship')
+        eye_auth = (
+            raw_auth if isinstance(raw_auth, EyeAuthorship)
+            else EyeAuthorship.from_dict(raw_auth)
+        )
+        return cls(
+            source=data['source'],
+            field=data['field'],
+            technical_value=data.get('technical_value', ''),
+            semantic_value=data['semantic_value'],
+            description=data.get('description', ''),
+            artifact_type=data.get('artifact_type', ''),
+            category=data.get('category', ''),
+            severity=data.get('severity', 'info'),
+            pattern=data.get('pattern', ''),
+            conditions=list(data.get('conditions', [])),
+            confidence=float(data.get('confidence', 1.0)),
+            mapping_source=data.get('mapping_source', 'built-in'),
+            scope=data.get('scope', 'global'),
+            wing_id=data.get('wing_id'),
+            pipeline_id=data.get('pipeline_id'),
+            eye_authorship=eye_auth,
+        )
 
 
 # =============================================================================
@@ -616,21 +683,36 @@ class SemanticCondition:
         return field_value_str.lower() == self.value.lower()
     
     @staticmethod
+    @lru_cache(maxsize=256)
+    def _build_lower_key_map(keys_frozenset: frozenset) -> Dict[str, str]:
+        """Build case-insensitive key lookup map, cached by key set."""
+        return {k.lower(): k for k in keys_frozenset}
+
+    @staticmethod
+    @lru_cache(maxsize=256)
+    def _build_normalized_key_map(keys_frozenset: frozenset) -> Dict[str, str]:
+        """Build normalized key lookup map, cached by key set."""
+        return {
+            SemanticCondition._normalize_field_name_cached(k): k
+            for k in keys_frozenset
+        }
+
+    @staticmethod
     def _smart_field_lookup(record: Dict[str, Any], field_name: str) -> Optional[Any]:
         """
         Smart field lookup that handles field name variations from different tools.
         OPTIMIZED with caching and FTS5.
-        
+
         Matching strategy (in order of priority):
         1. Exact match (O(1))
         2. Case-insensitive match (O(1))
-        3. Normalized match (O(N) but cached)
+        3. Normalized match (O(1) with cached map)
         4. FTS5 fuzzy match (O(log N) with index)
-        
+
         Args:
             record: Dictionary containing field values
             field_name: The field name to look for
-            
+
         Returns:
             The field value if found, None otherwise
         """
@@ -641,30 +723,31 @@ class SemanticCondition:
                 f"Cannot perform field lookup."
             )
             return None
-        
+
         # 1. Exact match - fastest path
         if field_name in record:
             return record[field_name]
-        
-        # Build lowercase key map once for this record (amortized cost)
+
+        # Build frozen key set once — used for cached map lookups
         try:
-            lower_key_map = {k.lower(): k for k in record.keys()}
+            keys_frozen = frozenset(record.keys())
         except Exception as e:
             logger.error(
-                f"[Malformed Data] Error building key map for record: {type(e).__name__}: {e}"
+                f"[Malformed Data] Error building key set for record: {type(e).__name__}: {e}"
             )
             return None
-        
-        # 2. Case-insensitive match
+
+        # 2. Case-insensitive match (cached per unique key set)
+        lower_key_map = SemanticCondition._build_lower_key_map(keys_frozen)
         field_name_lower = field_name.lower()
         if field_name_lower in lower_key_map:
             return record[lower_key_map[field_name_lower]]
-        
-        # 3. Normalized match (remove underscores, spaces, dashes)
+
+        # 3. Normalized match (cached per unique key set — O(1) lookup)
         normalized_target = SemanticCondition._normalize_field_name_cached(field_name)
-        for key in record.keys():
-            if SemanticCondition._normalize_field_name_cached(key) == normalized_target:
-                return record[key]
+        normalized_map = SemanticCondition._build_normalized_key_map(keys_frozen)
+        if normalized_target in normalized_map:
+            return record[normalized_map[normalized_target]]
         
         # 4. FTS5 fuzzy/alias match - MASSIVE IMPROVEMENT
         global _FIELD_ALIAS_FTS, _FTS_INITIALIZATION_FAILED
@@ -812,6 +895,10 @@ class SemanticRule:
     _requires_multi_indicator: bool = False
     _min_indicators: int = 1
     _pattern_specificity: float = 1.0
+
+    # EYE agent provenance — see SemanticMapping.eye_authorship for
+    # semantics. None for built-in / human-authored rules.
+    eye_authorship: Optional[EyeAuthorship] = None
     
     def __post_init__(self):
         """Post-initialization validation."""
@@ -836,19 +923,28 @@ class SemanticRule:
         """
         if not self.conditions:
             return True, []
-        
+
         matched_conditions = []
-        
+
         for condition in self.conditions:
             record = records.get(condition.feather_id, {})
             if condition.matches(record):
                 matched_conditions.append(f"{condition.feather_id}.{condition.field_name}")
-        
+
         if self.logic_operator == "AND":
             matches = len(matched_conditions) == len(self.conditions)
         else:
             matches = len(matched_conditions) > 0
-        
+
+        # Multi-indicator gating: an OR rule may declare it needs at least
+        # N of its conditions to fire (defends against over-broad rules
+        # like "Data Exfiltration Pattern" that should require multiple
+        # weak indicators, not a single one). When _requires_multi_indicator
+        # is True we additionally require len(matched) >= _min_indicators.
+        if matches and self._requires_multi_indicator:
+            if len(matched_conditions) < max(1, int(self._min_indicators)):
+                matches = False
+
         return matches, matched_conditions
     
     def to_dict(self) -> Dict[str, Any]:
@@ -868,7 +964,8 @@ class SemanticRule:
             'confidence': self.confidence,
             '_requires_multi_indicator': self._requires_multi_indicator,
             '_min_indicators': self._min_indicators,
-            '_pattern_specificity': self._pattern_specificity
+            '_pattern_specificity': self._pattern_specificity,
+            'eye_authorship': self.eye_authorship.to_dict() if self.eye_authorship else None,
         }
     
     @classmethod
@@ -886,6 +983,14 @@ class SemanticRule:
             except ValueError as e:
                 raise ValueError(f"Invalid condition in rule: {e}")
         
+        # Rehydrate EYE authorship if present (None preserves legacy
+        # rules that pre-date the field).
+        raw_auth = data.get('eye_authorship')
+        eye_auth = (
+            raw_auth if isinstance(raw_auth, EyeAuthorship)
+            else EyeAuthorship.from_dict(raw_auth)
+        )
+
         return cls(
             rule_id=data['rule_id'],
             name=data.get('name', ''),
@@ -901,7 +1006,8 @@ class SemanticRule:
             confidence=data.get('confidence', 1.0),
             _requires_multi_indicator=data.get('_requires_multi_indicator', False),
             _min_indicators=data.get('_min_indicators', 1),
-            _pattern_specificity=data.get('_pattern_specificity', 1.0)
+            _pattern_specificity=data.get('_pattern_specificity', 1.0),
+            eye_authorship=eye_auth,
         )
     
     def to_json(self, indent: int = 2) -> str:
@@ -953,6 +1059,30 @@ class SemanticMappingManager:
     
     def __init__(self):
         """Initialize SemanticMappingManager."""
+        # Task 6.3: Initialize path variables at the VERY START to prevent AttributeErrors (Requirement 9.7)
+        # Handle EXE mode using PathUtils (Requirement 11.2)
+        try:
+            from utils.path_utils import PathUtils
+            app_root = PathUtils.get_app_root()
+            exe_dir = PathUtils.get_executable_dir()
+            
+            # Internal bundled configs (read-only in EXE mode)
+            self.bundled_config_dir = app_root / "configs"
+            self.default_rules_path = self.bundled_config_dir / "semantic_rules_default.json"
+            
+            # User-level persistent configs (writable next to EXE)
+            self.user_config_dir = exe_dir / "configs"
+            self.custom_rules_path = self.user_config_dir / "semantic_rules_custom.json"
+            
+            # Standard config_dir for backward compatibility and writes
+            self.config_dir = self.user_config_dir
+        except Exception as e:
+            # Fallback if path resolution fails
+            logger.error(f"[Semantic Mapping] Failed to resolve paths via PathUtils: {e}")
+            self.config_dir = Path("configs")
+            self.default_rules_path = self.config_dir / "semantic_rules_default.json"
+            self.custom_rules_path = self.config_dir / "semantic_rules_custom.json"
+        
         # Basic mappings storage
         self.global_mappings: Dict[str, List[SemanticMapping]] = {}
         self.wing_mappings: Dict[str, List[SemanticMapping]] = {}
@@ -968,15 +1098,6 @@ class SemanticMappingManager:
         
         # Compiled pattern cache
         self.pattern_cache: Dict[str, re.Pattern] = {}
-        
-        # JSON configuration paths
-        # Use absolute path resolution to handle different working directories
-        import os
-        current_file = Path(__file__).resolve()
-        project_root = current_file.parent.parent.parent  # Go up from config/ to correlation_engine/ to Crow-Eye/
-        self.config_dir = project_root / "configs"
-        self.default_rules_path = self.config_dir / "semantic_rules_default.json"
-        self.custom_rules_path = self.config_dir / "semantic_rules_custom.json"
         
         # Log paths for debugging
         logger.info(f"[Semantic Mapping] Config directory: {self.config_dir}")
@@ -1267,11 +1388,16 @@ class SemanticMappingManager:
         ))
         
         # 5. Data Exfiltration Pattern (USB + File Access + Network)
+        # Requires at least 2 of the 3 indicators — a single recent-file
+        # LNK or a routine network connection is not, on its own, a
+        # data-exfil signal. Without the multi-indicator gate this rule
+        # would fire on almost every identity (severity=high, very
+        # noisy).
         default_rules.append(SemanticRule(
             rule_id="default-data-exfiltration-pattern",
             name="Potential Data Exfiltration",
             semantic_value="Data Exfiltration Pattern",
-            description="USB device connected OR file accessed OR network activity - potential data movement",
+            description="USB device connected AND/OR file accessed AND/OR network activity — requires 2+ indicators",
             conditions=[
                 SemanticCondition("Registry", "key_path", "USBSTOR", "contains"),
                 SemanticCondition("LNK", "target_path", "*", "wildcard"),
@@ -1281,7 +1407,9 @@ class SemanticMappingManager:
             scope="global",
             category="suspicious_activity",
             severity="high",
-            confidence=0.70
+            confidence=0.70,
+            _requires_multi_indicator=True,
+            _min_indicators=2,
         ))
         
         # =================================================================
@@ -1657,7 +1785,7 @@ class SemanticMappingManager:
     def _feather_id_matches(self, condition_feather_id: str, record_feather_id: str) -> bool:
         """Check if feather IDs match with common variations."""
         if not condition_feather_id or not record_feather_id:
-            return not condition_feather_id  # If no condition feather_id, match any
+            return not condition_feather_id # If no condition feather_id, match any
         
         # Normalize both IDs for comparison
         cond_lower = condition_feather_id.lower().replace("_", "").replace("-", "")
@@ -1711,7 +1839,7 @@ class SemanticMappingManager:
         """
         matching_mappings = []
         candidates = []
-        
+
         if artifact_type:
             candidates.extend(self.get_mappings_by_artifact(artifact_type))
         if wing_id and wing_id in self.wing_mappings:
@@ -1720,7 +1848,13 @@ class SemanticMappingManager:
             candidates.extend(self.pipeline_mappings[pipeline_id])
         for mappings_list in self.global_mappings.values():
             candidates.extend(mappings_list)
-        
+
+        # Dedupe — a global mapping with artifact_type set lives in BOTH
+        # global_mappings AND artifact_mappings, so it would otherwise be
+        # evaluated twice and the output list would contain it twice,
+        # inflating downstream semantic counts.
+        candidates = list({id(m): m for m in candidates}.values())
+
         for mapping in candidates:
             # Use FTS5 smart lookup to find field value
             # This handles case differences, aliases, and fuzzy matches
@@ -1980,10 +2114,18 @@ class SemanticMappingManager:
     # =========================================================================
     
     def _ensure_config_directory(self):
-        """Ensure the configs directory exists."""
+        """Ensure the configs directory exists with safety check for attributes."""
+        # Safety check: Ensure config_dir is initialized (Requirement 9.7)
+        if not hasattr(self, 'config_dir'):
+            from utils.path_utils import PathUtils
+            self.config_dir = PathUtils.get_executable_dir() / "configs"
+            
         if not self.config_dir.exists():
-            self.config_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created config directory: {self.config_dir}")
+            try:
+                self.config_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created config directory: {self.config_dir}")
+            except Exception as e:
+                logger.error(f"Failed to create config directory {self.config_dir}: {e}")
     
     def _load_rules_from_json(self):
         """
@@ -2027,17 +2169,17 @@ class SemanticMappingManager:
                 # Load default rules without adding to manager yet
                 default_rules_dict = self.load_rules_from_json(self.default_rules_path, add_to_manager=False)
                 default_loaded = True
-                logger.info(f"✓ Loaded {len(default_rules_dict)} default rules from JSON")
+                logger.info(f"[OK] Loaded {len(default_rules_dict)} default rules from JSON")
             except json.JSONDecodeError as e:
                 logger.error(f"JSON syntax error in {self.default_rules_path}: {e}")
-                logger.warning("⚠ Falling back to built-in rules due to corrupted default rules file")
+                logger.warning("[WARN] Falling back to built-in rules due to corrupted default rules file")
                 fallback_used = True
                 self._show_fallback_warning("default", str(e))
                 # Use built-in rules that are already loaded
                 default_rules_dict = {rule.rule_id: rule for rule in self.global_rules}
             except Exception as e:
                 logger.error(f"Failed to load default rules from JSON: {e}")
-                logger.warning("⚠ Falling back to built-in rules")
+                logger.warning("[WARN] Falling back to built-in rules")
                 fallback_used = True
                 self._show_fallback_warning("default", str(e))
                 # Use built-in rules that are already loaded
@@ -2048,14 +2190,14 @@ class SemanticMappingManager:
             try:
                 custom_rules_dict = self.load_rules_from_json(self.custom_rules_path, add_to_manager=False)
                 custom_loaded = True
-                logger.info(f"✓ Loaded {len(custom_rules_dict)} custom rules from JSON")
+                logger.info(f"[OK] Loaded {len(custom_rules_dict)} custom rules from JSON")
             except json.JSONDecodeError as e:
                 logger.error(f"JSON syntax error in {self.custom_rules_path}: {e}")
-                logger.warning("⚠ Skipping custom rules due to corrupted file")
+                logger.warning("[WARN] Skipping custom rules due to corrupted file")
                 self._show_fallback_warning("custom", str(e))
             except Exception as e:
                 logger.error(f"Failed to load custom rules from JSON: {e}")
-                logger.warning("⚠ Skipping custom rules")
+                logger.warning("[WARN] Skipping custom rules")
         else:
             logger.info("No custom rules file found (this is normal)")
         
@@ -2080,13 +2222,13 @@ class SemanticMappingManager:
         custom_count = len(custom_rules_dict)
         
         if fallback_used:
-            logger.warning(f"⚠ Using {total_rules} built-in rules (fallback mode)")
+            logger.warning(f"[WARN] Using {total_rules} built-in rules (fallback mode)")
         elif default_loaded and custom_loaded:
-            logger.info(f"✓ Successfully loaded rules: {default_count} default + {custom_count} custom = {total_rules} total")
+            logger.info(f"[OK] Successfully loaded rules: {default_count} default + {custom_count} custom = {total_rules} total")
         elif default_loaded:
-            logger.info(f"✓ Successfully loaded {total_rules} default rules from JSON")
+            logger.info(f"[OK] Successfully loaded {total_rules} default rules from JSON")
         else:
-            logger.info(f"✓ Using {total_rules} built-in rules")
+            logger.info(f"[OK] Using {total_rules} built-in rules")
     
     def _show_fallback_warning(self, file_type: str, error_message: str):
         """
@@ -2101,7 +2243,7 @@ class SemanticMappingManager:
         file_name = "semantic_rules_default.json" if file_type == "default" else "semantic_rules_custom.json"
         logger.warning(f"""
 ╔══════════════════════════════════════════════════════════════════════════╗
-║ WARNING: Semantic Rules Configuration Error                              ║
+║ WARNING: Semantic Rules Configuration Error ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 File: {file_name}
@@ -2289,21 +2431,21 @@ The system will continue operating normally with {'built-in' if file_type == 'de
         try:
             self._load_rules_from_json()
             rules_after = len(self.global_rules)
-            logger.info(f"✓ Successfully reloaded rules: {rules_before} → {rules_after}")
+            logger.info(f"[OK] Successfully reloaded rules: {rules_before} → {rules_after}")
             
             # Emit reload event
             logger.info("=" * 70)
             logger.info("RELOAD EVENT COMPLETE: Rules successfully reloaded")
-            logger.info(f"  - Previous count: {rules_before}")
-            logger.info(f"  - New count: {rules_after}")
-            logger.info(f"  - Change: {rules_after - rules_before:+d}")
+            logger.info(f" - Previous count: {rules_before}")
+            logger.info(f" - New count: {rules_after}")
+            logger.info(f" - Change: {rules_after - rules_before:+d}")
             logger.info("=" * 70)
             
         except Exception as e:
             logger.error(f"Failed to reload rules: {e}")
             # Restore built-in rules
             self.global_rules = built_in_rules
-            logger.warning("⚠ Restored previous rules due to reload failure")
+            logger.warning("[WARN] Restored previous rules due to reload failure")
             
             # Emit reload failure event
             logger.warning("=" * 70)

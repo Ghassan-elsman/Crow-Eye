@@ -23,6 +23,8 @@ from enum import Enum
 import threading
 import random
 
+logger = logging.getLogger(__name__)
+
 
 class DatabaseErrorType(Enum):
     """Types of database errors that can occur"""
@@ -78,6 +80,31 @@ class FallbackStrategy:
     use_cached_results: bool = True
     continue_with_partial_data: bool = True
     log_fallback_actions: bool = True
+    # Mark a feather 'unavailable' once it has accumulated this many
+    # consecutive failures, and from then on raise FeatherUnavailableError
+    # instead of falling back to empty results forever. A transient lock
+    # (1-3 failures) still falls back silently — but a feather that fails
+    # 5 times in a row almost certainly has a real problem the analyst
+    # should know about, not a degraded-result that looks like "no data".
+    unavailable_after_consecutive_failures: int = 5
+
+
+class FeatherUnavailableError(Exception):
+    """Raised when a feather has accumulated more consecutive failures than
+    `FallbackStrategy.unavailable_after_consecutive_failures` permits.
+
+    Distinct from the generic Exception types so PipelineExecutor's per-wing
+    error handling can recognize "this feather is dead, surface it" vs
+    "transient error, fall back to empty and continue"."""
+
+    def __init__(self, feather_id: str, consecutive_failures: int):
+        self.feather_id = feather_id
+        self.consecutive_failures = consecutive_failures
+        super().__init__(
+            f"Feather '{feather_id}' marked unavailable after "
+            f"{consecutive_failures} consecutive failures. "
+            f"Skipping until status is reset."
+        )
 
 
 class DatabaseErrorHandler:
@@ -123,8 +150,8 @@ class DatabaseErrorHandler:
             self.logger.setLevel(logging.DEBUG)
         
         if self.debug_mode:
-            print("[DatabaseErrorHandler] Initialized with retry config:", self.retry_config)
-            print("[DatabaseErrorHandler] Fallback strategy:", self.fallback_strategy)
+            logger.info("[DatabaseErrorHandler] Initialized with retry config:", self.retry_config)
+            logger.info("[DatabaseErrorHandler] Fallback strategy:", self.fallback_strategy)
     
     def execute_with_retry(self, 
                           operation: Callable,
@@ -150,7 +177,22 @@ class DatabaseErrorHandler:
         """
         self.total_operations += 1
         last_error = None
-        
+
+        # Loud-fail guard: if this feather has accumulated >= threshold
+        # consecutive failures it's marked 'unavailable'; raise instead of
+        # silently returning empty results yet again. The caller surfaces
+        # the FeatherUnavailableError through summary['errors'] so the
+        # analyst sees the feather is dead, not just "no matches".
+        existing = self.feather_status.get(feather_id, {})
+        if (
+            existing.get('status') == 'unavailable'
+            and self.fallback_strategy.skip_unavailable_feathers
+        ):
+            raise FeatherUnavailableError(
+                feather_id=feather_id,
+                consecutive_failures=existing.get('consecutive_failures', 0),
+            )
+
         for attempt in range(self.retry_config.max_retries + 1):
             try:
                 # Get or create connection
@@ -168,7 +210,7 @@ class DatabaseErrorHandler:
                 self._update_feather_status(feather_id, "healthy", None)
                 
                 if self.debug_mode and attempt > 0:
-                    print(f"[DatabaseErrorHandler] Operation '{operation_name}' succeeded on attempt {attempt + 1}")
+                    logger.info(f"[DatabaseErrorHandler] Operation '{operation_name}' succeeded on attempt {attempt + 1}")
                 
                 return result
                 
@@ -207,7 +249,7 @@ class DatabaseErrorHandler:
                     delay = self._calculate_retry_delay(attempt)
                     
                     if self.debug_mode:
-                        print(f"[DatabaseErrorHandler] Retrying operation '{operation_name}' "
+                        logger.info(f"[DatabaseErrorHandler] Retrying operation '{operation_name}' "
                               f"in {delay:.2f}s (attempt {attempt + 2}/{self.retry_config.max_retries + 1})")
                     
                     # Close connection on error to force reconnection
@@ -254,13 +296,9 @@ class DatabaseErrorHandler:
             # Check if we already have a connection
             if feather_id in self.connection_pool:
                 conn = self.connection_pool[feather_id]
-                try:
-                    # Test connection
-                    conn.execute("SELECT 1")
-                    return conn
-                except sqlite3.Error:
-                    # Connection is bad, remove it
-                    self._close_connection(feather_id)
+                # Return cached connection immediately
+                # If connection is bad, execute_with_retry will catch it and recreate on next attempt
+                return conn
             
             # Create new connection
             if not Path(database_path).exists():
@@ -273,16 +311,16 @@ class DatabaseErrorHandler:
             # Create connection with timeout and other settings
             conn = sqlite3.connect(
                 database_path,
-                timeout=30.0,  # 30 second timeout
+                timeout=30.0, # 30 second timeout
                 check_same_thread=False
             )
             
             # Configure connection
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")  # Use WAL mode for better concurrency
-            conn.execute("PRAGMA synchronous=NORMAL")  # Balance safety and performance
-            conn.execute("PRAGMA cache_size=10000")  # Increase cache size
-            conn.execute("PRAGMA temp_store=MEMORY")  # Use memory for temp storage
+            conn.execute("PRAGMA journal_mode=WAL") # Use WAL mode for better concurrency
+            conn.execute("PRAGMA synchronous=NORMAL") # Balance safety and performance
+            conn.execute("PRAGMA cache_size=10000") # Increase cache size
+            conn.execute("PRAGMA temp_store=MEMORY") # Use memory for temp storage
             
             # Test connection with a simple query
             conn.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1")
@@ -291,7 +329,7 @@ class DatabaseErrorHandler:
             self.connection_pool[feather_id] = conn
             
             if self.debug_mode:
-                print(f"[DatabaseErrorHandler] Created new connection for feather {feather_id}")
+                logger.info(f"[DatabaseErrorHandler] Created new connection for feather {feather_id}")
             
             return conn
     
@@ -381,17 +419,39 @@ class DatabaseErrorHandler:
     def _update_feather_status(self, feather_id: str, status: str, error: Optional[DatabaseError]):
         """
         Update the status of a feather.
-        
+
         Args:
             feather_id: ID of the feather
             status: Status string ("healthy", "error", "unavailable")
             error: DatabaseError object if status is "error"
         """
+        prior_consecutive = self.feather_status.get(feather_id, {}).get('consecutive_failures', 0)
+        if status == 'error':
+            consecutive = prior_consecutive + 1
+        else:
+            # Any non-error status resets the counter.
+            consecutive = 0
+
+        # Promote 'error' to 'unavailable' once the counter exceeds the
+        # configured threshold. Once a feather is marked unavailable, the
+        # guard at the top of execute_with_retry will raise rather than
+        # try (and silently fall back) again.
+        threshold = self.fallback_strategy.unavailable_after_consecutive_failures
+        if status == 'error' and consecutive >= threshold and threshold > 0:
+            status = 'unavailable'
+            if self.fallback_strategy.log_fallback_actions:
+                self.logger.error(
+                    f"[DatabaseErrorHandler] Feather '{feather_id}' marked "
+                    f"UNAVAILABLE after {consecutive} consecutive failures "
+                    f"(threshold={threshold}). Subsequent operations will "
+                    f"raise FeatherUnavailableError instead of falling back."
+                )
+
         self.feather_status[feather_id] = {
             'status': status,
             'last_updated': datetime.now(),
             'error': error,
-            'consecutive_failures': self.feather_status.get(feather_id, {}).get('consecutive_failures', 0) + (1 if status == 'error' else -self.feather_status.get(feather_id, {}).get('consecutive_failures', 0))
+            'consecutive_failures': consecutive,
         }
     
     def _log_database_error(self, error: DatabaseError):
@@ -417,7 +477,7 @@ class DatabaseErrorHandler:
             self.logger.debug(log_message)
         
         if self.debug_mode:
-            print(f"[DatabaseErrorHandler] {log_message}")
+            logger.info(f"[DatabaseErrorHandler] {log_message}")
     
     def _try_fallback_strategies(self, error: DatabaseError, operation_name: str, **kwargs) -> Any:
         """
@@ -440,7 +500,7 @@ class DatabaseErrorHandler:
                 fallback_msg = f"Using fallback for '{operation_name}' on feather '{error.feather_id}': returning empty results"
                 self.logger.warning(fallback_msg)
                 if self.debug_mode:
-                    print(f"[DatabaseErrorHandler] {fallback_msg}")
+                    logger.info(f"[DatabaseErrorHandler] {fallback_msg}")
             
             # Return appropriate empty result based on operation
             if operation_name == 'query_time_range':
@@ -509,7 +569,7 @@ class DatabaseErrorHandler:
         self.connection_locks.clear()
         
         if self.debug_mode:
-            print("[DatabaseErrorHandler] Cleanup completed")
+            logger.info("[DatabaseErrorHandler] Cleanup completed")
 
 
 # Import os for file permission checks

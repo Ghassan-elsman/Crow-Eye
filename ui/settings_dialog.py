@@ -20,6 +20,13 @@ from pathlib import Path
 # Import styles
 from styles import CrowEyeStyles
 
+# Eye AI settings persistence (pure JSON helpers, no Qt)
+try:
+    from config.eye_ai_settings import read_eye_ai_settings, write_eye_ai_settings
+except Exception:
+    read_eye_ai_settings = None
+    write_eye_ai_settings = None
+
 # Import semantic mapping manager
 try:
     from correlation_engine.config.semantic_mapping import SemanticMappingManager, SemanticMapping
@@ -98,12 +105,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.case_settings_panel = self.create_case_settings_panel()
         self.semantic_mappings_panel = self.create_semantic_mappings_panel()
         self.pipeline_mgmt_panel = self.create_pipeline_management_panel()
-        
+        self.eye_ai_panel = self.create_eye_ai_panel()
+
         self.content_stack.addWidget(self.general_panel)
         self.content_stack.addWidget(self.case_mgmt_panel)
         self.content_stack.addWidget(self.case_settings_panel)
         self.content_stack.addWidget(self.semantic_mappings_panel)
         self.content_stack.addWidget(self.pipeline_mgmt_panel)
+        self.content_stack.addWidget(self.eye_ai_panel)
         
         # Bottom buttons
         buttons_layout = QtWidgets.QHBoxLayout()
@@ -172,8 +181,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-size: 18px;
                 font-weight: 800;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 2px;
                 padding: 15px 0;
             }
         """)
@@ -201,6 +208,10 @@ class SettingsDialog(QtWidgets.QDialog):
         pipelines_btn = self.create_nav_button("🔗 Pipelines", 4)
         sidebar_layout.addWidget(pipelines_btn)
         self.nav_buttons.append(pipelines_btn)
+
+        eye_ai_btn = self.create_nav_button("🧠 Eye AI", 5)
+        sidebar_layout.addWidget(eye_ai_btn)
+        self.nav_buttons.append(eye_ai_btn)
         
         # Disable case settings and pipelines if no active case
         if not self.current_case:
@@ -279,8 +290,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-size: 20px;
                 font-weight: 700;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }
         """)
         layout.addWidget(title)
@@ -635,12 +644,73 @@ class SettingsDialog(QtWidgets.QDialog):
                 padding-top: 3px;
             }
         """)
-        
         wings_semantic_layout.addWidget(self.wings_semantic_mapping_checkbox)
         wings_semantic_layout.addWidget(wings_semantic_desc)
-        
+
         form_layout.addRow(wings_semantic_label, wings_semantic_container)
-        
+
+        # Cascade Tree Expansion setting
+        cascade_label = QtWidgets.QLabel("Cascade Tree Expansion:")
+        cascade_label.setStyleSheet(label_style)
+        cascade_label.setToolTip("Enable recursive expansion of tree items (Identity -> Anchor -> Evidence) on single click")
+
+        cascade_container = QtWidgets.QWidget()
+        cascade_layout = QtWidgets.QVBoxLayout(cascade_container)
+        cascade_layout.setContentsMargins(0, 0, 0, 0)
+        cascade_layout.setSpacing(5)
+
+        self.cascade_expansion_checkbox = QtWidgets.QCheckBox("Enable cascade tree expansion")
+        self.cascade_expansion_checkbox.setChecked(True)  # On by default
+        self.cascade_expansion_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #E2E8F0;
+                font-size: 13px;
+                font-weight: 600;
+                font-family: 'Segoe UI', sans-serif;
+                spacing: 10px;
+            }
+            QCheckBox::indicator {
+                width: 24px;
+                height: 24px;
+                border: 2px solid #475569;
+                border-radius: 4px;
+                background-color: #1E293B;
+            }
+            QCheckBox::indicator:hover {
+                border: 2px solid #00FFFF;
+                background-color: #263449;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #00FFFF;
+                border: 2px solid #00FFFF;
+                image: none;
+            }
+            QCheckBox::indicator:checked:after {
+                content: "✓";
+                color: #0F172A;
+                font-weight: bold;
+            }
+        """)
+
+        cascade_desc = QtWidgets.QLabel(
+            "💡 Automatically expands all underlying levels (Identity/Anchor/Evidence) when an item is clicked\n"
+            "   (Recommended: Enabled for faster investigation)"
+        )
+        cascade_desc.setStyleSheet("""
+            QLabel {
+                color: #94A3B8;
+                font-size: 11px;
+                font-style: italic;
+                padding-top: 3px;
+            }
+        """)
+
+        cascade_layout.addWidget(self.cascade_expansion_checkbox)
+        cascade_layout.addWidget(cascade_desc)
+
+        form_layout.addRow(cascade_label, cascade_container)
+
+        # Add form to panel layout
         layout.addWidget(form_widget)
         layout.addStretch()
         
@@ -667,8 +737,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-size: 20px;
                 font-weight: 700;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }
         """)
         layout.addWidget(title)
@@ -796,8 +864,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-size: 20px;
                 font-weight: 700;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }
         """)
         layout.addWidget(title)
@@ -868,8 +934,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-size: 20px;
                 font-weight: 700;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }
         """)
         layout.addWidget(title)
@@ -1100,6 +1164,287 @@ class SettingsDialog(QtWidgets.QDialog):
         
         return panel
     
+    def create_eye_ai_panel(self):
+        """Create the Eye AI settings panel (Compliance payload storage)."""
+        panel = QtWidgets.QWidget()
+        panel.setStyleSheet("QWidget { background-color: #0F172A; }")
+
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+
+        # Brand term is "Eye" / "Eye AI" — never uppercased to "EYE".
+        # (PyQt5 ignores text-transform/letter-spacing anyway, so the literal
+        # casing is what matters.)
+        title = QtWidgets.QLabel("Eye AI")
+        title.setStyleSheet("""
+            QLabel {
+                color: #00FFFF;
+                font-size: 20px;
+                font-weight: 700;
+                font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            }
+        """)
+        layout.addWidget(title)
+
+        info = QtWidgets.QLabel(
+            "Chain-of-custody storage for what the Eye sent to the model. "
+            "Changes apply the next time the Eye is opened."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("""
+            QLabel {
+                color: #94A3B8; font-size: 13px; font-family: 'Segoe UI', sans-serif;
+                padding: 10px; background-color: #1E293B; border-radius: 6px;
+            }
+        """)
+        layout.addWidget(info)
+
+        # Backend / model display + buttons that launch the existing Eye dialogs.
+        btn_style = CrowEyeStyles.BUTTON_STYLE + " QPushButton { font-size: 12px; padding: 8px 16px; min-height: 35px; }"
+        backend_row = QtWidgets.QHBoxLayout()
+        self.eye_backend_label = QtWidgets.QLabel("Backend: —")
+        self.eye_backend_label.setStyleSheet(
+            "QLabel { color: #E2E8F0; font-size: 13px; font-weight: 600; font-family: 'Segoe UI', sans-serif; }")
+        self.eye_configure_btn = QtWidgets.QPushButton("Configure Backend, Model & API Key…")
+        self.eye_configure_btn.setStyleSheet(btn_style)
+        self.eye_configure_btn.clicked.connect(self._open_eye_onboarding)
+        backend_row.addWidget(self.eye_backend_label, 1)
+        backend_row.addWidget(self.eye_configure_btn)
+        layout.addLayout(backend_row)
+
+        checkbox_style = """
+            QCheckBox { color: #E2E8F0; font-size: 13px; font-weight: 600;
+                        font-family: 'Segoe UI', sans-serif; spacing: 10px; }
+            QCheckBox::indicator { width: 24px; height: 24px; border: 2px solid #475569;
+                        border-radius: 4px; background-color: #1E293B; }
+            QCheckBox::indicator:hover { border: 2px solid #00FFFF; background-color: #263449; }
+            QCheckBox::indicator:checked { background-color: #00FFFF; border: 2px solid #00FFFF; }
+        """
+        # Style BOTH QSpinBox and QDoubleSpinBox (the Evidence Confidence field is a
+        # QDoubleSpinBox and was previously unstyled), and fully style the up/down
+        # buttons + arrows — once a spin box is partly stylesheeted Qt stops drawing
+        # the native buttons cleanly, which is why they looked "missing the style".
+        spin_style = """
+            QSpinBox, QDoubleSpinBox {
+                background-color: #1E293B; color: #FFFFFF; border: 2px solid #475569;
+                border-radius: 6px; padding: 8px 12px; min-height: 35px;
+                font-size: 16px; font-weight: 700; font-family: 'Segoe UI', sans-serif;
+            }
+            QSpinBox:hover, QSpinBox:focus,
+            QDoubleSpinBox:hover, QDoubleSpinBox:focus {
+                border: 2px solid #00FFFF; background-color: #263449;
+            }
+            QSpinBox::up-button, QDoubleSpinBox::up-button {
+                subcontrol-origin: border; subcontrol-position: top right;
+                width: 22px; background-color: #334155;
+                border-left: 1px solid #475569; border-top-right-radius: 6px;
+            }
+            QSpinBox::down-button, QDoubleSpinBox::down-button {
+                subcontrol-origin: border; subcontrol-position: bottom right;
+                width: 22px; background-color: #334155;
+                border-left: 1px solid #475569; border-bottom-right-radius: 6px;
+            }
+            QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+            QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+                background-color: #00FFFF;
+            }
+            QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+                width: 0; height: 0;
+                border-left: 5px solid transparent; border-right: 5px solid transparent;
+                border-bottom: 7px solid #E2E8F0;
+            }
+            QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+                width: 0; height: 0;
+                border-left: 5px solid transparent; border-right: 5px solid transparent;
+                border-top: 7px solid #E2E8F0;
+            }
+            QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {
+                border-bottom: 7px solid #0F172A;
+            }
+            QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {
+                border-top: 7px solid #0F172A;
+            }
+            QSpinBox:disabled, QDoubleSpinBox:disabled {
+                background-color: #1E293B; color: #64748B; border: 2px solid #334155;
+            }
+        """
+        desc_style = "QLabel { color: #94A3B8; font-size: 11px; font-style: italic; padding-top: 3px; }"
+
+        form_widget = QtWidgets.QWidget()
+        form_layout = QtWidgets.QFormLayout(form_widget)
+        form_layout.setSpacing(20)
+        form_layout.setLabelAlignment(Qt.AlignRight)
+        form_layout.setContentsMargins(20, 20, 20, 20)
+        label_style = "QLabel { color: #E2E8F0; font-size: 14px; font-weight: 600; padding-right: 15px; }"
+
+        # Store full payload toggle
+        store_label = QtWidgets.QLabel("Save Full Sent Payload:")
+        store_label.setStyleSheet(label_style)
+        store_container = QtWidgets.QWidget()
+        store_layout = QtWidgets.QVBoxLayout(store_container)
+        store_layout.setContentsMargins(0, 0, 0, 0)
+        store_layout.setSpacing(5)
+        self.eye_store_full_payload_checkbox = QtWidgets.QCheckBox(
+            "Store the exact payload (system prompt + history + tools) per seal")
+        self.eye_store_full_payload_checkbox.setStyleSheet(checkbox_style)
+        store_desc = QtWidgets.QLabel(
+            "💡 Lets the Compliance log REPRODUCE (not just verify) each turn. "
+            "Off = only the SHA-256 is kept.")
+        store_desc.setWordWrap(True)
+        store_desc.setStyleSheet(desc_style)
+        store_layout.addWidget(self.eye_store_full_payload_checkbox)
+        store_layout.addWidget(store_desc)
+        form_layout.addRow(store_label, store_container)
+
+        # Recent-uncompressed window
+        recent_label = QtWidgets.QLabel("Messages Before Compress:")
+        recent_label.setStyleSheet(label_style)
+        recent_container = QtWidgets.QWidget()
+        recent_layout = QtWidgets.QVBoxLayout(recent_container)
+        recent_layout.setContentsMargins(0, 0, 0, 0)
+        recent_layout.setSpacing(5)
+        self.eye_recent_uncompressed_spin = QtWidgets.QSpinBox()
+        self.eye_recent_uncompressed_spin.setRange(0, 1000)
+        self.eye_recent_uncompressed_spin.setValue(10)
+        self.eye_recent_uncompressed_spin.setStyleSheet(spin_style)
+        recent_desc = QtWidgets.QLabel(
+            "💡 Keep this many recent payloads uncompressed; older ones are "
+            "compressed (zstd, gzip fallback) and decompressed on demand.")
+        recent_desc.setWordWrap(True)
+        recent_desc.setStyleSheet(desc_style)
+        recent_layout.addWidget(self.eye_recent_uncompressed_spin)
+        recent_layout.addWidget(recent_desc)
+        form_layout.addRow(recent_label, recent_container)
+
+        # Evidence preservation confidence threshold
+        conf_label = QtWidgets.QLabel("Evidence Confidence:")
+        conf_label.setStyleSheet(label_style)
+        conf_container = QtWidgets.QWidget()
+        conf_layout = QtWidgets.QVBoxLayout(conf_container)
+        conf_layout.setContentsMargins(0, 0, 0, 0)
+        conf_layout.setSpacing(5)
+        self.eye_confidence_spin = QtWidgets.QDoubleSpinBox()
+        self.eye_confidence_spin.setRange(0.0, 1.0)
+        self.eye_confidence_spin.setSingleStep(0.05)
+        self.eye_confidence_spin.setDecimals(2)
+        self.eye_confidence_spin.setValue(0.70)
+        self.eye_confidence_spin.setStyleSheet(spin_style)
+        conf_desc = QtWidgets.QLabel(
+            "💡 Minimum detector confidence (0–1) to auto-preserve a message as evidence.")
+        conf_desc.setWordWrap(True)
+        conf_desc.setStyleSheet(desc_style)
+        conf_layout.addWidget(self.eye_confidence_spin)
+        conf_layout.addWidget(conf_desc)
+        form_layout.addRow(conf_label, conf_container)
+
+        # Max context tokens + lock
+        ctx_label = QtWidgets.QLabel("Max Context Tokens:")
+        ctx_label.setStyleSheet(label_style)
+        ctx_container = QtWidgets.QWidget()
+        ctx_layout = QtWidgets.QVBoxLayout(ctx_container)
+        ctx_layout.setContentsMargins(0, 0, 0, 0)
+        ctx_layout.setSpacing(5)
+        self.eye_max_tokens_spin = QtWidgets.QSpinBox()
+        self.eye_max_tokens_spin.setRange(1000, 2000000)
+        self.eye_max_tokens_spin.setSingleStep(1000)
+        self.eye_max_tokens_spin.setValue(64000)
+        self.eye_max_tokens_spin.setStyleSheet(spin_style)
+        self.eye_lock_tokens_checkbox = QtWidgets.QCheckBox(
+            "Lock — don't auto-resolve to the model's real window")
+        self.eye_lock_tokens_checkbox.setStyleSheet(checkbox_style)
+        ctx_desc = QtWidgets.QLabel(
+            "💡 Fallback window for unknown models. Locking pins this value instead of "
+            "auto-detecting the backend's real context window.")
+        ctx_desc.setWordWrap(True)
+        ctx_desc.setStyleSheet(desc_style)
+        ctx_layout.addWidget(self.eye_max_tokens_spin)
+        ctx_layout.addWidget(self.eye_lock_tokens_checkbox)
+        ctx_layout.addWidget(ctx_desc)
+        form_layout.addRow(ctx_label, ctx_container)
+
+        # Max tool output chars
+        tool_label = QtWidgets.QLabel("Max Tool Output Chars:")
+        tool_label.setStyleSheet(label_style)
+        tool_container = QtWidgets.QWidget()
+        tool_layout = QtWidgets.QVBoxLayout(tool_container)
+        tool_layout.setContentsMargins(0, 0, 0, 0)
+        tool_layout.setSpacing(5)
+        self.eye_tool_output_spin = QtWidgets.QSpinBox()
+        self.eye_tool_output_spin.setRange(1000, 5000000)
+        self.eye_tool_output_spin.setSingleStep(1000)
+        self.eye_tool_output_spin.setValue(100000)
+        self.eye_tool_output_spin.setStyleSheet(spin_style)
+        tool_desc = QtWidgets.QLabel(
+            "💡 Floor for how much of a single tool result is kept in the model's context "
+            "(scales up with the window).")
+        tool_desc.setWordWrap(True)
+        tool_desc.setStyleSheet(desc_style)
+        tool_layout.addWidget(self.eye_tool_output_spin)
+        tool_layout.addWidget(tool_desc)
+        form_layout.addRow(tool_label, tool_container)
+
+        layout.addWidget(form_widget)
+
+        # Advanced context / token-budget dialog (existing Eye dialog).
+        self.eye_advanced_ctx_btn = QtWidgets.QPushButton("Advanced Context & Token Budget…")
+        self.eye_advanced_ctx_btn.setStyleSheet(btn_style)
+        self.eye_advanced_ctx_btn.clicked.connect(self._open_eye_context_dialog)
+        adv_row = QtWidgets.QHBoxLayout()
+        adv_row.addStretch()
+        adv_row.addWidget(self.eye_advanced_ctx_btn)
+        layout.addLayout(adv_row)
+
+        layout.addStretch()
+
+        # Disable native controls if the helper module could not be imported
+        # (the launcher buttons have their own import guards).
+        if read_eye_ai_settings is None or write_eye_ai_settings is None:
+            for w in (self.eye_store_full_payload_checkbox, self.eye_recent_uncompressed_spin,
+                      self.eye_confidence_spin, self.eye_max_tokens_spin,
+                      self.eye_lock_tokens_checkbox, self.eye_tool_output_spin):
+                w.setEnabled(False)
+            info.setText("Eye AI settings module unavailable (config.eye_ai_settings could not be imported).")
+
+        return panel
+
+    def _open_eye_onboarding(self):
+        """Launch the existing Eye OnboardingWizard (backend / model / API key)."""
+        try:
+            from eye.services.config_manager import ConfigManager
+            from eye.services.credential_manager import CredentialManager
+            from eye.ui.onboarding_wizard import OnboardingWizard
+        except Exception as e:
+            QMessageBox.warning(self, "Eye AI", f"Eye onboarding is unavailable:\n{e}")
+            return
+        try:
+            wizard = OnboardingWizard(ConfigManager(), CredentialManager(), None, self)
+            wizard.exec_()
+            self.load_settings()  # refresh backend label + any changed values
+        except Exception as e:
+            QMessageBox.critical(self, "Eye AI", f"Failed to open onboarding wizard:\n{e}")
+
+    def _open_eye_context_dialog(self):
+        """Launch the existing Eye ContextWindowSettingsDialog (advanced tuning)."""
+        try:
+            from eye.services.context_window_config_manager import ContextWindowConfigManager
+            from eye.services.config_manager import ConfigManager
+            from eye.ui.settings_dialog import ContextWindowSettingsDialog
+        except Exception as e:
+            QMessageBox.warning(self, "Eye AI", f"Advanced context settings are unavailable:\n{e}")
+            return
+        try:
+            backend = ""
+            try:
+                backend = ConfigManager().load_config().get("backend", "") or ""
+            except Exception:
+                pass
+            dlg = ContextWindowSettingsDialog(ContextWindowConfigManager(), backend, self)
+            dlg.exec_()
+            self.load_settings()
+        except Exception as e:
+            QMessageBox.critical(self, "Eye AI", f"Failed to open advanced context settings:\n{e}")
+
     def _load_semantic_mappings(self):
         """Load semantic mappings from file."""
         if not self.semantic_manager:
@@ -1692,6 +2037,26 @@ class SettingsDialog(QtWidgets.QDialog):
         # Load wings semantic mapping setting (default to True if not present)
         wings_semantic_enabled = getattr(config, 'wings_semantic_mapping_enabled', True)
         self.wings_semantic_mapping_checkbox.setChecked(wings_semantic_enabled)
+        
+        # Load cascade tree expansion setting (default to True if not present)
+        cascade_enabled = getattr(config, 'cascade_tree_expansion_enabled', True)
+        self.cascade_expansion_checkbox.setChecked(cascade_enabled)
+
+        # Load Eye AI settings from configs/eye_config.json
+        if read_eye_ai_settings is not None:
+            try:
+                eye_ai = read_eye_ai_settings()
+                self.eye_store_full_payload_checkbox.setChecked(bool(eye_ai["store_full_payload"]))
+                self.eye_recent_uncompressed_spin.setValue(int(eye_ai["sealed_payload_recent_uncompressed"]))
+                self.eye_confidence_spin.setValue(float(eye_ai["confidence_threshold"]))
+                self.eye_max_tokens_spin.setValue(int(eye_ai["max_total_tokens"]))
+                self.eye_lock_tokens_checkbox.setChecked(bool(eye_ai["lock_max_total_tokens"]))
+                self.eye_tool_output_spin.setValue(int(eye_ai["max_tool_output_chars"]))
+                backend = eye_ai.get("backend") or "—"
+                model = eye_ai.get("model_name") or "—"
+                self.eye_backend_label.setText(f"Backend: {backend} / {model}")
+            except Exception as e:
+                print(f"[Settings] Could not load Eye AI settings: {e}")
     
     def save_settings(self):
         """Save settings and close dialog."""
@@ -1702,9 +2067,21 @@ class SettingsDialog(QtWidgets.QDialog):
                 recent_cases_display_count=self.recent_count_spin.value(),
                 max_history_size=self.max_history_spin.value(),
                 identity_semantic_phase_enabled=self.identity_semantic_phase_checkbox.isChecked(),
-                wings_semantic_mapping_enabled=self.wings_semantic_mapping_checkbox.isChecked()
+                wings_semantic_mapping_enabled=self.wings_semantic_mapping_checkbox.isChecked(),
+                cascade_tree_expansion_enabled=self.cascade_expansion_checkbox.isChecked()
             )
-            
+
+            # Persist Eye AI settings to configs/eye_config.json
+            if write_eye_ai_settings is not None:
+                write_eye_ai_settings({
+                    "store_full_payload": self.eye_store_full_payload_checkbox.isChecked(),
+                    "sealed_payload_recent_uncompressed": self.eye_recent_uncompressed_spin.value(),
+                    "confidence_threshold": self.eye_confidence_spin.value(),
+                    "max_total_tokens": self.eye_max_tokens_spin.value(),
+                    "lock_max_total_tokens": self.eye_lock_tokens_checkbox.isChecked(),
+                    "max_tool_output_chars": self.eye_tool_output_spin.value(),
+                })
+
             # Save semantic mappings if manager is available
             if self.semantic_manager:
                 home_dir = Path.home()

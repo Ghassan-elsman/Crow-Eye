@@ -28,55 +28,55 @@ class CorrelationEngineStyles:
     # ============================================================================
     
     # Score interpretation colors (semantic color coding)
-    SCORE_CONFIRMED = "#4CAF50"      # Green - High confidence
-    SCORE_PROBABLE = "#FF9800"       # Orange - Medium confidence
-    SCORE_WEAK = "#F44336"           # Red - Low confidence
-    SCORE_INSUFFICIENT = "#9E9E9E"   # Gray - Insufficient evidence
-    SCORE_DEFAULT = "#2196F3"        # Blue - Default/Unknown
+    SCORE_CONFIRMED = "#4CAF50" # Green - High confidence
+    SCORE_PROBABLE = "#FF9800" # Orange - Medium confidence
+    SCORE_WEAK = "#F44336" # Red - Low confidence
+    SCORE_INSUFFICIENT = "#9E9E9E" # Gray - Insufficient evidence
+    SCORE_DEFAULT = "#2196F3" # Blue - Default/Unknown
     
     # Background colors for score highlights
-    SCORE_CONFIRMED_BG = "#C8E6C9"   # Light green
-    SCORE_PROBABLE_BG = "#FFE0B2"    # Light orange
-    SCORE_WEAK_BG = "#FFCDD2"        # Light red
-    SCORE_INSUFFICIENT_BG = "#F5F5F5"  # Light gray
+    SCORE_CONFIRMED_BG = "#C8E6C9" # Light green
+    SCORE_PROBABLE_BG = "#FFE0B2" # Light orange
+    SCORE_WEAK_BG = "#FFCDD2" # Light red
+    SCORE_INSUFFICIENT_BG = "#F5F5F5" # Light gray
     
     # Match status colors
-    MATCHED_COLOR = "#4CAF50"        # Green
-    MATCHED_BG = "#E8F5E9"           # Very light green
-    UNMATCHED_COLOR = "#9E9E9E"      # Gray
-    UNMATCHED_BG = "#FAFAFA"         # Very light gray
+    MATCHED_COLOR = "#4CAF50" # Green
+    MATCHED_BG = "#E8F5E9" # Very light green
+    UNMATCHED_COLOR = "#9E9E9E" # Gray
+    UNMATCHED_BG = "#FAFAFA" # Very light gray
     
     # ============================================================================
     # COLOR PALETTE - General UI
     # ============================================================================
     
     # Base colors (matching Crow-Eye theme)
-    BG_PRIMARY = "#0F172A"           # Main background
-    BG_PANELS = "#1E293B"            # Panel background
-    BG_CARDS = "#1E293B"             # Card backgrounds
-    BG_HOVER = "#263449"             # Hover state
+    BG_PRIMARY = "#0F172A" # Main background
+    BG_PANELS = "#1E293B" # Panel background
+    BG_CARDS = "#1E293B" # Card backgrounds
+    BG_HOVER = "#263449" # Hover state
     
     # Text colors
-    TEXT_PRIMARY = "#E2E8F0"         # Primary text
-    TEXT_SECONDARY = "#94A3B8"       # Secondary text
-    TEXT_MUTED = "#64748B"           # Muted text
-    TEXT_ACCENT = "#00FFFF"          # Accent text (cyan)
+    TEXT_PRIMARY = "#E2E8F0" # Primary text
+    TEXT_SECONDARY = "#94A3B8" # Secondary text
+    TEXT_MUTED = "#64748B" # Muted text
+    TEXT_ACCENT = "#00FFFF" # Accent text (cyan)
     
     # Border colors
-    BORDER_SUBTLE = "#334155"        # Subtle borders
-    BORDER_ACCENT = "#475569"        # Accent borders
-    BORDER_FOCUS = "#3B82F6"         # Focus state
-    BORDER_HOVER = "#00FFFF"         # Hover state (cyan)
+    BORDER_SUBTLE = "#334155" # Subtle borders
+    BORDER_ACCENT = "#475569" # Accent borders
+    BORDER_FOCUS = "#3B82F6" # Focus state
+    BORDER_HOVER = "#00FFFF" # Hover state (cyan)
     
     # Button colors
-    BTN_PRIMARY = "#3B82F6"          # Primary button
-    BTN_PRIMARY_HOVER = "#2563EB"    # Primary hover
-    BTN_SUCCESS = "#10B981"          # Success button
-    BTN_SUCCESS_HOVER = "#059669"    # Success hover
-    BTN_DANGER = "#EF4444"           # Danger button
-    BTN_DANGER_HOVER = "#DC2626"     # Danger hover
-    BTN_SECONDARY = "#64748B"        # Secondary button
-    BTN_SECONDARY_HOVER = "#475569"  # Secondary hover
+    BTN_PRIMARY = "#3B82F6" # Primary button
+    BTN_PRIMARY_HOVER = "#2563EB" # Primary hover
+    BTN_SUCCESS = "#10B981" # Success button
+    BTN_SUCCESS_HOVER = "#059669" # Success hover
+    BTN_DANGER = "#EF4444" # Danger button
+    BTN_DANGER_HOVER = "#DC2626" # Danger hover
+    BTN_SECONDARY = "#64748B" # Secondary button
+    BTN_SECONDARY_HOVER = "#475569" # Secondary hover
     
     # ============================================================================
     # ICON DEFINITIONS
@@ -318,7 +318,6 @@ class CorrelationEngineStyles:
             font-family: 'Segoe UI', 'Roboto', sans-serif;
             padding: 12px 16px;
             background: transparent;
-            letter-spacing: 0.5px;
         }}
         
         QProgressBar {{
@@ -440,7 +439,6 @@ class CorrelationEngineStyles:
             font-weight: 600;
             font-size: 11px;
             font-family: 'Segoe UI', sans-serif;
-            text-transform: uppercase;
         }}
         
         QHeaderView::section:hover {{
@@ -522,13 +520,386 @@ class CorrelationEngineStyles:
             border: 2px solid {BORDER_SUBTLE};
             border-radius: 10px;
         }}
-        
+
         QDialog QLabel {{
             color: {TEXT_PRIMARY};
             font-family: 'Segoe UI', sans-serif;
         }}
     """
-    
+
+    # ============================================================================
+    # TAB WIDGET STYLES — mirrored from crow_eye_styles.qss so detail
+    # dialogs render identical tab chrome to the main window.
+    # ============================================================================
+
+    TAB_WIDGET_STYLE = f"""
+        QTabWidget::pane {{
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 8px;
+            background: {BG_PANELS};
+            margin: 0px;
+            padding: 0px;
+        }}
+
+        QTabBar::tab {{
+            background: {BG_PANELS};
+            color: {TEXT_SECONDARY};
+            border: 1px solid {BORDER_SUBTLE};
+            border-bottom: none;
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+            padding: 10px 22px;
+            margin: 0px 3px 0px 3px;
+            min-width: 110px;
+            font-weight: 600;
+            font-size: 11px;
+        }}
+
+        QTabBar::tab:selected {{
+            background-color: #0B1220;
+            color: {TEXT_ACCENT};
+            border-bottom: 2px solid {TEXT_ACCENT};
+            font-weight: bold;
+        }}
+
+        QTabBar::tab:hover:!selected {{
+            background-color: {BORDER_SUBTLE};
+            color: #FFFFFF;
+        }}
+    """
+
+    # ============================================================================
+    # TREE WIDGET STYLES
+    # ============================================================================
+
+    TREE_WIDGET_STYLE = f"""
+        QTreeWidget {{
+            background-color: {BG_PRIMARY};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 8px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 11px;
+            alternate-background-color: {BG_PANELS};
+            outline: 0;
+        }}
+
+        QTreeWidget::item {{
+            padding: 4px 6px;
+            border-bottom: 1px solid {BORDER_SUBTLE};
+            color: {TEXT_PRIMARY};
+        }}
+
+        QTreeWidget::item:selected {{
+            background-color: {BTN_SUCCESS};
+            color: #FFFFFF;
+            font-weight: bold;
+        }}
+
+        QTreeWidget::item:hover {{
+            background-color: {BG_HOVER};
+            color: {TEXT_ACCENT};
+        }}
+
+        QTreeWidget::branch:has-children:!has-siblings:closed,
+        QTreeWidget::branch:closed:has-children:has-siblings {{
+            border-image: none;
+        }}
+
+        QTreeWidget::branch:open:has-children:!has-siblings,
+        QTreeWidget::branch:open:has-children:has-siblings {{
+            border-image: none;
+        }}
+
+        QHeaderView::section {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 {BTN_PRIMARY}, stop:1 {BTN_PRIMARY_HOVER});
+            color: #FFFFFF;
+            padding: 6px 8px;
+            border: none;
+            border-right: 1px solid {BORDER_SUBTLE};
+            font-weight: 600;
+            font-size: 11px;
+        }}
+    """
+
+    # ============================================================================
+    # SCROLL AREA STYLES
+    # ============================================================================
+
+    SCROLL_AREA_STYLE = f"""
+        QScrollArea {{
+            background-color: {BG_PRIMARY};
+            border: none;
+        }}
+
+        QScrollArea > QWidget > QWidget {{
+            background-color: {BG_PRIMARY};
+            color: {TEXT_PRIMARY};
+        }}
+
+        QScrollBar:vertical {{
+            background-color: {BG_PANELS};
+            width: 12px;
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 6px;
+            margin: 0px;
+        }}
+
+        QScrollBar::handle:vertical {{
+            background-color: {TEXT_ACCENT};
+            min-height: 28px;
+            border-radius: 5px;
+        }}
+
+        QScrollBar::handle:vertical:hover {{
+            background-color: #22D3EE;
+        }}
+
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {{
+            background: none;
+            height: 0px;
+        }}
+
+        QScrollBar:horizontal {{
+            background-color: {BG_PANELS};
+            height: 12px;
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 6px;
+        }}
+
+        QScrollBar::handle:horizontal {{
+            background-color: {TEXT_ACCENT};
+            min-width: 28px;
+            border-radius: 5px;
+        }}
+
+        QScrollBar::add-line:horizontal,
+        QScrollBar::sub-line:horizontal {{
+            background: none;
+            width: 0px;
+        }}
+    """
+
+    # ============================================================================
+    # TEXT EDIT / READ-ONLY HTML PANE STYLES
+    # ============================================================================
+
+    TEXT_EDIT_STYLE = f"""
+        QTextEdit, QPlainTextEdit {{
+            background-color: #0B1220;
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 5px;
+            padding: 8px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 11px;
+            selection-background-color: {BTN_PRIMARY};
+            selection-color: #FFFFFF;
+        }}
+
+        QTextEdit:focus, QPlainTextEdit:focus {{
+            border: 1px solid {BORDER_HOVER};
+        }}
+    """
+
+    # ============================================================================
+    # HEADING / TITLE LABEL STYLES (h2 / h3 used inside detail dialogs)
+    # ============================================================================
+
+    HEADING_LABEL_STYLE = f"""
+        QLabel {{
+            color: {TEXT_PRIMARY};
+            font-family: 'Segoe UI', sans-serif;
+            background-color: transparent;
+        }}
+    """
+
+    # ============================================================================
+    # CATCH-ALL DETAIL-DIALOG QSS — covers every widget class an evidence
+    # detail view could contain (buttons, checkboxes, spinboxes, splitters,
+    # list widgets, frames, header views). Applied at dialog scope so
+    # cascading reaches deeply nested children Qt's class iteration would
+    # otherwise miss (e.g. a QPushButton inside a tab inside a tab).
+    # ============================================================================
+
+    DETAIL_DIALOG_QSS = f"""
+        /* Push buttons — primary blue default with hover */
+        QPushButton {{
+            background-color: {BTN_PRIMARY};
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 18px;
+            font-weight: 600;
+            font-size: 11px;
+            font-family: 'Segoe UI', sans-serif;
+            min-width: 80px;
+            min-height: 22px;
+        }}
+        QPushButton:hover {{ background-color: #60A5FA; }}
+        QPushButton:pressed {{ background-color: {BTN_PRIMARY_HOVER}; }}
+        QPushButton:disabled {{ background-color: {BTN_SECONDARY}; color: {TEXT_SECONDARY}; }}
+
+        /* Note: Close/Cancel→slate and Export/Save/Copy→emerald variants
+           are dispatched programmatically in apply_evidence_detail_styling
+           because Qt's QSS attribute selectors only support exact-match
+           [text="…"] — CSS3 prefix matching [text^="…"] is not supported
+           by Qt's stylesheet engine and silently no-ops. */
+
+        /* Checkboxes + radio buttons */
+        QCheckBox, QRadioButton {{
+            color: {TEXT_PRIMARY};
+            spacing: 8px;
+            background-color: transparent;
+        }}
+        QCheckBox::indicator, QRadioButton::indicator {{
+            width: 16px;
+            height: 16px;
+            border: 2px solid {BORDER_SUBTLE};
+            border-radius: 3px;
+            background-color: #0B1220;
+        }}
+        QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
+            border-color: {BORDER_HOVER};
+        }}
+        QCheckBox::indicator:checked {{
+            background-color: {TEXT_ACCENT};
+            border-color: {TEXT_ACCENT};
+        }}
+        QRadioButton::indicator {{ border-radius: 8px; }}
+        QRadioButton::indicator:checked {{
+            background-color: {TEXT_ACCENT};
+            border-color: {TEXT_ACCENT};
+        }}
+
+        /* Spin boxes */
+        QSpinBox, QDoubleSpinBox {{
+            background-color: {BG_PANELS};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 4px;
+            padding: 4px 6px;
+            selection-background-color: {BTN_PRIMARY};
+            selection-color: #FFFFFF;
+        }}
+        QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {BORDER_FOCUS}; }}
+
+        /* Splitters */
+        QSplitter::handle {{
+            background-color: {BORDER_SUBTLE};
+        }}
+        QSplitter::handle:hover {{
+            background-color: {TEXT_ACCENT};
+        }}
+
+        /* Frames that opt-in by object name. (Avoiding a blanket
+           QFrame rule because QGroupBox / QLineEdit / many composite
+           widgets inherit from QFrame internally and would inherit
+           "border: none" through the cascade.) */
+        QFrame#noFrame {{
+            background-color: transparent;
+            border: none;
+        }}
+
+        /* List widgets (used in some legacy detail sub-tabs) */
+        QListWidget {{
+            background-color: {BG_PANELS};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 4px;
+            padding: 4px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 11px;
+        }}
+        QListWidget::item {{
+            padding: 6px;
+            border-radius: 3px;
+        }}
+        QListWidget::item:hover {{
+            background-color: {BG_HOVER};
+            color: {TEXT_ACCENT};
+        }}
+        QListWidget::item:selected {{
+            background-color: {BTN_PRIMARY};
+            color: #FFFFFF;
+        }}
+
+        /* QHeaderView baseline — TABLE_STYLE / TREE_WIDGET_STYLE already
+           cover the in-table variants; this catches standalone ones. */
+        QHeaderView::section {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 {BTN_PRIMARY}, stop:1 {BTN_PRIMARY_HOVER});
+            color: #FFFFFF;
+            padding: 6px 8px;
+            border: none;
+            border-right: 1px solid {BORDER_SUBTLE};
+            font-weight: 600;
+        }}
+
+        /* Tool tips */
+        QToolTip {{
+            background-color: {BG_PRIMARY};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {TEXT_ACCENT};
+            padding: 4px 6px;
+        }}
+
+        /* Date / time edits */
+        QDateTimeEdit, QDateEdit, QTimeEdit {{
+            background-color: {BG_PANELS};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 4px;
+            padding: 4px 6px;
+        }}
+        QDateTimeEdit:focus, QDateEdit:focus, QTimeEdit:focus {{
+            border-color: {BORDER_FOCUS};
+        }}
+        QDateTimeEdit::drop-down,
+        QDateEdit::drop-down,
+        QTimeEdit::drop-down,
+        QComboBox::drop-down {{
+            border: none;
+        }}
+
+        /* Context menus that pop out of tables / trees */
+        QMenu {{
+            background-color: {BG_PANELS};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 6px;
+            padding: 4px;
+        }}
+        QMenu::item {{
+            padding: 6px 18px;
+            border-radius: 4px;
+        }}
+        QMenu::item:selected {{
+            background-color: {BTN_PRIMARY};
+            color: #FFFFFF;
+        }}
+        QMenu::separator {{
+            height: 1px;
+            background-color: {BORDER_SUBTLE};
+            margin: 4px 6px;
+        }}
+
+        /* Progress bars (used by some embedded heatmap / chart panes) */
+        QProgressBar {{
+            background-color: {BG_PANELS};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_SUBTLE};
+            border-radius: 4px;
+            text-align: center;
+        }}
+        QProgressBar::chunk {{
+            background-color: {TEXT_ACCENT};
+            border-radius: 3px;
+        }}
+    """
+
     # ============================================================================
     # UTILITY METHODS
     # ============================================================================
@@ -598,12 +969,130 @@ class CorrelationEngineStyles:
     def apply_dialog_style(dialog: QDialog):
         """
         Apply consistent dialog styling.
-        
+
         Args:
             dialog: QDialog to style
         """
         dialog.setStyleSheet(CorrelationEngineStyles.DIALOG_STYLE)
-    
+
+    # ------------------------------------------------------------------ #
+    # Detail-dialog widget styles (added in the GUI-polish pass).
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def apply_tab_style(tab_widget):
+        """Apply the Crow-Eye tab chrome to a ``QTabWidget``."""
+        tab_widget.setStyleSheet(CorrelationEngineStyles.TAB_WIDGET_STYLE)
+
+    @staticmethod
+    def apply_tree_style(tree_widget):
+        """Apply the Crow-Eye tree chrome (alt-rows, hover, headers)."""
+        tree_widget.setStyleSheet(CorrelationEngineStyles.TREE_WIDGET_STYLE)
+        try:
+            tree_widget.setAlternatingRowColors(True)
+        except Exception:
+            pass
+
+    @staticmethod
+    def apply_scroll_style(scroll_area):
+        """Apply the slate background + cyan scrollbars to a ``QScrollArea``."""
+        scroll_area.setStyleSheet(CorrelationEngineStyles.SCROLL_AREA_STYLE)
+
+    @staticmethod
+    def apply_text_edit_style(text_edit):
+        """Apply the read-only HTML / monospace text-edit chrome."""
+        text_edit.setStyleSheet(CorrelationEngineStyles.TEXT_EDIT_STYLE)
+
+    @staticmethod
+    def apply_evidence_detail_styling(dialog: QDialog) -> None:
+        """One-shot: style every widget inside a Correlation Engine detail dialog.
+
+        Walks ``dialog.findChildren(...)`` and applies the right
+        per-widget stylesheet (Qt's cascade isn't reliable across
+        every widget type, especially nested QTabWidgets). Idempotent —
+        safe to call from a constructor and from re-render paths.
+
+        Used by ``MatchDetailDialog``, ``AnchorDetailDialog``,
+        ``IdentityDetailDialog``, ``TimeWindowDetailDialog``, etc., so
+        every popup the analyst opens carries the unified slate / cyan /
+        emerald look instead of falling back to default Qt chrome.
+        """
+        # Lazy imports keep ui_styling.py importable without PyQt at
+        # module load (e.g. on the headless test harness).
+        from PyQt5.QtWidgets import (
+            QTabWidget, QTreeWidget, QTableWidget, QGroupBox,
+            QScrollArea, QTextEdit, QPlainTextEdit, QLineEdit, QComboBox,
+            QPushButton,
+        )
+
+        # Dialog frame + label baseline + catch-all widget chrome
+        # (push buttons, checkboxes, spinboxes, splitters, list widgets,
+        # tool tips, standalone header views, frames). Applied at the
+        # dialog level so every nested child cascades into the theme.
+        dialog.setStyleSheet(
+            CorrelationEngineStyles.DIALOG_STYLE
+            + CorrelationEngineStyles.HEADING_LABEL_STYLE
+            + CorrelationEngineStyles.DETAIL_DIALOG_QSS
+        )
+
+        # Tab containers — common in IdentityDetailDialog +
+        # TimeWindowDetailDialog content sections.
+        for tw in dialog.findChildren(QTabWidget):
+            CorrelationEngineStyles.apply_tab_style(tw)
+
+        # Tables (matched feathers, evidence list, etc.).
+        # Apply only the *visual* chrome — stylesheet, alt-rows, header
+        # stretch. Selection mode / edit triggers / vertical-header
+        # visibility are owned by each table's creator so an analyst
+        # who set up multi-row select on a specific table keeps it.
+        for tbl in dialog.findChildren(QTableWidget):
+            tbl.setStyleSheet(CorrelationEngineStyles.TABLE_STYLE)
+            tbl.setAlternatingRowColors(True)
+            header = tbl.horizontalHeader()
+            if header is not None:
+                header.setStretchLastSection(True)
+                header.setHighlightSections(True)
+
+        # Trees (raw record viewer)
+        for tree in dialog.findChildren(QTreeWidget):
+            CorrelationEngineStyles.apply_tree_style(tree)
+
+        # Group boxes (section wrappers)
+        for gb in dialog.findChildren(QGroupBox):
+            CorrelationEngineStyles.apply_group_box_style(gb)
+
+        # Scroll areas + scrollbars
+        for sa in dialog.findChildren(QScrollArea):
+            CorrelationEngineStyles.apply_scroll_style(sa)
+
+        # Read-only HTML / monospace panes (metadata blocks)
+        for te in dialog.findChildren(QTextEdit):
+            CorrelationEngineStyles.apply_text_edit_style(te)
+        for pe in dialog.findChildren(QPlainTextEdit):
+            CorrelationEngineStyles.apply_text_edit_style(pe)
+
+        # Inline inputs (rare in detail dialogs but possible — e.g.
+        # an in-line filter on a tab).
+        for inp in dialog.findChildren(QLineEdit):
+            CorrelationEngineStyles.apply_input_style(inp)
+        for combo in dialog.findChildren(QComboBox):
+            CorrelationEngineStyles.apply_input_style(combo)
+
+        # Push buttons — dispatch by text. Qt QSS attribute selectors
+        # don't support CSS3 prefix matching ([text^="…"]) and exact
+        # matching breaks the moment a label gains an ellipsis or
+        # mnemonic, so we route it through Python and call
+        # apply_button_style with the correct variant. The dialog-level
+        # QPushButton {…} rule covers everything else (primary blue).
+        for btn in dialog.findChildren(QPushButton):
+            label = (btn.text() or "").lstrip("&").strip().lower()
+            if not label:
+                continue
+            if label.startswith(("close", "cancel", "dismiss")):
+                CorrelationEngineStyles.apply_button_style(btn, "secondary")
+            elif label.startswith(("export", "save", "copy")):
+                CorrelationEngineStyles.apply_button_style(btn, "success")
+
     @staticmethod
     def get_score_color(interpretation: str) -> str:
         """

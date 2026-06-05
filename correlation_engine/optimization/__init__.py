@@ -3,7 +3,7 @@ Optimization module for correlation engine performance enhancements.
 
 This module provides performance optimizations for various correlation engine components:
 - Progress tracking optimization
-- Weighted scoring optimization  
+- Weighted scoring optimization 
 - Semantic mapping optimization
 - Performance profiling
 - Memory monitoring

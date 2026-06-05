@@ -37,7 +37,7 @@ class IdentitySemanticConfig:
     max_identities_per_batch: int = 10000
     fallback_to_per_record: bool = True
     debug_mode: bool = False
-    disable_per_record_semantic_mapping: bool = True  # NEW: Disable semantic mapping during correlation
+    disable_per_record_semantic_mapping: bool = True # NEW: Disable semantic mapping during correlation
 
 
 @dataclass
@@ -177,8 +177,8 @@ class IdentitySemanticController:
             wings_semantic_enabled = getattr(case_manager.global_config, 'wings_semantic_mapping_enabled', True)
             
             if not wings_semantic_enabled:
-                print("[Identity Semantic Phase] ⚠ Semantic mapping is disabled in settings")
-                print("[Identity Semantic Phase] You can enable it from Settings > General > Wings Semantic Mapping")
+                logger.info("[Identity Semantic Phase] [WARN] Semantic mapping is disabled in settings")
+                logger.info("[Identity Semantic Phase] You can enable it from Settings > General > Wings Semantic Mapping")
                 logger.info("[Identity Semantic Phase] Semantic mapping disabled in settings, skipping")
                 return correlation_results
         except Exception as e:
@@ -305,7 +305,7 @@ class IdentitySemanticController:
                     updated_count = self._identity_extractor.save_identity_fields_to_database(
                         correlation_results.database_path,
                         correlation_results.execution_id,
-                        force_update=True  # Always update to ensure latest extraction logic
+                        force_update=True # Always update to ensure latest extraction logic
                     )
                     logger.info(f"[Identity Semantic Phase] Saved identity fields to {updated_count:,} matches")
         
@@ -370,7 +370,7 @@ class IdentitySemanticController:
         
         if cursor.fetchone() is None:
             logger.info("[FTS5] Creating FTS5 virtual table for semantic search...")
-            print("[FTS5] Creating FTS5 virtual table...")
+            logger.info("[FTS5] Creating FTS5 virtual table...")
             
             # Create FTS5 virtual table with porter stemming
             cursor.execute("""
@@ -382,7 +382,7 @@ class IdentitySemanticController:
             """)
             
             logger.info("[FTS5] Populating FTS5 index...")
-            print("[FTS5] Populating FTS5 index (this may take 30-60 seconds)...")
+            logger.info("[FTS5] Populating FTS5 index (this may take 30-60 seconds)...")
             
             index_start = time.time()
             
@@ -400,12 +400,12 @@ class IdentitySemanticController:
             index_time = time.time() - index_start
             
             logger.info(f"[FTS5] Indexed {cursor.rowcount:,} matches in {index_time:.2f}s")
-            print(f"[FTS5] Indexed {cursor.rowcount:,} matches in {index_time:.2f}s")
+            logger.info(f"[FTS5] Indexed {cursor.rowcount:,} matches in {index_time:.2f}s")
             
             return True
         else:
             logger.info("[FTS5] FTS5 index already exists")
-            print("[FTS5] FTS5 index already exists")
+            logger.info("[FTS5] FTS5 index already exists")
             return False
     
     def _apply_semantic_mapping_to_database(self, correlation_results: CorrelationResult) -> Dict[str, Any]:
@@ -467,7 +467,7 @@ class IdentitySemanticController:
             
             if not rules:
                 logger.warning("[Identity Semantic Phase] No semantic rules loaded, skipping semantic mapping")
-                print("[Identity Semantic Phase] WARNING: No semantic rules loaded!")
+                logger.info("[Identity Semantic Phase] WARNING: No semantic rules loaded!")
                 return stats
             
             # Filter to rules with conditions
@@ -475,13 +475,13 @@ class IdentitySemanticController:
             
             logger.info(f"[Identity Semantic Phase] Using {len(identity_rules)} rules for semantic mapping")
             
-            print(f"\n{'='*80}")
-            print(f"SEMANTIC MAPPING - SQL-BASED APPROACH")
-            print(f"{'='*80}")
-            print(f"  Database: {database_path}")
-            print(f"  Execution ID: {execution_id}")
-            print(f"  Rules: {len(identity_rules)}")
-            print(f"{'='*80}\n")
+            logger.info(f"\n{'='*80}")
+            logger.info(f"SEMANTIC MAPPING - SQL-BASED APPROACH")
+            logger.info(f"{'='*80}")
+            logger.info(f" Database: {database_path}")
+            logger.info(f" Execution ID: {execution_id}")
+            logger.info(f" Rules: {len(identity_rules)}")
+            logger.info(f"{'='*80}\n")
             
             # Use SQL-based semantic mapper
             mapper = SQLSemanticMapper(database_path, execution_id)
@@ -723,67 +723,67 @@ class IdentitySemanticController:
         time_str = self._format_time(self.statistics.processing_time_seconds)
         
         # Print summary in correlation engine style
-        print(f"\n{'='*70}")
-        print(f"IDENTITY SEMANTIC PHASE COMPLETE")
-        print(f"{'='*70}")
-        print(f"  Unique identities processed: {self.statistics.unique_identities_processed:,}")
-        print(f"  Semantic mappings applied: {self.statistics.semantic_mappings_applied:,}")
-        print(f"  Records enhanced: {self.statistics.records_enhanced:,}")
-        print(f"  Processing time: {time_str}")
+        logger.info(f"\n{'='*70}")
+        logger.info(f"IDENTITY SEMANTIC PHASE COMPLETE")
+        logger.info(f"{'='*70}")
+        logger.info(f" Unique identities processed: {self.statistics.unique_identities_processed:,}")
+        logger.info(f" Semantic mappings applied: {self.statistics.semantic_mappings_applied:,}")
+        logger.info(f" Records enhanced: {self.statistics.records_enhanced:,}")
+        logger.info(f" Processing time: {time_str}")
         
         # Show phase breakdown if available
         if self.statistics.identity_extraction_time_seconds > 0:
             extraction_time = self._format_time(self.statistics.identity_extraction_time_seconds)
-            print(f"    - Identity extraction: {extraction_time}")
+            logger.info(f" - Identity extraction: {extraction_time}")
         
         if self.statistics.semantic_enhancement_time_seconds > 0:
             enhancement_time = self._format_time(self.statistics.semantic_enhancement_time_seconds)
-            print(f"    - Semantic enhancement: {enhancement_time}")
+            logger.info(f" - Semantic enhancement: {enhancement_time}")
         
         if self.statistics.data_propagation_time_seconds > 0:
             propagation_time = self._format_time(self.statistics.data_propagation_time_seconds)
-            print(f"    - Data propagation: {propagation_time}")
+            logger.info(f" - Data propagation: {propagation_time}")
         
         # Show performance metrics (Requirement 5.5)
-        print(f"\n  Performance Metrics:")
+        logger.info(f"\n Performance Metrics:")
         if self.statistics.identities_per_second > 0:
-            print(f"    - Identities/second: {self.statistics.identities_per_second:.1f}")
+            logger.info(f" - Identities/second: {self.statistics.identities_per_second:.1f}")
         if self.statistics.records_per_second > 0:
-            print(f"    - Records/second: {self.statistics.records_per_second:.1f}")
+            logger.info(f" - Records/second: {self.statistics.records_per_second:.1f}")
         if self.statistics.average_time_per_identity_ms > 0:
-            print(f"    - Avg time per identity: {self.statistics.average_time_per_identity_ms:.2f}ms")
+            logger.info(f" - Avg time per identity: {self.statistics.average_time_per_identity_ms:.2f}ms")
         
         # Show success/failure rates
         if self.statistics.unique_identities_processed > 0:
-            print(f"\n  Enhancement Results:")
-            print(f"    - Identities with mappings: {self.statistics.identities_with_mappings:,}")
-            print(f"    - Identities without mappings: {self.statistics.identities_without_mappings:,}")
+            logger.info(f"\n Enhancement Results:")
+            logger.info(f" - Identities with mappings: {self.statistics.identities_with_mappings:,}")
+            logger.info(f" - Identities without mappings: {self.statistics.identities_without_mappings:,}")
 
             if self.statistics.semantic_enhancement_failure_count > 0:
-                print(f"    - Failures: {self.statistics.semantic_enhancement_failure_count:,}")
+                logger.info(f" - Failures: {self.statistics.semantic_enhancement_failure_count:,}")
         
         # Show memory usage (Requirement 5.5)
         if PSUTIL_AVAILABLE and self.statistics.memory_usage_start_mb > 0:
-            print(f"\n  Memory Usage:")
-            print(f"    - Start: {self.statistics.memory_usage_start_mb:.1f} MB "
+            logger.info(f"\n Memory Usage:")
+            logger.info(f" - Start: {self.statistics.memory_usage_start_mb:.1f} MB "
                   f"(System: {self.statistics.system_memory_percent_start:.1f}%)")
-            print(f"    - Peak: {self.statistics.memory_usage_peak_mb:.1f} MB "
+            logger.info(f" - Peak: {self.statistics.memory_usage_peak_mb:.1f} MB "
                   f"(System: {self.statistics.system_memory_percent_peak:.1f}%)")
-            print(f"    - End: {self.statistics.memory_usage_end_mb:.1f} MB "
+            logger.info(f" - End: {self.statistics.memory_usage_end_mb:.1f} MB "
                   f"(System: {self.statistics.system_memory_percent_end:.1f}%)")
             
             # Show delta with sign
             delta_sign = "+" if self.statistics.memory_delta_mb >= 0 else ""
-            print(f"    - Delta: {delta_sign}{self.statistics.memory_delta_mb:.1f} MB")
+            logger.info(f" - Delta: {delta_sign}{self.statistics.memory_delta_mb:.1f} MB")
         
         # Show warnings if any errors occurred
         if self.statistics.errors_encountered > 0:
-            print(f"\n  ! Errors encountered: {self.statistics.errors_encountered}")
+            logger.info(f"\n ! Errors encountered: {self.statistics.errors_encountered}")
         
         if self.statistics.fallback_used:
-            print(f"  ! Fallback to per-record processing was used")
+            logger.info(f" ! Fallback to per-record processing was used")
         
-        print(f"{'='*70}\n")
+        logger.info(f"{'='*70}\n")
     
     def _format_time(self, seconds: float) -> str:
         """
@@ -841,8 +841,8 @@ class IdentitySemanticController:
             wings_semantic_enabled = getattr(case_manager.global_config, 'wings_semantic_mapping_enabled', True)
             
             if not wings_semantic_enabled:
-                print("[Identity Semantic Phase] ⚠ Semantic mapping is disabled in settings")
-                print("[Identity Semantic Phase] You can enable it from Settings > General > Wings Semantic Mapping")
+                logger.info("[Identity Semantic Phase] [WARN] Semantic mapping is disabled in settings")
+                logger.info("[Identity Semantic Phase] You can enable it from Settings > General > Wings Semantic Mapping")
                 logger.info("[Identity Semantic Phase] Semantic mapping disabled in settings, skipping")
                 return correlation_results_list
         except Exception as e:
@@ -1015,66 +1015,66 @@ class IdentitySemanticController:
         Requirements: 5.1, 5.2, 5.3, 3.5
         Property 8: Output Verbosity Reduction
         """
-        print("\n" + "="*80)
-        print("IDENTITY SEMANTIC PHASE SUMMARY (MULTI-WING)")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("IDENTITY SEMANTIC PHASE SUMMARY (MULTI-WING)")
+        logger.info("="*80)
         
         # Wing information
-        print(f"\nWings Processed: {wing_count}")
+        logger.info(f"\nWings Processed: {wing_count}")
         
         # Identity extraction
-        print(f"\nIdentity Extraction:")
-        print(f"  Total Unique Identities: {self.statistics.total_identities_extracted}")
-        print(f"  Extraction Time: {self.statistics.identity_extraction_time_seconds:.2f}s")
+        logger.info(f"\nIdentity Extraction:")
+        logger.info(f" Total Unique Identities: {self.statistics.total_identities_extracted}")
+        logger.info(f" Extraction Time: {self.statistics.identity_extraction_time_seconds:.2f}s")
         
         # Semantic enhancement
         if self.config.semantic_mapping_enabled:
-            print(f"\nSemantic Enhancement:")
-            print(f"  Identities Processed: {self.statistics.unique_identities_processed}")
-            print(f"  Mappings Applied: {self.statistics.semantic_mappings_applied}")
-            print(f"  Identities with Mappings: {self.statistics.identities_with_mappings}")
-            print(f"  Identities without Mappings: {self.statistics.identities_without_mappings}")
+            logger.info(f"\nSemantic Enhancement:")
+            logger.info(f" Identities Processed: {self.statistics.unique_identities_processed}")
+            logger.info(f" Mappings Applied: {self.statistics.semantic_mappings_applied}")
+            logger.info(f" Identities with Mappings: {self.statistics.identities_with_mappings}")
+            logger.info(f" Identities without Mappings: {self.statistics.identities_without_mappings}")
             
             if self.statistics.unique_identities_processed > 0:
                 success_rate = (self.statistics.semantic_enhancement_success_count / 
                               self.statistics.unique_identities_processed * 100)
-                print(f"  Success Rate: {success_rate:.1f}%")
+                logger.info(f" Success Rate: {success_rate:.1f}%")
             
-            print(f"  Enhancement Time: {self.statistics.semantic_enhancement_time_seconds:.2f}s")
+            logger.info(f" Enhancement Time: {self.statistics.semantic_enhancement_time_seconds:.2f}s")
         
         # Data propagation
-        print(f"\nData Propagation:")
-        print(f"  Records Enhanced: {self.statistics.records_enhanced}")
-        print(f"  Propagation Time: {self.statistics.data_propagation_time_seconds:.2f}s")
+        logger.info(f"\nData Propagation:")
+        logger.info(f" Records Enhanced: {self.statistics.records_enhanced}")
+        logger.info(f" Propagation Time: {self.statistics.data_propagation_time_seconds:.2f}s")
         
         # Performance metrics
-        print(f"\nPerformance:")
-        print(f"  Total Processing Time: {self.statistics.processing_time_seconds:.2f}s")
+        logger.info(f"\nPerformance:")
+        logger.info(f" Total Processing Time: {self.statistics.processing_time_seconds:.2f}s")
         
         if self.statistics.processing_time_seconds > 0:
             identities_per_sec = self.statistics.total_identities_extracted / self.statistics.processing_time_seconds
-            print(f"  Identities/Second: {identities_per_sec:.1f}")
+            logger.info(f" Identities/Second: {identities_per_sec:.1f}")
             
             if self.statistics.records_enhanced > 0:
                 records_per_sec = self.statistics.records_enhanced / self.statistics.processing_time_seconds
-                print(f"  Records/Second: {records_per_sec:.1f}")
+                logger.info(f" Records/Second: {records_per_sec:.1f}")
         
         # Memory usage (if available)
         if PSUTIL_AVAILABLE and self.statistics.memory_usage_start_mb > 0:
-            print(f"\nMemory Usage:")
-            print(f"  Start: {self.statistics.memory_usage_start_mb:.1f} MB")
-            print(f"  Peak: {self.statistics.memory_usage_peak_mb:.1f} MB")
-            print(f"  End: {self.statistics.memory_usage_end_mb:.1f} MB")
-            print(f"  Delta: {self.statistics.memory_delta_mb:+.1f} MB")
+            logger.info(f"\nMemory Usage:")
+            logger.info(f" Start: {self.statistics.memory_usage_start_mb:.1f} MB")
+            logger.info(f" Peak: {self.statistics.memory_usage_peak_mb:.1f} MB")
+            logger.info(f" End: {self.statistics.memory_usage_end_mb:.1f} MB")
+            logger.info(f" Delta: {self.statistics.memory_delta_mb:+.1f} MB")
         
         # Errors
         if self.statistics.errors_encountered > 0:
-            print(f"\nErrors: {self.statistics.errors_encountered}")
+            logger.info(f"\nErrors: {self.statistics.errors_encountered}")
         
         if self.statistics.fallback_used:
-            print("\n⚠️  Fallback to per-record processing was used")
+            logger.info("\n[WARN] Fallback to per-record processing was used")
         
-        print("="*80 + "\n")
+        logger.info("="*80 + "\n")
     
     def get_phase_statistics(self) -> IdentitySemanticStatistics:
         """

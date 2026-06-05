@@ -11,6 +11,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 import json
 
+from correlation_engine.gui.ui_styling import CorrelationEngineStyles
+
 
 class MatchDetailDialog(QDialog):
     """
@@ -52,7 +54,12 @@ class MatchDetailDialog(QDialog):
                 print(f"Warning: Could not load full match data: {e}")
         
         self.setup_ui()
-    
+        # GUI-polish pass: unified slate / cyan / emerald look across
+        # every widget in this dialog (dialog frame, tables, tree,
+        # group boxes, scroll area). See
+        # correlation_engine/gui/ui_styling.py.
+        CorrelationEngineStyles.apply_evidence_detail_styling(self)
+
     def setup_ui(self):
         """Setup dialog UI."""
         self.setWindowTitle("Match Details")
@@ -198,7 +205,7 @@ class MatchDetailDialog(QDialog):
             if semantic_data.get('similarity_scores'):
                 layout.addWidget(QLabel("<br><b>Similarity Scores:</b>"))
                 for field, score in semantic_data['similarity_scores'].items():
-                    layout.addWidget(QLabel(f"  • {field}: {score:.4f}"))
+                    layout.addWidget(QLabel(f" • {field}: {score:.4f}"))
         else:
             layout.addWidget(QLabel("No semantic mappings applied"))
         
@@ -216,7 +223,7 @@ class MatchDetailDialog(QDialog):
             dup_info = getattr(self.match, 'duplicate_info', None)
             if dup_info:
                 layout.addWidget(QLabel(
-                    f"<b>Status:</b> <span style='color: red;'>Duplicate</span>"
+                    f"<b>Status:</b> <span style='color: {CorrelationEngineStyles.BTN_DANGER};'>Duplicate</span>"
                 ))
                 layout.addWidget(QLabel(
                     f"<b>Original Match ID:</b> {dup_info.original_match_id}"
@@ -231,7 +238,7 @@ class MatchDetailDialog(QDialog):
                 layout.addWidget(QLabel("<b>Status:</b> Duplicate (no details available)"))
         else:
             layout.addWidget(QLabel(
-                "<b>Status:</b> <span style='color: green;'>Not a duplicate</span>"
+                f"<b>Status:</b> <span style='color: {CorrelationEngineStyles.BTN_SUCCESS};'>Not a duplicate</span>"
             ))
         
         group.setLayout(layout)

@@ -30,7 +30,7 @@ class WingSelectionDialog(QDialog):
         super().__init__(parent)
         
         self.wings = wings
-        self.wing_checkboxes = {}  # wing_id -> QCheckBox
+        self.wing_checkboxes = {} # wing_id -> QCheckBox
         self.selected_wing_ids = []
         
         self._init_ui()
@@ -296,20 +296,31 @@ class WingSelectionDialog(QDialog):
         details_layout.setSpacing(15)
         
         # Feather count
-        feather_count_label = QLabel(f"📊 {len(wing.feathers)} Feather(s)")
+        feather_count_label = QLabel(f"{len(wing.feathers)} Feather(s)")
         feather_count_label.setStyleSheet("color: #64748B; font-size: 9px;")
         details_layout.addWidget(feather_count_label)
         
         # Time window
-        time_window_label = QLabel(f"⏱ {wing.time_window_minutes} min window")
+        time_window_label = QLabel(f"{wing.time_window_minutes} min window")
         time_window_label.setStyleSheet("color: #64748B; font-size: 9px;")
         details_layout.addWidget(time_window_label)
         
-        # Weighted scoring indicator
+        # Weighted scoring indicator — icon + text in a tight QHBoxLayout
+        # so the Crow-Eye chart icon sits next to the label without
+        # changing the surrounding layout's stretch behavior.
         if wing.use_weighted_scoring:
-            scoring_label = QLabel("⚖ Weighted Scoring")
+            from .crow_eye_icons import CrowEyeIcons
+            scoring_row = QHBoxLayout()
+            scoring_row.setSpacing(4)
+            scoring_row.setContentsMargins(0, 0, 0, 0)
+            scoring_icon = QLabel()
+            scoring_icon.setPixmap(CrowEyeIcons.chart().pixmap(12, 12))
+            scoring_label = QLabel("Weighted Scoring")
             scoring_label.setStyleSheet("color: #3B82F6; font-size: 9px; font-weight: bold;")
-            details_layout.addWidget(scoring_label)
+            scoring_row.addWidget(scoring_icon)
+            scoring_row.addWidget(scoring_label)
+            scoring_row.addStretch()
+            details_layout.addLayout(scoring_row)
         
         details_layout.addStretch()
         layout.addLayout(details_layout)

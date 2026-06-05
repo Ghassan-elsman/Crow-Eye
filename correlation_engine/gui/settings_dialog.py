@@ -22,6 +22,7 @@ from ..config.integrated_configuration_manager import (
     SemanticMappingConfig, WeightedScoringConfig, ProgressTrackingConfig,
     EngineSelectionConfig, CaseSpecificConfig
 )
+from .crow_eye_icons import apply_status_to_label
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class SettingsDialog(QDialog):
     """
     
     # Signal emitted when configuration changes
-    configuration_changed = pyqtSignal(object)  # IntegratedConfiguration
+    configuration_changed = pyqtSignal(object) # IntegratedConfiguration
     
     def __init__(self, config_manager: IntegratedConfigurationManager, parent=None):
         super().__init__(parent)
@@ -48,7 +49,7 @@ class SettingsDialog(QDialog):
         self.current_config = IntegratedConfiguration(**self.original_config.__dict__)
         
         self.setWindowTitle("Crow-Eye Settings")
-        self.setModal(False)  # Non-modal to allow interaction with main window
+        self.setModal(False) # Non-modal to allow interaction with main window
         self.resize(800, 600)
         
         self._setup_ui()
@@ -158,17 +159,17 @@ class SettingsDialog(QDialog):
         ])
         # Set column widths - make all columns user-resizable with Interactive mode
         header = self.global_mappings_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)  # Allow user to resize all columns
+        header.setSectionResizeMode(QHeaderView.Interactive) # Allow user to resize all columns
         # Set initial widths
-        header.resizeSection(0, 80)   # Type
-        header.resizeSection(1, 120)  # Category
-        header.resizeSection(2, 200)  # Name
-        header.resizeSection(3, 60)   # Logic
-        header.resizeSection(4, 400)  # Conditions/Value - wider for readability
-        header.resizeSection(5, 200)  # Semantic Value
-        header.resizeSection(6, 80)   # Severity
-        header.resizeSection(7, 150)  # Feathers
-        header.resizeSection(8, 300)  # Description
+        header.resizeSection(0, 80) # Type
+        header.resizeSection(1, 120) # Category
+        header.resizeSection(2, 200) # Name
+        header.resizeSection(3, 60) # Logic
+        header.resizeSection(4, 400) # Conditions/Value - wider for readability
+        header.resizeSection(5, 200) # Semantic Value
+        header.resizeSection(6, 80) # Severity
+        header.resizeSection(7, 150) # Feathers
+        header.resizeSection(8, 300) # Description
         # Make last column stretch to fill remaining space
         header.setStretchLastSection(True)
         self.global_mappings_table.setMinimumHeight(300)
@@ -869,24 +870,24 @@ class SettingsDialog(QDialog):
             results_text = []
             
             if validation_result['valid']:
-                results_text.append("✅ Configuration is valid!")
+                results_text.append("[OK] Configuration is valid!")
             else:
-                results_text.append("❌ Configuration has errors:")
+                results_text.append("[ERROR] Configuration has errors:")
                 for error in validation_result['errors']:
-                    results_text.append(f"  • {error}")
+                    results_text.append(f" • {error}")
             
             if validation_result['warnings']:
-                results_text.append("\n⚠️ Warnings:")
+                results_text.append("\n[WARN] Warnings:")
                 for warning in validation_result['warnings']:
-                    results_text.append(f"  • {warning}")
+                    results_text.append(f" • {warning}")
             
             if validation_result['fixes']:
-                results_text.append(f"\n🔧 {len(validation_result['fixes'])} suggested fixes available")
+                results_text.append(f"\n{len(validation_result['fixes'])} suggested fixes available")
             
             self.validation_results.setText("\n".join(results_text))
             
         except Exception as e:
-            self.validation_results.setText(f"❌ Validation failed: {str(e)}")
+            apply_status_to_label(self.validation_results, "ERROR", f"Validation failed: {str(e)}")
     
     def _export_configuration(self):
         """Export complete configuration to file"""
@@ -1104,7 +1105,7 @@ class SettingsDialog(QDialog):
                 from ..config.configuration_change_handler import notify_configuration_change
                 notify_configuration_change(old_config, new_config)
             except ImportError:
-                pass  # Handler may not exist
+                pass # Handler may not exist
             
             # Emit signal
             self.configuration_changed.emit(new_config)
@@ -1177,7 +1178,7 @@ class SettingsDialog(QDialog):
                 mapping=None,
                 scope='global',
                 wing_id=None,
-                mode='simple'  # Default to simple, user can switch to advanced
+                mode='simple' # Default to simple, user can switch to advanced
             )
             
             if dialog.exec_() == QDialog.Accepted:
@@ -1461,7 +1462,7 @@ class SettingsDialog(QDialog):
         
         row = list(selected_rows)[0]
         mapping_type = self.global_mappings_table.item(row, 0).text()
-        name = self.global_mappings_table.item(row, 2).text()  # Name column
+        name = self.global_mappings_table.item(row, 2).text() # Name column
         
         reply = QMessageBox.question(
             self,
@@ -1516,37 +1517,37 @@ class SettingsDialog(QDialog):
             
             # Validate default rules file
             default_rules_path = manager.default_rules_path
-            results_text.append(f"📄 Default Rules: {default_rules_path}")
+            results_text.append(f"Default Rules: {default_rules_path}")
             
             if default_rules_path.exists():
                 is_valid, errors = manager.validate_json_rules(default_rules_path)
                 
                 if is_valid:
-                    results_text.append("✅ Valid - No errors found")
+                    results_text.append("[OK] Valid - No errors found")
                 else:
-                    results_text.append(f"❌ Invalid - {len(errors)} error(s) found:")
+                    results_text.append(f"[ERROR] Invalid - {len(errors)} error(s) found:")
                     for error in errors:
-                        results_text.append(f"  • {error}")
+                        results_text.append(f" • {error}")
             else:
-                results_text.append("⚠️ File does not exist - will be created on first export")
+                results_text.append("[WARN] File does not exist - will be created on first export")
             
-            results_text.append("")  # Blank line
+            results_text.append("") # Blank line
             
             # Validate custom rules file
             custom_rules_path = manager.custom_rules_path
-            results_text.append(f"📄 Custom Rules: {custom_rules_path}")
+            results_text.append(f"Custom Rules: {custom_rules_path}")
             
             if custom_rules_path.exists():
                 is_valid, errors = manager.validate_json_rules(custom_rules_path)
                 
                 if is_valid:
-                    results_text.append("✅ Valid - No errors found")
+                    results_text.append("[OK] Valid - No errors found")
                 else:
-                    results_text.append(f"❌ Invalid - {len(errors)} error(s) found:")
+                    results_text.append(f"[ERROR] Invalid - {len(errors)} error(s) found:")
                     for error in errors:
-                        results_text.append(f"  • {error}")
+                        results_text.append(f" • {error}")
             else:
-                results_text.append("ℹ️ File does not exist - no custom rules defined")
+                results_text.append("[INFO] File does not exist - no custom rules defined")
             
             results_text.append("")
             results_text.append("Validation complete!")
@@ -1556,9 +1557,9 @@ class SettingsDialog(QDialog):
             self.validation_results_text.setPlainText(validation_text)
             
             # Apply color coding based on results
-            if "❌" in validation_text:
+            if "[ERROR]" in validation_text:
                 self.validation_results_text.setStyleSheet("QTextEdit { background-color: #ffe6e6; }")
-            elif "⚠️" in validation_text:
+            elif "[WARN]" in validation_text:
                 self.validation_results_text.setStyleSheet("QTextEdit { background-color: #fff4e6; }")
             else:
                 self.validation_results_text.setStyleSheet("QTextEdit { background-color: #e6ffe6; }")
@@ -1567,7 +1568,7 @@ class SettingsDialog(QDialog):
             
         except Exception as e:
             logger.error(f"Failed to validate rule files: {e}")
-            self.validation_results_text.setPlainText(f"❌ Validation failed: {str(e)}")
+            self.validation_results_text.setPlainText(f"[ERROR] Validation failed: {str(e)}")
             self.validation_results_text.setStyleSheet("QTextEdit { background-color: #ffe6e6; }")
     
     def _export_default_rules(self):
@@ -1607,9 +1608,9 @@ class SettingsDialog(QDialog):
                 # Open file explorer based on platform
                 if platform.system() == "Windows":
                     os.startfile(file_path)
-                elif platform.system() == "Darwin":  # macOS
+                elif platform.system() == "Darwin": # macOS
                     subprocess.Popen(["open", file_path])
-                else:  # Linux
+                else: # Linux
                     subprocess.Popen(["xdg-open", file_path])
             
             logger.info(f"Default rules exported to {manager.default_rules_path}")

@@ -1,5 +1,36 @@
 # Config Directory Documentation
 
+> ## ⚠ Public API consolidated (current state)
+>
+> The `config/` package went through a public-surface consolidation. **What was 7 manager classes is now 3 public classes** plus a small set of legacy singletons kept for back-compatibility. New code should import only what is listed below.
+>
+> ### Public classes
+>
+> | Public class | Import path | Purpose |
+> |---|---|---|
+> | `IntegratedConfigurationManager` | `from correlation_engine.config import IntegratedConfigurationManager` | **Primary façade.** Case directories, per-case semantic mappings / scoring weights / metadata, case-file lifecycle ops (validate/repair/archive/compress), and a `score_config_manager` property routing to the score singleton. |
+> | `ConfigManager` | `from correlation_engine.config import ConfigManager` | Feather / Wing / Pipeline JSON artifact CRUD. Orthogonal domain — kept as a sibling. |
+> | `PipelineConfigurationManager` | `from correlation_engine.config.pipeline_config_manager import PipelineConfigurationManager` | Pipeline execution session state (discovery, loading, auto-registration). |
+> | `ScoreConfigurationManager` *(legacy direct singleton)* | `from correlation_engine.config import ScoreConfigurationManager` | Centralised score config. Still importable for back-compat, but new code should reach it via `IntegratedConfigurationManager().score_config_manager`. |
+>
+> ### Now private (folded behind `IntegratedConfigurationManager`)
+>
+> The following files were renamed with a leading underscore to mark them as internal. They are reached *exclusively* through `IntegratedConfigurationManager` methods. **Do not import these directly in new code.**
+>
+> | Old public file | New private file | Façade entry point on `IntegratedConfigurationManager` |
+> |---|---|---|
+> | `case_configuration_file_manager.py` | `_case_config_file_service.py` | `.case_files` property + `get_case_config_file_statistics()`, `archive_old_case_configs()`, `cleanup_empty_case_directories()`, `validate_case_config_file()`, `repair_case_config_file()`, `get_case_config_file_names()` |
+> | `case_specific_configuration_manager.py` | `_case_specific_config_service.py` | `.case_specific` property + `list_cases()`, `case_exists()`, `get_case_directory()`, `load_case_semantic_mappings()`, `save_case_semantic_mappings()`, `load_case_scoring_weights()`, `save_case_scoring_weights()`, `delete_case_configuration()`, `copy_case_configuration()`, `backup_case_configuration()`, `export_case_configuration()`, `import_case_configuration()`, `validate_case_configuration()`, `clear_case_cache()` |
+> | `case_configuration_manager.py` | `_case_coordinator_service.py` | Reached internally by the other two services; the coordinator's switch/compare/export methods remain available on the underlying service object via `.case_specific` if absolutely needed. |
+>
+> ### Deleted (dead code, removed)
+>
+> - `score_config_migration_tool.py` — one-shot migration utility, no live callers.
+>
+> The remainder of this document still describes the underlying responsibilities of each file (now-private files included), since the *behaviour* of the configuration system hasn't changed — only the public import path. When you see a section titled "case_configuration_manager.py" below, read it as documentation of `_case_coordinator_service.py` reached via `IntegratedConfigurationManager`.
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -21,16 +52,16 @@
   - [configuration_change_handler.py](#configuration_change_handlerpy)
   - [configuration_conflict_resolver.py](#configuration_conflict_resolverpy)
   - [configuration_migration.py](#configuration_migrationpy)
-  - [score_config_migration_tool.py](#score_config_migration_toolpy)
+  - ~~score_config_migration_tool.py~~ *(deleted in consolidation)*
   - [feather_config.py](#feather_configpy)
   - [wing_config.py](#wing_configpy)
   - [pipeline_config.py](#pipeline_configpy)
   - [session_state.py](#session_statepy)
   - [identifier_extraction_config.py](#identifier_extraction_configpy)
   - [pipeline_config_manager.py](#pipeline_config_managerpy)
-  - [case_configuration_file_manager.py](#case_configuration_file_managerpy)
-  - [case_configuration_manager.py](#case_configuration_managerpy)
-  - [case_specific_configuration_manager.py](#case_specific_configuration_managerpy)
+  - [case_configuration_file_manager.py](#case_configuration_file_managerpy) *(now private: `_case_config_file_service.py` — reach via `IntegratedConfigurationManager`)*
+  - [case_configuration_manager.py](#case_configuration_managerpy) *(now private: `_case_coordinator_service.py` — reach via `IntegratedConfigurationManager`)*
+  - [case_specific_configuration_manager.py](#case_specific_configuration_managerpy) *(now private: `_case_specific_config_service.py` — reach via `IntegratedConfigurationManager`)*
   - [default_mappings/ Subdirectory](#default_mappings-subdirectory)
 - [Common Modification Scenarios](#common-modification-scenarios)
 - [Configuration File Formats](#configuration-file-formats)
@@ -69,30 +100,40 @@ The `config` directory is a **foundational and pervasive layer** within the corr
 Crow-Eye/correlation_engine/config/
 ├── __pycache__/
 ├── default_mappings/             # Default semantic mapping files (YAML/JSON/Python)
-├── __init__.py
+├── __init__.py                   # Public API surface — see "Public classes" table above
+│
+│ ── PUBLIC API ──────────────────────────────────────────────────────
+├── integrated_configuration_manager.py # PRIMARY FAÇADE. Global/case-specific configs + case-file ops + score_config_manager route
+├── config_manager.py             # Feather/Wing/Pipeline JSON artifact CRUD (sibling domain)
+├── pipeline_config_manager.py    # Pipeline execution session state coordinator
+├── score_configuration_manager.py # Singleton for CentralizedScoreConfig (also reachable via IntegratedConfigurationManager.score_config_manager)
+│
+│ ── DATA MODELS (importable, used as dataclasses) ──────────────────
+├── feather_config.py             # Dataclass for Feather configurations
+├── wing_config.py                # Dataclass for Wing configurations (uses ScoreConfigurationManager singleton internally)
+├── pipeline_config.py            # Dataclass for Pipeline configurations
+├── centralized_score_config.py   # Dataclass for global score configuration (thresholds, weights)
+├── identifier_extraction_config.py # Dataclasses for identifier extraction & timestamp parsing
+├── semantic_config.py            # Dataclass for semantic mapping system configuration (paths, thresholds, performance)
+├── session_state.py              # Dataclasses for session state, metadata, and status tracking (+ SessionStateManager)
+│
+│ ── INTERNAL SERVICES (private — reach via IntegratedConfigurationManager) ──
+├── _case_config_file_service.py        # was case_configuration_file_manager.py
+├── _case_specific_config_service.py    # was case_specific_configuration_manager.py
+├── _case_coordinator_service.py        # was case_configuration_manager.py
+│
+│ ── SUPPORTING UTILITIES ────────────────────────────────────────────
 ├── artifact_type_registry.py     # Singleton registry for artifact type definitions
 ├── artifact_types.json           # JSON file for artifact type definitions
-├── case_configuration_file_manager.py # Low-level file operations for case configs
-├── case_configuration_manager.py # High-level case config management (compare, copy, export)
-├── case_specific_configuration_manager.py # Manages case-specific semantic & scoring overrides
-├── centralized_score_config.py   # Dataclass for global score configuration (thresholds, weights)
-├── config_manager.py             # Basic CRUD for feather/wing/pipeline JSON files
 ├── configuration_change_handler.py # Notifies components of config changes via observer pattern
 ├── configuration_conflict_resolver.py # Detects and resolves conflicts between config levels
 ├── configuration_migration.py    # Utilities for migrating old config formats
-├── feather_config.py             # Dataclass for Feather configurations
-├── identifier_extraction_config.py # Dataclasses for identifier extraction & timestamp parsing
-├── integrated_configuration_manager.py # Manages global/case-specific integrated configs (scoring, semantic, progress)
-├── pipeline_config_manager.py    # Central coordinator for pipeline lifecycle (session, discovery, loading)
-├── pipeline_config.py            # Dataclass for Pipeline configurations
-├── score_config_migration_tool.py # Tool to scan codebase and create centralized score config
-├── score_configuration_manager.py # Singleton manager for CentralizedScoreConfig (loading, updating, callbacks)
-├── semantic_config.py            # Dataclass for semantic mapping system configuration (paths, thresholds, performance)
-├── semantic_mapping_discovery.py # Service to discover/load semantic mappings from various sources/formats
 ├── semantic_mapping.py           # Core semantic mapping system: FieldAliasFTS, SemanticMapping, SemanticRule, SemanticMappingManager
-├── semantic_rule_validator.py    # Validates semantic rule JSON files against schema
-└── session_state.py              # Dataclasses for session state, metadata, and status tracking (+ SessionStateManager)
+├── semantic_mapping_discovery.py # Service to discover/load semantic mappings from various sources/formats
+└── semantic_rule_validator.py    # Validates semantic rule JSON files against schema
 ```
+
+> **Note:** `score_config_migration_tool.py` was removed in the consolidation — it was a one-shot codebase-scanner used during the initial CentralizedScoreConfig migration and has no live callers.
 
 ## Distinction Between 'config/' and 'configs/' Directories
 

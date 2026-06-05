@@ -25,15 +25,32 @@ class EnrichmentMixin:
     memory overhead from Python dictionary lookups.
     """
     
-    # Enrichment Target Columns: Column indices that should be enriched
-    # This allows selective enrichment of specific columns in a table
+    # Enrichment Target Columns: Common forensic column names that should be enriched.
+    # VirtualTableWidget._initialize_intelligence iterates self.columns and checks
+    # `if candidate in self.ENRICHMENT_TARGET_COLUMNS` — so this must be a set of
+    # STRINGS, not a set of integer indices.
     ENRICHMENT_TARGET_COLUMNS = {
-        0,  # First column typically contains values to enrich
-        1,  # Second column often contains related values
+        # Identity / SID
+        'user_sid', 'SID', 'sid',
+        # Paths / executables
+        'profile_path', 'target_path', 'Local_Path', 'executable_path', 'process_path',
+        'program_path', 'app_path', 'key_path', 'path', 'filename', 'Filename',
+        # Network
+        'mac_address', 'MAC_Address', 'gateway_mac', 'Tracker_MAC',
+        'ip_address', 'IP_Address',
+        # Device identifiers
+        'serial_number', 'device_id', 'volume_guid', 'Volume_Serial', 'AppID',
+        # Application / service
+        'Source_Name', 'service_name', 'app_name', 'display_name', 'Name',
+        # Generic value columns
+        'Value', 'value', 'Name', 'name', 'id', 'ID',
     }
     
     def __init__(self):
         """Initialize the enrichment mixin."""
+        import logging
+        if not hasattr(self, 'logger'):
+            self.logger = logging.getLogger(self.__class__.__name__)
         self._intelligence_db_path: Optional[str] = None
         self._intelligence_db_attached = False
     
@@ -59,73 +76,67 @@ class EnrichmentMixin:
         
         This method creates a smart SQL query that:
         1. ATTACHs the Crow_Intelligence.db database
-        2. Performs a LEFT JOIN on the Mapping table
-        3. Enforces Source Exclusion Rule natively by filtering out mappings where source = current_table
-        4. Returns the original data plus the Dynamic_Key column
-        
-        Args:
-            base_query: The base SQL query to enrich
-            table_name: Name of the table being queried
-            value_column: Name of the column containing values to enrich
-            
-        Returns:
-            Enriched SQL query string with LEFT JOIN
-            
-        Example:
-            Input:  "SELECT * FROM LNK_table"
-            Output: "SELECT L.*, Intel.Mapping.Key AS Dynamic_Key 
-                     FROM LNK_table L 
-                     LEFT JOIN Intel.Mapping ON L.target_column = Intel.Mapping.Value AND Intel.Mapping.source != 'LNK_table'"
+        2. Uses a correlated subquery with GROUP_CONCAT to fetch mappings
+        3. Enforces Source Exclusion Rule natively
+        4. Guarantees 1-to-1 row results to prevent row-shifting in virtual tables
         """
         if not base_query or not table_name or not value_column:
             return base_query
         
         # Check if intelligence database exists
         if not self._intelligence_db_path or not os.path.exists(self._intelligence_db_path):
-            # Graceful degradation: return base query without enrichment
             return base_query
         
-        # Generate enriched query with LEFT JOIN
-        # Use table alias to avoid column name conflicts
-        alias = table_name[:1].upper()  # Use first letter as alias
-        
-        # Parse the base query to add enrichment
         query_upper = base_query.upper().strip()
         
         if query_upper.startswith("SELECT"):
-            # Find FROM clause
             from_pos = query_upper.find(" FROM ")
             if from_pos > 0:
-                # Extract SELECT and FROM parts
                 select_part = base_query[:from_pos].strip()
-                from_part = base_query[from_pos + 6:].strip()  # Skip " FROM "
-                
-                # Build enriched query
-                # Enforce Source Exclusion explicitly in the ON clause
-                # We use a unique alias to avoid clashing with the user's existing aliases
-                # Because databases hate it when they don't know who they are.
+                from_part = base_query[from_pos + 6:].strip()
+
                 alias = f"{table_name[:3]}_tbl"
-                
+                quoted_alias = f'"{alias}"'
+                quoted_value_column = f'"{value_column}"'
+                table_literal = table_name.replace("'", "''")
+
+                # Prefix columns properly, handling the SELECT keyword correctly
                 # To avoid ambiguous columns (like 'Source'), we try to prefix them
                 select_cols = select_part
-                if "*" in select_part:
-                    select_cols = f"{alias}.*"
-                elif "," in select_part and not any(f"{alias}." in col for col in select_part.split(",")):
-                    # Simple prefixing for simple column lists
-                    if "(" not in select_part: # Avoid breaking complex SQL magic
-                        cols = [c.strip() for c in select_part.split(",")]
-                        select_cols = ", ".join([f"{alias}.{c}" for c in cols])
-                
-                enriched_query = (
-                    f"{select_cols}, Intel.Mapping.Key AS Dynamic_Key "
-                    f"FROM {from_part} AS {alias} "
-                    f"LEFT JOIN Intel.Mapping ON {alias}.{value_column} = Intel.Mapping.Value "
-                    f"AND Intel.Mapping.source != '{table_name}'"
+                # Strip "SELECT" from select_part to prefix columns properly without prefixing the SELECT keyword itself
+                if select_part.upper().startswith("SELECT "):
+                    cols_part = select_part[7:].strip()
+                    if "*" in cols_part:
+                        select_cols = f"SELECT {quoted_alias}.*"
+                    elif "," in cols_part and not any(f"{alias}." in col for col in cols_part.split(",")):
+                        # Simple prefixing for simple column lists
+                        if "(" not in cols_part:  # Avoid breaking complex SQL magic
+                            cols = [c.strip() for c in cols_part.split(",")]
+                            prefixed = ", ".join([f"{quoted_alias}.{c}" for c in cols])
+                            select_cols = "SELECT " + prefixed
+                    else:
+                        # Fallback for complex SELECT parts
+                        select_cols = select_part
+                else:
+                    select_cols = select_part
+
+                # Use a correlated subquery with GROUP_CONCAT. 
+                # This is critical: if a value has multiple mappings, we MUST 
+                # concatenate them into one string rather than returning 
+                # multiple rows, which would shift indices in our virtual table.
+                subquery = (
+                    f"(SELECT GROUP_CONCAT(Key, ', ') FROM Intel.Mapping "
+                    f"WHERE REPLACE({quoted_alias}.{quoted_value_column}, 'PySID:', '') = Intel.Mapping.Value "
+                    f"AND Intel.Mapping.source != '{table_literal}')"
                 )
-                
+
+                enriched_query = (
+                    f"{select_cols}, {subquery} AS Dynamic_Key "
+                    f"FROM {from_part} AS {quoted_alias}"
+                )
+
                 return enriched_query
-        
-        # Fallback: return base query unchanged
+
         return base_query
     
     def format_enriched_value(self, value: str, dynamic_key: Optional[str]) -> str:
@@ -168,7 +179,16 @@ class EnrichmentMixin:
         if not dynamic_key:
             # No mapping exists - return raw value
             return value_str
-        
+
+        # Multi-key mappings (e.g. a SID that resolves to BOTH a username and a
+        # profile path) are stored comma-joined in Mapping.key. Render them with
+        # a pipe separator so cells read cleanly: "S-... [Admin | C:\\Users\\..]"
+        # instead of "[Admin,C:\\Users\\..]".
+        if "," in dynamic_key:
+            parts = [p.strip() for p in dynamic_key.split(",") if p.strip()]
+            if parts:
+                return f"{value_str} [{' | '.join(parts)}]"
+
         # Apply inline enrichment format: "Value [Dynamic_Key]"
         return f"{value_str} [{dynamic_key}]"
     
@@ -194,18 +214,31 @@ class EnrichmentMixin:
             # Check if already attached by querying database_list
             cursor.execute("PRAGMA database_list")
             attached_dbs = [row[1] for row in cursor.fetchall()]
-            
+
             if 'Intel' in attached_dbs:
-                self.logger.debug("Intel DB is already invited to the party. No need to re-invite.")
                 self._intelligence_db_attached = True
                 return True
-                
-            cursor.execute(f"ATTACH DATABASE '{self._intelligence_db_path}' AS Intel")
+
+            # Use parameterized ATTACH to safely handle paths with special chars.
+            cursor.execute("ATTACH DATABASE ? AS Intel", (self._intelligence_db_path,))
             self._intelligence_db_attached = True
+
+            # Index the enrichment lookup column so the per-row correlated subquery
+            # (… WHERE base.col = Intel.Mapping.Value AND source != …) is an index
+            # seek rather than a full scan of Mapping — a big speedup when scrolling
+            # enriched tables (e.g. SRUM). Idempotent and best-effort.
+            try:
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS Intel.idx_mapping_value_source "
+                    "ON Mapping(Value, source)"
+                )
+            except Exception:
+                pass  # read-only intel DB or older schema — enrichment still works
+
             return True
         except Exception as e:
-            # Maybe it's already attached under a different name? Or SQLite is just having a Monday.
-            if "already in use" in str(e).lower() or "already attached" in str(e).lower():
+            err = str(e).lower()
+            if "already in use" in err or "already attached" in err or "already" in err:
                 self._intelligence_db_attached = True
                 return True
             return False

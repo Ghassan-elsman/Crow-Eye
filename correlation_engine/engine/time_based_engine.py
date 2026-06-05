@@ -1,12 +1,12 @@
 """
 Time-Window Scanning Correlation Engine
-Implements O(N) time-window scanning approach instead of O(N²) anchor-based correlation.
+Implements O(N log N) time-window scanning approach instead of O(N^2) anchor-based correlation.
 
-This module provides a new correlation strategy that:
+This module provides a correlation strategy that:
 1. Scans through time systematically from year 2000 in fixed intervals
 2. Uses wing's time_window_minutes as the scanning window size
 3. Handles any timestamp format automatically with robust indexing
-4. Provides O(N) performance for large datasets
+4. Provides O(N log N) performance for large datasets
 """
 
 import time
@@ -14,6 +14,8 @@ import sqlite3
 import logging
 import uuid
 import fnmatch
+import json
+import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Iterator, Tuple
 from dataclasses import dataclass, field
@@ -31,26 +33,28 @@ from .two_phase_correlation import (
     Phase1ErrorHandler
 )
 
-# Core identity fields across all artifact types (Requirement 6.3 - Performance optimization)
-CORE_IDENTITY_FIELDS = [
-    # Names (higher priority)
-    'name', 'filename', 'executable_name', 'app_name', 'application',
-    'fn_filename', 'Source_Name', 'original_filename', 'original_file_name', 'program_name',
-    'display_name', 'product_name', 'Source', 'FileName', 'Name',
-    'ProductName', 'FileDescription', 'OriginalFileName', 'value',
-    'Value', 'entry_name', 'program', 'executable', 'Executable',
-    'service_name', 'ServiceName', 'task_name', 'TaskName', 'process',
-    'Process', 'application_name', 'publisher', 'Publisher',
-    # Paths (lower priority)
-    'path', 'file_path', 'app_path', 'Local_Path', 'reconstructed_path',
-    'original_path', 'lower_case_long_path', 'install_location',
-    'root_dir_path', 'ShortcutTargetPath', 'Source_Path', 'folder_path',
-    'registry_path', 'FullPath', 'Path', 'FilePath', 'LowerCaseLongPath',
-    'focus_path', 'run_path', 'ExecutablePath', 'executable_path',
-    'image_path', 'ImagePath', 'binary_path', 'BinaryPath',
-    'full_path', 'application_path', 'program_path', 'command_line',
-    'exe_path', 'exepath', 'target_path', 'TargetPath'
-]
+# Core identity fields across all artifact types.
+# Loaded from the central standard fields registry at
+# config/standard_fields/{file_paths,process_identifiers,system_identifiers,
+# event_identifiers,user_identifiers}.json. Adding a new parser column
+# means editing those JSONs — not this constant. The tuple is sorted
+# names-first then paths so identity extraction prefers a specific name
+# field over a long path field when both are present (Requirement 6.3).
+try:
+    from utils.standard_fields import StandardFields as _StandardFields # type: ignore
+    CORE_IDENTITY_FIELDS = list(_StandardFields.all_identity_fields())
+except Exception as _e: # pragma: no cover - defensive fallback
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "StandardFields registry unavailable (%s); using minimal fallback list", _e
+    )
+    CORE_IDENTITY_FIELDS = [
+        # Minimal safety net used only when the registry is missing.
+        'name', 'filename', 'file_name', 'executable_name', 'app_name',
+        'fn_filename', 'Source_Name', 'original_filename',
+        'path', 'file_path', 'Local_Path', 'reconstructed_path',
+        'lower_case_long_path', 'image_path', 'process_path',
+    ]
 from .memory_manager import WindowMemoryManager
 from .database_persistence import StreamingMatchWriter, ResultsDatabase
 from .parallel_window_processor import ParallelWindowProcessor, ParallelProcessingStats
@@ -67,6 +71,7 @@ from .error_handling_coordinator import ErrorHandlingCoordinator, ErrorCategory,
 from .semantic_rule_evaluator import SemanticRuleEvaluator, SemanticMatchResult
 from ..wings.core.wing_model import Wing
 from ..config.semantic_mapping import SemanticMappingManager
+from ..integration.interfaces import IScoringIntegration, ISemanticMappingIntegration
 from ..optimization.optimization_components import (
     PerformanceProfiler,
     EmptyWindowDetector,
@@ -74,7 +79,8 @@ from ..optimization.optimization_components import (
     TimestampCache,
     TimestampFormatCache,
     TimestampParseCache,
-    TimestampFormat
+    TimestampFormat,
+    ParallelCoordinator
 )
 from ..optimization.performance_config import PerformanceConfig
 
@@ -126,8 +132,8 @@ class WindowProcessingStats:
         
         # Estimate time saved: assume each empty window would have taken 50ms if fully processed
         # vs <1ms with quick check
-        estimated_full_processing_time_per_window = 0.050  # 50ms
-        actual_quick_check_time_per_window = 0.001  # 1ms
+        estimated_full_processing_time_per_window = 0.050 # 50ms
+        actual_quick_check_time_per_window = 0.001 # 1ms
         time_saved_per_empty_window = estimated_full_processing_time_per_window - actual_quick_check_time_per_window
         self.time_saved_by_skipping_seconds = self.empty_windows_skipped * time_saved_per_empty_window
     
@@ -142,18 +148,75 @@ class WindowProcessingStats:
 
 
 class OptimizedFeatherQuery:
-    """Optimized querying for time windows with robust timestamp handling and error resilience"""
+    """Per-feather time-range query path with caching + multi-timestamp fan-out.
+
+    Inputs
+    ------
+    A :class:`FeatherLoader` pointing at one SQLite feather DB, plus a
+    ``[start_time, end_time]`` window from the engine.
+
+    Outputs
+    -------
+    A list of record dicts whose primary timestamp column falls inside
+    the window. For tables declared in ``feather_schemas.json`` with
+    ``multi_timestamp_json_columns`` (e.g. Prefetch ``run_times``), each
+    JSON-list timestamp is fanned out into its own virtual record.
+
+    Invariants
+    ----------
+    * ``timestamp_column`` is detected at first query and cached for the
+      lifetime of the instance.
+    * Result cache is LRU-evicted at ``_max_cache_size_mb`` (default 512).
+    * Multi-timestamp expansion is computed once per feather and cached.
+
+    Threading
+    ---------
+    Phase 9 added ``self._cache_lock`` (RLock) around the main cache
+    paths in :meth:`query_time_range` and :meth:`_evict_lru_cache_entries`.
+    SQLite connections are not yet per-thread; until per-TLS connections
+    land, treat the instance as single-thread-owned at query time. Phase 9
+    follow-up is to wire ``self._tls`` into ``_get_connection``.
+    """
     
     def __init__(self, feather_loader: FeatherLoader, debug_mode: bool = False, profiler: Optional[PerformanceProfiler] = None):
         self.loader = feather_loader
         self.timestamp_format = None
         self.debug_mode = debug_mode
-        self.profiler = profiler  # Optional profiler for performance tracking (Requirements 1.1)
+        self.profiler = profiler # Optional profiler for performance tracking (Requirements 1.1)
         
         # Support multiple timestamp columns per feather (e.g., created, modified, accessed)
-        self.timestamp_columns = []  # List of timestamp column names
-        self.timestamp_column = None  # Primary timestamp column (for backward compatibility)
-        
+        self.timestamp_columns = [] # List of timestamp column names
+        self.timestamp_column = None # Primary timestamp column (for backward compatibility)
+
+        # Per-column timestamp format. When timestamp columns are heterogeneous
+        # (e.g., amcache's install_date in MM/DD/YYYY and parsed_at in ISO),
+        # WHERE-clause parameters must be formatted per-column to match the
+        # stored representation — otherwise SQL string comparison silently
+        # returns nothing. Populated by Method 0 (schema-driven) and Method 2
+        # (smart parse). Defaults to empty dict; query_time_range falls back
+        # to self.timestamp_format when a column isn't in this map.
+        self.column_formats: Dict[str, str] = {}
+
+        # Timeless flag. Some feathers capture *current* system state
+        # (AutoStartPrograms, MUICache, SystemServices, TypedPaths,
+        # RegistryHives, InstalledSoftware) with no per-row observation
+        # time — only when the feather itself was generated. We do NOT
+        # synthesize a feather-creation timestamp onto every row (that
+        # would lie about when the artifact was observed); instead the
+        # TimeWindowScanningEngine runs an identity-side enrichment pass
+        # *after* time-windowed matches are formed: for each match's
+        # identity, it pulls matching records from every timeless feather
+        # and attaches them as supplementary evidence. Identity drives
+        # the join; the real time anchor comes from the other feathers
+        # in the match.
+        self.is_timeless: bool = False
+
+        # Schema-detection error log. When detection methods 0/2/3 throw,
+        # the feather may end up marked is_timeless because of a real bug
+        # rather than a legitimate "no timestamp columns" finding. The
+        # entries here distinguish the two cases for evidence_accounting.
+        self._schema_detection_errors: List[Dict[str, str]] = []
+
         # Initialize resilient timestamp parser
         validation_rules = TimestampValidationRule(
             min_year=1970,
@@ -195,17 +258,40 @@ class OptimizedFeatherQuery:
             fallback_strategy=fallback_strategy,
             debug_mode=debug_mode
         )
-        
+
+        # Multi-timestamp fan-out cache. For tables that store multiple
+        # timestamps per row in a JSON list column (e.g. Prefetch
+        # run_times = up to 8 historical execution times), this caches an
+        # already-expanded list of virtual records so each timestamp
+        # contributes its own correlation event. None until first use.
+        # See _expand_multi_timestamp_records().
+        self._expanded_records_cache: Optional[List[Dict[str, Any]]] = None
+        self._multi_timestamp_columns: Optional[List[str]] = None
+
         # Cache for timestamp range (min/max timestamps)
         self._timestamp_range_cache: Optional[Tuple[Optional[datetime], Optional[datetime]]] = None
         self._timestamp_range_cached = False
-        
-        # Cache for query results (for overlapping time windows) with LRU eviction
+
+        # Cache for query results (for overlapping time windows) with LRU eviction.
+        # PHASE 9: All cache mutations go through self._cache_lock so the
+        # query path is safe to call from multiple worker threads
+        # simultaneously. The lock is re-entrant because eviction is
+        # invoked from inside cached insertion.
+        import threading as _threading
+        self._cache_lock = _threading.RLock()
         self._query_result_cache: Dict[str, List[Dict[str, Any]]] = {}
-        self._cache_access_order: List[str] = []  # Track access order for LRU eviction
-        self._max_cache_size = 100  # Limit cache entry count
-        self._max_cache_size_mb = 512  # Limit cache memory size (Requirements 2.4, 2.5)
-        self._current_cache_size_mb = 0.0  # Track current cache size in MB
+        self._cache_access_order: List[str] = [] # Track access order for LRU eviction
+        self._max_cache_size = 100 # Limit cache entry count
+        self._max_cache_size_mb = 512 # Limit cache memory size (Requirements 2.4, 2.5)
+        self._current_cache_size_mb = 0.0 # Track current cache size in MB
+
+        # PHASE 9: Per-thread SQLite connections via threading.local.
+        # sqlite3.connect() is not thread-safe by default; sharing a
+        # connection across worker threads triggers
+        # "SQLite objects created in a thread can only be used in that
+        # same thread". Each worker requests get_connection() and gets
+        # its own connection lazily.
+        self._tls = _threading.local()
         
         # Cache statistics (Requirements 2.4, 2.5)
         self._cache_stats = {
@@ -234,7 +320,99 @@ class OptimizedFeatherQuery:
             # Try to detect timestamp columns using multiple methods
             # IMPORTANT: Run ALL methods and combine results for maximum coverage
             all_detected_columns = []
-            
+
+            # Method 0: Schema-driven detection (feather_schemas.json).
+            # When the table has a declared schema, trust it absolutely —
+            # the author of the schema knows which columns are meaningful
+            # timestamps. This avoids two failure modes of the auto-detector:
+            # 1. Auto-detector picks ONE format and applies it to every
+            # column, which fails when columns have heterogeneous
+            # formats (amcache: install_date MM/DD/YYYY + parsed_at ISO).
+            # 2. Auto-detector misses columns the schema specifically
+            # wants included (mft_usn: schema lists usn_timestamp but
+            # auto-detector locks onto si_creation_time only).
+            # On success, Method 0 populates everything Methods 1-3 would
+            # have and we return early.
+            try:
+                from ..config import feather_schemas as _fs
+                table_name_m0 = self.loader.current_table if hasattr(self.loader, 'current_table') else None
+                if not table_name_m0:
+                    try:
+                        cur0 = connection.cursor()
+                        cur0.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1")
+                        r = cur0.fetchone()
+                        if r:
+                            table_name_m0 = r[0]
+                    except Exception:
+                        pass
+
+                declared = _fs.all_timestamp_columns(table_name_m0) if table_name_m0 else []
+                if declared:
+                    # Filter to columns that actually exist in the table.
+                    try:
+                        cur0 = connection.cursor()
+                        cur0.execute(f"PRAGMA table_info({table_name_m0})")
+                        existing_cols = {row[1] for row in cur0.fetchall()}
+                    except Exception:
+                        existing_cols = set()
+
+                    present = [c for c in declared if c in existing_cols]
+                    if present:
+                        # Detect format per column by sampling one non-null value.
+                        per_col_formats: Dict[str, str] = {}
+                        for col in present:
+                            try:
+                                cur0.execute(
+                                    f"SELECT {col} FROM {table_name_m0} "
+                                    f"WHERE {col} IS NOT NULL AND {col} != '' LIMIT 1"
+                                )
+                                sample = cur0.fetchone()
+                                if sample and sample[0] is not None:
+                                    result = self.timestamp_parser.parse_timestamp(sample[0])
+                                    if result.success and result.detected_format is not None:
+                                        fmt = result.detected_format.value if hasattr(result.detected_format, 'value') else str(result.detected_format)
+                                        per_col_formats[col] = fmt
+                            except Exception as e:
+                                if self.debug_mode:
+                                    logger.info(f"[OptimizedFeatherQuery] Method 0: per-column sample failed for {col}: {e}")
+
+                        # Commit Method 0 results.
+                        self.timestamp_columns = list(present)
+                        self.timestamp_column = present[0]
+                        self.column_formats = per_col_formats
+                        # Engine-level format: use the primary column's format
+                        # as the default fallback for code paths that still
+                        # consult self.timestamp_format.
+                        if present[0] in per_col_formats:
+                            self.timestamp_format = per_col_formats[present[0]]
+
+                        # Create indexes for all columns.
+                        for ts_col in self.timestamp_columns:
+                            original_col = self.timestamp_column
+                            self.timestamp_column = ts_col
+                            try:
+                                self.ensure_timestamp_index()
+                            except Exception:
+                                pass
+                            self.timestamp_column = original_col
+
+                        if self.debug_mode:
+                            logger.info(
+                                f"[OptimizedFeatherQuery] Method 0 (schema): "
+                                f"table={table_name_m0!r} declared={declared} "
+                                f"present={present} formats={per_col_formats}"
+                            )
+                        # Short-circuit: schema is authoritative.
+                        return True
+            except Exception as e:
+                self._schema_detection_errors.append({
+                    'method': 'method_0_schema',
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                })
+                if self.debug_mode:
+                    logger.info(f"[OptimizedFeatherQuery] Method 0 failed, falling through to auto-detect: {e}")
+
             # Method 1: Try forensic patterns if detect_columns exists
             if hasattr(self.loader, 'detect_columns'):
                 try:
@@ -242,15 +420,15 @@ class OptimizedFeatherQuery:
                     if detected_cols and hasattr(detected_cols, 'timestamp_columns') and detected_cols.timestamp_columns:
                         all_detected_columns.extend(detected_cols.timestamp_columns)
                         if self.debug_mode:
-                            print(f"[OptimizedFeatherQuery] Method 1 (forensic): Found {len(detected_cols.timestamp_columns)} columns: {detected_cols.timestamp_columns}")
+                            logger.info(f"[OptimizedFeatherQuery] Method 1 (forensic): Found {len(detected_cols.timestamp_columns)} columns: {detected_cols.timestamp_columns}")
                 except Exception as e:
                     if self.debug_mode:
-                        print(f"[OptimizedFeatherQuery] Forensic detection failed: {e}")
+                        logger.info(f"[OptimizedFeatherQuery] Forensic detection failed: {e}")
             
             # Method 2: Enhanced smart detection - sample ALL columns and detect timestamp patterns
             # This catches timestamp columns with unusual names and detects their formats
             # CRITICAL: This method ALWAYS runs with robust error handling
-            column_formats = {}  # Track format for each column
+            column_formats = {} # Track format for each column
             parser_columns = []
             
             try:
@@ -266,7 +444,7 @@ class OptimizedFeatherQuery:
                             table_name = result[0]
                     except Exception as e:
                         if self.debug_mode:
-                            print(f"[OptimizedFeatherQuery] Method 2: Could not find table - {e}")
+                            logger.info(f"[OptimizedFeatherQuery] Method 2: Could not find table - {e}")
                         table_name = None
                 
                 if table_name:
@@ -276,31 +454,65 @@ class OptimizedFeatherQuery:
                         all_cols = [row[1] for row in cursor.fetchall()]
                     except Exception as e:
                         if self.debug_mode:
-                            print(f"[OptimizedFeatherQuery] Method 2: Could not get columns - {e}")
+                            logger.info(f"[OptimizedFeatherQuery] Method 2: Could not get columns - {e}")
                         all_cols = []
                     
                     if all_cols:
                         if self.debug_mode:
-                            print(f"[OptimizedFeatherQuery] Method 2 (smart): Analyzing {len(all_cols)} columns for timestamp patterns...")
+                            logger.info(f"[OptimizedFeatherQuery] Method 2 (smart): Analyzing {len(all_cols)} columns for timestamp patterns...")
                         
                         # Sample random values from each column and test if they're timestamps
                         for col in all_cols:
                             # Skip columns already found by Method 1
                             if col in all_detected_columns:
                                 continue
-                            
-                            # Skip obviously non-timestamp columns by name
+
+                            # Skip obviously non-timestamp columns by name.
+                            # Extended list: also rejects cycle counters and
+                            # ordinal positions (SRUM has *_cycle_time and
+                            # *_num_* integers in the unix-epoch range that
+                            # the parser would otherwise accept as timestamps,
+                            # poisoning timestamp_format detection for the
+                            # actual ISO-string timestamp column).
                             col_lower = col.lower()
-                            if any(skip in col_lower for skip in ['id', 'count', 'size', 'length', 'hash', 'key', 'flag']):
-                                continue
-                            
+                            non_time_tokens = (
+                                'id', 'count', 'size', 'length', 'hash',
+                                'key', 'flag',
+                                'cycle', 'position', 'index', 'offset',
+                                'bytes', 'rate', 'cpu', 'memory', 'ram',
+                                'num_', '_num', 'duration', 'percent',
+                                'width', 'height', 'level', 'priority',
+                                'port',
+                            )
+                            if any(tok in col_lower for tok in non_time_tokens):
+                                # ...unless the column name also contains a
+                                # clear time word ("creation_time", "last_time",
+                                # "event_time" etc. — these should pass).
+                                time_tokens = ('timestamp', 'datetime', 'date',
+                                               'time_', '_time', 'created',
+                                               'modified', 'accessed', 'when')
+                                if not any(tt in col_lower for tt in time_tokens):
+                                    continue
+
                             try:
+                                # Sample size is configurable via performance_config so analysts
+                                # who hit heterogeneous-format columns (e.g., mid-migration data)
+                                # can bump it. Default 100 — a 10x increase over the prior hardcoded
+                                # 10 — empirically reliable on mixed-format columns where 10 samples
+                                # could land on the minority format and mis-detect. Stratified
+                                # sampling (first/middle/last by primary key) is a follow-up
+                                # if pure random ever proves unreliable.
+                                sample_size = getattr(
+                                    self.performance_config,
+                                    'format_detection_sample_size',
+                                    100,
+                                )
                                 # Get random sample of non-NULL values with timeout protection
                                 cursor.execute(f"""
-                                    SELECT {col} FROM {table_name} 
-                                    WHERE {col} IS NOT NULL 
-                                    ORDER BY RANDOM() 
-                                    LIMIT 10
+                                    SELECT {col} FROM {table_name}
+                                    WHERE {col} IS NOT NULL
+                                    ORDER BY RANDOM()
+                                    LIMIT {int(sample_size)}
                                 """)
                                 samples = [row[0] for row in cursor.fetchall()]
                                 
@@ -310,11 +522,55 @@ class OptimizedFeatherQuery:
                                 # Test if values look like timestamps and detect format
                                 timestamp_count = 0
                                 detected_formats = {}
-                                
+
+                                # Plausible date range for forensic data:
+                                # year 1990-01-01 (631152000) through year
+                                # 2100-01-01 (4102444800). Anything outside
+                                # almost certainly is NOT a wall-clock time —
+                                # we use this to reject cycle counters and
+                                # other big integers that the parser would
+                                # otherwise accept as Unix epoch.
+                                _MIN_PLAUSIBLE_EPOCH = 631152000 # 1990
+                                _MAX_PLAUSIBLE_EPOCH = 4102444800 # 2100
+                                _MIN_PLAUSIBLE_EPOCH_MS = 631152000000
+                                _MAX_PLAUSIBLE_EPOCH_MS = 4102444800000
+
                                 for value in samples:
                                     try:
+                                        # Pre-screen integer values to reject
+                                        # cycle counters / position indices
+                                        # that would parse as bogus timestamps.
+                                        if isinstance(value, (int, float)):
+                                            v = float(value)
+                                            if v < 0:
+                                                continue
+                                            if v < _MIN_PLAUSIBLE_EPOCH:
+                                                # too small to be a real time
+                                                # (would land before 1990)
+                                                continue
+                                            if (v > _MAX_PLAUSIBLE_EPOCH and
+                                                    v < _MIN_PLAUSIBLE_EPOCH_MS):
+                                                # in the "no-mans-land" gap
+                                                # between seconds (~1e10) and
+                                                # milliseconds (~6e11) —
+                                                # typical of CPU cycle counts
+                                                continue
+                                            if v > _MAX_PLAUSIBLE_EPOCH_MS:
+                                                # past year 2100 even as ms
+                                                continue
+
                                         result = self.timestamp_parser.parse_timestamp(value)
                                         if result.success:
+                                            # Double-check the parsed datetime
+                                            # falls in the plausible range.
+                                            parsed_dt = getattr(result, 'parsed_datetime', None) or getattr(result, 'datetime', None)
+                                            if parsed_dt is not None:
+                                                try:
+                                                    year = parsed_dt.year
+                                                    if year < 1990 or year > 2100:
+                                                        continue
+                                                except Exception:
+                                                    pass
                                             timestamp_count += 1
                                             # Track which format was detected
                                             fmt = result.detected_format.value if hasattr(result.detected_format, 'value') else str(result.detected_format)
@@ -322,7 +578,7 @@ class OptimizedFeatherQuery:
                                     except Exception:
                                         # Skip individual parse errors
                                         continue
-                                
+
                                 # If >50% of samples are valid timestamps, consider it a timestamp column
                                 if timestamp_count >= len(samples) * 0.5:
                                     parser_columns.append(col)
@@ -333,56 +589,67 @@ class OptimizedFeatherQuery:
                                         column_formats[col] = most_common_format
                                         
                                         if self.debug_mode:
-                                            print(f"[OptimizedFeatherQuery]   ✓ {col}: {timestamp_count}/{len(samples)} samples are timestamps (format: {most_common_format})")
+                                            logger.info(f"[OptimizedFeatherQuery] [OK] {col}: {timestamp_count}/{len(samples)} samples are timestamps (format: {most_common_format})")
                                     else:
                                         if self.debug_mode:
-                                            print(f"[OptimizedFeatherQuery]   ✓ {col}: {timestamp_count}/{len(samples)} samples are timestamps")
+                                            logger.info(f"[OptimizedFeatherQuery] [OK] {col}: {timestamp_count}/{len(samples)} samples are timestamps")
                             
                             except Exception as e:
                                 # Log but continue with other columns
                                 if self.debug_mode:
-                                    print(f"[OptimizedFeatherQuery]   ✗ {col}: Error sampling - {e}")
+                                    logger.info(f"[OptimizedFeatherQuery] [FAIL] {col}: Error sampling - {e}")
                                 continue
                         
                         if parser_columns:
                             all_detected_columns.extend(parser_columns)
-                            
+
+                            # Propagate Method 2's per-column formats to the
+                            # engine-level dict so query_time_range can bind
+                            # WHERE parameters with the correct per-column
+                            # format when columns are heterogeneous.
+                            self.column_formats.update(column_formats)
+
                             # Store format for first detected column if we don't have one yet
                             if not hasattr(self, 'timestamp_format') or not self.timestamp_format:
                                 if column_formats:
                                     self.timestamp_format = list(column_formats.values())[0]
                             
                             if self.debug_mode:
-                                print(f"[OptimizedFeatherQuery] Method 2 (smart): Found {len(parser_columns)} columns: {parser_columns}")
+                                logger.info(f"[OptimizedFeatherQuery] Method 2 (smart): Found {len(parser_columns)} columns: {parser_columns}")
                                 if column_formats:
-                                    print(f"[OptimizedFeatherQuery] Method 2 (smart): Detected formats: {column_formats}")
+                                    logger.info(f"[OptimizedFeatherQuery] Method 2 (smart): Detected formats: {column_formats}")
                         else:
                             if self.debug_mode:
-                                print(f"[OptimizedFeatherQuery] Method 2 (smart): No additional timestamp columns found")
+                                logger.info(f"[OptimizedFeatherQuery] Method 2 (smart): No additional timestamp columns found")
                     else:
                         if self.debug_mode:
-                            print(f"[OptimizedFeatherQuery] Method 2 (smart): No columns found in table")
+                            logger.info(f"[OptimizedFeatherQuery] Method 2 (smart): No columns found in table")
                 else:
                     if self.debug_mode:
-                        print(f"[OptimizedFeatherQuery] Method 2 (smart): No table available for analysis")
+                        logger.info(f"[OptimizedFeatherQuery] Method 2 (smart): No table available for analysis")
             
             except Exception as e:
                 # Method 2 failed completely - log but don't crash
+                self._schema_detection_errors.append({
+                    'method': 'method_2_smart',
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                })
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Method 2 (smart) failed: {e}")
+                    logger.info(f"[OptimizedFeatherQuery] Method 2 (smart) failed: {e}")
                     import traceback
                     traceback.print_exc()
             
             # GUARANTEE: Method 2 always completes, even if it finds nothing
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Method 2 (smart): Completed (found {len(parser_columns)} columns)")
+                logger.info(f"[OptimizedFeatherQuery] Method 2 (smart): Completed (found {len(parser_columns)} columns)")
             
             # Method 3: ALWAYS run fallback detection to catch any missed columns
             fallback_columns = self._fallback_timestamp_detection(connection)
             if fallback_columns:
                 all_detected_columns.extend(fallback_columns)
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Method 3 (fallback): Found {len(fallback_columns)} columns: {fallback_columns}")
+                    logger.info(f"[OptimizedFeatherQuery] Method 3 (fallback): Found {len(fallback_columns)} columns: {fallback_columns}")
             
             # Remove duplicates while preserving order
             seen = set()
@@ -397,7 +664,7 @@ class OptimizedFeatherQuery:
                 self.timestamp_column = self.timestamp_columns[0]
                 
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] TOTAL: {len(self.timestamp_columns)} unique timestamp columns: {self.timestamp_columns}")
+                    logger.info(f"[OptimizedFeatherQuery] TOTAL: {len(self.timestamp_columns)} unique timestamp columns: {self.timestamp_columns}")
             
             if self.timestamp_columns:
                 # Detect timestamp format if not already detected
@@ -416,13 +683,27 @@ class OptimizedFeatherQuery:
                     
                     if self.debug_mode:
                         if index_created:
-                            print(f"[OptimizedFeatherQuery] Timestamp index ensured on {ts_col}")
+                            logger.info(f"[OptimizedFeatherQuery] Timestamp index ensured on {ts_col}")
                         else:
-                            print(f"[OptimizedFeatherQuery] Failed to ensure timestamp index on {ts_col}")
+                            logger.info(f"[OptimizedFeatherQuery] Failed to ensure timestamp index on {ts_col}")
             else:
+                # No real timestamp columns: mark this feather as
+                # timeless. It will NOT participate in window-filter
+                # queries (query_time_range returns [] for it). Instead,
+                # the TimeWindowScanningEngine performs an identity-side
+                # enrichment pass after correlation: any match whose
+                # identity appears in this feather will get the matching
+                # records attached as supplementary evidence (with no
+                # claim about when they were observed beyond what the
+                # match's time-anchored feathers establish).
+                self.is_timeless = True
                 if self.debug_mode:
-                    print("[OptimizedFeatherQuery] No timestamp columns found - queries will return empty results")
-            
+                    logger.info(
+                        "[OptimizedFeatherQuery] No timestamp columns found; "
+                        "feather marked timeless — will be joined by identity "
+                        "during post-correlation enrichment."
+                    )
+
             return True
         
         try:
@@ -434,7 +715,7 @@ class OptimizedFeatherQuery:
             )
         except Exception as e:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Failed to detect timestamps: {e}")
+                logger.info(f"[OptimizedFeatherQuery] Failed to detect timestamps: {e}")
             # Continue without timestamp detection - queries will return empty results
     
     def _detect_timestamp_format_resilient(self, connection) -> str:
@@ -466,7 +747,7 @@ class OptimizedFeatherQuery:
                 
                 if self.debug_mode:
                     success_rate = (successful_parses / total_attempts * 100) if total_attempts > 0 else 0
-                    print(f"[OptimizedFeatherQuery] Timestamp format detection: {most_common_format} "
+                    logger.info(f"[OptimizedFeatherQuery] Timestamp format detection: {most_common_format} "
                           f"(success rate: {success_rate:.1f}%, formats found: {format_counts})")
                 
                 return most_common_format
@@ -520,8 +801,15 @@ class OptimizedFeatherQuery:
             'created_time', 'modified_time', 'accessed_time',
             'create_time', 'modify_time', 'access_time',
             'created_on', 'modified_on', 'accessed_on',
-            # Parser timestamps (lower priority - only use if no artifact timestamps found)
-            'parsed_at', 'parsed_timestamp'
+            # NOTE: 'parsed_at' / 'parsed_timestamp' deliberately excluded.
+            # Those columns store the moment the FEATHER was generated, not
+            # the moment the underlying artifact was observed. Treating them
+            # as a real per-row timestamp would assign every row in a
+            # timeless feather (MUICache, AutoStartPrograms, SystemServices,
+            # TypedPaths) to a single arbitrary window, polluting it with
+            # records that are actually persistent system state. Feathers
+            # without any real per-row timestamp now fall through to the
+            # is_timeless path and are joined by identity instead.
         ]
         
         try:
@@ -538,12 +826,12 @@ class OptimizedFeatherQuery:
                     return []
             
             cursor.execute(f"PRAGMA table_info({table_name})")
-            all_columns = [(row[1], row[2]) for row in cursor.fetchall()]  # (name, type)
+            all_columns = [(row[1], row[2]) for row in cursor.fetchall()] # (name, type)
             column_names_lower = [col[0].lower() for col in all_columns]
             
             if self.debug_mode:
                 feather_id = getattr(self.loader, 'feather_id', 'unknown')
-                print(f"[OptimizedFeatherQuery] {feather_id} - Available columns: {[col[0] for col in all_columns]}")
+                logger.info(f"[OptimizedFeatherQuery] {feather_id} - Available columns: {[col[0] for col in all_columns]}")
             
             timestamp_columns_found = []
             
@@ -584,17 +872,22 @@ class OptimizedFeatherQuery:
             if timestamp_columns_found:
                 if self.debug_mode:
                     feather_id = getattr(self.loader, 'feather_id', 'unknown')
-                    print(f"[OptimizedFeatherQuery] {feather_id} - Found {len(timestamp_columns_found)} timestamp columns: {timestamp_columns_found}")
+                    logger.info(f"[OptimizedFeatherQuery] {feather_id} - Found {len(timestamp_columns_found)} timestamp columns: {timestamp_columns_found}")
                 return timestamp_columns_found
             
             if self.debug_mode:
                 feather_id = getattr(self.loader, 'feather_id', 'unknown')
-                print(f"[OptimizedFeatherQuery] {feather_id} - No timestamp columns found in {len(all_columns)} columns")
+                logger.info(f"[OptimizedFeatherQuery] {feather_id} - No timestamp columns found in {len(all_columns)} columns")
                         
         except Exception as e:
+            self._schema_detection_errors.append({
+                'method': 'method_3_fallback',
+                'error': str(e),
+                'error_type': type(e).__name__,
+            })
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Fallback timestamp detection failed: {e}")
-        
+                logger.info(f"[OptimizedFeatherQuery] Fallback timestamp detection failed: {e}")
+
         return []
     
     def _detect_timestamp_format(self, connection) -> str:
@@ -639,7 +932,7 @@ class OptimizedFeatherQuery:
             return records
         except Exception as e:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Failed to get sample records: {e}")
+                logger.info(f"[OptimizedFeatherQuery] Failed to get sample records: {e}")
             return []
     
     def _create_universal_timestamp_index(self, connection):
@@ -659,85 +952,440 @@ class OptimizedFeatherQuery:
             connection.commit()
             
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Created timestamp index on {self.timestamp_column}")
+                logger.info(f"[OptimizedFeatherQuery] Created timestamp index on {self.timestamp_column}")
         except Exception as e:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Warning: Could not create index on {self.timestamp_column}: {e}")
+                logger.info(f"[OptimizedFeatherQuery] Warning: Could not create index on {self.timestamp_column}: {e}")
     
     def _identify_timestamp_format(self, timestamp_value: Any) -> Optional[str]:
-        """Identify the format of a timestamp value"""
-        if isinstance(timestamp_value, (int, float)):
-            # Unix timestamp (seconds or milliseconds)
-            if timestamp_value > 1000000000000:  # Milliseconds
-                return 'unix_ms'
-            elif timestamp_value > 1000000000:  # Seconds
-                return 'unix_s'
-            else:
-                return 'numeric'
-        
-        elif isinstance(timestamp_value, str):
-            # Try common string formats
-            if 'T' in timestamp_value and 'Z' in timestamp_value:
-                return 'iso8601'
-            elif '-' in timestamp_value and ':' in timestamp_value:
-                return 'datetime_string'
-            elif '/' in timestamp_value:
-                return 'date_slash'
-            else:
-                return 'string_unknown'
-        
-        return None
+        """Forward to the standalone timestamp_format_codec.
+
+        Logic extracted so other engines (identity-based, future) can
+        reuse the FILETIME-aware classifier without dragging in
+        OptimizedFeatherQuery. See engine/timestamp_format_codec.py.
+        """
+        from .timestamp_format_codec import detect_column_format
+        return detect_column_format(timestamp_value)
     
+    def _multi_timestamp_columns_for_table(self) -> List[str]:
+        """Return JSON list-of-timestamps columns configured for this table.
+
+        Resolved lazily and memoized via TimeWindowScanningEngine's
+        feather_schemas-backed mapping (table name → list of column names).
+        """
+        if self._multi_timestamp_columns is not None:
+            return self._multi_timestamp_columns
+        table = getattr(self.loader, 'current_table', None) or ''
+        cfg = TimeWindowScanningEngine._multi_timestamp_fields_map().get(table, [])
+        self._multi_timestamp_columns = list(cfg)
+        return self._multi_timestamp_columns
+
+    def _expand_multi_timestamp_records(self) -> List[Dict[str, Any]]:
+        """Build the in-memory list of fan-out records for this feather.
+
+        For each row in the source table, parse the configured JSON-list
+        timestamp column(s) and emit one record per timestamp. Each virtual
+        record is a shallow copy of the source row with its primary
+        timestamp column rewritten to one of the JSON entries — so the
+        engine treats every execution as its own correlation event instead
+        of only the most recent one.
+
+        Cached after first build. Returns the full list of virtual records.
+        """
+        if self._expanded_records_cache is not None:
+            return self._expanded_records_cache
+
+        json_cols = self._multi_timestamp_columns_for_table()
+        if not json_cols:
+            self._expanded_records_cache = []
+            return self._expanded_records_cache
+
+        def _scan_all(connection):
+            cursor = connection.cursor()
+            cursor.execute(f"SELECT * FROM {self.loader.current_table}")
+            columns = [d[0] for d in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        try:
+            all_rows = self.error_handler.execute_with_retry(
+                operation=_scan_all,
+                feather_id=getattr(self.loader, 'feather_id', 'unknown'),
+                database_path=self.loader.database_path,
+                operation_name="multi_timestamp_full_scan",
+            )
+        except Exception as e:
+            logger.warning(
+                f"[OptimizedFeatherQuery] Multi-timestamp full scan failed for "
+                f"{self.loader.current_table}: {e}. Falling back to single-timestamp path."
+            )
+            self._expanded_records_cache = []
+            return self._expanded_records_cache
+
+        import json as _json
+        expanded: List[Dict[str, Any]] = []
+        primary_ts_col = self.timestamp_column or (self.timestamp_columns[0] if self.timestamp_columns else None)
+
+        for row in all_rows:
+            timestamps: List[str] = []
+            for col in json_cols:
+                raw = row.get(col)
+                if not raw:
+                    continue
+                if isinstance(raw, list):
+                    parsed = raw
+                else:
+                    try:
+                        parsed = _json.loads(raw)
+                    except (TypeError, ValueError):
+                        continue
+                if isinstance(parsed, list):
+                    timestamps.extend(str(t) for t in parsed if t)
+                elif isinstance(parsed, str):
+                    timestamps.append(parsed)
+            # Fall back to the row's primary timestamp so rows with no JSON
+            # entries are still emitted exactly once (no data left behind).
+            if not timestamps and primary_ts_col and row.get(primary_ts_col):
+                timestamps.append(str(row[primary_ts_col]))
+
+            # Deduplicate identical timestamps from the same row to avoid
+            # emitting redundant virtual records (e.g. when run_times stores
+            # the same value 3 times because the artifact was bumped within
+            # one second).
+            seen = set()
+            for ts in timestamps:
+                if ts in seen:
+                    continue
+                seen.add(ts)
+                virtual = dict(row)
+                if primary_ts_col:
+                    virtual[primary_ts_col] = ts
+                # Mark for debugging — lets diagnostics tell virtual records
+                # from native rows.
+                virtual['_multi_timestamp_source'] = json_cols[0] if json_cols else None
+                expanded.append(virtual)
+
+        if self.debug_mode:
+            logger.info(
+                f"[OptimizedFeatherQuery] Multi-timestamp expansion for "
+                f"{self.loader.current_table}: {len(all_rows)} rows -> {len(expanded)} virtual records "
+                f"(JSON cols: {json_cols})"
+            )
+
+        self._expanded_records_cache = expanded
+        return expanded
+
+    def _filter_expanded_for_window(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
+        """Return virtual records whose primary timestamp lies in [start, end]."""
+        records = self._expand_multi_timestamp_records()
+        if not records:
+            return []
+        primary_ts_col = self.timestamp_column or (self.timestamp_columns[0] if self.timestamp_columns else None)
+        if not primary_ts_col:
+            return list(records)
+
+        out: List[Dict[str, Any]] = []
+        for r in records:
+            ts_raw = r.get(primary_ts_col)
+            if not ts_raw:
+                continue
+            parsed = self.timestamp_parser.parse_timestamp(ts_raw)
+            if not parsed.success or parsed.datetime_value is None:
+                continue
+            # Strip tz to compare with naive start_time / end_time, which is
+            # how the rest of the engine carries window boundaries.
+            dt = parsed.datetime_value.replace(tzinfo=None)
+            # Plausibility gate — drop NTFS / LNK placeholder dates
+            # (1601-01-01, 1980-01-01, 2000-01-01) that occasionally
+            # appear in JSON-list run_times alongside real entries.
+            # Matches the same heuristic used by the multi-column
+            # fan-out at _fan_out_multi_column_timestamps.
+            if dt.year < 1990 or dt.year > 2100:
+                continue
+            if start_time <= dt <= end_time:
+                out.append(r)
+        return out
+
+    def _fan_out_multi_column_timestamps(
+        self,
+        rows: List[Dict[str, Any]],
+        start_time: datetime,
+        end_time: datetime,
+    ) -> List[Dict[str, Any]]:
+        """Emit one virtual record per distinct in-window timestamp per row.
+
+        For feathers with multiple declared timestamp columns (mft_usn,
+        amcache_app, amcache_file), a single physical row often has
+        multiple meaningful timestamps — file creation, modification,
+        access, USN change. Each in-window timestamp should participate
+        in correlation independently so e.g. a file modified on 2026-04-15
+        gets grouped with other 2026-04-15 evidence, regardless of when
+        the same file was originally created.
+
+        Rules:
+          * For each declared timestamp column present in the row, parse
+            its value. Skip parse failures and NULL/empty values.
+          * Drop parsed datetimes outside year 1990–2100 (NTFS / LNK
+            "unknown" placeholders like 1980-01-01, 2000-01-01,
+            2001-01-01 OS-install dates that would otherwise spawn
+            lonely virtual rows in their own windows).
+          * Drop datetimes outside the requested window.
+          * Dedupe by canonical ISO timestamp within the same physical
+            row — usn_timestamp == si_access_time at the same instant
+            collapses to one virtual row (per-row, not per-feather, so
+            two physical rows with the same timestamp still both appear).
+          * Tag each virtual record with ``_canonical_timestamp`` (ISO
+            string) and ``_canonical_timestamp_column`` (origin column
+            name) so downstream diagnostics can see which timestamp
+            anchored the row.
+
+        Returns the expanded list. May be larger or smaller than the
+        input — smaller if many rows have all-junk timestamps, larger
+        when rows have multiple distinct in-window timestamps.
+        """
+        if not rows or not self.timestamp_columns:
+            return rows
+
+        ts_cols = list(self.timestamp_columns)
+        out: List[Dict[str, Any]] = []
+
+        for row in rows:
+            seen_in_row: set = set()
+            for col in ts_cols:
+                value = row.get(col)
+                if value is None or value == "":
+                    continue
+                try:
+                    parsed = self.timestamp_parser.parse_timestamp(value)
+                except Exception:
+                    continue
+                if not parsed.success or parsed.datetime_value is None:
+                    continue
+                dt = parsed.datetime_value.replace(tzinfo=None)
+                # Plausibility filter: drop NTFS / LNK placeholder dates
+                # (1980-01-01, 2000-01-01, 2001-01-01) and any year past
+                # 2100. Matches the same heuristic used by Method 2's
+                # smart auto-detector to reject cycle counters.
+                if dt.year < 1990 or dt.year > 2100:
+                    continue
+                if not (start_time <= dt <= end_time):
+                    continue
+                iso = dt.isoformat()
+                if iso in seen_in_row:
+                    continue
+                seen_in_row.add(iso)
+                virtual = dict(row)
+                virtual["_canonical_timestamp"] = iso
+                virtual["_canonical_timestamp_column"] = col
+                out.append(virtual)
+
+        if self.debug_mode:
+            logger.info(
+                f"[OptimizedFeatherQuery] Multi-column fan-out for "
+                f"{self.loader.current_table}: {len(rows)} rows -> "
+                f"{len(out)} virtual records in window"
+            )
+        return out
+
+    # In-memory cache for timeless-feather full-table reads. Populated
+    # on first call to load_all_records(); subsequent enrichment passes
+    # reuse this list without re-hitting SQLite.
+    _all_records_cache: Optional[List[Dict[str, Any]]] = None
+
+    def load_all_records(self) -> List[Dict[str, Any]]:
+        """Return every row in the feather, cached.
+
+        Used by the engine's post-correlation enrichment pass for
+        timeless feathers (no per-row observation time). Each row is
+        joined to existing time-anchored matches by identity, so the
+        whole table needs to be in memory once.
+        """
+        if self._all_records_cache is not None:
+            return self._all_records_cache
+
+        def _op(connection):
+            table = self.loader.current_table
+            if not table:
+                return []
+            cur = connection.cursor()
+            cur.execute(f"SELECT * FROM {table}")
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+        try:
+            records = self.error_handler.execute_with_retry(
+                operation=_op,
+                feather_id=getattr(self.loader, 'feather_id', 'unknown'),
+                database_path=self.loader.database_path,
+                operation_name="load_all_records",
+            )
+        except Exception as e:
+            if self.debug_mode:
+                logger.info(
+                    f"[OptimizedFeatherQuery] load_all_records failed: {e}"
+                )
+            records = []
+        self._all_records_cache = records
+        return records
+
+    def query_time_range_iter(self, start_time: datetime, end_time: datetime):
+        """Streaming variant of :meth:`query_time_range`.
+
+        Yields records one at a time instead of materializing the full
+        list. Memory footprint drops from O(window_records) to O(1).
+        Skips the result cache because caching a generator would defeat
+        the streaming benefit — callers needing the full list should
+        keep using ``query_time_range``.
+
+        Used by Phase 11 for memory-constrained scans over very large
+        feathers (MFT, USN). The correlation loop already iterates, so
+        adopting the iter API is transparent at the call site.
+        """
+        # Multi-timestamp path materializes the expanded list anyway,
+        # so just iterate it.
+        if self._multi_timestamp_columns_for_table():
+            for r in self._filter_expanded_for_window(start_time, end_time):
+                yield r
+            return
+
+        if not self.timestamp_column:
+            return
+
+        # Per-column WHERE binding — parity with query_time_range. Without
+        # this, heterogeneous-format feathers (amcache MM/DD/YYYY +
+        # parsed_at ISO) silently drop records whenever the engine
+        # routes through the streaming path under memory pressure.
+        from .timestamp_format_codec import format_for_query as _ffq
+
+        def _col_param(c: str, dt: datetime):
+            fmt = self.column_formats.get(c) or self.timestamp_format
+            return _ffq(dt, fmt, debug=self.debug_mode)
+
+        if self.timestamp_columns and len(self.timestamp_columns) > 1:
+            where = " OR ".join(f"({c} >= ? AND {c} <= ?)" for c in self.timestamp_columns)
+            params = []
+            for c in self.timestamp_columns:
+                params.append(_col_param(c, start_time))
+                params.append(_col_param(c, end_time))
+            order_col = self.timestamp_columns[0]
+        else:
+            col = self.timestamp_columns[0] if self.timestamp_columns else self.timestamp_column
+            where = f"{col} >= ? AND {col} <= ?"
+            params = [_col_param(col, start_time), _col_param(col, end_time)]
+            order_col = col
+
+        query = f'SELECT * FROM {self.loader.current_table} WHERE {where} ORDER BY {order_col}'
+
+        def _stream(connection):
+            cursor = connection.cursor()
+            cursor.execute(query, params)
+            columns = [d[0] for d in cursor.description]
+            return cursor, columns
+
+        try:
+            cursor, columns = self.error_handler.execute_with_retry(
+                operation=_stream,
+                feather_id=getattr(self.loader, 'feather_id', 'unknown'),
+                database_path=self.loader.database_path,
+                operation_name="query_time_range_iter",
+            )
+        except Exception as e:
+            if self.debug_mode:
+                logger.info(f"[OptimizedFeatherQuery] streaming query failed: {e}")
+            return
+
+        try:
+            while True:
+                batch = cursor.fetchmany(1000)
+                if not batch:
+                    break
+                for row in batch:
+                    yield dict(zip(columns, row))
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
     def query_time_range(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
         """Optimized time range query that handles any timestamp format with error resilience and caching"""
         # Start profiling if profiler is available (Requirements 1.1, 1.4)
         if self.profiler:
             self.profiler.start_operation("query_time_range")
-        
+
         try:
+            # Multi-timestamp fan-out path: tables like Prefetch carry up to
+            # 8 historical execution times per row in a JSON column. Run a
+            # one-shot full-feather scan, fan each row out to one virtual
+            # record per timestamp, then filter the in-memory list by the
+            # requested window. This way every execution gets correlated,
+            # not just the most-recent one that survives the
+            # last_executed-in-window SQL filter.
+            if self._multi_timestamp_columns_for_table():
+                results = self._filter_expanded_for_window(start_time, end_time)
+                if self.debug_mode:
+                    logger.info(
+                        f"[OptimizedFeatherQuery] Multi-timestamp query for "
+                        f"{self.loader.current_table}: {len(results)} virtual records in window"
+                    )
+                return results
+
             if not self.timestamp_column:
                 return []
             
             # Track cache request (Requirements 2.4)
             cache_key = f"{start_time.isoformat()}_{end_time.isoformat()}"
-            self._cache_stats['total_requests'] += 1
-            
-            # OPTIMIZATION: Check cache first for overlapping time windows
-            if cache_key in self._query_result_cache:
-                # Cache hit - update statistics and LRU order (Requirements 2.4, 2.5)
-                self._cache_stats['hits'] += 1
-                
-                # Move to end of access order (most recently used)
-                if cache_key in self._cache_access_order:
-                    self._cache_access_order.remove(cache_key)
-                self._cache_access_order.append(cache_key)
-                
-                if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Cache hit for time range {start_time} to {end_time}")
-                return self._query_result_cache[cache_key]
-            
-            # Cache miss - track statistics (Requirements 2.4)
-            self._cache_stats['misses'] += 1
+
+            # PHASE 9: All cache reads + LRU mutation happen under the
+            # cache lock so concurrent workers can't observe a half-
+            # updated _cache_access_order list (which would corrupt the
+            # eviction policy and leak unbounded memory).
+            with self._cache_lock:
+                self._cache_stats['total_requests'] += 1
+                if cache_key in self._query_result_cache:
+                    self._cache_stats['hits'] += 1
+                    if cache_key in self._cache_access_order:
+                        self._cache_access_order.remove(cache_key)
+                    self._cache_access_order.append(cache_key)
+                    if self.debug_mode:
+                        logger.info(
+                            f"[OptimizedFeatherQuery] Cache hit for time range {start_time} to {end_time}"
+                        )
+                    return self._query_result_cache[cache_key]
+                self._cache_stats['misses'] += 1
             
             def query_operation(connection):
-                # Convert datetime objects to format that matches the database
+                # Per-column parameter formatting. Heterogeneous-format
+                # feathers (amcache: install_date MM/DD/YYYY + parsed_at ISO)
+                # silently returned 0 rows previously because the same
+                # ISO-formatted parameter was bound against an MM/DD/YYYY
+                # column. We now format each column's WHERE parameters in
+                # that column's specific format (populated by Method 0 /
+                # Method 2 into self.column_formats; falls back to the
+                # engine-level self.timestamp_format if a column wasn't
+                # individually profiled).
+                from .timestamp_format_codec import format_for_query as _ffq
+
+                def _col_param(col: str, dt: datetime):
+                    fmt = self.column_formats.get(col) or self.timestamp_format
+                    return _ffq(dt, fmt, debug=self.debug_mode)
+
+                # Single-format fallback for code paths that still consult
+                # the engine-level value (e.g. cache key, range scanners).
                 start_value = self._convert_datetime_for_query(start_time)
                 end_value = self._convert_datetime_for_query(end_time)
-                
+
                 # Build WHERE clause for multiple timestamp columns (OR condition)
                 # This allows records to match if ANY timestamp column falls in the range
                 if self.timestamp_columns and len(self.timestamp_columns) > 1:
                     # Multiple timestamp columns - check all with OR
                     where_conditions = []
+                    params = []
                     for ts_col in self.timestamp_columns:
                         where_conditions.append(f"({ts_col} >= ? AND {ts_col} <= ?)")
+                        params.append(_col_param(ts_col, start_time))
+                        params.append(_col_param(ts_col, end_time))
                     where_clause = " OR ".join(where_conditions)
-                    
-                    # Build parameter list (start, end for each column)
-                    params = []
-                    for _ in self.timestamp_columns:
-                        params.extend([start_value, end_value])
-                    
+
                     query = f"""
                         SELECT * FROM {self.loader.current_table}
                         WHERE {where_clause}
@@ -745,34 +1393,49 @@ class OptimizedFeatherQuery:
                     """
                 elif self.timestamp_columns and len(self.timestamp_columns) == 1:
                     # Single column in list
+                    col = self.timestamp_columns[0]
                     query = f"""
                         SELECT * FROM {self.loader.current_table}
-                        WHERE {self.timestamp_columns[0]} >= ? AND {self.timestamp_columns[0]} <= ?
-                        ORDER BY {self.timestamp_columns[0]}
+                        WHERE {col} >= ? AND {col} <= ?
+                        ORDER BY {col}
                     """
-                    params = [start_value, end_value]
+                    params = [_col_param(col, start_time), _col_param(col, end_time)]
                 elif self.timestamp_column:
                     # Fallback to primary timestamp column
+                    col = self.timestamp_column
                     query = f"""
                         SELECT * FROM {self.loader.current_table}
-                        WHERE {self.timestamp_column} >= ? AND {self.timestamp_column} <= ?
-                        ORDER BY {self.timestamp_column}
+                        WHERE {col} >= ? AND {col} <= ?
+                        ORDER BY {col}
                     """
-                    params = [start_value, end_value]
+                    params = [_col_param(col, start_time), _col_param(col, end_time)]
                 else:
                     # No timestamp columns - return empty results
                     return []
-                
+
                 cursor = connection.cursor()
                 cursor.execute(query, params)
-                
+
                 # Convert rows to dictionaries
                 columns = [description[0] for description in cursor.description]
                 records = []
                 for row in cursor.fetchall():
                     record = dict(zip(columns, row))
                     records.append(record)
-                
+
+                # Multi-column timestamp fan-out: when a feather declares
+                # multiple timestamp columns, emit one virtual record per
+                # distinct in-window timestamp the row has. This lets the
+                # correlation engine treat a file with both
+                # si_creation_time=2001 (skipped, outside window) and
+                # si_modification_time=2026-04-15 (kept) as participating
+                # in the 2026-04-15 window correctly — and lets a file
+                # with timestamps in two different windows show up in both.
+                if self.timestamp_columns and len(self.timestamp_columns) > 1:
+                    records = self._fan_out_multi_column_timestamps(
+                        records, start_time, end_time
+                    )
+
                 return records
             
             try:
@@ -783,80 +1446,55 @@ class OptimizedFeatherQuery:
                     operation_name="query_time_range"
                 )
                 
-                # OPTIMIZATION: Cache results with LRU eviction (Requirements 2.4, 2.5)
+                # OPTIMIZATION: Cache results with LRU eviction (Requirements 2.4, 2.5).
+                # PHASE 9: All cache mutation under self._cache_lock so
+                # concurrent workers can't double-evict or corrupt the
+                # access-order list.
                 result_size_mb = self._estimate_result_size_mb(results)
-                
-                # Check if we need to evict entries before caching
-                if (self._current_cache_size_mb + result_size_mb > self._max_cache_size_mb or
-                    len(self._query_result_cache) >= self._max_cache_size):
-                    
-                    if self.debug_mode:
-                        print(f"[OptimizedFeatherQuery] Cache limit reached, evicting LRU entries")
-                    
-                    # Evict LRU entries to make room
-                    self._evict_lru_cache_entries(self._max_cache_size_mb - result_size_mb)
-                
-                # Add to cache if there's room
-                if (self._current_cache_size_mb + result_size_mb <= self._max_cache_size_mb and
-                    len(self._query_result_cache) < self._max_cache_size):
-                    
-                    self._query_result_cache[cache_key] = results
-                    self._cache_access_order.append(cache_key)
-                    self._current_cache_size_mb += result_size_mb
-                    
-                    if self.debug_mode:
-                        print(f"[OptimizedFeatherQuery] Cached query result (size: {result_size_mb:.2f} MB, "
-                              f"total cache: {self._current_cache_size_mb:.2f} MB)")
-                elif self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Result too large to cache ({result_size_mb:.2f} MB)")
+                with self._cache_lock:
+                    if (self._current_cache_size_mb + result_size_mb > self._max_cache_size_mb or
+                        len(self._query_result_cache) >= self._max_cache_size):
+                        if self.debug_mode:
+                            logger.info("[OptimizedFeatherQuery] Cache limit reached, evicting LRU entries")
+                        # _evict_lru_cache_entries reacquires the same RLock
+                        # — safe because it's reentrant.
+                        self._evict_lru_cache_entries(self._max_cache_size_mb - result_size_mb)
+                    if (self._current_cache_size_mb + result_size_mb <= self._max_cache_size_mb and
+                        len(self._query_result_cache) < self._max_cache_size):
+                        self._query_result_cache[cache_key] = results
+                        self._cache_access_order.append(cache_key)
+                        self._current_cache_size_mb += result_size_mb
+                        if self.debug_mode:
+                            logger.info(
+                                f"[OptimizedFeatherQuery] Cached query result (size: {result_size_mb:.2f} MB, "
+                                f"total cache: {self._current_cache_size_mb:.2f} MB)"
+                            )
+                    elif self.debug_mode:
+                        logger.info(f"[OptimizedFeatherQuery] Result too large to cache ({result_size_mb:.2f} MB)")
                 
                 return results
                 
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Query failed for range {start_time} to {end_time}: {e}")
-                return []  # Return empty list on failure
+                    logger.info(f"[OptimizedFeatherQuery] Query failed for range {start_time} to {end_time}: {e}")
+                return [] # Return empty list on failure
         finally:
             # End profiling if profiler is available (Requirements 1.1, 1.3)
             if self.profiler:
                 try:
                     self.profiler.end_operation("query_time_range")
                 except Exception:
-                    pass  # Silently ignore profiler errors
+                    pass # Silently ignore profiler errors
     
     def _convert_datetime_for_query(self, dt: datetime) -> Any:
+        """Render ``dt`` into the column's storage format for WHERE clauses.
+
+        Forwards to the standalone codec so other engines can use the
+        same logic. CRITICAL: the rendered value must byte-match what
+        the column stores or range queries return nothing.
         """
-        Convert datetime to format that matches database timestamp format.
-        
-        CRITICAL: This must match the exact format stored in the database,
-        otherwise range queries will fail to find records.
-        """
-        if not self.timestamp_format or self.timestamp_format == 'unknown':
-            # Try multiple formats to ensure we don't miss data
-            # This is a fallback for when format detection fails
-            if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] WARNING: Unknown timestamp format, trying multiple formats")
-            # Default to ISO format as it's most common
-            return dt.isoformat()
-        
-        if self.timestamp_format == 'unix_s':
-            return int(dt.timestamp())
-        elif self.timestamp_format == 'unix_ms':
-            return int(dt.timestamp() * 1000)
-        elif self.timestamp_format == 'iso8601':
-            return dt.isoformat() + 'Z'
-        elif self.timestamp_format in ['datetime_string', 'string_unknown']:
-            return dt.strftime('%Y-%m-%d %H:%M:%S')
-        elif self.timestamp_format == 'date_slash':
-            return dt.strftime('%m/%d/%Y %H:%M:%S')
-        elif self.timestamp_format == 'mixed':
-            # For mixed formats, use ISO as it's most flexible
-            return dt.isoformat()
-        else:
-            # Fallback: try ISO format
-            if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] WARNING: Unhandled timestamp format '{self.timestamp_format}', using ISO")
-            return dt.isoformat()
+        from .timestamp_format_codec import format_for_query
+        return format_for_query(dt, self.timestamp_format, debug=self.debug_mode)
     
     def get_timestamp_range(self) -> Tuple[Optional[datetime], Optional[datetime]]:
         """
@@ -876,7 +1514,7 @@ class OptimizedFeatherQuery:
         # OPTIMIZATION: Return cached result if available
         if self._timestamp_range_cached:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Using cached timestamp range: {self._timestamp_range_cache}")
+                logger.info(f"[OptimizedFeatherQuery] Using cached timestamp range: {self._timestamp_range_cache}")
             return self._timestamp_range_cache
         
         def range_operation(connection):
@@ -920,7 +1558,7 @@ class OptimizedFeatherQuery:
                                 return min_dt, max_dt
                         except (ValueError, OSError, OverflowError) as e:
                             if self.debug_mode:
-                                print(f"[OptimizedFeatherQuery] Fast timestamp conversion failed: {e}, using parser")
+                                logger.info(f"[OptimizedFeatherQuery] Fast timestamp conversion failed: {e}, using parser")
                     
                     # Slow path: Use full parser for string timestamps or conversion failures
                     min_dt = self._parse_timestamp_value(min_val)
@@ -929,7 +1567,7 @@ class OptimizedFeatherQuery:
                 
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Range query error: {e}")
+                    logger.info(f"[OptimizedFeatherQuery] Range query error: {e}")
             
             return None, None
         
@@ -946,13 +1584,13 @@ class OptimizedFeatherQuery:
             self._timestamp_range_cached = True
             
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Cached timestamp range: {result}")
+                logger.info(f"[OptimizedFeatherQuery] Cached timestamp range: {result}")
             
             return result
             
         except Exception as e:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Could not get timestamp range: {e}")
+                logger.info(f"[OptimizedFeatherQuery] Could not get timestamp range: {e}")
             return None, None
     
     def _parse_timestamp_value(self, value: Any) -> Optional[datetime]:
@@ -981,13 +1619,13 @@ class OptimizedFeatherQuery:
         # Fallback for edge cases not handled by resilient parser
         if isinstance(value, (int, float)):
             try:
-                if value > 1000000000000:  # Milliseconds
+                if value > 1000000000000: # Milliseconds
                     dt = datetime.fromtimestamp(value / 1000)
                     # Cache successful fallback parse
                     from ..optimization.optimization_components import TimestampFormat
                     self.timestamp_parse_cache.put_success(value, dt, TimestampFormat.UNIX_MILLISECONDS)
                     return dt
-                elif value > 1000000000:  # Seconds
+                elif value > 1000000000: # Seconds
                     dt = datetime.fromtimestamp(value)
                     # Cache successful fallback parse
                     from ..optimization.optimization_components import TimestampFormat
@@ -1022,7 +1660,7 @@ class OptimizedFeatherQuery:
         self._current_cache_size_mb = 0.0
         
         if self.debug_mode:
-            print(f"[OptimizedFeatherQuery] Cleared query cache ({cache_size} entries)")
+            logger.info(f"[OptimizedFeatherQuery] Cleared query cache ({cache_size} entries)")
     
     def clear_timestamp_range_cache(self):
         """
@@ -1034,7 +1672,7 @@ class OptimizedFeatherQuery:
         self._timestamp_range_cached = False
         
         if self.debug_mode:
-            print(f"[OptimizedFeatherQuery] Cleared timestamp range cache")
+            logger.info(f"[OptimizedFeatherQuery] Cleared timestamp range cache")
     
     def get_cache_statistics(self) -> Dict[str, Any]:
         """
@@ -1146,35 +1784,31 @@ class OptimizedFeatherQuery:
             Number of entries evicted
         """
         if target_size_mb is None:
-            target_size_mb = self._max_cache_size_mb * 0.8  # Evict to 80% of max
-        
+            target_size_mb = self._max_cache_size_mb * 0.8 # Evict to 80% of max
+
+        # PHASE 9: Lock the entire eviction loop so concurrent inserts
+        # can't refill the cache faster than we drain it. RLock allows
+        # callers that already hold the lock to call into here.
         evicted_count = 0
-        
-        # Evict entries from the front of the access order list (least recently used)
-        while (self._current_cache_size_mb > target_size_mb and 
-               self._cache_access_order and 
-               len(self._query_result_cache) > 0):
-            
-            # Get the least recently used key
-            lru_key = self._cache_access_order.pop(0)
-            
-            # Remove from cache if it exists
-            if lru_key in self._query_result_cache:
-                results = self._query_result_cache[lru_key]
-                entry_size = self._estimate_result_size_mb(results)
-                
-                del self._query_result_cache[lru_key]
-                self._current_cache_size_mb -= entry_size
-                evicted_count += 1
-                self._cache_stats['evictions'] += 1
-                
-                if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Evicted LRU cache entry (size: {entry_size:.2f} MB)")
-        
-        if self.debug_mode and evicted_count > 0:
-            print(f"[OptimizedFeatherQuery] LRU eviction complete: {evicted_count} entries removed, "
-                  f"cache size now {self._current_cache_size_mb:.2f} MB")
-        
+        with self._cache_lock:
+            while (self._current_cache_size_mb > target_size_mb and
+                   self._cache_access_order and
+                   len(self._query_result_cache) > 0):
+                lru_key = self._cache_access_order.pop(0)
+                if lru_key in self._query_result_cache:
+                    results = self._query_result_cache[lru_key]
+                    entry_size = self._estimate_result_size_mb(results)
+                    del self._query_result_cache[lru_key]
+                    self._current_cache_size_mb -= entry_size
+                    evicted_count += 1
+                    self._cache_stats['evictions'] += 1
+                    if self.debug_mode:
+                        logger.info(f"[OptimizedFeatherQuery] Evicted LRU cache entry (size: {entry_size:.2f} MB)")
+            if self.debug_mode and evicted_count > 0:
+                logger.info(
+                    f"[OptimizedFeatherQuery] LRU eviction complete: {evicted_count} entries removed, "
+                    f"cache size now {self._current_cache_size_mb:.2f} MB"
+                )
         return evicted_count
     
     def configure_cache(self, max_size_mb: Optional[int] = None, max_entries: Optional[int] = None) -> None:
@@ -1192,12 +1826,12 @@ class OptimizedFeatherQuery:
         if max_size_mb is not None:
             self._max_cache_size_mb = max_size_mb
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Set max cache size to {max_size_mb} MB")
+                logger.info(f"[OptimizedFeatherQuery] Set max cache size to {max_size_mb} MB")
         
         if max_entries is not None:
             self._max_cache_size = max_entries
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Set max cache entries to {max_entries}")
+                logger.info(f"[OptimizedFeatherQuery] Set max cache entries to {max_entries}")
         
         # Evict if current cache exceeds new limits
         if self._current_cache_size_mb > self._max_cache_size_mb:
@@ -1252,7 +1886,7 @@ class OptimizedFeatherQuery:
                 return result is not None
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Error checking index: {e}")
+                    logger.info(f"[OptimizedFeatherQuery] Error checking index: {e}")
                 return False
         
         try:
@@ -1274,7 +1908,7 @@ class OptimizedFeatherQuery:
         """
         if not self.timestamp_column:
             if self.debug_mode:
-                print("[OptimizedFeatherQuery] Cannot create index: no timestamp column detected")
+                logger.info("[OptimizedFeatherQuery] Cannot create index: no timestamp column detected")
             return False
         
         def create_index_operation(connection):
@@ -1288,12 +1922,12 @@ class OptimizedFeatherQuery:
                 connection.commit()
                 
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Created/verified timestamp index on {self.timestamp_column}")
+                    logger.info(f"[OptimizedFeatherQuery] Created/verified timestamp index on {self.timestamp_column}")
                 
                 return True
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Failed to create index: {e}")
+                    logger.info(f"[OptimizedFeatherQuery] Failed to create index: {e}")
                 return False
         
         try:
@@ -1320,27 +1954,27 @@ class OptimizedFeatherQuery:
         """
         if not self.timestamp_column:
             if self.debug_mode:
-                print("[OptimizedFeatherQuery] Cannot ensure index: no timestamp column detected")
+                logger.info("[OptimizedFeatherQuery] Cannot ensure index: no timestamp column detected")
             return False
         
         # Check if index already exists
         if self.has_timestamp_index():
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Timestamp index already exists on {self.timestamp_column}")
+                logger.info(f"[OptimizedFeatherQuery] Timestamp index already exists on {self.timestamp_column}")
             return True
         
         # Index doesn't exist, create it
         if self.debug_mode:
-            print(f"[OptimizedFeatherQuery] Timestamp index missing, creating automatically on {self.timestamp_column}")
+            logger.info(f"[OptimizedFeatherQuery] Timestamp index missing, creating automatically on {self.timestamp_column}")
         
         success = self.create_timestamp_index()
         
         if success:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Successfully created timestamp index on {self.timestamp_column}")
+                logger.info(f"[OptimizedFeatherQuery] Successfully created timestamp index on {self.timestamp_column}")
         else:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Failed to create timestamp index on {self.timestamp_column}")
+                logger.info(f"[OptimizedFeatherQuery] Failed to create timestamp index on {self.timestamp_column}")
         
         return success
     
@@ -1364,8 +1998,8 @@ class OptimizedFeatherQuery:
         """
         if not self.timestamp_column and not self.timestamp_columns:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Quick count skipped: no timestamp columns")
-            return -1  # Return -1 to indicate "can't check" (not "has 1 record")
+                logger.info(f"[OptimizedFeatherQuery] Quick count skipped: no timestamp columns")
+            return -1 # Return -1 to indicate "can't check" (not "has 1 record")
         
         def count_operation(connection):
             try:
@@ -1413,22 +2047,10 @@ class OptimizedFeatherQuery:
                 result = cursor.fetchone()
                 
                 count = result[0] if result else 0
-                
-                # Debug logging for troubleshooting
-                if self.debug_mode and count == 0:
-                    # Double-check: try to get total record count
-                    cursor.execute(f"SELECT COUNT(*) FROM {self.loader.current_table}")
-                    total = cursor.fetchone()[0]
-                    if total > 0:
-                        print(f"[OptimizedFeatherQuery] WARNING: Quick count returned 0 but table has {total} records")
-                        print(f"[OptimizedFeatherQuery]   Range: {start_time} to {end_time}")
-                        print(f"[OptimizedFeatherQuery]   Format: {self.timestamp_format}")
-                        print(f"[OptimizedFeatherQuery]   Columns: {self.timestamp_columns if self.timestamp_columns else [self.timestamp_column]}")
-                
                 return count
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Quick count failed for range {start_time} to {end_time}: {e}")
+                    logger.info(f"[OptimizedFeatherQuery] Quick count failed for range {start_time} to {end_time}: {e}")
                 # Fallback: return 1 to force full query (safer than assuming empty)
                 return 1
         
@@ -1441,7 +2063,7 @@ class OptimizedFeatherQuery:
             )
         except Exception as e:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] Quick count error: {e}")
+                logger.info(f"[OptimizedFeatherQuery] Quick count error: {e}")
             # Fallback: return 1 to force full query (safer than assuming empty)
             return 1
     
@@ -1494,7 +2116,7 @@ class OptimizedFeatherQuery:
         
         if not uncached_ranges:
             if self.debug_mode:
-                print(f"[OptimizedFeatherQuery] All {len(time_ranges)} ranges found in cache")
+                logger.info(f"[OptimizedFeatherQuery] All {len(time_ranges)} ranges found in cache")
             return results
         
         # Detect groups of consecutive ranges
@@ -1502,7 +2124,7 @@ class OptimizedFeatherQuery:
         self._batch_stats['total_groups_detected'] += len(consecutive_groups)
         
         if self.debug_mode:
-            print(f"[OptimizedFeatherQuery] Detected {len(consecutive_groups)} consecutive groups from {len(uncached_ranges)} uncached ranges")
+            logger.info(f"[OptimizedFeatherQuery] Detected {len(consecutive_groups)} consecutive groups from {len(uncached_ranges)} uncached ranges")
         
         # Process each group
         for group in consecutive_groups:
@@ -1512,7 +2134,7 @@ class OptimizedFeatherQuery:
                 overall_end = max(r[1] for r in group)
                 
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Batch querying {len(group)} consecutive ranges")
+                    logger.info(f"[OptimizedFeatherQuery] Batch querying {len(group)} consecutive ranges")
                 
                 all_records = self.query_time_range(overall_start, overall_end)
                 self._batch_stats['total_queries_executed'] += 1
@@ -1548,7 +2170,7 @@ class OptimizedFeatherQuery:
                 start_time, end_time = time_range
                 
                 if self.debug_mode:
-                    print(f"[OptimizedFeatherQuery] Querying single range individually")
+                    logger.info(f"[OptimizedFeatherQuery] Querying single range individually")
                 
                 results[time_range] = self.query_time_range(start_time, end_time)
                 self._batch_stats['total_queries_executed'] += 1
@@ -1665,7 +2287,34 @@ class OptimizedFeatherQuery:
 
 
 class WindowQueryManager:
-    """
+    """Per-window orchestration across all feathers in a wing.
+
+    Inputs
+    ------
+    A :class:`TimeWindow` with ``start_time``/``end_time``, plus a dict
+    of ``{feather_id: OptimizedFeatherQuery}`` and optional identity
+    filters from :class:`FilterConfig`.
+
+    Outputs
+    -------
+    The same TimeWindow populated with ``records_by_feather``,
+    post-identity-filter. Records that fail the identity filter are
+    dropped here (not in the engine's correlation step).
+
+    Invariants
+    ----------
+    * Per-feather query results may be cached in
+      ``OptimizedFeatherQuery`` — the manager doesn't cache itself.
+    * Identity filters apply to records as they're added, not after.
+
+    Threading
+    ---------
+    Currently single-threaded. Phase 9 enables thread-pool parallelism
+    over windows; ``OptimizedFeatherQuery`` is the sharded resource so
+    each worker thread gets its own feather-query instance per feather.
+
+    Original docstring follows:
+    -------------------------
     Manages efficient querying of feathers for time windows.
     
     Coordinates queries across multiple feathers and provides caching.
@@ -1697,7 +2346,7 @@ class WindowQueryManager:
         total_feathers = len(self.feather_queries)
         feathers_queried = 0
         total_records = 0
-        total_filtered = 0  # Track filtered records
+        total_filtered = 0 # Track filtered records
         query_start_time = time.time()
         
         # Report query start
@@ -1717,7 +2366,7 @@ class WindowQueryManager:
                 records = query_manager.query_time_range(window.start_time, window.end_time)
                 
                 # Cache results (limit cache size)
-                if len(self.query_cache) < 1000:  # Limit cache size
+                if len(self.query_cache) < 1000: # Limit cache size
                     self.query_cache[cache_key] = records
                 
                 self.cache_misses += 1
@@ -1730,7 +2379,7 @@ class WindowQueryManager:
                 total_filtered += filtered_count
                 
                 if filtered_count > 0 and self.debug_mode:
-                    print(f"[WindowQueryManager] Filtered {filtered_count}/{original_count} records from {feather_id}")
+                    logger.info(f"[WindowQueryManager] Filtered {filtered_count}/{original_count} records from {feather_id}")
             
             # Add records to window
             if records:
@@ -1754,7 +2403,7 @@ class WindowQueryManager:
         
         # Log filter statistics
         if total_filtered > 0:
-            print(f"[WindowQueryManager] Identity filters excluded {total_filtered:,} records from window {window.window_id}")
+            logger.info(f"[WindowQueryManager] Identity filters excluded {total_filtered:,} records from window {window.window_id}")
         
         return window
     
@@ -1826,7 +2475,7 @@ class WindowQueryManager:
         to avoid redundant string operations in the window loop.
         """
         if not self.filters or not self.filters.identity_filters:
-            return False  # No filters, keep all records
+            return False # No filters, keep all records
         
         # Use global CORE_IDENTITY_FIELDS for performance
         identity_values = []
@@ -1849,7 +2498,7 @@ class WindowQueryManager:
             # Check if pattern matches any identity value
             for value in identity_values:
                 if fnmatch.fnmatch(value, pattern_cmp):
-                    return False  # Match found, keep record
+                    return False # Match found, keep record
         
         # No match found in any pattern, filter out record (exclude)
         return True
@@ -1913,9 +2562,47 @@ class WindowQueryManager:
 
 
 class TimeWindowScanningEngine(BaseCorrelationEngine):
-    """
+    """Time-Window Scanning Correlation Engine — public engine entry point.
+
+    Inputs
+    ------
+    * A list of :class:`Wing` configurations (loaded from JSON via
+      ``DefaultWingsLoader`` or a case directory).
+    * A :class:`PipelineConfig` describing feather paths + output dir.
+    * Optional :class:`FilterConfig` for time-period and identity filters.
+
+    Outputs
+    -------
+    Per-wing :class:`CorrelationMatch` lists. Each match groups records
+    that share a normalized identity within the wing's time window.
+    Diagnostics are exposed via the ``_last_window_correlation_stats``
+    dict (records_in / no_identity / parse_cache_hits / below_threshold
+    / matches_emitted) so callers can verify no evidence was dropped.
+
+    Invariants
+    ----------
+    * Identity normalization uses :func:`identity_grouping.identity_key`
+      so the engine, GUI viewers, and identity-semantic phase agree on
+      what constitutes the same artifact.
+    * Timestamp field probe order comes from ``StandardFields``
+      (config/standard_fields/timestamps.json) — real-activity
+      timestamps always beat parser bookkeeping fields.
+    * Multi-timestamp JSON columns declared in feather_schemas.json
+      (or stamped by ``FeatherWriter``) are fanned out so every
+      timestamp produces a correlation event.
+
+    Threading
+    ---------
+    Currently single-threaded. Phase 9 adds opt-in parallelism via
+    ``TimeWindowScanningConfig.parallel_strategy`` (``'threads'`` for
+    I/O-bound, ``'processes'`` for CPU-bound). Per-feather query
+    caches are already lock-protected; per-thread SQLite connections
+    are the final piece.
+
+    Original docstring follows:
+    -------------------------
     Time-Window Scanning Correlation Engine.
-    
+
     This engine scans through time systematically in fixed intervals to find correlations.
     Provides O(N) performance compared to O(N²) anchor-based approach.
     
@@ -1943,6 +2630,83 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         )
         result = engine.execute([wing])
     """
+    
+    # Performance Optimization Constants
+    _RE_VERSION_NUMBERS = re.compile(r'\s*v?\d+[\d.]*')
+    _RE_PARENTHESES = re.compile(r'\s*\(.*?\)')
+    _RE_BRACKETS = re.compile(r'\s*\[.*?\]')
+    _RE_NON_ALPHA = re.compile(r'[^a-z\s]')
+    # Executable / shortcut / launcher extensions only.
+    # Why: stripping data extensions (.txt/.log/.ini/.cfg) collapsed distinct raw
+    # identities (e.g., "foo.exe" + "foo.txt") to the same normalized key, which
+    # caused the dedup signature in _correlate_window_records to drop legitimate
+    # records as "duplicates" within the same feather + timestamp.
+    _IDENTITY_EXTENSIONS = frozenset([
+        '.exe', '.dll', '.sys', '.drv', '.ocx', '.cpl', '.scr',
+        '.msi', '.msp', '.mst', '.bat', '.cmd', '.ps1', '.vbs',
+        '.js', '.jse', '.wsf', '.wsh', '.lnk', '.pf',
+        '.pif', '.com', '.jar'
+    ])
+    _IDENTITY_NOISE_WORDS = frozenset(['the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for'])
+    # Per-record timestamp fields, probed in priority order. Real-activity
+    # timestamps (event_time, last_executed, …) come first; parser
+    # bookkeeping (parsed_at, inserted_at) is forced to the back. Loaded
+    # from config/standard_fields/timestamps.json so adding new parser
+    # columns means editing JSON, not code. See utils/standard_fields.py.
+    try:
+        from utils.standard_fields import StandardFields as _SF # type: ignore
+        _TIMESTAMP_FIELDS = _SF.all_timestamp_fields(priority='real_first')
+    except Exception: # pragma: no cover - defensive fallback
+        # Real per-row observation timestamps only. Feather-bookkeeping
+        # columns (parsed_at / inserted_at / created_at) are NOT in this
+        # list: they record when the feather was generated, not when the
+        # artifact was observed, so treating them as a row timestamp
+        # would assign a misleading "observation moment" to every row.
+        _TIMESTAMP_FIELDS = (
+            'timestamp', 'event_time', 'last_executed', 'last_execution',
+            'created_time', 'modified_time', 'accessed_time',
+            'EventTimestampUTC', 'usn_timestamp', 'deletion_time',
+            'install_date', 'link_date',
+        )
+
+    # Tables whose rows carry MULTIPLE timestamps (typically packed into a
+    # JSON list column). Populated lazily from
+    # correlation_engine/config/feather_schemas.json on first access.
+    # Adding a new multi-timestamp table = one JSON edit, no code change.
+    # Kept as a class attribute for back-compat with code that referenced
+    # it directly; resolved through _multi_timestamp_fields_map() below.
+    _MULTI_TIMESTAMP_FIELDS_CACHED: Optional[Dict[str, List[str]]] = None
+
+    @classmethod
+    def _multi_timestamp_fields_map(cls) -> Dict[str, List[str]]:
+        """Return ``{table_name: [json_column, ...]}`` from feather_schemas.json.
+
+        Fallback to the previously-hardcoded Prefetch mapping if the
+        schema file is unavailable, so the engine still works with no
+        config installed.
+        """
+        if cls._MULTI_TIMESTAMP_FIELDS_CACHED is not None:
+            return cls._MULTI_TIMESTAMP_FIELDS_CACHED
+        try:
+            from ..config import feather_schemas as _fs
+            mapping: Dict[str, List[str]] = {}
+            for table in _fs.all_declared_tables():
+                cols = [c.get('column') for c in _fs.multi_timestamp_json_columns(table) if c.get('column')]
+                if cols:
+                    mapping[table] = cols
+            cls._MULTI_TIMESTAMP_FIELDS_CACHED = mapping
+            return mapping
+        except Exception as _e:
+            logger.warning("feather_schemas unavailable (%s); using built-in fallback", _e)
+            cls._MULTI_TIMESTAMP_FIELDS_CACHED = {'prefetch_data': ['run_times']}
+            return cls._MULTI_TIMESTAMP_FIELDS_CACHED
+
+    # Back-compat alias. Resolved on first access via the classmethod
+    # above; assignment to this name is preserved for any external code
+    # that imports it directly.
+    @classmethod
+    def MULTI_TIMESTAMP_FIELDS(cls) -> Dict[str, List[str]]:
+        return cls._multi_timestamp_fields_map()
     
     @classmethod
     def create_with_config(cls, 
@@ -1985,11 +2749,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Log any warnings or incompatibilities
         if adaptation_result.warnings:
             for warning in adaptation_result.warnings:
-                print(f"[TimeWindow] Wing Adaptation Warning: {warning}")
+                logger.info(f"[TimeWindow] Wing Adaptation Warning: {warning}")
         
         if adaptation_result.incompatibilities:
             for incompatibility in adaptation_result.incompatibilities:
-                print(f"[TimeWindow] Wing Adaptation Error: {incompatibility}")
+                logger.info(f"[TimeWindow] Wing Adaptation Error: {incompatibility}")
         
         return engine
     
@@ -2039,10 +2803,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                        f"profiling={'enabled' if self.performance_config.enable_profiling else 'disabled'}, "
                        f"empty_window_skipping={'enabled' if self.performance_config.enable_empty_window_skipping else 'disabled'}")
         
-        # Initialize centralized score configuration manager
+        # Initialize centralized score configuration manager via the
+        # integrated façade so all external entry points share one route.
         # Requirements: 7.2, 8.3
-        from ..config.score_configuration_manager import ScoreConfigurationManager
-        self.score_config_manager = ScoreConfigurationManager()
+        from ..config.integrated_configuration_manager import IntegratedConfigurationManager
+        self.score_config_manager = IntegratedConfigurationManager().score_config_manager
         
         # Handle configuration - can be pipeline config or TimeWindowScanningConfig
         if isinstance(config, TimeWindowScanningConfig):
@@ -2064,6 +2829,22 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Store last execution result
         self.last_result = None
+
+        # Engine-level evidence accounting accumulator. Populated by
+        # every call to _correlate_window_records; surfaced as a single
+        # summary block at the end of execute(). Provides the
+        # "no-evidence-left-over" guarantee — every record either lands
+        # in a high-/low-confidence match, in a drop bucket with a
+        # reason, or gets attached as timeless-feather enrichment.
+        self._evidence_accounting: Dict[str, Any] = {
+            'records_in': 0,
+            'records_no_identity': 0,
+            'below_threshold_skipped': 0,
+            'low_confidence_emitted': 0,
+            'high_confidence_emitted': 0,
+            'drop_buckets': {},
+            'timeless_attached': 0,
+        }
         
         # Progress tracking system
         self.progress_tracker = ProgressTracker(debug_mode=debug_mode)
@@ -2115,13 +2896,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             if manager.config_dir.exists():
                 logger.info(f"[Time-Window Engine] Semantic config directory found: {manager.config_dir}")
                 if manager.default_rules_path.exists():
-                    logger.info(f"[Time-Window Engine]   Default rules file: available")
+                    logger.info(f"[Time-Window Engine] Default rules file: available")
                 else:
-                    logger.warning(f"[Time-Window Engine]   Default rules file: missing")
+                    logger.warning(f"[Time-Window Engine] Default rules file: missing")
                 if manager.custom_rules_path.exists():
-                    logger.info(f"[Time-Window Engine]   Custom rules file: available")
+                    logger.info(f"[Time-Window Engine] Custom rules file: available")
                 else:
-                    logger.info(f"[Time-Window Engine]   Custom rules file: not found (optional)")
+                    logger.info(f"[Time-Window Engine] Custom rules file: not found (optional)")
             else:
                 logger.warning(f"[Time-Window Engine] Semantic config directory not found: {manager.config_dir}")
         
@@ -2135,13 +2916,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             if manager.config_dir.exists():
                 logger.info(f"[Time-Window Engine] Config directory: {manager.config_dir}")
                 if manager.default_rules_path.exists():
-                    logger.info(f"[Time-Window Engine]   - Default rules: {manager.default_rules_path.name}")
+                    logger.info(f"[Time-Window Engine] - Default rules: {manager.default_rules_path.name}")
                 if manager.custom_rules_path.exists():
-                    logger.info(f"[Time-Window Engine]   - Custom rules: {manager.custom_rules_path.name}")
+                    logger.info(f"[Time-Window Engine] - Custom rules: {manager.custom_rules_path.name}")
         
         # Memory management and streaming
         self.memory_manager: Optional[WindowMemoryManager] = None
-        self.memory_monitor: Optional['MemoryMonitor'] = None  # Task 15: Memory monitoring for streaming mode
+        self.memory_monitor: Optional['MemoryMonitor'] = None # Task 15: Memory monitoring for streaming mode
         self.streaming_writer: Optional[StreamingMatchWriter] = None
         self.streaming_mode_active = False
         # Task 21: Apply memory threshold from performance config (Requirement 8.4)
@@ -2150,6 +2931,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Output directory for streaming mode (set by pipeline)
         self._output_dir: Optional[str] = None
         self._execution_id: Optional[int] = None
+        
+        # Identity Normalization Cache (Performance Optimization)
+        self._identity_cache: Dict[str, str] = {}
+        self._identity_cache_max = 50000
         
         # Parallel processing configuration
         # Task 21: Apply parallel processing config from performance config (Requirement 8.2)
@@ -2488,7 +3273,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Auto-detect optimal worker count
             import os
             cpu_count = os.cpu_count() or 4
-            self.max_workers = min(cpu_count * 2, 8)  # Cap at 8 for database I/O
+            self.max_workers = min(cpu_count * 2, 8) # Cap at 8 for database I/O
         
         self.parallel_batch_size = batch_size
         
@@ -2503,7 +3288,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 )
                 
                 if self.debug_mode:
-                    print(f"[TimeWindow] Parallel coordinator enabled: {self.max_workers} workers, "
+                    logger.info(f"[TimeWindow] Parallel coordinator enabled: {self.max_workers} workers, "
                           f"memory_limit={self.memory_limit_mb}MB")
             else:
                 # Use existing ParallelWindowProcessor
@@ -2515,13 +3300,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 )
                 
                 if self.debug_mode:
-                    print(f"[TimeWindow] Parallel processing enabled: {self.max_workers} workers, "
+                    logger.info(f"[TimeWindow] Parallel processing enabled: {self.max_workers} workers, "
                           f"batch_size={batch_size}, load_balancing={enable_load_balancing}")
         else:
             self.parallel_processor = None
             self.parallel_coordinator = None
             if self.debug_mode:
-                print("[TimeWindow] Parallel processing disabled")
+                logger.info("[TimeWindow] Parallel processing disabled")
     
     def get_parallel_processing_stats(self) -> Optional[ParallelProcessingStats]:
         """
@@ -2593,19 +3378,19 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             raise ValueError("No wing configurations provided")
         
         # Always print which engine is being used
-        print("\n" + "="*70)
-        print("🔧 CORRELATION ENGINE: Time-Window Scanning")
-        print("="*70)
-        print(f"[Time-Window Engine] 🎯 Target: {len(wing_configs)} wing(s)")
+        logger.info("\n" + "="*70)
+        logger.info("CORRELATION ENGINE: Time-Window Scanning")
+        logger.info("="*70)
+        logger.info(f"[Time-Window Engine] Target: {len(wing_configs)} wing(s)")
         window_display = self._format_time_window(self.window_size_minutes)
-        print(f"[Time-Window Engine] ⚙️ Window: {window_display}, Interval: {self.scanning_interval_minutes} min")
+        logger.info(f"[Time-Window Engine] Window: {window_display}, Interval: {self.scanning_interval_minutes} min")
         
         if self.enable_parallel_processing:
-            print(f"[Time-Window Engine] 🔄 Mode: Parallel processing ({self.max_workers} workers)")
+            logger.info(f"[Time-Window Engine] Mode: Parallel processing ({self.max_workers} workers)")
         else:
-            print(f"[Time-Window Engine] ➡️ Mode: Sequential processing")
+            logger.info(f"[Time-Window Engine] -> Mode: Sequential processing")
         
-        wing = wing_configs[0]  # Typically one wing per execution
+        wing = wing_configs[0] # Typically one wing per execution
         
         # Get feather paths from wing
         feather_paths = self._extract_feather_paths(wing)
@@ -2647,8 +3432,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         self._execution_id = execution_id
         
         if self.debug_mode:
-            print(f"[Time-Window Engine] Output directory set: {output_dir}")
-            print(f"[Time-Window Engine] Execution ID: {execution_id}")
+            logger.info(f"[Time-Window Engine] Output directory set: {output_dir}")
+            logger.info(f"[Time-Window Engine] Execution ID: {execution_id}")
     
     def _should_run_identity_semantic_phase(self) -> bool:
         """
@@ -2758,15 +3543,15 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Identity Semantic Phase components not available
             logger.warning(f"[Time-Window Engine] Identity Semantic Phase not available: {e}")
             if self.debug_mode:
-                print(f"[Time-Window Engine] Identity Semantic Phase import failed: {e}")
+                logger.info(f"[Time-Window Engine] Identity Semantic Phase import failed: {e}")
             return correlation_results
             
         except Exception as e:
             # Error during Identity Semantic Phase execution
             # Log error but return original results (graceful degradation)
             logger.error(f"[Time-Window Engine] Identity Semantic Phase failed: {e}")
-            print(f"[Time-Window Engine] WARNING: Identity Semantic Phase failed: {e}")
-            print(f"[Time-Window Engine] Continuing with original correlation results")
+            logger.info(f"[Time-Window Engine] WARNING: Identity Semantic Phase failed: {e}")
+            logger.info(f"[Time-Window Engine] Continuing with original correlation results")
             return correlation_results
     
     def execute_wing(self, wing: Any, feather_paths: Dict[str, str]) -> Any:
@@ -2796,13 +3581,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             CorrelationResult with matches found
         """
         start_time = time.time()
-        total_windows = 0  # Initialize early to avoid UnboundLocalError in finally block
+        total_windows = 0 # Initialize early to avoid UnboundLocalError in finally block
         
         import sys
         
         def log(msg):
             """Print with immediate flush for visibility"""
-            print(msg)
+            logger.info(msg)
             sys.stdout.flush()
         
         # Task 23: Start profiling the entire scan operation (Requirements 1.1, 1.2)
@@ -2811,16 +3596,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             self.profiler.record_memory_checkpoint("scan_start")
         
         # Requirement 6.1: Log time range at engine start
-        log(f"\n[Time-Window Engine] 🚀 Starting correlation...")
+        log(f"\n[Time-Window Engine] Starting correlation...")
         log(f"[Time-Window Engine] Wing: {wing.wing_name}")
         log(f"[Time-Window Engine] Feathers: {len(feather_paths)}")
         
         # Show feather paths for debugging
-        for fid, fpath in list(feather_paths.items())[:3]:  # Show first 3
+        for fid, fpath in list(feather_paths.items())[:3]: # Show first 3
             path_display = fpath[:50] if len(fpath) > 50 else fpath
-            log(f"[Time-Window Engine]   • {fid}: {path_display}...")
+            log(f"[Time-Window Engine] • {fid}: {path_display}...")
         if len(feather_paths) > 3:
-            log(f"[Time-Window Engine]   ... and {len(feather_paths) - 3} more")
+            log(f"[Time-Window Engine] ... and {len(feather_paths) - 3} more")
         
         result = CorrelationResult(
             wing_id=wing.wing_id,
@@ -2840,14 +3625,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 'memory_limit_mb': self.memory_limit_mb,
                 'feather_count': len(feather_paths)
             })
-            log(f"[Time-Window Engine] Performance monitor started ✓")
+            log(f"[Time-Window Engine] Performance monitor started [OK]")
         except Exception as perf_error:
             log(f"[Time-Window Engine] Performance monitor error: {perf_error}")
             performance_report = None
         
         try:
             # Step 1: Adapt wing configuration for time-window scanning
-            log(f"[Time-Window Engine] 📋 Step 1: Adapting wing configuration...")
+            log(f"[Time-Window Engine] Step 1: Adapting wing configuration...")
             with PhaseTimer(self.performance_monitor, ProcessingPhase.INITIALIZATION) as timer:
                 adaptation_result = self.wing_adapter.adapt_wing_configuration(wing, self.scanning_config)
                 
@@ -2857,22 +3642,22 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 self.scanning_interval_minutes = self.scanning_config.scanning_interval_minutes
                 
                 if adaptation_result.success:
-                    print(f"[Time-Window Engine]   ✓ Configuration adapted successfully")
+                    logger.info(f"[Time-Window Engine] [OK] Configuration adapted successfully")
                     sys.stdout.flush()
                 else:
-                    print(f"[Time-Window Engine]   ❌ Configuration adaptation failed")
+                    logger.info(f"[Time-Window Engine] [ERROR] Configuration adaptation failed")
                     sys.stdout.flush()
                 
                 # Log adaptation warnings
                 if adaptation_result.warnings and self.debug_mode:
                     for warning in adaptation_result.warnings:
-                        print(f"[Time-Window Engine]   ⚠️ Warning: {warning}")
+                        logger.info(f"[Time-Window Engine] [WARN] Warning: {warning}")
                         result.warnings.append(f"Configuration: {warning}")
                 
                 # Log incompatibilities as errors
                 if adaptation_result.incompatibilities:
                     for incompatibility in adaptation_result.incompatibilities:
-                        print(f"[Time-Window Engine]   ❌ Error: {incompatibility}")
+                        logger.info(f"[Time-Window Engine] [ERROR] Error: {incompatibility}")
                         result.errors.append(f"Configuration: {incompatibility}")
                         timer.add_error()
                     
@@ -2881,7 +3666,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         return result
                 
                 if self.debug_mode:
-                    print(f"[Time-Window Engine]   📊 Feather priorities: {adaptation_result.feather_priority_mapping}")
+                    logger.info(f"[Time-Window Engine] Feather priorities: {adaptation_result.feather_priority_mapping}")
             
             # Set execution context for semantic rule evaluation
             wing_semantic_rules = getattr(wing, 'semantic_rules', [])
@@ -2891,10 +3676,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 wing_semantic_rules=wing_semantic_rules
             )
             if self.debug_mode:
-                print(f"[Time-Window Engine]   🏷️ Semantic context: wing={wing.wing_id}, rules={len(wing_semantic_rules)}")
+                logger.info(f"[Time-Window Engine] Semantic context: wing={wing.wing_id}, rules={len(wing_semantic_rules)}")
             
             # Step 2: Initialize memory management and error coordination
-            print(f"[Time-Window Engine] 🧠 Step 2: Initializing memory management...")
+            logger.info(f"[Time-Window Engine] Step 2: Initializing memory management...")
             sys.stdout.flush()
             with PhaseTimer(self.performance_monitor, ProcessingPhase.INITIALIZATION) as timer:
                 self.memory_manager = WindowMemoryManager(
@@ -2923,13 +3708,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     "memory_manager", self.memory_manager
                 )
                 
-                print(f"[Time-Window Engine]   ✓ Memory limit: {self.scanning_config.memory_limit_mb} MB")
-                print(f"[Time-Window Engine]   ✓ Memory monitor initialized")
-                print(f"[Time-Window Engine]   ✓ Error handling initialized")
+                logger.info(f"[Time-Window Engine] [OK] Memory limit: {self.scanning_config.memory_limit_mb} MB")
+                logger.info(f"[Time-Window Engine] [OK] Memory monitor initialized")
+                logger.info(f"[Time-Window Engine] [OK] Error handling initialized")
                 sys.stdout.flush()
             
             # Step 3: Load and initialize feather databases
-            print(f"[Time-Window Engine] 📂 Step 3: Loading feather databases...")
+            logger.info(f"[Time-Window Engine] Step 3: Loading feather databases...")
             sys.stdout.flush()
             with PhaseTimer(self.performance_monitor, ProcessingPhase.FEATHER_LOADING) as timer:
                 self._load_feathers(wing, feather_paths, result)
@@ -2939,13 +3724,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 if self._profiling_enabled:
                     self.profiler.record_memory_checkpoint("after_feather_loading")
                 
-                print(f"[Time-Window Engine]   ✓ Loaded {result.feathers_processed} feathers")
+                logger.info(f"[Time-Window Engine] [OK] Loaded {result.feathers_processed} feathers")
                 sys.stdout.flush()
                 
                 if result.errors:
-                    print(f"[Time-Window Engine]   ⚠️ {len(result.errors)} feather loading errors")
-                    for err in result.errors[:3]:  # Show first 3 errors
-                        print(f"[Time-Window Engine]     • {err}")
+                    logger.info(f"[Time-Window Engine] [WARN] {len(result.errors)} feather loading errors")
+                    for err in result.errors[:3]: # Show first 3 errors
+                        logger.info(f"[Time-Window Engine] • {err}")
                     sys.stdout.flush()
                     timer.error_count = len(result.errors)
                     return result
@@ -2956,7 +3741,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         result.feather_metadata.get(fid, {}).get('total_records', 0) 
                         for fid in self.feather_queries.keys()
                     )
-                    print(f"[Time-Window Engine]   📊 Total records: {total_records:,}")
+                    logger.info(f"[Time-Window Engine] Total records: {total_records:,}")
                     
                     # Show feather types
                     feather_types = {}
@@ -2965,14 +3750,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         feather_types[artifact_type] = feather_types.get(artifact_type, 0) + 1
                     
                     type_summary = ", ".join([f"{count} {type_name}" for type_name, count in feather_types.items()])
-                    print(f"[Time-Window Engine]   📋 Types: {type_summary}")
+                    logger.info(f"[Time-Window Engine] Types: {type_summary}")
                     sys.stdout.flush()
                 
                 # Display timestamp columns detected for each feather
-                print(f"\n[Time-Window Engine]   ⏰ Timestamp Columns Detected:")
-                print(f"[Time-Window Engine]   {'='*80}")
-                print(f"[Time-Window Engine]   {'Feather':<25} {'Timestamp Columns':<55}")
-                print(f"[Time-Window Engine]   {'-'*80}")
+                logger.info(f"\n[Time-Window Engine] Timestamp Columns Detected:")
+                logger.info(f"[Time-Window Engine] {'='*80}")
+                logger.info(f"[Time-Window Engine] {'Feather':<25} {'Timestamp Columns':<55}")
+                logger.info(f"[Time-Window Engine] {'-'*80}")
                 
                 for fid, query_manager in self.feather_queries.items():
                     # Get timestamp columns
@@ -2983,7 +3768,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                             cols_display = f"{', '.join(ts_cols[:3])} (+{len(ts_cols)-3} more)"
                         else:
                             cols_display = ', '.join(ts_cols)
-                        print(f"[Time-Window Engine]   {fid:<25} {cols_display:<55}")
+                        logger.info(f"[Time-Window Engine] {fid:<25} {cols_display:<55}")
                         
                         # DEBUG: Show sample timestamp values to verify data exists
                         if self.debug_mode and hasattr(query_manager, 'loader') and query_manager.loader:
@@ -2993,22 +3778,22 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                                 table = query_manager.loader.current_table
                                 
                                 # Check each timestamp column for non-NULL values
-                                for ts_col in ts_cols[:3]:  # Check first 3 columns
+                                for ts_col in ts_cols[:3]: # Check first 3 columns
                                     cursor.execute(f"SELECT {ts_col} FROM {table} WHERE {ts_col} IS NOT NULL LIMIT 1")
                                     sample = cursor.fetchone()
                                     if sample:
-                                        print(f"[Time-Window Engine]     └─ {ts_col}: {sample[0]} (sample)")
+                                        logger.info(f"[Time-Window Engine] └─ {ts_col}: {sample[0]} (sample)")
                                     else:
-                                        print(f"[Time-Window Engine]     └─ {ts_col}: ⚠️  ALL NULL")
+                                        logger.info(f"[Time-Window Engine] └─ {ts_col}: [WARN] ALL NULL")
                             except Exception as e:
                                 if self.debug_mode:
-                                    print(f"[Time-Window Engine]     └─ Could not sample: {e}")
+                                    logger.info(f"[Time-Window Engine] └─ Could not sample: {e}")
                     elif hasattr(query_manager, 'timestamp_column') and query_manager.timestamp_column:
-                        print(f"[Time-Window Engine]   {fid:<25} {query_manager.timestamp_column:<55}")
+                        logger.info(f"[Time-Window Engine] {fid:<25} {query_manager.timestamp_column:<55}")
                     else:
-                        print(f"[Time-Window Engine]   {fid:<25} {'⚠️  None detected':<55}")
+                        logger.info(f"[Time-Window Engine] {fid:<25} {'[WARN] None detected':<55}")
                 
-                print(f"[Time-Window Engine]   {'='*80}\n")
+                logger.info(f"[Time-Window Engine] {'='*80}\n")
                 sys.stdout.flush()
                 
                 # Register error handling components with coordinator
@@ -3066,22 +3851,28 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Note: WindowDataCollector expects feather_loader and error_handler
                 # Create error handler for Phase 1
                 phase1_error_handler = Phase1ErrorHandler(debug_mode=self.debug_mode)
+                # Expose on the engine so PipelineExecutor can collect its
+                # summary into the evidence_accounting surface. Currently
+                # remains empty because the WindowDataCollector path is
+                # commented out below, but the wiring is in place for when
+                # that path is re-enabled.
+                self.phase1_error_handler = phase1_error_handler
                 
                 # WindowDataCollector is not currently used in the simplified architecture
                 # The window_query_manager handles data collection directly
                 # Commenting out for now to avoid initialization errors
                 # self.window_data_collector = WindowDataCollector(
-                #     feather_loader=None,  # Would need to pass appropriate loader
-                #     error_handler=phase1_error_handler,
-                #     debug_mode=self.debug_mode
+                # feather_loader=None, # Would need to pass appropriate loader
+                # error_handler=phase1_error_handler,
+                # debug_mode=self.debug_mode
                 # )
                 
-                print(f"[Time-Window Engine]   ✓ Two-phase architecture initialized")
-                print(f"[Time-Window Engine]   📁 Correlation DB: {correlation_db_path}")
+                logger.info(f"[Time-Window Engine] [OK] Two-phase architecture initialized")
+                logger.info(f"[Time-Window Engine] Correlation DB: {correlation_db_path}")
                 sys.stdout.flush()
             
             # Step 4: Determine overall time range for scanning
-            print(f"[Time-Window Engine] ⏰ Step 4: Determining time range...")
+            logger.info(f"[Time-Window Engine] Step 4: Determining time range...")
             sys.stdout.flush()
             with PhaseTimer(self.performance_monitor, ProcessingPhase.TIME_RANGE_DETERMINATION) as timer:
                 start_epoch, end_epoch = self._determine_time_range(result)
@@ -3090,13 +3881,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 duration_hours = (end_epoch - start_epoch).total_seconds() / 3600
                 duration_days = (end_epoch - start_epoch).total_seconds() / 86400
                 
-                print(f"[Time-Window Engine]   ✓ Time range determined successfully")
-                print(f"[Time-Window Engine] 🕐 Time Range: {start_epoch.strftime('%Y-%m-%d %H:%M:%S')} to {end_epoch.strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"[Time-Window Engine]   📅 Data Span: {duration_days:.1f} days ({duration_hours:.1f} hours)")
+                logger.info(f"[Time-Window Engine] [OK] Time range determined successfully")
+                logger.info(f"[Time-Window Engine] Time Range: {start_epoch.strftime('%Y-%m-%d %H:%M:%S')} to {end_epoch.strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.info(f"[Time-Window Engine] Data Span: {duration_days:.1f} days ({duration_hours:.1f} hours)")
                 
                 # Requirement 6.2: Log time window generation summary
                 estimated_windows = self._calculate_total_windows(start_epoch, end_epoch)
-                print(f"[Time-Window Engine] 📊 Generated {estimated_windows:,} time windows ({self.window_size_minutes} minutes each)")
+                logger.info(f"[Time-Window Engine] Generated {estimated_windows:,} time windows ({self.window_size_minutes} minutes each)")
                 
                 # Calculate and display estimated processing time with improved accuracy
                 # Base estimate depends on dataset size and configuration
@@ -3112,41 +3903,41 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     # - Medium windows (100-1000 records): ~2000 records/sec
                     # - Large windows (>1000 records): ~1000 records/sec (correlation overhead)
                     if avg_records_per_window < 100:
-                        processing_rate = 5000  # Fast processing for sparse data
-                        base_time_per_window = 0.02  # 20ms overhead per window
+                        processing_rate = 5000 # Fast processing for sparse data
+                        base_time_per_window = 0.02 # 20ms overhead per window
                     elif avg_records_per_window < 1000:
                         processing_rate = 2000
-                        base_time_per_window = 0.05  # 50ms overhead
+                        base_time_per_window = 0.05 # 50ms overhead
                     else:
                         processing_rate = 1000
-                        base_time_per_window = 0.1  # 100ms overhead
+                        base_time_per_window = 0.1 # 100ms overhead
                     
                     # Calculate time based on records + overhead
                     estimated_seconds = (total_records / processing_rate) + (estimated_windows * base_time_per_window)
                     
                     # Add overhead for streaming mode
                     if self.streaming_mode_active:
-                        estimated_seconds *= 1.2  # 20% overhead for database writes
+                        estimated_seconds *= 1.2 # 20% overhead for database writes
                     
                     # Add overhead for parallel processing coordination
                     if self.enable_parallel_processing:
-                        estimated_seconds *= 0.7  # 30% speedup from parallelization
+                        estimated_seconds *= 0.7 # 30% speedup from parallelization
                     
                     estimated_processing_minutes = estimated_seconds / 60
                 else:
                     # Fallback: use simple per-window estimate
-                    estimated_processing_minutes = (estimated_windows * 0.1) / 60  # 100ms per window
+                    estimated_processing_minutes = (estimated_windows * 0.1) / 60 # 100ms per window
                 
                 estimated_time_str = self._format_time_duration(estimated_processing_minutes)
                 
                 # Show estimate with context
                 if estimated_processing_minutes < 1:
-                    print(f"[Time-Window Engine] ⏱️ Estimated Time: ~{estimated_seconds:.1f} seconds")
+                    logger.info(f"[Time-Window Engine] Estimated Time: ~{estimated_seconds:.1f} seconds")
                 elif estimated_processing_minutes < 60:
-                    print(f"[Time-Window Engine] ⏱️ Estimated Time: ~{estimated_processing_minutes:.1f} minutes")
+                    logger.info(f"[Time-Window Engine] Estimated Time: ~{estimated_processing_minutes:.1f} minutes")
                 else:
-                    print(f"[Time-Window Engine] ⏱️ Estimated Time: ~{estimated_time_str}")
-                    print(f"[Time-Window Engine]   ℹ️  Initial estimate - will refine as processing begins")
+                    logger.info(f"[Time-Window Engine] Estimated Time: ~{estimated_time_str}")
+                    logger.info(f"[Time-Window Engine] [INFO] Initial estimate - will refine as processing begins")
                 
                 # Show data density information
                 if total_records > 0 and estimated_windows > 0:
@@ -3160,13 +3951,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     else:
                         density = "dense"
                     
-                    print(f"[Time-Window Engine] 📊 Data Density: {avg_records_per_window:.1f} records/window ({density})")
+                    logger.info(f"[Time-Window Engine] Data Density: {avg_records_per_window:.1f} records/window ({density})")
                 
                 # Show performance comparison if we avoided year 2000 default
                 if self.scanning_config.auto_detect_time_range:
                     # Calculate what it would have been from year 2000
                     from datetime import timezone
-                    year_2000 = datetime(2000, 1, 1, tzinfo=timezone.utc)  # Make timezone-aware
+                    year_2000 = datetime(2000, 1, 1, tzinfo=timezone.utc) # Make timezone-aware
                     if start_epoch > year_2000:
                         windows_from_2000 = self._calculate_total_windows(year_2000, end_epoch)
                         windows_saved = windows_from_2000 - estimated_windows
@@ -3174,10 +3965,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                             savings_percent = (windows_saved / windows_from_2000 * 100) if windows_from_2000 > 0 else 0
                             time_saved_hours = (windows_saved * base_time_per_window) / 3600 if 'base_time_per_window' in locals() else (windows_saved * 0.1) / 3600
                             
-                            print(f"[Time-Window Engine] 💡 Smart Time Range Detection:")
-                            print(f"[Time-Window Engine]   • Avoided {windows_saved:,} unnecessary windows ({savings_percent:.1f}% reduction)")
-                            print(f"[Time-Window Engine]   • Saved ~{time_saved_hours:.1f} hours of processing time")
-                            print(f"[Time-Window Engine]   • Started from {start_epoch.year} instead of 2000")
+                            logger.info(f"[Time-Window Engine] Tip: Smart Time Range Detection:")
+                            logger.info(f"[Time-Window Engine] • Avoided {windows_saved:,} unnecessary windows ({savings_percent:.1f}% reduction)")
+                            logger.info(f"[Time-Window Engine] • Saved ~{time_saved_hours:.1f} hours of processing time")
+                            logger.info(f"[Time-Window Engine] • Started from {start_epoch.year} instead of 2000")
                 
                 sys.stdout.flush()
             
@@ -3186,18 +3977,18 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             total_windows = self._calculate_total_windows(start_epoch, end_epoch)
             
             processing_mode = "parallel" if self.enable_parallel_processing else "sequential"
-            print(f"\n[Time-Window Engine] 🔍 Step 5: Processing Time Windows")
-            print(f"[Time-Window Engine] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            print(f"[Time-Window Engine] Mode: {processing_mode.upper()}")
+            logger.info(f"\n[Time-Window Engine] Step 5: Processing Time Windows")
+            logger.info(f"[Time-Window Engine] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            logger.info(f"[Time-Window Engine] Mode: {processing_mode.upper()}")
             
             if self.enable_parallel_processing and self.parallel_processor:
-                print(f"[Time-Window Engine] Workers: {self.max_workers} parallel threads")
+                logger.info(f"[Time-Window Engine] Workers: {self.max_workers} parallel threads")
             
             if self.streaming_mode_active:
-                print(f"[Time-Window Engine] Streaming: ENABLED (memory-efficient mode)")
+                logger.info(f"[Time-Window Engine] Streaming: ENABLED (memory-efficient mode)")
             
-            print(f"[Time-Window Engine] Windows: {total_windows:,} to process")
-            print(f"[Time-Window Engine] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            logger.info(f"[Time-Window Engine] Windows: {total_windows:,} to process")
+            logger.info(f"[Time-Window Engine] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             
             sys.stdout.flush()
             
@@ -3237,16 +4028,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Requirements: 1.1, 1.2, 1.3, 1.4
             # Semantic matching will be applied in Identity Semantic Phase AFTER correlation reaches 100%
             result.matches = matches
-            print(f"[Time-Window Engine] ✓ Correlation processing complete - NO semantic mappings during correlation")
-            print(f"[Time-Window Engine]   Semantic matching will be applied in Identity Semantic Phase after 100%")
-            print(f"[Time-Window Engine]   Weighted scoring was applied DURING correlation (fast operation)")
+            logger.info(f"[Time-Window Engine] [OK] Correlation processing complete - NO semantic mappings during correlation")
+            logger.info(f"[Time-Window Engine] Semantic matching will be applied in Identity Semantic Phase after 100%")
+            logger.info(f"[Time-Window Engine] Weighted scoring was applied DURING correlation (fast operation)")
             
             # Complete progress tracking
             self.progress_tracker.complete_scanning()
             
-            print(f"\n[Time-Window Engine] ✅ Phase 1 Complete: Data Collection")
-            print(f"[Time-Window Engine]   📊 Windows processed: {total_windows:,}")
-            print(f"[Time-Window Engine]   💾 Data saved to database")
+            logger.info(f"\n[Time-Window Engine] [OK] Phase 1 Complete: Data Collection")
+            logger.info(f"[Time-Window Engine] Windows processed: {total_windows:,}")
+            logger.info(f"[Time-Window Engine] Data saved to database")
             
             # Finalize streaming if active
             if self.streaming_mode_active and self.streaming_writer:
@@ -3256,16 +4047,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 if hasattr(self, '_output_dir') and hasattr(self, '_execution_id'):
                     db_path = Path(self._output_dir) / "correlation_results.db"
                     if db_path.exists():
-                        print("\n[Time-Window Engine] Starting post-processing semantic mapping...")
+                        logger.info("\n[Time-Window Engine] Starting post-processing semantic mapping...")
                         semantic_result = self.apply_semantic_mapping_post_processing(
                             database_path=str(db_path),
                             execution_id=self._execution_id
                         )
                         
                         if semantic_result.get('success'):
-                            print(f"[Time-Window Engine] ✓ Semantic mapping applied to {semantic_result.get('matches_updated', 0):,} matches")
+                            logger.info(f"[Time-Window Engine] [OK] Semantic mapping applied to {semantic_result.get('matches_updated', 0):,} matches")
                         else:
-                            print(f"[Time-Window Engine] ⚠ Semantic mapping skipped: {semantic_result.get('reason', 'unknown')}")
+                            logger.info(f"[Time-Window Engine] [WARN] Semantic mapping skipped: {semantic_result.get('reason', 'unknown')}")
 
             
             if self.debug_mode:
@@ -3273,13 +4064,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 memory_info = f", peak memory: {final_memory.peak_memory_mb:.1f}MB" if final_memory else ""
                 streaming_info = " (streamed to database)" if self.streaming_mode_active else ""
                 parallel_info = f" (parallel: {self.max_workers} workers)" if self.enable_parallel_processing else ""
-                print(f"[TimeWindow] Scanning complete: {result.total_matches} matches found{memory_info}{streaming_info}{parallel_info}")
+                logger.info(f"[TimeWindow] Scanning complete: {result.total_matches} matches found{memory_info}{streaming_info}{parallel_info}")
                 
                 # Log parallel processing statistics if available
                 if self.enable_parallel_processing and self.parallel_processor:
                     parallel_stats = self.parallel_processor.get_processing_stats()
                     if parallel_stats.total_windows_processed > 0:
-                        print(f"[TimeWindow] Parallel stats: {parallel_stats.parallel_speedup:.1f}x speedup, "
+                        logger.info(f"[TimeWindow] Parallel stats: {parallel_stats.parallel_speedup:.1f}x speedup, "
                               f"{parallel_stats.load_balancing_efficiency:.1f} load balance efficiency, "
                               f"{parallel_stats.average_window_time:.3f}s avg window time")
             
@@ -3305,7 +4096,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Regular error - use comprehensive error handling
                 error_message = str(e)
                 
-                print(f"[Time-Window Engine] ❌ Error: {error_message}")
+                logger.info(f"[Time-Window Engine] [ERROR] Error: {error_message}")
                 
                 # Attempt recovery using error coordinator
                 if self.error_coordinator:
@@ -3324,11 +4115,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     if recovered:
                         result.warnings.append(f"Error recovered: {recovery_action}")
                         if self.debug_mode:
-                            print(f"[Time-Window Engine]   ✓ Error recovered: {recovery_action}")
+                            logger.info(f"[Time-Window Engine] [OK] Error recovered: {recovery_action}")
                     else:
                         result.errors.append(f"Time-window scanning error: {error_message}")
                         if self.debug_mode:
-                            print(f"[Time-Window Engine]   ❌ Error recovery failed: {recovery_action}")
+                            logger.info(f"[Time-Window Engine] [ERROR] Error recovery failed: {recovery_action}")
                 else:
                     result.errors.append(f"Time-window scanning error: {error_message}")
                 
@@ -3348,9 +4139,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     # Generate and log performance report if debug mode
                     if self.debug_mode:
                         perf_report = self.profiler.get_performance_report()
-                        print(f"\n[Time-Window Engine] 📊 Performance Profiling Report:")
-                        print(f"[Time-Window Engine]   Total execution time: {perf_report.total_execution_time:.2f}s")
-                        print(f"[Time-Window Engine]   Peak memory: {perf_report.peak_memory_mb:.1f}MB")
+                        logger.info(f"\n[Time-Window Engine] Performance Profiling Report:")
+                        logger.info(f"[Time-Window Engine] Total execution time: {perf_report.total_execution_time:.2f}s")
+                        logger.info(f"[Time-Window Engine] Peak memory: {perf_report.peak_memory_mb:.1f}MB")
                         
                         # Show top 5 operations by time
                         sorted_ops = sorted(
@@ -3360,13 +4151,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         )[:5]
                         
                         if sorted_ops:
-                            print(f"[Time-Window Engine]   Top operations by time:")
+                            logger.info(f"[Time-Window Engine] Top operations by time:")
                             for op_name, stats in sorted_ops:
-                                print(f"[Time-Window Engine]     • {op_name}: {stats.total_time_seconds:.2f}s "
+                                logger.info(f"[Time-Window Engine] • {op_name}: {stats.total_time_seconds:.2f}s "
                                      f"({stats.call_count} calls, avg {stats.average_time_seconds:.3f}s)")
             except Exception as prof_error:
                 if self.debug_mode:
-                    print(f"[Time-Window Engine] Profiler error: {prof_error}")
+                    logger.info(f"[Time-Window Engine] Profiler error: {prof_error}")
             
             # Cleanup
             self._cleanup_feather_queries()
@@ -3416,13 +4207,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         result.feather_metadata[fid]['identities_extracted'] = len(feather_identities_extracted[fid])
                 
                 if self.debug_mode:
-                    print(f"[Time-Window Engine] 📊 Feather statistics:")
+                    logger.info(f"[Time-Window Engine] Feather statistics:")
                     for fid in sorted(result.feather_metadata.keys()):
                         if fid in feather_match_counts and feather_match_counts[fid] > 0:
                             matches = feather_match_counts[fid]
                             identities_found = len(feather_identities_in_matches[fid])
                             identities_extracted = len(feather_identities_extracted[fid])
-                            print(f"  • {fid}: {identities_extracted:,} extracted, {identities_found:,} in matches, {matches:,} match contributions")
+                            logger.info(f" • {fid}: {identities_extracted:,} extracted, {identities_found:,} in matches, {matches:,} match contributions")
             
             # Calculate and log total feather data size
             total_feather_data_size = 0
@@ -3436,14 +4227,45 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Log feather data size
                 size_mb = total_feather_data_size / (1024 * 1024)
                 if size_mb > 100:
-                    print(f"[Time-Window Engine] ⚠️ Large feather data size: {size_mb:.2f} MB")
+                    logger.info(f"[Time-Window Engine] [WARN] Large feather data size: {size_mb:.2f} MB")
                     result.warnings.append(f"Large feather data size: {size_mb:.2f} MB - consider data reduction strategies")
                 elif self.debug_mode:
-                    print(f"[Time-Window Engine] 📊 Total feather data size: {size_mb:.2f} MB")
+                    logger.info(f"[Time-Window Engine] Total feather data size: {size_mb:.2f} MB")
             
             # Print completion summary (Requirement 6.6)
-            print(f"\n[Time-Window Engine] ✅ Complete!")
-            print(f"[Time-Window Engine] ✅ Processed {total_windows:,} time windows")
+            logger.info(f"\n[Time-Window Engine] [OK] Complete!")
+            logger.info(f"[Time-Window Engine] [OK] Processed {total_windows:,} time windows")
+
+            # Evidence-accounting block: every record the correlation
+            # phase touched ended up in one of these buckets. Use this
+            # to verify "no evidence left over".
+            ea = self._evidence_accounting
+            total_matches = ea['high_confidence_emitted'] + ea['low_confidence_emitted']
+            logger.info(f"\n[Time-Window Engine] Evidence accounting:")
+            logger.info(f"[Time-Window Engine] • Records seen by correlation: {ea['records_in']:,}")
+            logger.info(f"[Time-Window Engine] • Matches emitted: {total_matches:,} "
+                        f"(High: {ea['high_confidence_emitted']:,}, "
+                        f"Low/below-threshold: {ea['low_confidence_emitted']:,})")
+            if ea['timeless_attached']:
+                logger.info(
+                    f"[Time-Window Engine] • Timeless-feather records attached by identity: "
+                    f"{ea['timeless_attached']:,}"
+                )
+            if ea['records_no_identity']:
+                logger.info(
+                    f"[Time-Window Engine] • Records with no extractable identity: "
+                    f"{ea['records_no_identity']:,}"
+                )
+            if ea['below_threshold_skipped']:
+                logger.info(
+                    f"[Time-Window Engine] • Below-threshold groups truly dropped: "
+                    f"{ea['below_threshold_skipped']:,} "
+                    f"(set low_confidence_review_mode=True to surface as Low matches)"
+                )
+            if ea['drop_buckets']:
+                logger.info(f"[Time-Window Engine] • Drop buckets:")
+                for bucket, count in sorted(ea['drop_buckets'].items(), key=lambda kv: -kv[1]):
+                    logger.info(f"[Time-Window Engine] - {bucket}: {count:,}")
             
             # Add summary of records that were loaded but not parsed into matches
             if result.feather_metadata:
@@ -3457,33 +4279,33 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 
                 if records_not_parsed > 0:
                     parse_rate = (total_records_in_matches / total_records_loaded * 100) if total_records_loaded > 0 else 0
-                    print(f"\n[Time-Window Engine] 📊 Record Processing Summary:")
-                    print(f"[Time-Window Engine]   • Total records loaded: {total_records_loaded:,}")
-                    print(f"[Time-Window Engine]   • Records in matches: {total_records_in_matches:,} ({parse_rate:.1f}%)")
-                    print(f"[Time-Window Engine]   • Records not parsed: {records_not_parsed:,} ({100-parse_rate:.1f}%)")
-                    print(f"[Time-Window Engine]   ℹ️  Records not parsed were likely filtered by minimum_matches={wing.correlation_rules.minimum_matches}")
-                    print(f"[Time-Window Engine]   ℹ️  To include all records, set minimum_matches=1 in wing configuration")
+                    logger.info(f"\n[Time-Window Engine] Record Processing Summary:")
+                    logger.info(f"[Time-Window Engine] • Total records loaded: {total_records_loaded:,}")
+                    logger.info(f"[Time-Window Engine] • Records in matches: {total_records_in_matches:,} ({parse_rate:.1f}%)")
+                    logger.info(f"[Time-Window Engine] • Records not parsed: {records_not_parsed:,} ({100-parse_rate:.1f}%)")
+                    logger.info(f"[Time-Window Engine] [INFO] Records not parsed were likely filtered by minimum_matches={wing.correlation_rules.minimum_matches}")
+                    logger.info(f"[Time-Window Engine] [INFO] To include all records, set minimum_matches=1 in wing configuration")
             
             # Task 23: Add window statistics if available (Requirements 3.3, 9.3, 9.4)
             if self.scanning_config.track_empty_window_stats:
                 windows_with_data = self.window_processing_stats.windows_with_data
                 empty_windows = self.window_processing_stats.empty_windows_skipped
                 skip_rate = self.window_processing_stats.skip_rate_percentage
-                print(f"[Time-Window Engine] ✅ Windows with correlations: {windows_with_data:,}")
-                print(f"[Time-Window Engine] ⏭️ Empty windows skipped: {empty_windows:,} ({skip_rate:.1f}%)")
+                logger.info(f"[Time-Window Engine] [OK] Windows with correlations: {windows_with_data:,}")
+                logger.info(f"[Time-Window Engine] Empty windows skipped: {empty_windows:,} ({skip_rate:.1f}%)")
                 
                 # Task 23: Add EmptyWindowDetector statistics if available (Requirements 3.3)
                 if self.empty_window_detector:
                     detector_stats = self.empty_window_detector.get_skip_statistics()
                     if detector_stats.time_saved_seconds > 0:
-                        print(f"[Time-Window Engine] ⚡ Time saved by skipping: ~{detector_stats.time_saved_seconds:.1f}s")
+                        logger.info(f"[Time-Window Engine] Time saved by skipping: ~{detector_stats.time_saved_seconds:.1f}s")
                     
                     # Log detector efficiency
                     if self.debug_mode and detector_stats.total_windows_checked > 0:
-                        print(f"[Time-Window Engine] 📊 Empty window detection:")
-                        print(f"[Time-Window Engine]   • Windows checked: {detector_stats.total_windows_checked:,}")
-                        print(f"[Time-Window Engine]   • Empty found: {detector_stats.empty_windows_found:,}")
-                        print(f"[Time-Window Engine]   • Skip rate: {detector_stats.skip_rate_percentage:.1f}%")
+                        logger.info(f"[Time-Window Engine] Empty window detection:")
+                        logger.info(f"[Time-Window Engine] • Windows checked: {detector_stats.total_windows_checked:,}")
+                        logger.info(f"[Time-Window Engine] • Empty found: {detector_stats.empty_windows_found:,}")
+                        logger.info(f"[Time-Window Engine] • Skip rate: {detector_stats.skip_rate_percentage:.1f}%")
             
             # Count unique identities and total records from matches
             if result.total_matches > 0:
@@ -3497,25 +4319,25 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         if hasattr(match, 'feather_records') and match.feather_records:
                             total_records += sum(len(records) for records in match.feather_records.values())
                 
-                print(f"[Time-Window Engine] 🔗 Total unique identities: {unique_identities:,}")
-                print(f"[Time-Window Engine] 📊 Total records correlated: {total_records:,}")
+                logger.info(f"[Time-Window Engine] Total unique identities: {unique_identities:,}")
+                logger.info(f"[Time-Window Engine] Total records correlated: {total_records:,}")
             
-            print(f"[Time-Window Engine] ✅ Correlation complete")
+            logger.info(f"[Time-Window Engine] [OK] Correlation complete")
             
             # Display processing time with formatted duration
             processing_time_minutes = result.execution_duration_seconds / 60
             processing_time_str = self._format_time_duration(processing_time_minutes)
-            print(f"[Time-Window Engine] ⏱️ Processing Time: {processing_time_str}")
+            logger.info(f"[Time-Window Engine] Processing Time: {processing_time_str}")
             
             if result.warnings:
-                print(f"[Time-Window Engine] ⚠️ Warnings: {len(result.warnings)}")
+                logger.info(f"[Time-Window Engine] [WARN] Warnings: {len(result.warnings)}")
             if result.errors:
-                print(f"[Time-Window Engine] ❌ Errors: {len(result.errors)}")
+                logger.info(f"[Time-Window Engine] [ERROR] Errors: {len(result.errors)}")
             
             if self.streaming_mode_active:
-                print(f"[Time-Window Engine] 💾 Streaming mode: Results saved to database")
+                logger.info(f"[Time-Window Engine] Streaming mode: Results saved to database")
             
-            print("="*70 + "\n")
+            logger.info("="*70 + "\n")
             
             # Complete performance monitoring
             performance_report = self.performance_monitor.complete_execution()
@@ -3539,55 +4361,55 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             
             # Log performance summary if debug mode
             if self.debug_mode:
-                print("\n" + "="*60)
-                print("PERFORMANCE ANALYSIS SUMMARY")
-                print("="*60)
-                print(result.performance_summary)
-                print("="*60)
+                logger.info("\n" + "="*60)
+                logger.info("PERFORMANCE ANALYSIS SUMMARY")
+                logger.info("="*60)
+                logger.info(result.performance_summary)
+                logger.info("="*60)
                 
                 # Task 23: Add optimization components summary (Requirements 9.3, 9.4)
-                print("\n" + "="*60)
-                print("OPTIMIZATION COMPONENTS SUMMARY")
-                print("="*60)
+                logger.info("\n" + "="*60)
+                logger.info("OPTIMIZATION COMPONENTS SUMMARY")
+                logger.info("="*60)
                 
                 # Profiling summary
                 if self._profiling_enabled:
-                    print("✓ Performance Profiling: ENABLED")
+                    logger.info("[OK] Performance Profiling: ENABLED")
                     perf_report = self.profiler.get_performance_report()
-                    print(f"  • Total operations tracked: {len(perf_report.operation_stats)}")
-                    print(f"  • Memory checkpoints: {len(perf_report.memory_checkpoints)}")
+                    logger.info(f" • Total operations tracked: {len(perf_report.operation_stats)}")
+                    logger.info(f" • Memory checkpoints: {len(perf_report.memory_checkpoints)}")
                 else:
-                    print("○ Performance Profiling: DISABLED")
+                    logger.info("Performance Profiling: DISABLED")
                 
                 # Empty window detection summary
                 if self.empty_window_detector and self.performance_config.enable_empty_window_skipping:
                     detector_stats = self.empty_window_detector.get_skip_statistics()
-                    print("✓ Empty Window Detection: ENABLED")
-                    print(f"  • Windows checked: {detector_stats.total_windows_checked:,}")
-                    print(f"  • Empty windows found: {detector_stats.empty_windows_found:,}")
-                    print(f"  • Skip rate: {detector_stats.skip_rate_percentage:.1f}%")
-                    print(f"  • Time saved: {detector_stats.time_saved_seconds:.1f}s")
+                    logger.info("[OK] Empty Window Detection: ENABLED")
+                    logger.info(f" • Windows checked: {detector_stats.total_windows_checked:,}")
+                    logger.info(f" • Empty windows found: {detector_stats.empty_windows_found:,}")
+                    logger.info(f" • Skip rate: {detector_stats.skip_rate_percentage:.1f}%")
+                    logger.info(f" • Time saved: {detector_stats.time_saved_seconds:.1f}s")
                 else:
-                    print("○ Empty Window Detection: DISABLED")
+                    logger.info("Empty Window Detection: DISABLED")
                 
                 # Memory monitoring summary
                 if self.memory_monitor:
-                    print("✓ Memory Monitoring: ENABLED")
-                    print(f"  • Threshold: {self.memory_monitor.threshold_mb:.0f}MB")
-                    print(f"  • Streaming mode: {'ACTIVE' if self.streaming_mode_active else 'INACTIVE'}")
+                    logger.info("[OK] Memory Monitoring: ENABLED")
+                    logger.info(f" • Threshold: {self.memory_monitor.threshold_mb:.0f}MB")
+                    logger.info(f" • Streaming mode: {'ACTIVE' if self.streaming_mode_active else 'INACTIVE'}")
                 else:
-                    print("○ Memory Monitoring: DISABLED")
+                    logger.info("Memory Monitoring: DISABLED")
                 
                 # Parallel processing summary
                 if self.enable_parallel_processing:
-                    print("✓ Parallel Processing: ENABLED")
-                    print(f"  • Max workers: {self.max_workers}")
+                    logger.info("[OK] Parallel Processing: ENABLED")
+                    logger.info(f" • Max workers: {self.max_workers}")
                     if self.use_parallel_coordinator:
-                        print(f"  • Mode: ParallelCoordinator")
+                        logger.info(f" • Mode: ParallelCoordinator")
                     else:
-                        print(f"  • Mode: ParallelWindowProcessor")
+                        logger.info(f" • Mode: ParallelWindowProcessor")
                 else:
-                    print("○ Parallel Processing: DISABLED")
+                    logger.info("Parallel Processing: DISABLED")
                 
                 # Cache statistics summary
                 if self.feather_queries:
@@ -3600,37 +4422,63 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     
                     if total_cache_hits + total_cache_misses > 0:
                         cache_hit_rate = (total_cache_hits / (total_cache_hits + total_cache_misses)) * 100
-                        print("✓ Query Caching: ACTIVE")
-                        print(f"  • Cache hits: {total_cache_hits:,}")
-                        print(f"  • Cache misses: {total_cache_misses:,}")
-                        print(f"  • Hit rate: {cache_hit_rate:.1f}%")
+                        logger.info("[OK] Query Caching: ACTIVE")
+                        logger.info(f" • Cache hits: {total_cache_hits:,}")
+                        logger.info(f" • Cache misses: {total_cache_misses:,}")
+                        logger.info(f" • Hit rate: {cache_hit_rate:.1f}%")
                 
                 # Timestamp caching summary
                 if hasattr(self, 'timestamp_utc_cache'):
-                    print("✓ Timestamp Caching: ENABLED")
-                    print(f"  • UTC cache size: {self.timestamp_utc_cache.max_size:,}")
-                    print(f"  • Parse cache size: {self.timestamp_parse_cache.max_size:,}")
+                    logger.info("[OK] Timestamp Caching: ENABLED")
+                    logger.info(f" • UTC cache size: {self.timestamp_utc_cache.max_size:,}")
+                    logger.info(f" • Parse cache size: {self.timestamp_parse_cache.max_size:,}")
                 
-                print("="*60)
+                logger.info("="*60)
         
         return result
     
+    @staticmethod
+    def _build_feather_tz_map(feather_configs) -> Dict[str, str]:
+        """Build a feather-identifier -> source_timezone map from a list of
+        FeatherConfigs. Keyed by config_name and feather_name (plus their
+        lowercase forms) so a wing's feather_spec.feather_id resolves
+        whichever shape it has. Missing source_timezone defaults to 'UTC'."""
+        tz_map: Dict[str, str] = {}
+        for fc in feather_configs or []:
+            tz = getattr(fc, 'source_timezone', 'UTC') or 'UTC'
+            for key in (
+                getattr(fc, 'config_name', '') or '',
+                getattr(fc, 'feather_name', '') or '',
+            ):
+                if not key:
+                    continue
+                tz_map[key] = tz
+                tz_map[key.lower()] = tz
+        return tz_map
+
     def _load_feathers(self, wing: Wing, feather_paths: Dict[str, str], result: CorrelationResult):
         """Load all feather databases and create optimized query managers with comprehensive error handling"""
         import sys
         total_feathers = len(wing.feathers)
-        
+
+        # self.config may be a PipelineConfig (with feather_configs) or a
+        # TimeWindowScanningConfig (without). getattr(...) returns [] for
+        # the latter, leaving the map empty and the parser at UTC default.
+        feather_tz_map = self._build_feather_tz_map(
+            getattr(self.config, 'feather_configs', None)
+        )
+
         for idx, feather_spec in enumerate(wing.feathers, 1):
             feather_id = feather_spec.feather_id
             
             # Print progress for each feather
-            print(f"[Time-Window Engine]   Loading feather {idx}/{total_feathers}: {feather_id}...")
+            logger.info(f"[Time-Window Engine] Loading feather {idx}/{total_feathers}: {feather_id}...")
             sys.stdout.flush()
             
             if feather_id not in feather_paths:
                 error_msg = f"Missing path for feather: {feather_id}"
                 result.errors.append(error_msg)
-                print(f"[Time-Window Engine]     ❌ {error_msg}")
+                logger.info(f"[Time-Window Engine] [ERROR] {error_msg}")
                 sys.stdout.flush()
                 continue
             
@@ -3640,7 +4488,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             if not Path(db_path).exists():
                 error_msg = f"Feather database not found: {db_path}"
                 result.errors.append(error_msg)
-                print(f"[Time-Window Engine]     ❌ {error_msg}")
+                logger.info(f"[Time-Window Engine] [ERROR] {error_msg}")
                 sys.stdout.flush()
                 continue
             
@@ -3656,24 +4504,49 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     loader.connect()
                     # Test basic query to ensure database is accessible
                     test_count = loader.get_record_count()
-                    print(f"[Time-Window Engine]     ✓ Connected: {test_count:,} records")
+                    logger.info(f"[Time-Window Engine] [OK] Connected: {test_count:,} records")
                     sys.stdout.flush()
                 except Exception as conn_error:
                     error_msg = f"Failed to connect to feather {feather_id}: {str(conn_error)}"
                     result.errors.append(error_msg)
-                    print(f"[Time-Window Engine]     ❌ Connection failed: {conn_error}")
+                    logger.info(f"[Time-Window Engine] [ERROR] Connection failed: {conn_error}")
                     sys.stdout.flush()
                     continue
                 
                 # Create optimized query manager with error handling
-                print(f"[Time-Window Engine]     Creating query manager...")
+                logger.info(f"[Time-Window Engine] Creating query manager...")
                 sys.stdout.flush()
                 query_manager = OptimizedFeatherQuery(loader, debug_mode=self.debug_mode, profiler=self.profiler)
+
+                # Wire the per-feather source_timezone into the query manager's
+                # timestamp parser so naive timestamp strings get localized
+                # using the FeatherConfig's declared tz instead of being
+                # blindly stamped as UTC. Falls through to UTC default when
+                # no FeatherConfig matches this feather_id.
+                # The wing's feather_id is often a short alias ("prefetch")
+                # while the FeatherConfig is keyed by config_name and
+                # feather_name ("prefetch_croweyefeather" /
+                # "Prefetch_CrowEyeFeather"), so also try feather_config_name
+                # which the wing JSON does carry and which DOES match.
+                feather_config_name = getattr(feather_spec, 'feather_config_name', '') or ''
+                feather_source_tz = (
+                    feather_tz_map.get(feather_id)
+                    or feather_tz_map.get(feather_id.lower())
+                    or feather_tz_map.get(feather_config_name)
+                    or feather_tz_map.get(feather_config_name.lower())
+                    or getattr(feather_spec, 'source_timezone', None)
+                    or 'UTC'
+                )
+                if feather_source_tz != 'UTC':
+                    logger.info(
+                        f"[Time-Window Engine] Source timezone for {feather_id}: {feather_source_tz}"
+                    )
+                query_manager.timestamp_parser.set_source_timezone(feather_source_tz)
                 
                 # Task 21: Apply cache configuration from performance config (Requirement 8.3)
                 query_manager.configure_cache(
                     max_size_mb=self.performance_config.query_cache_size_mb,
-                    max_entries=100  # Keep default max entries
+                    max_entries=100 # Keep default max entries
                 )
                 
                 self.feather_queries[feather_id] = query_manager
@@ -3686,36 +4559,36 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     timestamp_range = query_manager.get_timestamp_range()
                     
                     result.feather_metadata[feather_id] = {
-                        'feather_name': feather_id,  # Requirement 7.2
+                        'feather_name': feather_id, # Requirement 7.2
                         'artifact_type': loader.artifact_type or feather_spec.artifact_type,
                         'database_path': db_path,
-                        'records_processed': record_count,  # Requirement 7.2 (renamed from total_records)
-                        'total_records': record_count,  # Keep for backward compatibility
-                        'identities_extracted': 0,  # Will be calculated during window processing
-                        'identities_found': 0,  # Will be calculated from matches (for GUI compatibility)
+                        'records_processed': record_count, # Requirement 7.2 (renamed from total_records)
+                        'total_records': record_count, # Keep for backward compatibility
+                        'identities_extracted': 0, # Will be calculated during window processing
+                        'identities_found': 0, # Will be calculated from matches (for GUI compatibility)
                         'timestamp_column': query_manager.timestamp_column,
                         'timestamp_format': query_manager.timestamp_format,
                         'timestamp_range': {
                             'min': timestamp_range[0].isoformat() if timestamp_range[0] else None,
                             'max': timestamp_range[1].isoformat() if timestamp_range[1] else None
                         },
-                        'matches_created': 0,  # Requirement 7.2 - will be updated during correlation
+                        'matches_created': 0, # Requirement 7.2 - will be updated during correlation
                         'health_status': query_manager.get_health_status(),
                         'error_statistics': query_manager.get_error_statistics()
                     }
                     
-                    print(f"[Time-Window Engine]     ✓ Metadata loaded (ts_col: {query_manager.timestamp_column})")
+                    logger.info(f"[Time-Window Engine] [OK] Metadata loaded (ts_col: {query_manager.timestamp_column})")
                     sys.stdout.flush()
                     
                     if self.debug_mode:
-                        print(f"[TimeWindow] Loaded {feather_id}: {record_count} records, "
+                        logger.info(f"[TimeWindow] Loaded {feather_id}: {record_count} records, "
                               f"timestamp_column={query_manager.timestamp_column}, "
                               f"format={query_manager.timestamp_format}")
                         
                         # Log any database errors encountered during initialization
                         error_stats = query_manager.get_error_statistics()
                         if error_stats['total_errors'] > 0:
-                            print(f"[TimeWindow] {feather_id} had {error_stats['total_errors']} initialization errors "
+                            logger.info(f"[TimeWindow] {feather_id} had {error_stats['total_errors']} initialization errors "
                                   f"(success rate: {error_stats['success_rate_percent']:.1f}%)")
                 
                 except Exception as metadata_error:
@@ -3723,19 +4596,19 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     warning_msg = f"Feather {feather_id} loaded but metadata collection failed: {str(metadata_error)}"
                     result.warnings.append(warning_msg)
                     if self.debug_mode:
-                        print(f"[TimeWindow] Warning: {warning_msg}")
+                        logger.info(f"[TimeWindow] Warning: {warning_msg}")
                     
                     # Add minimal metadata
                     result.feather_metadata[feather_id] = {
-                        'feather_name': feather_id,  # Requirement 7.2
+                        'feather_name': feather_id, # Requirement 7.2
                         'artifact_type': feather_spec.artifact_type,
                         'database_path': db_path,
-                        'records_processed': 0,  # Requirement 7.2
+                        'records_processed': 0, # Requirement 7.2
                         'total_records': 0,
-                        'identities_found': 0,  # For GUI compatibility
+                        'identities_found': 0, # For GUI compatibility
                         'timestamp_column': None,
                         'timestamp_format': 'unknown',
-                        'matches_created': 0,  # Requirement 7.2
+                        'matches_created': 0, # Requirement 7.2
                         'error': str(metadata_error)
                     }
                 
@@ -3743,9 +4616,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 error_msg = f"Failed to load feather {feather_id}: {str(e)}"
                 result.errors.append(error_msg)
                 if self.debug_mode:
-                    print(f"[TimeWindow] {error_msg}")
+                    logger.info(f"[TimeWindow] {error_msg}")
                     import traceback
-                    print(f"[TimeWindow] Stack trace: {traceback.format_exc()}")
+                    logger.info(f"[TimeWindow] Stack trace: {traceback.format_exc()}")
         
         # Log summary of feather loading
         if self.debug_mode:
@@ -3753,9 +4626,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             loaded_feathers = result.feathers_processed
             failed_feathers = total_feathers - loaded_feathers
             
-            print(f"[TimeWindow] Feather loading summary: {loaded_feathers}/{total_feathers} loaded successfully")
+            logger.info(f"[TimeWindow] Feather loading summary: {loaded_feathers}/{total_feathers} loaded successfully")
             if failed_feathers > 0:
-                print(f"[TimeWindow] {failed_feathers} feathers failed to load - correlation will continue with available feathers")
+                logger.info(f"[TimeWindow] {failed_feathers} feathers failed to load - correlation will continue with available feathers")
             
             # Check if we have enough feathers for correlation
             # minimum_matches represents the minimum number of feathers required
@@ -3763,7 +4636,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             if loaded_feathers < minimum_feathers:
                 error_msg = f"Insufficient feathers loaded ({loaded_feathers}) for correlation (minimum required: {minimum_feathers})"
                 result.errors.append(error_msg)
-                print(f"[TimeWindow] Critical: {error_msg}")
+                logger.info(f"[TimeWindow] Critical: {error_msg}")
         
         # Add feather loading statistics to result
         result.feather_loading_stats = {
@@ -3848,17 +4721,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     f"is after end time ({latest.strftime('%Y-%m-%d %H:%M:%S')}). "
                     f"Please check your time filter settings."
                 )
-                print(f"[Time-Window Engine] ❌ ERROR: {error_msg}")
+                logger.info(f"[Time-Window Engine] [ERROR] ERROR: {error_msg}")
                 raise ValueError(error_msg)
             
             # Requirement 6.7: Log time filter when applied
             total_span_seconds = (latest - earliest).total_seconds()
-            print(f"[Time-Window Engine] 🔍 Time Filter: {earliest.strftime('%Y-%m-%d %H:%M:%S')} to {latest.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"[Time-Window Engine] Time Filter: {earliest.strftime('%Y-%m-%d %H:%M:%S')} to {latest.strftime('%Y-%m-%d %H:%M:%S')}")
             
             if self.debug_mode:
-                print(f"[TimeWindow] Using FilterConfig time range:")
-                print(f"  Start: {earliest}")
-                print(f"  End: {latest}")
+                logger.info(f"[TimeWindow] Using FilterConfig time range:")
+                logger.info(f" Start: {earliest}")
+                logger.info(f" End: {latest}")
             
             # Still query feather ranges for validation
             for feather_id, query_manager in self.feather_queries.items():
@@ -3911,9 +4784,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 warnings.append(f"Excluded {outliers_removed} outlier end timestamps (likely false timestamps)")
             
             if self.debug_mode:
-                print(f"[TimeWindow] Using FilterConfig start, auto-detected end:")
-                print(f"  Start: {earliest} (from FilterConfig)")
-                print(f"  End: {latest} (auto-detected, {outliers_removed} outliers excluded)")
+                logger.info(f"[TimeWindow] Using FilterConfig start, auto-detected end:")
+                logger.info(f" Start: {earliest} (from FilterConfig)")
+                logger.info(f" End: {latest} (auto-detected, {outliers_removed} outliers excluded)")
         
         elif self.filters.time_period_end:
             # Only end time specified - auto-detect start with outlier filtering, use specified end
@@ -3941,9 +4814,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 warnings.append(f"Excluded {outliers_removed} outlier start timestamps (likely false timestamps)")
             
             if self.debug_mode:
-                print(f"[TimeWindow] Using auto-detected start, FilterConfig end:")
-                print(f"  Start: {earliest} (auto-detected, {outliers_removed} outliers excluded)")
-                print(f"  End: {latest} (from FilterConfig)")
+                logger.info(f"[TimeWindow] Using auto-detected start, FilterConfig end:")
+                logger.info(f" Start: {earliest} (auto-detected, {outliers_removed} outliers excluded)")
+                logger.info(f" End: {latest} (from FilterConfig)")
         
         else:
             # Priority 2: Auto-detect from feather data with statistical outlier filtering
@@ -3979,16 +4852,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 )
                 
                 if self.debug_mode:
-                    print(f"[TimeWindow] Auto-detected time range with outlier filtering:")
-                    print(f"  Start: {earliest} ({outliers_removed_min} outliers excluded)")
-                    print(f"  End: {latest} ({outliers_removed_max} outliers excluded)")
-                    print(f"  Original range would have been: {min(all_min_timestamps)} to {max(all_max_timestamps)}")
+                    logger.info(f"[TimeWindow] Auto-detected time range with outlier filtering:")
+                    logger.info(f" Start: {earliest} ({outliers_removed_min} outliers excluded)")
+                    logger.info(f" End: {latest} ({outliers_removed_max} outliers excluded)")
+                    logger.info(f" Original range would have been: {min(all_min_timestamps)} to {max(all_max_timestamps)}")
             else:
                 if self.debug_mode:
-                    print(f"[TimeWindow] Auto-detected time range from data:")
-                    print(f"  Start: {earliest}")
-                    print(f"  End: {latest}")
-                    print(f"  No outliers detected")
+                    logger.info(f"[TimeWindow] Auto-detected time range from data:")
+                    logger.info(f" Start: {earliest}")
+                    logger.info(f" End: {latest}")
+                    logger.info(f" No outliers detected")
         
         # Calculate span
         span_days = (latest - earliest).total_seconds() / 86400
@@ -4010,10 +4883,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             span_days = (latest - earliest).total_seconds() / 86400
             
             if self.debug_mode:
-                print(f"[TimeWindow] Applied {self.scanning_config.max_time_range_years}-year limit:")
-                print(f"  New start: {earliest}")
-                print(f"  End: {latest}")
-                print(f"  New span: {span_days:.1f} days ({span_days/365.25:.2f} years)")
+                logger.info(f"[TimeWindow] Applied {self.scanning_config.max_time_range_years}-year limit:")
+                logger.info(f" New start: {earliest}")
+                logger.info(f" End: {latest}")
+                logger.info(f" New span: {span_days:.1f} days ({span_days/365.25:.2f} years)")
         
         detection_time = time.time() - detection_start
         
@@ -4070,7 +4943,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Calculate 20-year rule boundary
         # If a timestamp is more than 20 years older than the latest, it's likely false
         latest_timestamp = max(unix_timestamps)
-        twenty_years_seconds = 20 * 365.25 * 24 * 3600  # 20 years in seconds
+        twenty_years_seconds = 20 * 365.25 * 24 * 3600 # 20 years in seconds
         lower_bound_20yr = latest_timestamp - twenty_years_seconds
         
         # Filter outliers using both methods
@@ -4117,7 +4990,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     if is_outlier_20yr:
                         method.append(f"20yr rule ({years_diff:.1f} years old)")
                     
-                    print(f"[TimeWindow] Excluding outlier timestamp: {outlier_dt} "
+                    logger.info(f"[TimeWindow] Excluding outlier timestamp: {outlier_dt} "
                           f"(detected by: {', '.join(method)})")
             else:
                 filtered_unix.append(unix_ts)
@@ -4128,16 +5001,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Log detection method statistics
         if self.debug_mode and outliers_removed > 0:
-            print(f"[TimeWindow] Outlier detection summary:")
-            print(f"  Total outliers: {outliers_removed}")
-            print(f"  Detected by IQR only: {outliers_by_method['iqr']}")
-            print(f"  Detected by 20-year rule only: {outliers_by_method['20yr_rule']}")
-            print(f"  Detected by both methods: {outliers_by_method['both']}")
+            logger.info(f"[TimeWindow] Outlier detection summary:")
+            logger.info(f" Total outliers: {outliers_removed}")
+            logger.info(f" Detected by IQR only: {outliers_by_method['iqr']}")
+            logger.info(f" Detected by 20-year rule only: {outliers_by_method['20yr_rule']}")
+            logger.info(f" Detected by both methods: {outliers_by_method['both']}")
         
         # If we filtered out everything, return original (safety check)
         if not filtered_timestamps:
             if self.debug_mode:
-                print(f"[TimeWindow] Warning: Outlier filtering removed all timestamps, using original data")
+                logger.info(f"[TimeWindow] Warning: Outlier filtering removed all timestamps, using original data")
             return timestamps, 0
         
         return filtered_timestamps, outliers_removed
@@ -4158,7 +5031,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         # Use new detection method if auto-detection is enabled
         if self.scanning_config.auto_detect_time_range:
-            print(f"[Time-Window Engine] 🔍 Auto-detecting time range from data...")
+            logger.info(f"[Time-Window Engine] Auto-detecting time range from data...")
             try:
                 detection_result = self._detect_actual_time_range()
                 
@@ -4170,34 +5043,34 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 
                 # Log warnings if any (always show warnings, not just in debug mode)
                 for warning in detection_result.warnings:
-                    print(f"[TimeWindow] ⚠️ Warning: {warning}")
+                    logger.info(f"[TimeWindow] [WARN] Warning: {warning}")
                     # Add warning to result object
                     if result:
                         result.warnings.append(f"Time Range: {warning}")
                 
                 # Log detection summary with enhanced information
-                print(f"[TimeWindow] ✓ Time range detection completed in {detection_result.detection_time_seconds:.2f}s")
-                print(f"[TimeWindow]   📅 Start: {detection_result.earliest_timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"[TimeWindow]   📅 End: {detection_result.latest_timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"[TimeWindow]   ⏱️ Span: {detection_result.total_span_days:.1f} days ({detection_result.get_span_years():.2f} years)")
+                logger.info(f"[TimeWindow] [OK] Time range detection completed in {detection_result.detection_time_seconds:.2f}s")
+                logger.info(f"[TimeWindow] Start: {detection_result.earliest_timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.info(f"[TimeWindow] End: {detection_result.latest_timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.info(f"[TimeWindow] Span: {detection_result.total_span_days:.1f} days ({detection_result.get_span_years():.2f} years)")
                 
                 # Calculate and log estimated window count
                 estimated_windows = self._calculate_total_windows(
                     detection_result.earliest_timestamp, 
                     detection_result.latest_timestamp
                 )
-                print(f"[TimeWindow]   🔢 Estimated windows: {estimated_windows:,}")
+                logger.info(f"[TimeWindow] Estimated windows: {estimated_windows:,}")
                 
                 # Show feather-specific ranges in debug mode
                 if self.debug_mode and detection_result.feather_ranges:
-                    print(f"[TimeWindow]   📊 Feather time ranges:")
+                    logger.info(f"[TimeWindow] Feather time ranges:")
                     for feather_id, (min_ts, max_ts) in detection_result.feather_ranges.items():
                         span_days = (max_ts - min_ts).total_seconds() / 86400
-                        print(f"[TimeWindow]     • {feather_id}: {min_ts.strftime('%Y-%m-%d')} to {max_ts.strftime('%Y-%m-%d')} ({span_days:.1f} days)")
+                        logger.info(f"[TimeWindow] • {feather_id}: {min_ts.strftime('%Y-%m-%d')} to {max_ts.strftime('%Y-%m-%d')} ({span_days:.1f} days)")
                 
                 # Warn if FilterConfig range extends beyond actual data
                 if detection_result.warnings:
-                    print(f"[TimeWindow] ⚠️ {len(detection_result.warnings)} warning(s) detected during time range detection")
+                    logger.info(f"[TimeWindow] [WARN] {len(detection_result.warnings)} warning(s) detected during time range detection")
                 
                 # TASK 9: Add validation when detected range exceeds max_time_range_years
                 if not detection_result.is_reasonable_range(self.scanning_config.max_time_range_years):
@@ -4205,8 +5078,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         f"Time range spans {detection_result.get_span_years():.1f} years, "
                         f"exceeding recommended maximum of {self.scanning_config.max_time_range_years} years"
                     )
-                    print(f"[TimeWindow] ⚠️ Warning: {warning_msg}")
-                    print(f"[TimeWindow]   Consider using FilterConfig to limit the range for better performance")
+                    logger.info(f"[TimeWindow] [WARN] Warning: {warning_msg}")
+                    logger.info(f"[TimeWindow] Consider using FilterConfig to limit the range for better performance")
                     
                     # Add warning to result object
                     if result:
@@ -4218,9 +5091,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 )
                 
                 if recommendations:
-                    print(f"[TimeWindow] 💡 Configuration Recommendations:")
+                    logger.info(f"[TimeWindow] Tip: Configuration Recommendations:")
                     for i, recommendation in enumerate(recommendations, 1):
-                        print(f"[TimeWindow]   {i}. {recommendation}")
+                        logger.info(f"[TimeWindow] {i}. {recommendation}")
                         # Add recommendations to result object
                         if result:
                             result.warnings.append(f"Recommendation: {recommendation}")
@@ -4228,30 +5101,30 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Performance comparison message
                 if estimated_windows > 100000:
                     perf_warning = f"Large window count detected ({estimated_windows:,} windows) - processing may take significant time"
-                    print(f"[TimeWindow] ⚠️ {perf_warning}")
-                    print(f"[TimeWindow]   Consider narrowing the time range.")
+                    logger.info(f"[TimeWindow] [WARN] {perf_warning}")
+                    logger.info(f"[TimeWindow] Consider narrowing the time range.")
                     if result:
                         result.warnings.append(f"Performance: {perf_warning}")
                 elif estimated_windows < 10000:
-                    print(f"[TimeWindow] ✓ Reasonable window count - processing should be fast")
+                    logger.info(f"[TimeWindow] [OK] Reasonable window count - processing should be fast")
                 
                 return detection_result.earliest_timestamp, detection_result.latest_timestamp
                 
             except Exception as e:
                 error_msg = f"Auto-detection failed: {e}"
-                print(f"[Time-Window Engine] ❌ {error_msg}")
-                print(f"[Time-Window Engine] Falling back to legacy time range determination")
+                logger.info(f"[Time-Window Engine] [ERROR] {error_msg}")
+                logger.info(f"[Time-Window Engine] Falling back to legacy time range determination")
                 if result:
                     result.warnings.append(f"Time Range Detection: {error_msg}, using fallback method")
                 if self.debug_mode:
                     import traceback
                     traceback.print_exc()
         else:
-            print(f"[Time-Window Engine] ⚠️ Auto-detection is DISABLED (auto_detect_time_range=False)")
-            print(f"[Time-Window Engine] Using legacy time range determination")
+            logger.info(f"[Time-Window Engine] [WARN] Auto-detection is DISABLED (auto_detect_time_range=False)")
+            logger.info(f"[Time-Window Engine] Using legacy time range determination")
         
         # Fallback to legacy behavior (for backward compatibility)
-        print(f"[Time-Window Engine] 📅 Legacy Mode: Querying timestamp ranges from feathers...")
+        logger.info(f"[Time-Window Engine] Legacy Mode: Querying timestamp ranges from feathers...")
         
         earliest_times = []
         latest_times = []
@@ -4267,46 +5140,46 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Use configured starting epoch or earliest data
         if self.filters.time_period_start:
             start_time = self.filters.time_period_start
-            print(f"[TimeWindow]   Using FilterConfig start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"[TimeWindow] Using FilterConfig start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         elif earliest_times:
             # Use the earliest data time, but don't go back further than 1 year from latest data
             earliest_data = min(earliest_times)
             latest_data = max(latest_times) if latest_times else datetime.now()
             one_year_ago = latest_data - timedelta(days=365)
             start_time = max(earliest_data, one_year_ago)
-            print(f"[TimeWindow]   Using earliest data time (limited to 1 year): {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"[TimeWindow] Using earliest data time (limited to 1 year): {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         else:
             # Default to 30 days ago instead of year 2000
             start_time = datetime.now() - timedelta(days=30)
-            print(f"[TimeWindow]   Using default (30 days ago): {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"[TimeWindow] Using default (30 days ago): {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Use configured ending epoch or latest data
         if self.filters.time_period_end:
             end_time = self.filters.time_period_end
-            print(f"[TimeWindow]   Using FilterConfig end time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"[TimeWindow] Using FilterConfig end time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         elif latest_times:
             end_time = max(latest_times)
-            print(f"[TimeWindow]   Using latest data time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"[TimeWindow] Using latest data time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         else:
             end_time = datetime.now()
-            print(f"[TimeWindow]   Using current time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"[TimeWindow] Using current time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Safety check: limit time range to prevent excessive processing
-        max_range_days = 365  # Maximum 1 year range
+        max_range_days = 365 # Maximum 1 year range
         if (end_time - start_time).days > max_range_days:
             warning_msg = f"Time range too large ({(end_time - start_time).days} days), limiting to {max_range_days} days from end time"
-            print(f"[TimeWindow] ⚠️ Warning: {warning_msg}")
+            logger.info(f"[TimeWindow] [WARN] Warning: {warning_msg}")
             if result:
                 result.warnings.append(f"Time Range: {warning_msg}")
             start_time = end_time - timedelta(days=max_range_days)
         
         # Calculate expected windows for user awareness
         total_windows = self._calculate_total_windows(start_time, end_time)
-        print(f"[TimeWindow]   🔢 Expected windows: {total_windows:,}")
+        logger.info(f"[TimeWindow] Expected windows: {total_windows:,}")
         
         if total_windows > 10000:
             warning_msg = f"Large number of windows ({total_windows:,}) may take significant time"
-            print(f"[TimeWindow] ⚠️ Warning: {warning_msg}")
+            logger.info(f"[TimeWindow] [WARN] Warning: {warning_msg}")
             if result:
                 result.warnings.append(f"Performance: {warning_msg}")
         
@@ -4342,7 +5215,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Estimate based on window count
                 avg_windows_per_day = estimated_windows / total_span_days
                 
-                if avg_windows_per_day > 288:  # More than 5-minute windows
+                if avg_windows_per_day > 288: # More than 5-minute windows
                     recommendations.append(
                         f"High temporal resolution detected ({avg_windows_per_day:.0f} windows/day). "
                         f"Consider increasing window_size_minutes (currently {self.window_size_minutes}) "
@@ -4385,7 +5258,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         f"({detection_result.earliest_timestamp.strftime('%Y-%m-%d')} to {detection_result.latest_timestamp.strftime('%Y-%m-%d')}) "
                         f"to avoid processing empty windows."
                     )
-                    break  # Only add this recommendation once
+                    break # Only add this recommendation once
         
         return recommendations
     
@@ -4451,7 +5324,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 start_time=current_time,
                 end_time=window_end,
                 window_id=f"window_{window_counter:06d}",
-                records_by_feather={}  # Empty dict, will be populated by query_window
+                records_by_feather={} # Empty dict, will be populated by query_window
             )
             
             # Advance by scanning interval
@@ -4459,71 +5332,56 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             window_counter += 1
     
     def _normalize_identity(self, identity: str) -> str:
+        """Forward to the canonical identity_grouping.identity_key.
+
+        Keeps a per-engine LRU-ish cache (capped at ``_identity_cache_max``)
+        because the engine processes millions of records and the canonical
+        function is pure — caching here saves the regex work on repeat
+        raw values.
         """
-        Normalize identity for grouping by removing symbols and numbers.
-        
-        This ensures that variations like:
-        - "chrome.exe", "chrome", "Chrome.exe" -> "chrome"
-        - "app-v1.2.3", "app_v2.0", "app" -> "app"
-        - "program (x86)", "program", "Program" -> "program"
-        
-        Args:
-            identity: Raw identity string
-            
-        Returns:
-            Normalized identity string (lowercase, no symbols/numbers)
-        """
-        import re
-        
-        # Convert to lowercase
-        normalized = identity.lower()
-        
-        # Remove common file extensions
-        extensions = ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.jar', '.msi']
-        for ext in extensions:
-            if normalized.endswith(ext):
-                normalized = normalized[:-len(ext)]
-                break
-        
-        # Remove version numbers and common patterns
-        # Examples: "v1.2.3", "version 2.0", "(x86)", "[64bit]"
-        normalized = re.sub(r'\s*v?\d+[\d.]*', '', normalized)  # Remove version numbers
-        normalized = re.sub(r'\s*\(.*?\)', '', normalized)  # Remove parentheses content
-        normalized = re.sub(r'\s*\[.*?\]', '', normalized)  # Remove brackets content
-        
-        # Remove all symbols and numbers, keep only letters and spaces
-        normalized = re.sub(r'[^a-z\s]', '', normalized)
-        
-        # Remove extra whitespace
-        normalized = ' '.join(normalized.split())
-        
-        # Remove common noise words
-        noise_words = ['the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for']
-        words = normalized.split()
-        words = [w for w in words if w not in noise_words]
-        normalized = ' '.join(words)
-        
-        return normalized.strip()
+        if not identity:
+            return ""
+        cached = self._identity_cache.get(identity)
+        if cached is not None:
+            return cached
+        from .identity_grouping import identity_key
+        normalized = identity_key(identity)
+        if len(self._identity_cache) < self._identity_cache_max:
+            self._identity_cache[identity] = normalized
+        return normalized
     
     def _extract_identity_from_record(self, record: Dict[str, Any]) -> Optional[str]:
         """
         Extract identity value from a record with normalization.
-        
+
         Args:
             record: Record to extract identity from
-            
+
         Returns:
             Normalized identity value or None if no identity found
         """
-        # Try to find first non-empty identity field from core list
+        raw = self._extract_raw_identity_from_record(record)
+        return self._normalize_identity(raw) if raw else None
+
+    def _extract_raw_identity_from_record(self, record: Dict[str, Any]) -> Optional[str]:
+        """Extract the first non-empty identity field WITHOUT normalization.
+
+        Used by the dedup signature so distinct raw identities (e.g. "foo.exe"
+        vs "foo.dll") that collapse to the same normalized key do not get
+        falsely deduplicated within the same feather + timestamp.
+        """
         for field in CORE_IDENTITY_FIELDS:
             if field in record and record[field]:
                 value = str(record[field]).strip()
                 if value:
-                    # Normalize identity for proper grouping
-                    # This removes symbols, numbers, and standardizes format
-                    return self._normalize_identity(value)
-        
+                    return value
+        return None
+
+    def _get_first_timestamp(self, record: Dict[str, Any]) -> Optional[str]:
+        """Fast timestamp extraction using class-level constant."""
+        for field in self._TIMESTAMP_FIELDS:
+            if field in record and record[field]:
+                return record[field]
         return None
     
     def _correlate_window_records(self, window: TimeWindow, wing: Wing) -> List[CorrelationMatch]:
@@ -4576,93 +5434,120 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         logger.debug(f"[Correlation Optimization] Skipping filtering for {feather_id} - window_query_manager not available")
                     filtered_records_by_feather[feather_id] = records
             
-            # OPTIMIZATION 2: Deduplicate records (Requirement 6.4)
-            # Build identity index with deduplication using hash map for O(1) lookups
-            identity_groups = {}  # identity_value -> {feather_id: [records]}
-            seen_records = set()  # Track seen records to avoid duplicates
+            # Build identity index using hash map for O(1) lookups.
+            # We KEEP duplicate records (they carry forensic signal — repeated
+            # occurrences of an artifact are real evidence) but reuse the
+            # parse result (normalized identity + timestamp) for repeat
+            # signatures so we don't re-do the work. total_duplicates is
+            # tracked for diagnostics only.
+            identity_groups = {} # normalized_identity -> {feather_id: [records]}
+            parse_cache: Dict[tuple, tuple] = {} # signature -> (normalized_identity,)
             total_duplicates = 0
-            
+            total_records_in = 0
+            total_records_no_identity = 0
+            # Drop ledger — every record we touch but don't add to an
+            # identity group lands in one of these buckets. Sample fields
+            # capture a few candidate keys (first feather + first 3 raw
+            # identity values seen, when the record had one) so the log
+            # line can name what was lost.
+            drop_ledger: Dict[str, Dict[str, Any]] = {
+                'no_identity_field': {'count': 0, 'sample_feathers': []},
+                'normalize_failure': {'count': 0, 'samples': []},
+            }
+
+            def _ledger_add(bucket: str, sample: Optional[str] = None) -> None:
+                entry = drop_ledger[bucket]
+                entry['count'] += 1
+                key = 'samples' if 'samples' in entry else 'sample_feathers'
+                if sample is not None and len(entry[key]) < 3 and sample not in entry[key]:
+                    entry[key].append(sample)
+
             for feather_id, records in filtered_records_by_feather.items():
                 for record in records:
-                    # Create a record signature for deduplication
-                    # Use identity + timestamp + feather_id as unique key
-                    identity = self._extract_identity_from_record(record)
-                    
-                    if identity:
-                        # Create record signature for deduplication
-                        timestamp_val = None
-                        timestamp_fields = ['timestamp', 'event_time', 'last_run_time', 'access_time', 
-                                          'creation_time', 'modification_time', 'last_modified']
-                        for ts_field in timestamp_fields:
-                            if ts_field in record and record[ts_field]:
-                                timestamp_val = record[ts_field]
-                                break
-                        
-                        # Create unique signature
-                        record_signature = (identity, feather_id, str(timestamp_val))
-                        
-                        # Check if we've seen this record before
-                        if record_signature in seen_records:
-                            total_duplicates += 1
-                            if self.debug_mode:
-                                logger.debug(f"[Correlation Optimization] Skipped duplicate record: {record_signature}")
-                            continue  # Skip duplicate
-                        
-                        # Mark as seen
-                        seen_records.add(record_signature)
-                        
-                        # OPTIMIZATION 3: Use hash map for O(1) identity lookups
-                        # Initialize identity group if needed
-                        if identity not in identity_groups:
-                            identity_groups[identity] = {}
-                        
-                        # Initialize feather list if needed
-                        if feather_id not in identity_groups[identity]:
-                            identity_groups[identity][feather_id] = []
-                        
-                        # Add record to group
-                        identity_groups[identity][feather_id].append(record)
-            
-            # Log optimization statistics
-            if total_filtered > 0 or total_duplicates > 0:
-                logger.info(f"[Correlation Optimization] Filtered {total_filtered} records, removed {total_duplicates} duplicates before correlation")
-            
+                    total_records_in += 1
+                    raw_identity = self._extract_raw_identity_from_record(record)
+                    if not raw_identity:
+                        total_records_no_identity += 1
+                        _ledger_add('no_identity_field', feather_id)
+                        continue
+
+                    timestamp_val = self._get_first_timestamp(record)
+                    record_signature = (raw_identity, feather_id, str(timestamp_val))
+
+                    cached = parse_cache.get(record_signature)
+                    if cached is not None:
+                        # Same raw identity + feather + timestamp seen earlier in
+                        # this window: reuse the normalization result, count as a
+                        # duplicate for diagnostics, but DO NOT drop the record.
+                        identity = cached[0]
+                        total_duplicates += 1
+                    else:
+                        identity = self._normalize_identity(raw_identity)
+                        if not identity:
+                            total_records_no_identity += 1
+                            _ledger_add('normalize_failure', raw_identity)
+                            continue
+                        parse_cache[record_signature] = (identity,)
+
+                    if identity not in identity_groups:
+                        identity_groups[identity] = {}
+                    if feather_id not in identity_groups[identity]:
+                        identity_groups[identity][feather_id] = []
+                    identity_groups[identity][feather_id].append(record)
+
             # Create matches from identity groups
             matches = []
-            minimum_feathers = wing.correlation_rules.minimum_matches
-            
-            # Track skipped identities for logging
-            skipped_identities = []
-            total_skipped_records = 0
-            
-            for identity_value, feather_records in identity_groups.items():
+            # Threshold: prefer engine-level override (analyst tuning) over wing config.
+            # Use `is not None` so override=0 ("emit every identity") is honored.
+            override = getattr(self.scanning_config, 'min_feathers_override', None)
+            minimum_feathers = override if override is not None else wing.correlation_rules.minimum_matches
+            low_confidence_mode = bool(getattr(self.scanning_config, 'low_confidence_review_mode', False))
+
+            # Track below-threshold identity groups. In normal mode these are
+            # truly skipped; in low_confidence_review_mode they are emitted as
+            # Low-confidence matches and still tracked here for diagnostics.
+            below_threshold_groups = []
+            below_threshold_record_count = 0
+            below_threshold_skipped = 0 # truly skipped (low_confidence_mode = False)
+            low_confidence_emitted = 0 # emitted as Low (low_confidence_mode = True)
+
+            # Sort by identity_value so the same input data produces a
+            # bit-identical matches list across runs. Insertion order
+            # depends on DB cursor order which can vary; sorting kills
+            # non-determinism without changing match counts.
+            for identity_value, feather_records in sorted(identity_groups.items()):
                 # Check if we have enough feathers
                 feather_count = len(feather_records)
-                
+
                 if feather_count < minimum_feathers:
-                    # Track skipped identity
                     record_count = sum(len(records) for records in feather_records.values())
-                    skipped_identities.append({
+                    below_threshold_groups.append({
                         'identity': identity_value,
                         'feather_count': feather_count,
                         'record_count': record_count,
                         'feathers': list(feather_records.keys())
                     })
-                    total_skipped_records += record_count
-                    continue  # Skip - not enough feathers
+                    below_threshold_record_count += record_count
+                    if not low_confidence_mode:
+                        # Truly dropped: count as skipped + record sample.
+                        below_threshold_skipped += 1
+                        bucket = drop_ledger.setdefault(
+                            'below_threshold_skipped',
+                            {'count': 0, 'samples': []},
+                        )
+                        bucket['count'] += 1
+                        if len(bucket['samples']) < 3 and identity_value not in bucket['samples']:
+                            bucket['samples'].append(identity_value)
+                        continue
+                    # Otherwise fall through and emit as Low.
+                    low_confidence_emitted += 1
                 
                 # Get timestamp from first record (use any feather)
                 first_feather_id = list(feather_records.keys())[0]
                 first_record = feather_records[first_feather_id][0]
                 
-                # Try to extract timestamp
-                timestamp = None
-                timestamp_fields = ['timestamp', 'event_time', 'last_run_time', 'access_time', 
-                                  'creation_time', 'modification_time', 'last_modified']
-                for ts_field in timestamp_fields:
-                    if ts_field in first_record and first_record[ts_field]:
-                        timestamp = first_record[ts_field]
-                        break
+                # Try to extract timestamp using fast lookup
+                timestamp = self._get_first_timestamp(first_record)
                 
                 # Use window start time if no timestamp found
                 if not timestamp:
@@ -4680,9 +5565,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 latest_time = window.end_time
                 time_spread = (latest_time - earliest_time).total_seconds()
                 
-                # Prepare feather_records dict for CorrelationMatch
+                # Prepare feather_records dict for CorrelationMatch.
+                # Sort feather_records too so column-order in match details
+                # is stable across runs.
                 match_feather_records = {}
-                for fid, records_list in feather_records.items():
+                for fid, records_list in sorted(feather_records.items()):
                     # Include ALL records (metadata + actual data) - don't discard anything!
                     match_feather_records[fid] = records_list if records_list else []
                     
@@ -4695,45 +5582,279 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                             metadata_count = sum(1 for r in records_list if isinstance(r, dict) and 
                                                set(r.keys()) <= {'key', 'value', '_table', '_feather_id'})
                             actual_data_count = len(records_list) - metadata_count
-                            logger.debug(f"[Time-Based Engine]   Record types - Metadata: {metadata_count}, Actual data: {actual_data_count}")
+                            logger.debug(f"[Time-Based Engine] Record types - Metadata: {metadata_count}, Actual data: {actual_data_count}")
                 
-                # Create CorrelationMatch (without semantic_data - will be added in post-processing)
+                # Score / label decisions:
+                # - below_threshold: feather_count < minimum_feathers
+                # → "Low - below threshold" (score 0.5)
+                # - single_feather: feather_count == 1 (but >=
+                # minimum_feathers, so not below-threshold)
+                # → "Low - single feather" (score 0.5)
+                # Tags the huge mft_usn-only matches so they
+                # don't drown the High view; user-confirmed labeling.
+                # - else: "High" (score 1.0)
+                below_threshold = feather_count < minimum_feathers
+                single_feather = (not below_threshold) and feather_count == 1
+                if below_threshold:
+                    confidence_category = "Low - below threshold"
+                    confidence_score = 0.5
+                elif single_feather:
+                    confidence_category = "Low - single feather"
+                    confidence_score = 0.5
+                else:
+                    confidence_category = "High"
+                    confidence_score = 1.0
+
                 match = CorrelationMatch(
                     match_id=str(uuid.uuid4()),
                     timestamp=timestamp_str,
                     feather_records=match_feather_records,
-                    match_score=1.0,  # Identity matches are high confidence
+                    match_score=confidence_score,
                     feather_count=feather_count,
                     time_spread_seconds=time_spread,
                     anchor_feather_id=first_feather_id,
                     anchor_artifact_type='Unknown',
                     matched_application=identity_value,
-                    confidence_score=1.0,
-                    confidence_category="High",
-                    semantic_data=None  # Will be populated by post-processing semantic phase
+                    confidence_score=confidence_score,
+                    confidence_category=confidence_category,
+                    semantic_data=None # Will be populated by post-processing semantic phase
                 )
-                
+
                 matches.append(match)
-            
-            # Log skipped identities if any
-            if skipped_identities:
-                print(f"\n[Time-Window Engine] ⚠️  Skipped {len(skipped_identities)} identities ({total_skipped_records:,} records) - found in fewer than {minimum_feathers} feathers")
-                
-                if self.debug_mode:
-                    print(f"[Time-Window Engine] Skipped identities details:")
-                    for skip_info in skipped_identities[:10]:  # Show first 10
-                        print(f"[Time-Window Engine]   • {skip_info['identity']}: {skip_info['record_count']} records in {skip_info['feather_count']} feather(s) {skip_info['feathers']}")
-                    if len(skipped_identities) > 10:
-                        print(f"[Time-Window Engine]   ... and {len(skipped_identities) - 10} more")
-            
+                if single_feather:
+                    low_confidence_emitted += 1
+
+            # Aggregate diagnostics for this window. Promoted to INFO only when
+            # something was lost or surfaced for review; otherwise emitted at
+            # DEBUG so high-window-count runs don't spam the log.
+            # NOTE: parse_cache_hits counts records whose normalization was
+            # reused (same raw identity + feather + timestamp seen earlier in
+            # the window) — these are NOT dropped, just not re-parsed.
+            # Compact ledger string — name each non-zero drop bucket with
+            # its count + the first 3 sample identities. Lets analysts
+            # see *what* was lost in this window, not just how many.
+            ledger_parts: List[str] = []
+            for bucket_name, entry in drop_ledger.items():
+                if entry.get('count'):
+                    samples_key = 'samples' if 'samples' in entry else 'sample_feathers'
+                    samples = entry.get(samples_key) or []
+                    sample_str = (', '.join(samples)) if samples else ''
+                    ledger_parts.append(
+                        f"{bucket_name}={entry['count']:,}"
+                        + (f"({sample_str})" if sample_str else '')
+                    )
+            ledger_str = ' '.join(ledger_parts) if ledger_parts else ''
+
+            if total_records_in:
+                stats_line = (
+                    f"[Time-Window Engine] window={getattr(window, 'window_id', '?')} "
+                    f"records_in={total_records_in:,} "
+                    f"no_identity={total_records_no_identity:,} "
+                    f"parse_cache_hits={total_duplicates:,} "
+                    f"identities={len(identity_groups):,} "
+                    f"below_threshold={len(below_threshold_groups):,} "
+                    f"skipped={below_threshold_skipped:,} "
+                    f"low_confidence_emitted={low_confidence_emitted:,} "
+                    f"matches_emitted={len(matches):,} "
+                    f"min_feathers={minimum_feathers}"
+                )
+                if ledger_str:
+                    stats_line += f" dropped[{ledger_str}]"
+                noteworthy = (
+                    total_records_no_identity > 0
+                    or below_threshold_skipped > 0
+                    or low_confidence_emitted > 0
+                )
+                if noteworthy:
+                    logger.info(stats_line)
+                else:
+                    logger.debug(stats_line)
+
+            # Engine-level accumulator for the end-of-run summary. Each
+            # window contributes its totals so the pipeline boundary can
+            # produce a single "evidence accounting" block.
+            agg = self._evidence_accounting
+            agg['records_in'] += total_records_in
+            agg['records_no_identity'] += total_records_no_identity
+            agg['below_threshold_skipped'] += below_threshold_skipped
+            agg['low_confidence_emitted'] += low_confidence_emitted
+            agg['high_confidence_emitted'] += len(matches) - low_confidence_emitted
+            for bucket_name, entry in drop_ledger.items():
+                cnt = entry.get('count', 0)
+                if cnt:
+                    agg['drop_buckets'][bucket_name] = (
+                        agg['drop_buckets'].get(bucket_name, 0) + cnt
+                    )
+
+            # Per-window aggregate for cross-window statistics (consumed by callers
+            # if they choose to inspect it).
+            self._last_window_correlation_stats = {
+                'window_id': getattr(window, 'window_id', None),
+                'records_in': total_records_in,
+                'records_no_identity': total_records_no_identity,
+                'records_filtered_by_filters': total_filtered,
+                'parse_cache_hits': total_duplicates, # records that reused a cached normalization (not dropped)
+                'identities_unique': len(identity_groups),
+                'below_threshold_groups': len(below_threshold_groups),
+                'below_threshold_records': below_threshold_record_count,
+                'below_threshold_skipped': below_threshold_skipped,
+                'low_confidence_emitted': low_confidence_emitted,
+                'matches_emitted': len(matches),
+                'min_feathers_threshold': minimum_feathers,
+            }
+
+            # Verbose below-threshold dump (debug only)
+            if below_threshold_groups and self.debug_mode:
+                logger.debug(
+                    f"[Time-Window Engine] Below-threshold identity details "
+                    f"(first 10 of {len(below_threshold_groups)}):"
+                )
+                for info in below_threshold_groups[:10]:
+                    logger.debug(
+                        f"[Time-Window Engine] - {info['identity']}: "
+                        f"{info['record_count']} records in "
+                        f"{info['feather_count']} feather(s) {info['feathers']}"
+                    )
+
+            # Identity-side enrichment: attach records from timeless
+            # feathers (AutoStartPrograms, MUICache, SystemServices,
+            # TypedPaths, ...) to existing matches by shared identity.
+            # These feathers don't contribute to the window selection
+            # (they have no per-row time), but if a match's identity
+            # also appears in a timeless feather, that's relevant
+            # evidence — Discord in AutoStartPrograms enriches a match
+            # already anchored by a Discord prefetch run.
+            if matches:
+                self._enrich_matches_with_timeless_feathers(matches)
+
             return matches
         finally:
             # End profiling (Requirements 1.1, 1.3)
             try:
                 self.profiler.end_operation("_correlate_window_records")
             except Exception:
-                pass  # Silently ignore profiler errors
-    
+                pass # Silently ignore profiler errors
+
+    # Per-engine cache: feather_id -> {normalized_identity: [records]}.
+    # Built lazily on first window that produces matches; reused across
+    # all subsequent windows so timeless-feather full-table reads happen
+    # exactly once per pipeline run.
+    _timeless_identity_index: Optional[Dict[str, Dict[str, List[Dict[str, Any]]]]] = None
+
+    def _enrich_matches_with_timeless_feathers(self, matches: List['CorrelationMatch']) -> None:
+        """Attach records from timeless feathers to existing matches by identity.
+
+        Timeless feathers — AutoStartPrograms, MUICache, SystemServices,
+        TypedPaths, RegistryHives, InstalledSoftware, BAM, etc. — capture
+        persistent system state with no per-row observation time. They
+        can't drive window selection, but when a match's identity (e.g.
+        "discord") also appears in such a feather, that's real evidence
+        the analyst should see attached to the match.
+
+        This is a side-join: identities established by time-windowed
+        feathers are looked up in each timeless feather's full record
+        set. Matched records are appended to the match's
+        ``feather_records`` under the timeless feather's id. No claim is
+        made about WHEN those records were observed — the time anchor
+        for the match comes from the time-windowed feathers that
+        originally formed the identity group.
+
+        Operates in-place on the supplied matches list.
+        """
+        feather_queries = getattr(self, 'feather_queries', None)
+        if not feather_queries:
+            return
+
+        # Build the timeless-identity index once per engine run.
+        if self._timeless_identity_index is None:
+            from ..config import feather_schemas as _fs
+            self._timeless_identity_index = {}
+            for fid, ofq in feather_queries.items():
+                if not getattr(ofq, 'is_timeless', False):
+                    continue
+                try:
+                    rows = ofq.load_all_records()
+                except Exception as e:
+                    if self.debug_mode:
+                        logger.info(
+                            f"[Time-Window Engine] Could not load timeless "
+                            f"feather {fid!r}: {e}"
+                        )
+                    continue
+                if not rows:
+                    continue
+
+                # Schema-declared identity columns take priority over the
+                # generic CORE_IDENTITY_FIELDS walk: each feather knows
+                # which of its columns names the artifact (e.g. SystemServices
+                # uses service_name / display_name, not the generic
+                # "filename"). Falls back to the generic extractor when
+                # no schema is declared.
+                table = getattr(ofq.loader, 'current_table', None)
+                preferred_cols = _fs.identity_columns_preferred(table) if table else []
+
+                index: Dict[str, List[Dict[str, Any]]] = {}
+                for row in rows:
+                    identity = None
+                    # Try each preferred column in declared order.
+                    for col in preferred_cols:
+                        val = row.get(col)
+                        if val:
+                            raw = str(val).strip()
+                            if raw:
+                                identity = self._normalize_identity(raw)
+                                if identity:
+                                    break
+                    # Fallback: generic CORE_IDENTITY_FIELDS walk.
+                    if not identity:
+                        identity = self._extract_identity_from_record(row)
+                    if not identity:
+                        continue
+                    index.setdefault(identity, []).append(row)
+                if index:
+                    self._timeless_identity_index[fid] = index
+                    if self.debug_mode:
+                        logger.info(
+                            f"[Time-Window Engine] Timeless index for {fid!r}: "
+                            f"{len(index):,} unique identities across "
+                            f"{len(rows):,} rows"
+                        )
+
+        if not self._timeless_identity_index:
+            return
+
+        # Join phase: for each match, look up its identity in every
+        # timeless feather's index and append matching records.
+        enrichment_count = 0
+        for match in matches:
+            identity = getattr(match, 'matched_application', None)
+            if not identity:
+                continue
+            # Already normalized — matches use the same normalization
+            # path (_normalize_identity) that built the index above.
+            for fid, index in self._timeless_identity_index.items():
+                records = index.get(identity)
+                if not records:
+                    continue
+                existing = match.feather_records.get(fid, []) if match.feather_records else []
+                # Append; don't duplicate identical records that may
+                # have been added by an earlier enrichment call.
+                existing_ids = {id(r) for r in existing}
+                added = [r for r in records if id(r) not in existing_ids]
+                if added:
+                    if match.feather_records is None:
+                        match.feather_records = {}
+                    match.feather_records[fid] = existing + added
+                    enrichment_count += len(added)
+
+        if enrichment_count:
+            self._evidence_accounting['timeless_attached'] += enrichment_count
+            if self.debug_mode:
+                logger.info(
+                    f"[Time-Window Engine] Identity-side enrichment attached "
+                    f"{enrichment_count:,} timeless records to {len(matches):,} matches"
+                )
+
     def _process_window(self, window: TimeWindow, wing: Wing) -> List[CorrelationMatch]:
         """
         Process a single time window - Create correlations by grouping records by identity.
@@ -4754,11 +5875,6 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Task 23: Start profiling (Requirements 1.1, 1.4)
         if self._profiling_enabled:
             self.profiler.start_operation("_process_window")
-        
-        # Task 15: Record memory checkpoint at window start (Requirements 5.2, 5.3)
-        memory_before = None
-        if hasattr(self, 'memory_monitor') and self.memory_monitor:
-            memory_before = self.memory_monitor.get_current_usage_mb()
         
         # Start window performance monitoring
         window_metrics = self.performance_monitor.start_window_processing(
@@ -4783,7 +5899,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 if is_empty:
                     # Window is empty - skip immediately without full query
                     # Record time saved by skipping (Requirements 3.3)
-                    estimated_processing_time = 0.050  # 50ms estimated for full processing
+                    estimated_processing_time = 0.050 # 50ms estimated for full processing
                     self.empty_window_detector.record_time_saved(estimated_processing_time)
                     
                     if window_metrics:
@@ -4791,6 +5907,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                             window.window_id, 0, 0, 0
                         )
                     return []
+            
+            # Task 15: Record memory checkpoint ONLY for non-empty windows (Requirements 5.2, 5.3)
+            memory_before = None
+            if hasattr(self, 'memory_monitor') and self.memory_monitor:
+                memory_before = self.memory_monitor.get_current_usage_mb()
             
             # Step 1: Query all feathers for records in this window
             query_start_time = time.time()
@@ -4827,7 +5948,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Record correlation timing
             if window_metrics:
                 self.performance_monitor.record_correlation_timing(
-                    window.window_id, correlation_duration, 0  # No semantic comparisons yet
+                    window.window_id, correlation_duration, 0 # No semantic comparisons yet
                 )
             
             # Complete window monitoring
@@ -4854,7 +5975,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     memory_freed = self.memory_monitor.trigger_garbage_collection()
                     
                     if self.debug_mode:
-                        print(f"[TimeWindow] Memory pressure detected: {memory_status.current_mb:.1f}MB, freed {memory_freed:.1f}MB")
+                        logger.info(f"[TimeWindow] Memory pressure detected: {memory_status.current_mb:.1f}MB, freed {memory_freed:.1f}MB")
                 
                 elif memory_status.should_reduce_caches:
                     # Reduce cache sizes if available
@@ -4875,7 +5996,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                             )
                             
                             if self.debug_mode:
-                                print(f"[TimeWindow] Cache reduction: freed {actual_freed:.1f}MB")
+                                logger.info(f"[TimeWindow] Cache reduction: freed {actual_freed:.1f}MB")
             
             # Task 15: Release memory after window processing (Requirements 5.3)
             # Clear local references to allow garbage collection
@@ -4908,7 +6029,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 if self._profiling_enabled:
                     self.profiler.end_operation("_process_window")
             except Exception:
-                pass  # Silently ignore profiler errors
+                pass # Silently ignore profiler errors
     
     def _process_windows_sequential(self, 
                                   start_epoch: datetime, 
@@ -4931,7 +6052,15 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         matches = []
         window_count = 0
-        
+
+        # Adaptive progress emit cadence: aim for ~200 events per run so
+        # the GUI bar moves frequently enough to feel smooth regardless
+        # of dataset size, but never floods the cross-thread signal queue
+        # on huge runs. Capped at every 100 windows for very large runs
+        # (the original behavior) and bottoms out at every window for
+        # tiny runs (<200 windows).
+        progress_emit_step = max(1, min(100, total_windows // 200))
+
         # Task 8.3: Initialize progress reporter for window processing
         # Requirements: 4.1, 4.2, 4.3, 4.4
         # Reports progress every 5% (at 5%, 10%, 15%, 20%, etc.)
@@ -4939,7 +6068,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         progress_reporter = CorrelationProgressReporter(
             total_items=total_windows,
-            report_percentage_interval=5.0,  # Report every 5%
+            report_percentage_interval=5.0, # Report every 5%
             phase_name="Time-Window Scanning"
         )
         
@@ -4958,8 +6087,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # DISABLED: Smart stop was too risky - it skipped windows that were "likely" empty
         # For forensic analysis, we must process ALL windows to ensure no data is missed
         consecutive_empty_windows = 0
-        max_consecutive_empty_before_stop = 999999999  # Effectively disabled - never stop early
-        found_any_data = False  # Track if we've found any data yet
+        max_consecutive_empty_before_stop = 999999999 # Effectively disabled - never stop early
+        found_any_data = False # Track if we've found any data yet
         
         for window in self._generate_time_windows(start_epoch, end_epoch):
             # Task 9.3: Check for stall before processing each window
@@ -4979,7 +6108,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             except Exception:
                 # Cancellation requested - break out of loop
                 if self.debug_mode:
-                    print(f"[TimeWindow] Cancellation detected at window {window_count}")
+                    logger.info(f"[TimeWindow] Cancellation detected at window {window_count}")
                 break
             
             # Start window processing tracking with time-window-specific formatting
@@ -4991,7 +6120,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             )
             
             # Log per-window processing (Requirement 6.3)
-            window_num = window_count + 1  # 1-indexed for display
+            window_num = window_count + 1 # 1-indexed for display
             window_start_str = window.start_time.strftime('%Y-%m-%d %H:%M:%S')
             window_end_str = window.end_time.strftime('%Y-%m-%d %H:%M:%S')
             progress_percent = (window_num / total_windows * 100) if total_windows > 0 else 0
@@ -5031,17 +6160,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     else:
                         progress_msg += f" | ETA: {remaining_minutes:.1f}m"
                 
-                print(progress_msg)
-                
-                # Force GUI update to prevent freezing
-                try:
-                    from PyQt5.QtWidgets import QApplication
-                    QApplication.processEvents()
-                except:
-                    pass  # Ignore if not in GUI context
+                logger.info(progress_msg)
+                # NOTE: Do NOT call QApplication.processEvents() here.
+                # This runs in a worker thread — Qt event loop access is unsafe.
             
-            # Check memory pressure before processing window (silently)
-            self._check_memory_and_enable_streaming(result, wing)
+            # Check memory pressure every 50 windows (not every window — psutil syscalls are expensive)
+            if window_count % 50 == 0:
+                self._check_memory_and_enable_streaming(result, wing)
             
             # Process this time window with error handling (Requirement 6.8)
             try:
@@ -5049,7 +6174,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             except Exception as e:
                 # Log error for window processing failure (Requirement 6.8)
                 error_msg = str(e)
-                print(f"[Time-Window Engine] ❌ Error in window {window.window_id}: {error_msg}")
+                logger.info(f"[Time-Window Engine] [ERROR] Error in window {window.window_id}: {error_msg}")
                 
                 # Add error to result
                 result.errors.append(f"Window {window.window_id}: {error_msg}")
@@ -5059,7 +6184,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 
                 if self.debug_mode:
                     import traceback
-                    print(f"[Time-Window Engine] DEBUG: Full traceback:")
+                    logger.info(f"[Time-Window Engine] DEBUG: Full traceback:")
                     traceback.print_exc()
             
             # Calculate processing metrics
@@ -5086,9 +6211,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 
                 # Log window correlation results (Requirement 6.4)
                 # Note: Each match = one unique identity, total_records = all data records
-                print(f"[Time-Window Engine] ✓ Window {window.window_id} ({window_start_str} → {window_end_str}): {len(window_matches)} identities, {total_records} records")
-                found_any_data = True  # Mark that we've found data
-                consecutive_empty_windows = 0  # Reset counter when we find data
+                logger.info(f"[Time-Window Engine] [OK] Window {window.window_id} ({window_start_str} → {window_end_str}): {len(window_matches)} identities, {total_records} records")
+                found_any_data = True # Mark that we've found data
+                consecutive_empty_windows = 0 # Reset counter when we find data
             
             # Smart early termination: Stop if we've seen too many consecutive empty windows AFTER finding data
             if is_empty_window:
@@ -5097,17 +6222,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Only consider early termination if we've already found some data
                 if found_any_data and consecutive_empty_windows >= max_consecutive_empty_before_stop:
                     remaining_windows = total_windows - window_count
-                    print(f"\n[Time-Window Engine] 🎯 Smart Stop: {consecutive_empty_windows} consecutive empty windows detected")
-                    print(f"[Time-Window Engine]   Skipping remaining {remaining_windows:,} windows (likely all empty)")
-                    print(f"[Time-Window Engine]   Processed: {window_count:,}/{total_windows:,} windows ({window_count/total_windows*100:.1f}%)")
-                    print(f"[Time-Window Engine]   Found: {len(matches):,} matches in {window_count - consecutive_empty_windows:,} windows with data")
+                    logger.info(f"\n[Time-Window Engine] Smart Stop: {consecutive_empty_windows} consecutive empty windows detected")
+                    logger.info(f"[Time-Window Engine] Skipping remaining {remaining_windows:,} windows (likely all empty)")
+                    logger.info(f"[Time-Window Engine] Processed: {window_count:,}/{total_windows:,} windows ({window_count/total_windows*100:.1f}%)")
+                    logger.info(f"[Time-Window Engine] Found: {len(matches):,} matches in {window_count - consecutive_empty_windows:,} windows with data")
                     
                     # Add info to result
                     result.warnings.append(
                         f"Early termination: Stopped after {consecutive_empty_windows} consecutive empty windows. "
                         f"Skipped {remaining_windows:,} likely empty windows."
                     )
-                    break  # Exit the scanning loop early
+                    break # Exit the scanning loop early
             
             # Update window processing statistics (if enabled)
             if self.scanning_config.track_empty_window_stats:
@@ -5152,13 +6277,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Requirements: 4.2, 4.3, 4.4
             progress_reporter.update(items_processed=1)
             
-            # Task 9.3: Update stall monitor after processing each window
+            # Task 9.3: Update stall monitor every 10 windows (not every window)
             # Requirements: 5.2, 5.4
-            stall_monitor.update_progress(
-                window_count,
-                current_stage="window_processing",
-                last_operation=f"processed_window_{window_count}"
-            )
+            if window_count % 10 == 0:
+                stall_monitor.update_progress(
+                    window_count,
+                    current_stage="window_processing",
+                    last_operation="window_processing"
+                )
             
             # OPTIMIZATION: Consolidate memory pressure checks and throttle reporting
             memory_usage = None
@@ -5184,12 +6310,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 is_empty_window=is_empty_window
             )
             
-            # Report time-window processing milestone - throttled to every 100 windows
+            # Report time-window processing milestone - keep the heavier
+            # milestone log on the original every-100-windows cadence.
             if window_count % 100 == 0 or window_count == total_windows:
                 self._report_time_window_milestone(window_count, total_windows, window.start_time, window.end_time)
-            
-            # Legacy progress reporting for backward compatibility
-            if window_count % 100 == 0 or window_count == total_windows:
+
+            # GUI progress emit — adaptive cadence so the bar moves often
+            # enough to interpolate smoothly across all dataset sizes.
+            if window_count % progress_emit_step == 0 or window_count == total_windows:
                 self._emit_progress_event("window_progress", {
                     'windows_processed': window_count,
                     'total_windows': total_windows,
@@ -5200,19 +6328,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     'processing_mode': 'sequential'
                 })
             
-            # Force GUI update more frequently to prevent freezing (every 10 windows)
-            if window_count % 10 == 0:
-                try:
-                    from PyQt5.QtWidgets import QApplication
-                    QApplication.processEvents()
-                except:
-                    pass  # Ignore if not in GUI context
+            # NOTE: Do NOT call QApplication.processEvents() here.
+            # This code runs in a worker thread — calling processEvents() from a
+            # non-GUI thread is unsafe and was the primary cause of loading bar
+            # freeze/deadlock. The Qt signal-slot mechanism with QueuedConnection
+            # already handles cross-thread GUI updates properly.
             
             if self.debug_mode and window_count % 1000 == 0:
                 memory_report = self.memory_manager.check_memory_pressure() if self.memory_manager else None
                 memory_info = f", memory: {memory_report.current_memory_mb:.1f}MB" if memory_report else ""
                 streaming_info = " (streaming)" if self.streaming_mode_active else ""
-                print(f"[TimeWindow] Processed {window_count}/{total_windows} windows, "
+                logger.info(f"[TimeWindow] Processed {window_count}/{total_windows} windows, "
                       f"{result.total_matches} matches found{memory_info}{streaming_info}")
         
         # Task 8.3: Report final progress (100%)
@@ -5246,7 +6372,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         if self.debug_mode:
             processor_type = "coordinator" if self.use_parallel_coordinator else "processor"
-            print(f"[TimeWindow] Starting parallel processing of {len(windows)} windows "
+            logger.info(f"[TimeWindow] Starting parallel processing of {len(windows)} windows "
                   f"with {self.max_workers} workers using {processor_type}")
         
         # Task 12: Use ParallelCoordinator if configured
@@ -5311,17 +6437,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     window_id=window.window_id,
                     window_start_time=window.start_time,
                     window_end_time=window.end_time,
-                    records_found=0,  # Not tracked in parallel mode
+                    records_found=0, # Not tracked in parallel mode
                     matches_created=len(matches),
-                    feathers_with_records=0,  # Not tracked in parallel mode
-                    memory_usage_mb=0,  # Not tracked per window in parallel mode
+                    feathers_with_records=0, # Not tracked in parallel mode
+                    memory_usage_mb=0, # Not tracked per window in parallel mode
                     is_empty_window=len(matches) == 0
                 )
                 
                 return matches
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[TimeWindow] Error processing window {window.window_id}: {e}")
+                    logger.info(f"[TimeWindow] Error processing window {window.window_id}: {e}")
                 # Return empty list on error - coordinator will track the error
                 return []
         
@@ -5342,7 +6468,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Flatten matches (each window returns a list of matches)
         flattened_matches = []
         for window_matches in all_matches:
-            if window_matches:  # Skip None results from errors
+            if window_matches: # Skip None results from errors
                 flattened_matches.extend(window_matches)
         
         # Add all matches to result
@@ -5353,7 +6479,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         if self.parallel_coordinator.has_errors():
             error_summary = self.parallel_coordinator.get_error_summary()
             if self.debug_mode:
-                print(f"[TimeWindow] Parallel coordinator completed with {error_summary['total_errors']} errors")
+                logger.info(f"[TimeWindow] Parallel coordinator completed with {error_summary['total_errors']} errors")
             
             # Add error summary to result warnings
             result.warnings.append(
@@ -5393,7 +6519,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             lb_stats = progress_data.get('load_balancing_stats', {})
             efficiency = lb_stats.get('balancing_efficiency', 0.0)
             
-            print(f"[TimeWindow] Parallel batch complete: {batch_size} windows, "
+            logger.info(f"[TimeWindow] Parallel batch complete: {batch_size} windows, "
                   f"{windows_processed}/{total_windows} total, {matches_found} matches, "
                   f"load balance: {efficiency:.2f}")
     
@@ -5427,7 +6553,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 })
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[TimeWindow] Progress listener error: {e}")
+                    logger.info(f"[TimeWindow] Progress listener error: {e}")
     
     def _cleanup_feather_queries(self):
         """Cleanup feather query managers with comprehensive error handling"""
@@ -5446,7 +6572,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             except Exception as e:
                 cleanup_errors.append(f"Error cleaning up feather {feather_id}: {str(e)}")
                 if self.debug_mode:
-                    print(f"[TimeWindow] Cleanup error for {feather_id}: {e}")
+                    logger.info(f"[TimeWindow] Cleanup error for {feather_id}: {e}")
         
         self.feather_queries.clear()
         
@@ -5457,7 +6583,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             except Exception as e:
                 cleanup_errors.append(f"Error closing streaming writer: {str(e)}")
                 if self.debug_mode:
-                    print(f"[TimeWindow] Streaming writer cleanup error: {e}")
+                    logger.info(f"[TimeWindow] Streaming writer cleanup error: {e}")
             self.streaming_writer = None
         
         # Cleanup parallel processing
@@ -5466,16 +6592,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         except Exception as e:
             cleanup_errors.append(f"Error cleaning up parallel processing: {str(e)}")
             if self.debug_mode:
-                print(f"[TimeWindow] Parallel processing cleanup error: {e}")
+                logger.info(f"[TimeWindow] Parallel processing cleanup error: {e}")
         
         # Log cleanup summary
         if self.debug_mode:
             if cleanup_errors:
-                print(f"[TimeWindow] Cleanup completed with {len(cleanup_errors)} errors:")
+                logger.info(f"[TimeWindow] Cleanup completed with {len(cleanup_errors)} errors:")
                 for error in cleanup_errors:
-                    print(f"[TimeWindow]   - {error}")
+                    logger.info(f"[TimeWindow] - {error}")
             else:
-                print("[TimeWindow] Cleanup completed successfully")
+                logger.info("[TimeWindow] Cleanup completed successfully")
         
         return cleanup_errors
     
@@ -5502,7 +6628,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         should_stream, reason = self.memory_manager.should_enable_streaming_mode()
         
         if should_stream:
-            print(f"[Time-Window Engine] 💾 Streaming mode enabled")
+            logger.info(f"[Time-Window Engine] Streaming mode enabled")
             
             # Create streaming database path
             streaming_db_path = self._get_streaming_database_path(wing)
@@ -5526,7 +6652,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 
                 # Create result session with proper execution_id
                 result_id = self.streaming_writer.create_result(
-                    execution_id=self._execution_id if self._execution_id else 0,  # Use pipeline execution_id
+                    execution_id=self._execution_id if self._execution_id else 0, # Use pipeline execution_id
                     wing_id=wing.wing_id,
                     wing_name=wing.wing_name,
                     feathers_processed=result.feathers_processed,
@@ -5542,7 +6668,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 self.streaming_mode_active = True
                 self.memory_manager.activate_streaming_mode(reason)
                 
-                print(f"[Time-Window Engine]   ✓ Streaming to: {streaming_db_path}")
+                logger.info(f"[Time-Window Engine] [OK] Streaming to: {streaming_db_path}")
                 
                 # Legacy progress event for backward compatibility
                 self._emit_progress_event("streaming_enabled", {
@@ -5552,7 +6678,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 })
                 
             except Exception as e:
-                print(f"[Time-Window Engine]   ❌ Failed to enable streaming: {e}")
+                logger.info(f"[Time-Window Engine] [ERROR] Failed to enable streaming: {e}")
                 if self.debug_mode:
                     import traceback
                     traceback.print_exc()
@@ -5560,7 +6686,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Issue memory warnings if needed
         elif memory_report.usage_percentage > 80:
             if self.debug_mode:
-                print(f"[Time-Window Engine]   ⚠️ Memory warning: {memory_report.usage_percentage:.1f}%")
+                logger.info(f"[Time-Window Engine] [WARN] Memory warning: {memory_report.usage_percentage:.1f}%")
             
             # Report memory warning to progress tracker
             self.progress_tracker.report_memory_warning(
@@ -5584,8 +6710,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             output_dir = Path(self._output_dir)
             db_path = output_dir / "correlation_results.db"
             if self.debug_mode:
-                print(f"[TimeWindow] Using pipeline output directory: {output_dir}")
-                print(f"[TimeWindow] Database path: {db_path}")
+                logger.info(f"[TimeWindow] Using pipeline output directory: {output_dir}")
+                logger.info(f"[TimeWindow] Database path: {db_path}")
             return str(db_path)
         
         # Priority 2: Use pipeline config's output_directory if available
@@ -5593,19 +6719,19 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             output_dir = Path(self.config.output_directory)
             db_path = output_dir / "correlation_results.db"
             if self.debug_mode:
-                print(f"[TimeWindow] Using pipeline config output directory: {output_dir}")
+                logger.info(f"[TimeWindow] Using pipeline config output directory: {output_dir}")
             return str(db_path)
         
         # Priority 3: Use wing path parent directory
         elif hasattr(wing, 'wing_path') and wing.wing_path:
             output_dir = Path(wing.wing_path).parent
             if self.debug_mode:
-                print(f"[TimeWindow] Using wing path parent directory: {output_dir}")
+                logger.info(f"[TimeWindow] Using wing path parent directory: {output_dir}")
         # Priority 4: Fall back to current working directory
         else:
             output_dir = Path.cwd()
             if self.debug_mode:
-                print(f"[TimeWindow] WARNING: Falling back to current working directory: {output_dir}")
+                logger.info(f"[TimeWindow] WARNING: Falling back to current working directory: {output_dir}")
         
         # Create streaming_results subdirectory (fallback mode only)
         streaming_dir = output_dir / "streaming_results"
@@ -5617,7 +6743,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         db_path = streaming_dir / db_name
         if self.debug_mode:
-            print(f"[TimeWindow] Streaming database path: {db_path}")
+            logger.info(f"[TimeWindow] Streaming database path: {db_path}")
         
         return str(db_path)
     
@@ -5641,9 +6767,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Perform cleanup based on memory usage and window count
         # OPTIMIZATION: More conservative cleanup interval
         should_cleanup = (
-            memory_report.usage_percentage > 85 or  # High memory usage (was 70)
-            window_count % 1000 == 0 or  # Periodic cleanup every 1000 windows
-            memory_report.is_over_limit  # Over memory limit
+            memory_report.usage_percentage > 85 or # High memory usage (was 70)
+            window_count % 1000 == 0 or # Periodic cleanup every 1000 windows
+            memory_report.is_over_limit # Over memory limit
         )
         
         if should_cleanup:
@@ -5653,7 +6779,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Clear query cache if it exists
             if hasattr(self, 'window_query_manager') and hasattr(self.window_query_manager, 'query_cache'):
                 cache_size = len(self.window_query_manager.query_cache)
-                if cache_size > 500:  # Clear cache if it's getting large (was 100)
+                if cache_size > 500: # Clear cache if it's getting large (was 100)
                     self.window_query_manager.query_cache.clear()
     
     def _report_time_window_milestone(self, processed_windows: int, total_windows: int, 
@@ -5672,8 +6798,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Log time-window-specific progress format
         if self.debug_mode and processed_windows % 100 == 0:
-            print(f"[TimeWindow] Processing window {processed_windows} of {total_windows} ({progress_percent:.1f}% complete)")
-            print(f"[TimeWindow] Current window: {window_start.strftime('%Y-%m-%d %H:%M:%S')} to {window_end.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"[TimeWindow] Processing window {processed_windows} of {total_windows} ({progress_percent:.1f}% complete)")
+            logger.info(f"[TimeWindow] Current window: {window_start.strftime('%Y-%m-%d %H:%M:%S')} to {window_end.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Report to progress tracker with time-window-specific message
         from .progress_tracking import ProgressEvent, ProgressEventType
@@ -5710,7 +6836,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         if not self.streaming_writer or not self.streaming_mode_active:
             return
         
-        print(f"[Time-Window Engine] 💾 Finalizing streaming mode...")
+        logger.info(f"[Time-Window Engine] Finalizing streaming mode...")
         
         try:
             # Flush any remaining matches
@@ -5731,14 +6857,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 )
             
             total_written = self.streaming_writer.get_total_written()
-            print(f"[Time-Window Engine]   ✓ {total_written:,} matches written to database")
+            logger.info(f"[Time-Window Engine] [OK] {total_written:,} matches written to database")
             
             # Store streaming info in result
             result.streaming_database_path = getattr(result, '_streaming_db_path', None)
             result.streaming_matches_written = total_written
             
         except Exception as e:
-            print(f"[Time-Window Engine]   ❌ Error finalizing streaming: {e}")
+            logger.info(f"[Time-Window Engine] [ERROR] Error finalizing streaming: {e}")
             if self.debug_mode:
                 import traceback
                 traceback.print_exc()
@@ -6124,7 +7250,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             'empty_window_check_time_seconds': stats.empty_window_check_time_seconds,
             'average_check_time_ms': avg_check_time_ms,
             'efficiency_summary': stats.get_efficiency_summary(),
-            'performance_target_met': avg_check_time_ms < 1.0  # Target: <1ms per check
+            'performance_target_met': avg_check_time_ms < 1.0 # Target: <1ms per check
         }
     
     def get_efficiency_metrics(self) -> Dict[str, Any]:
@@ -6169,11 +7295,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Factor 3: Quick check performance (30 points max)
         avg_check_time = empty_window_stats.get('average_check_time_ms', 999)
         if avg_check_time < 1.0:
-            efficiency_score += 30  # Perfect score
+            efficiency_score += 30 # Perfect score
         elif avg_check_time < 5.0:
-            efficiency_score += 20  # Good
+            efficiency_score += 20 # Good
         elif avg_check_time < 10.0:
-            efficiency_score += 10  # Acceptable
+            efficiency_score += 10 # Acceptable
         
         # Calculate total time saved
         total_time_saved = (
@@ -6367,7 +7493,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         if hasattr(self, 'memory_manager') and self.memory_manager:
             memory_stats = self.memory_manager.get_memory_statistics()
             peak_memory_mb = memory_stats.get('peak_memory_mb', 0)
-            if peak_memory_mb > 4096:  # > 4GB
+            if peak_memory_mb > 4096: # > 4GB
                 bottlenecks.append({
                     'type': 'high_memory_usage',
                     'severity': 'high',
@@ -6375,7 +7501,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     'impact': 'Risk of out-of-memory errors, potential swapping',
                     'recommendation': 'Enable streaming mode or reduce cache sizes'
                 })
-            elif peak_memory_mb > 2048:  # > 2GB
+            elif peak_memory_mb > 2048: # > 2GB
                 bottlenecks.append({
                     'type': 'moderate_memory_usage',
                     'severity': 'medium',
@@ -6619,9 +7745,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         if hasattr(self, 'performance_monitor'):
             self.performance_monitor.export_performance_data(filepath)
-            print(f"[TimeWindow] Performance data exported to {filepath}")
+            logger.info(f"[TimeWindow] Performance data exported to {filepath}")
         else:
-            print("[TimeWindow] No performance monitor available for export")
+            logger.info("[TimeWindow] No performance monitor available for export")
     
     def _extract_feather_paths(self, wing: Wing) -> Dict[str, str]:
         """
@@ -6704,7 +7830,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             semantic_values = [v.get('semantic_value', '') for k, v in semantic_data.items() 
                              if k != '_metadata' and isinstance(v, dict)]
             if semantic_values:
-                unique_values = list(set(semantic_values))[:5]  # Show first 5 unique values
+                unique_values = list(set(semantic_values))[:5] # Show first 5 unique values
                 logger.debug(f"[Time-Window Engine] Semantic values sample: {unique_values}")
         
         return semantic_data
@@ -6914,7 +8040,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             if not self.semantic_mapping_controller.should_apply_per_record_semantic_mapping():
                 if self.debug_mode:
                     logger.info("[Time-Window Engine] Skipping per-record semantic mapping - will be applied in Identity Semantic Phase")
-                print("[Time-Window Engine] Semantic mapping deferred to Identity Semantic Phase")
+                logger.info("[Time-Window Engine] Semantic mapping deferred to Identity Semantic Phase")
                 return matches
         
         # Task 6.1: Check if semantic integration is available before proceeding
@@ -6945,7 +8071,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Phase 1: Collect all records from all matches into a single batch
             all_records = []
             match_indices = []
-            record_to_match_map = []  # Track which records belong to which match
+            record_to_match_map = [] # Track which records belong to which match
             
             for match_idx, match in enumerate(matches):
                 for feather_id, record in match.feather_records.items():
@@ -6967,7 +8093,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             semantic_data_per_match = self._extract_semantic_data_batch(enhanced_records_list, match_indices)
             
             # Phase 4: Reconstruct enhanced records per match
-            enhanced_records_per_match = [{}  for _ in range(len(matches))]
+            enhanced_records_per_match = [{} for _ in range(len(matches))]
             for record_idx, enhanced_record in enumerate(enhanced_records_list):
                 match_idx, feather_id = record_to_match_map[record_idx]
                 enhanced_records_per_match[match_idx][feather_id] = enhanced_record
@@ -7001,7 +8127,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         confidence_category=match.confidence_category,
                         weighted_score=match.weighted_score,
                         score_breakdown=match.score_breakdown,
-                        semantic_data=semantic_data  # Now contains actual values from batch processing
+                        semantic_data=semantic_data # Now contains actual values from batch processing
                     )
                     
                     enhanced_matches.append(enhanced_match)
@@ -7027,7 +8153,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     # Keep original match but add error semantic_data
                     error_match = CorrelationMatch(
                         match_id=match.match_id,
-                        feather_records=match.feather_records,  # Keep original records
+                        feather_records=match.feather_records, # Keep original records
                         timestamp=match.timestamp,
                         match_score=match.match_score,
                         feather_count=match.feather_count,
@@ -7069,7 +8195,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 
                 error_match = CorrelationMatch(
                     match_id=match.match_id,
-                    feather_records=match.feather_records,  # Keep original records
+                    feather_records=match.feather_records, # Keep original records
                     timestamp=match.timestamp,
                     match_score=match.match_score,
                     feather_count=match.feather_count,
@@ -7279,13 +8405,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Log weighted scoring statistics
         scoring_stats = self.scoring_integration.get_scoring_statistics()
         logger.info(f"Weighted scoring application completed:")
-        logger.info(f"  Matches processed: {len(matches)}")
-        logger.info(f"  Scores calculated: {scoring_stats.scores_calculated}")
-        logger.info(f"  Fallbacks to simple count: {scoring_stats.fallback_to_simple_count}")
-        logger.info(f"  Average score: {scoring_stats.average_score:.2f}")
+        logger.info(f" Matches processed: {len(matches)}")
+        logger.info(f" Scores calculated: {scoring_stats.scores_calculated}")
+        logger.info(f" Fallbacks to simple count: {scoring_stats.fallback_to_simple_count}")
+        logger.info(f" Average score: {scoring_stats.average_score:.2f}")
         
         # Log detailed scoring summary
-        execution_time = 0.1  # This would be actual execution time from the calling method
+        execution_time = 0.1 # This would be actual execution time from the calling method
         self.scoring_integration.log_scoring_summary(len(matches), execution_time)
         
         return scored_matches
@@ -7502,7 +8628,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             ),
             'match_count': self.last_result.total_matches,
             'feathers_processed': self.last_result.feathers_processed,
-            'duplicate_rate': 0.0,  # Time-window scanning has minimal duplicates
+            'duplicate_rate': 0.0, # Time-window scanning has minimal duplicates
             'windows_processed': getattr(self.last_result, 'windows_processed', 0),
             'semantic_mapping_enabled': self.semantic_integration.is_enabled(),
             'weighted_scoring_enabled': self.scoring_integration.is_enabled()
@@ -7577,9 +8703,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         Returns:
             Dictionary with statistics about semantic mapping applied
         """
-        print("\n" + "="*80)
-        print("[Time-Window Engine] Starting Post-Processing Semantic Mapping")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("[Time-Window Engine] Starting Post-Processing Semantic Mapping")
+        logger.info("="*80)
         
         # Check if semantic mapping is enabled in settings
         try:
@@ -7588,9 +8714,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             wings_semantic_enabled = getattr(case_manager.global_config, 'wings_semantic_mapping_enabled', True)
             
             if not wings_semantic_enabled:
-                print("[Time-Window Engine] ⚠ Semantic mapping is disabled in settings")
-                print("[Time-Window Engine] You can enable it from Settings > General > Wings Semantic Mapping")
-                print("="*80)
+                logger.info("[Time-Window Engine] [WARN] Semantic mapping is disabled in settings")
+                logger.info("[Time-Window Engine] You can enable it from Settings > General > Wings Semantic Mapping")
+                logger.info("="*80)
                 return {
                     'status': 'skipped',
                     'reason': 'disabled_in_settings',
@@ -7598,8 +8724,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 }
         except Exception as e:
             # If we can't load settings, default to enabled (backward compatibility)
-            print(f"[Time-Window Engine] ⚠ Could not load settings: {e}")
-            print("[Time-Window Engine] Defaulting to semantic mapping enabled")
+            logger.info(f"[Time-Window Engine] [WARN] Could not load settings: {e}")
+            logger.info("[Time-Window Engine] Defaulting to semantic mapping enabled")
         
         start_time = time.time()
         
@@ -7609,13 +8735,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             from ..identity_semantic_phase.sql_semantic_mapper import SQLSemanticMapper
             
             # Initialize semantic manager
-            print("[Time-Window Engine] Loading semantic rules...")
+            logger.info("[Time-Window Engine] Loading semantic rules...")
             semantic_manager = SemanticMappingManager()
             rules_count = len(semantic_manager.global_rules)
-            print(f"[Time-Window Engine] Loaded {rules_count} semantic rules")
+            logger.info(f"[Time-Window Engine] Loaded {rules_count} semantic rules")
             
             if rules_count == 0:
-                print("[Time-Window Engine] ⚠ No semantic rules found - skipping semantic mapping")
+                logger.info("[Time-Window Engine] [WARN] No semantic rules found - skipping semantic mapping")
                 return {
                     'success': False,
                     'reason': 'no_rules',
@@ -7624,25 +8750,25 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 }
             
             # Create SQL semantic mapper
-            print(f"[Time-Window Engine] Initializing SQL semantic mapper...")
-            print(f"[Time-Window Engine] Database: {database_path}")
-            print(f"[Time-Window Engine] Execution ID: {execution_id}")
+            logger.info(f"[Time-Window Engine] Initializing SQL semantic mapper...")
+            logger.info(f"[Time-Window Engine] Database: {database_path}")
+            logger.info(f"[Time-Window Engine] Execution ID: {execution_id}")
             
             mapper = SQLSemanticMapper(database_path, execution_id)
             
             # Apply semantic mapping using SQL (same as Identity engine)
-            print("[Time-Window Engine] Applying semantic mapping to database...")
+            logger.info("[Time-Window Engine] Applying semantic mapping to database...")
             result = mapper.apply_semantic_mapping(semantic_manager.global_rules)
             
             processing_time = time.time() - start_time
             
             # Print summary
-            print("\n" + "="*80)
-            print("[Time-Window Engine] Post-Processing Semantic Mapping Complete")
-            print("="*80)
-            print(f"Matches updated: {result.get('matches_updated', 0):,}")
-            print(f"Processing time: {processing_time:.2f}s")
-            print("="*80 + "\n")
+            logger.info("\n" + "="*80)
+            logger.info("[Time-Window Engine] Post-Processing Semantic Mapping Complete")
+            logger.info("="*80)
+            logger.info(f"Matches updated: {result.get('matches_updated', 0):,}")
+            logger.info(f"Processing time: {processing_time:.2f}s")
+            logger.info("="*80 + "\n")
             
             return {
                 'success': True,
@@ -7655,7 +8781,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             processing_time = time.time() - start_time
             error_msg = str(e)
             
-            print(f"\n[Time-Window Engine] ❌ Error in post-processing semantic mapping: {error_msg}")
+            logger.info(f"\n[Time-Window Engine] [ERROR] Error in post-processing semantic mapping: {error_msg}")
             logger.error(f"Post-processing semantic mapping failed: {e}")
             
             import traceback
@@ -7684,16 +8810,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         Returns:
             Dictionary with statistics about scoring applied
         """
-        print("\n" + "="*80)
-        print("[Time-Window Engine] Starting Post-Processing Weighted Scoring")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("[Time-Window Engine] Starting Post-Processing Weighted Scoring")
+        logger.info("="*80)
         
         start_time = time.time()
         
         try:
             # Check if scoring is enabled
             if not self.scoring_integration.is_enabled():
-                print("[Time-Window Engine] ⚠ Weighted scoring is disabled - skipping")
+                logger.info("[Time-Window Engine] [WARN] Weighted scoring is disabled - skipping")
                 return {
                     'success': False,
                     'reason': 'scoring_disabled',
@@ -7704,92 +8830,92 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Connect to database
             import sqlite3
             conn = sqlite3.connect(database_path, timeout=30.0)
-            cursor = conn.cursor()
-            
-            # Get all matches for this execution
-            print(f"[Time-Window Engine] Loading matches from database...")
-            cursor.execute("""
-                SELECT match_id, feather_records, confidence_score, confidence_category
-                FROM matches
-                WHERE execution_id = ?
-            """, (execution_id,))
-            
-            matches_data = cursor.fetchall()
-            print(f"[Time-Window Engine] Loaded {len(matches_data):,} matches")
-            
-            if len(matches_data) == 0:
-                conn.close()
-                return {
-                    'success': False,
-                    'reason': 'no_matches',
-                    'matches_updated': 0,
-                    'processing_time_seconds': time.time() - start_time
-                }
-            
-            # Apply scoring to each match
-            print("[Time-Window Engine] Calculating weighted scores...")
-            case_id = getattr(self.config, 'case_id', None)
-            updates = []
-            
-            for match_id, feather_records_json, old_confidence_score, old_confidence_category in matches_data:
-                try:
-                    # Parse feather records
-                    feather_records = json.loads(feather_records_json) if feather_records_json else []
-                    
-                    # Calculate weighted score
-                    weighted_score = self.scoring_integration.calculate_match_scores(
-                        feather_records, wing, case_id
-                    )
-                    
-                    if isinstance(weighted_score, dict):
-                        # Extract score components
-                        score = weighted_score.get('score', old_confidence_score)
-                        category = weighted_score.get('interpretation', old_confidence_category)
-                        breakdown = json.dumps(weighted_score.get('breakdown', {}))
-                        weighted_score_json = json.dumps(weighted_score)
+            try:
+                cursor = conn.cursor()
+                
+                # Get all matches for this execution
+                logger.info(f"[Time-Window Engine] Loading matches from database...")
+                cursor.execute("""
+                    SELECT match_id, feather_records, confidence_score, confidence_category
+                    FROM matches
+                    WHERE execution_id = ?
+                """, (execution_id,))
+                
+                matches_data = cursor.fetchall()
+                logger.info(f"[Time-Window Engine] Loaded {len(matches_data):,} matches")
+                
+                if len(matches_data) == 0:
+                    return {
+                        'success': False,
+                        'reason': 'no_matches',
+                        'matches_updated': 0,
+                        'processing_time_seconds': time.time() - start_time
+                    }
+                
+                # Apply scoring to each match
+                logger.info("[Time-Window Engine] Calculating weighted scores...")
+                case_id = getattr(self.config, 'case_id', None)
+                updates = []
+                
+                for match_id, feather_records_json, old_confidence_score, old_confidence_category in matches_data:
+                    try:
+                        # Parse feather records
+                        feather_records = json.loads(feather_records_json) if feather_records_json else []
                         
-                        updates.append((score, category, weighted_score_json, breakdown, match_id))
-                    
-                except Exception as e:
-                    logger.warning(f"Scoring failed for match {match_id}: {e}")
-                    continue
-            
-            # Bulk update database
-            if updates:
-                print(f"[Time-Window Engine] Updating {len(updates):,} matches in database...")
-                cursor.executemany("""
-                    UPDATE matches
-                    SET confidence_score = ?,
-                        confidence_category = ?,
-                        weighted_score = ?,
-                        score_breakdown = ?
-                    WHERE match_id = ?
-                """, updates)
-                conn.commit()
-            
-            conn.close()
-            
-            processing_time = time.time() - start_time
-            
-            # Print summary
-            print("\n" + "="*80)
-            print("[Time-Window Engine] Post-Processing Weighted Scoring Complete")
-            print("="*80)
-            print(f"Matches updated: {len(updates):,}")
-            print(f"Processing time: {processing_time:.2f}s")
-            print("="*80 + "\n")
-            
-            return {
-                'success': True,
-                'matches_updated': len(updates),
-                'processing_time_seconds': processing_time
-            }
+                        # Calculate weighted score
+                        weighted_score = self.scoring_integration.calculate_match_scores(
+                            feather_records, wing, case_id
+                        )
+                        
+                        if isinstance(weighted_score, dict):
+                            # Extract score components
+                            score = weighted_score.get('score', old_confidence_score)
+                            category = weighted_score.get('interpretation', old_confidence_category)
+                            breakdown = json.dumps(weighted_score.get('breakdown', {}))
+                            weighted_score_json = json.dumps(weighted_score)
+                            
+                            updates.append((score, category, weighted_score_json, breakdown, match_id))
+                        
+                    except Exception as e:
+                        logger.warning(f"Scoring failed for match {match_id}: {e}")
+                        continue
+                
+                # Bulk update database
+                if updates:
+                    logger.info(f"[Time-Window Engine] Updating {len(updates):,} matches in database...")
+                    cursor.executemany("""
+                        UPDATE matches
+                        SET confidence_score = ?,
+                            confidence_category = ?,
+                            weighted_score = ?,
+                            score_breakdown = ?
+                        WHERE match_id = ?
+                    """, updates)
+                    conn.commit()
+                
+                processing_time = time.time() - start_time
+                
+                # Print summary
+                logger.info("\n" + "="*80)
+                logger.info("[Time-Window Engine] Post-Processing Weighted Scoring Complete")
+                logger.info("="*80)
+                logger.info(f"Matches updated: {len(updates):,}")
+                logger.info(f"Processing time: {processing_time:.2f}s")
+                logger.info("="*80 + "\n")
+                
+                return {
+                    'success': True,
+                    'matches_updated': len(updates),
+                    'processing_time_seconds': processing_time
+                }
+            finally:
+                conn.close()
             
         except Exception as e:
             processing_time = time.time() - start_time
             error_msg = str(e)
             
-            print(f"\n[Time-Window Engine] ❌ Error in post-processing scoring: {error_msg}")
+            logger.info(f"\n[Time-Window Engine] [ERROR] Error in post-processing scoring: {error_msg}")
             logger.error(f"Post-processing scoring failed: {e}")
             
             import traceback

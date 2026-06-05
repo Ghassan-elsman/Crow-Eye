@@ -38,7 +38,7 @@ class ComplexityAnalysis:
         for i in range(1, len(self.dataset_sizes)):
             size_ratio = self.dataset_sizes[i] / self.dataset_sizes[i-1]
             time_ratio = self.execution_times[i] / self.execution_times[i-1]
-            if size_ratio > 1.1:  # Only consider significant size increases
+            if size_ratio > 1.1: # Only consider significant size increases
                 time_ratios.append(time_ratio / size_ratio)
         
         if time_ratios:
@@ -616,7 +616,7 @@ class AdvancedPerformanceAnalyzer:
             if latest_report.error_count > 0:
                 recommendations.append("Implement better error handling and recovery mechanisms")
         
-        return list(set(recommendations))  # Remove duplicates
+        return list(set(recommendations)) # Remove duplicates
     
     def analyze_performance_report(self, report: PerformanceReport) -> Dict[str, Any]:
         """

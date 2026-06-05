@@ -2,13 +2,33 @@
 
 This document describes the architecture of the Crow-Eye Correlation Engine, explaining how the various components work together to process forensic data and produce correlation results.
 
+> ## Recent consolidation (current state)
+>
+> The engine recently went through a structural cleanup. The high-level architecture below is unchanged, but the file and class layout was simplified:
+>
+> **Dead code deleted (8 files, ~3,200 LoC):**
+> - `gui/correlation_results_view.py`, `gui/hierarchical_results_view.py`, `gui/time_based_results_view.py` (empty) — superseded by the `identity_results_view.py` + `timebased_results_viewer.py` dual-viewer split
+> - `engine/semantic_matches_evaluator.py` and `engine/semantic_matches_evaluator_enhanced.py` (empty) — superseded by `semantic_rule_evaluator.py`
+> - `config/score_config_migration_tool.py` — one-shot migration utility, no live callers
+> - `integration/error_handling.py` (empty) and `integration/integration_logging.py` (truncated, no callers)
+>
+> **Config public surface: 7 manager classes → 3.** The three `case_*_manager.py` files were renamed to private services (`_case_config_file_service.py`, `_case_specific_config_service.py`, `_case_coordinator_service.py`) and are now reached exclusively through `IntegratedConfigurationManager`. See [Configuration façade](#configuration-façade-integratedconfigurationmanager) below and [docs/config/CONFIG_DOCUMENTATION.md](docs/config/CONFIG_DOCUMENTATION.md) for the full mapping.
+>
+> **Result views: 5 → 2 active + orchestrator.** Both `IdentityResultsView` and `TimeBasedResultsViewer` are active (hosted by `DynamicResultsTabWidget` in `results_viewer.py`); the two superseded views were deleted.
+>
+> The architecture diagrams below still apply — only the file inventory changed, not the data-flow.
+
+---
+
 ## Overview
 
 The Correlation Engine is a modular system for correlating forensic artifacts across multiple data sources (feathers). It implements a **dual-engine architecture** that provides two distinct correlation strategies optimized for different use cases and dataset sizes:
 
-- **Time-Based Correlation Engine**: Uses temporal proximity as the primary correlation factor with comprehensive field matching. Best for small datasets (< 1,000 records) requiring detailed analysis. Complexity: O(N²)
+- **Time-Window Scanning Engine (TWSE)**: Scans the timeline in fixed windows, using indexed timestamp queries to gather records within each window. Suitable for any dataset size; recommended for time-bucketed temporal analysis. **Complexity: O(N log N)**
 
-- **Identity-Based Correlation Engine**: Groups records by identity (application/file) first, then creates temporal anchors. Best for large datasets (> 1,000 records) requiring fast execution and identity tracking. Complexity: O(N log N)
+- **Identity-Based Correlation Engine (IBCE)**: Groups records by identity (application/file) first, then creates temporal anchors within each identity bucket. Suitable for any dataset size; recommended for identity tracking and filtering. **Complexity: O(N log N)**
+
+Both engines share the **same asymptotic complexity** — neither performs the pairwise O(N²) comparison that an older naive approach would. Choose by question (time-bucketed vs identity-bucketed), not by dataset size.
 
 Both engines implement the `BaseCorrelationEngine` interface, allowing seamless switching between strategies based on dataset characteristics and analysis requirements. The `EngineSelector` factory provides a unified interface for engine creation and metadata retrieval.
 
@@ -145,8 +165,10 @@ For detailed engine documentation, see [ENGINE_DOCUMENTATION.md](docs/engine/ENG
 **Engine Types**:
 | Type | Class | Complexity | Best For |
 |------|-------|------------|----------|
-| `time_based` | `TimeBasedCorrelationEngine` | O(N²) | Small datasets, detailed analysis |
-| `identity_based` | `IdentityBasedEngineAdapter` | O(N log N) | Large datasets, identity tracking |
+| `time_based`     | `TimeWindowScanningEngine`   | **O(N log N)** | Time-bucketed temporal analysis |
+| `identity_based` | `IdentityBasedEngineAdapter` | **O(N log N)** | Identity tracking & filtering   |
+
+Both engines share the same asymptotic complexity.
 
 ---
 
@@ -360,14 +382,59 @@ When `save_result()` detects a streamed result (`_result_id > 0`):
 
 **Features**:
 - Groups matches by identity
-- Shows identity hierarchy (name → anchors → evidence)
+- Shows identity hierarchy (Identity → Sub-Identity → Anchor → Evidence)
 - Displays feather contribution per identity
 - Timeline visualization
+- **Cascade expand on Sub-Identity click**: clicking a Sub-Identity row opens it AND each of its Anchor children in one go, so the underlying evidence rows surface without a second click. Implemented in `_on_item_clicked` via `_set_subtree_expanded(item, expanded=True, max_depth=2)`.
 
 **Key Classes**:
 - `IdentityResultsView`: Main widget
 - `IdentityTreeWidget`: Tree view of identities
 - `AnchorDetailWidget`: Details for selected anchor
+
+---
+
+## 10. Time-Based Results View (`gui/timebased_results_viewer.py`)
+
+**Purpose**: Specialized view for time-window correlation results — the complement to the Identity view.
+
+**Tree shape**: `Time Window → Identity → Sub-Identity → Anchor → Evidence`. The user-adjustable window size (default 3 hours) drives the top-level grouping; identities within a window are clustered chronologically.
+
+**Features**:
+- Pagination (100 windows/page)
+- Dynamic re-grouping when window size changes
+- Shares the semantic-search utility with the Identity view (`_search_semantic_data`)
+- **Cascade expand on Sub-Identity click**, identical to the Identity view
+
+**Hosted by**: `DynamicResultsTabWidget` in `results_viewer.py`, added as a dynamic tab.
+
+**Key Classes**:
+- `TimeBasedResultsViewer`: Main widget
+
+---
+
+## 11. Configuration façade (`IntegratedConfigurationManager`)
+
+**Purpose**: Single public entry point for case-level and scoring configuration. Replaces what used to be three separate public managers (`CaseConfigurationManager`, `CaseConfigurationFileManager`, `CaseSpecificConfigurationManager`) — those are now private services and reached only through this class.
+
+**Import**:
+```python
+from correlation_engine.config import IntegratedConfigurationManager
+```
+
+**Surface** (selection):
+- `m.case_files.*` — file-lifecycle ops for case configs (validate / repair / archive / compress / statistics)
+- `m.case_specific.*` — per-case semantic mappings, scoring weights, metadata; CRUD + copy + backup + export/import
+- `m.score_config_manager` — routes to the `ScoreConfigurationManager` singleton
+- `m.load_case_specific_configuration(case_id)` / `m.save_case_specific_configuration(config)` — global+case merged view
+- `m.validate_configuration(config)` — schema check
+- `m.resolve_configuration_conflicts(...)` — multi-source reconciliation
+
+**Sibling public classes** (orthogonal domains, kept separate):
+- `ConfigManager` — Feather/Wing/Pipeline JSON artifact CRUD
+- `PipelineConfigurationManager` — pipeline execution session state
+
+See [docs/config/CONFIG_DOCUMENTATION.md](docs/config/CONFIG_DOCUMENTATION.md) for the full method inventory.
 
 ---
 
@@ -480,12 +547,15 @@ PipelineConfig ──────► PipelineExecutor
 | `pipeline_executor.py` | Execute pipelines | `PipelineExecutor` |
 | `engine_selector.py` | Engine factory | `EngineSelector`, `EngineType` |
 | `base_engine.py` | Engine interface | `BaseCorrelationEngine`, `FilterConfig` |
-| `identity_correlation_engine.py` | Identity correlation | `IdentityCorrelationEngine`, `IdentityBasedEngineAdapter` |
+| `identity_based_engine_adapter.py` | Identity correlation adapter | `IdentityBasedEngineAdapter` |
+| `identity_correlation_engine.py` | Identity correlation | `IdentityCorrelationEngine` |
 | `time_based_engine.py` | Time correlation | `TimeBasedCorrelationEngine` |
 | `correlation_result.py` | Result data structures | `CorrelationResult`, `CorrelationMatch` |
 | `database_persistence.py` | SQLite storage | `ResultsDatabase`, `StreamingMatchWriter` |
-| `results_viewer.py` | Results GUI | `DynamicResultsTabWidget`, `ResultsTableWidget` |
-| `identity_results_view.py` | Identity results GUI | `IdentityResultsView` |
+| `results_viewer.py` | Results GUI orchestrator (the tab host) | `DynamicResultsTabWidget`, `FilterPanelWidget`, `MatchDetailViewer` |
+| `results_tab_widget.py` | Tab container for the two viewers | `ResultsTabWidget` |
+| `identity_results_view.py` | Identity-centric results tree (Sub-Identity → Anchor → Evidence) | `IdentityResultsView` |
+| `timebased_results_viewer.py` | Time-window results tree (Window → Identity → Anchor → Evidence) | `TimeBasedResultsViewer` |
 
 ---
 

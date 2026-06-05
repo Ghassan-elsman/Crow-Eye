@@ -3,81 +3,90 @@
 .message-pin-button {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  font-size: 12px;
-  font-weight: 500;
-  background: transparent;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  color: #6b7280;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-family: 'Space Mono', 'JetBrains Mono', monospace;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #9ca3af;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   user-select: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 .message-pin-button:hover {
-  background: #f9fafb;
-  border-color: #d1d5db;
-  color: #374151;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #f3f4f6;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+  transform: translateY(-1px);
 }
 
 .message-pin-button:active {
-  transform: scale(0.98);
+  transform: translateY(0);
 }
 
 .message-pin-button--pinned {
-  background: #fef3c7;
-  border-color: #fbbf24;
-  color: #92400e;
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #60a5fa;
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.3);
 }
 
 .message-pin-button--pinned:hover {
-  background: #fde68a;
-  border-color: #f59e0b;
+  background: rgba(59, 130, 246, 0.25);
+  border-color: #60a5fa;
+  color: #93c5fd;
 }
 
 .message-pin-button--processing {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: wait;
+  filter: grayscale(1);
 }
 
 .message-pin-button:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.3;
 }
 
 .pin-icon {
-  font-size: 14px;
-  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.3s ease;
+}
+
+.message-pin-button--pinned .pin-icon {
+  transform: rotate(-15deg);
+  filter: drop-shadow(0 0 5px rgba(96, 165, 250, 0.5));
 }
 
 .pin-label {
   line-height: 1;
 }
 
-/* Animation for pin state change */
-@keyframes pinPulse {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.1);
-  }
+/* Pulse animation for active pinning */
+@keyframes pinGlow {
+  0%, 100% { box-shadow: 0 0 5px rgba(59, 130, 246, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.5); }
 }
 
-.message-pin-button--pinned .pin-icon {
-  animation: pinPulse 0.3s ease-out;
+.message-pin-button--pinned {
+  animation: pinGlow 3s infinite;
 }
 
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .message-pin-button {
-    padding: 3px 6px;
-    font-size: 11px;
-  }
-
-  .pin-icon {
-    font-size: 12px;
+    padding: 4px 8px;
+    font-size: 10px;
   }
 }

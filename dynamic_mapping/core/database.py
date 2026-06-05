@@ -57,7 +57,7 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS Mapping (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    value TEXT NOT NULL UNIQUE,
+                    value TEXT NOT NULL UNIQUE COLLATE NOCASE,
                     key TEXT NOT NULL,
                     source TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -109,14 +109,45 @@ class DatabaseManager:
             # Create indexes for GatherHistory table
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_gatherhistory_rule ON GatherHistory(rule_name)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_gatherhistory_executed ON GatherHistory(executed_at)")
-            
+
+            # Schema versioning entry point. CURRENT_SCHEMA_VERSION advances when
+            # a column is added or renamed; _run_migrations() owns the upgrade
+            # path so older case DBs aren't stranded on the prior schema.
+            self._run_migrations(cursor)
+
             self._connection.commit()
             self._is_initialized = True
             return True
-            
+
         except Exception:
             self._is_initialized = False
             return False
+
+    # Bump this when adding a column / table / index that older case DBs need.
+    CURRENT_SCHEMA_VERSION = 2
+
+    def _run_migrations(self, cursor) -> None:
+        """Bring the on-disk schema up to CURRENT_SCHEMA_VERSION.
+
+        Reads PRAGMA user_version, applies any migrations in order, then writes
+        the new version back. Today there is exactly one version (1) and no
+        deltas to apply — this is the home for future ALTER TABLE statements so
+        the next column addition does not require a manual patch script.
+        """
+        try:
+            cursor.execute("PRAGMA user_version")
+            row = cursor.fetchone()
+            current = row[0] if row else 0
+        except Exception:
+            current = 0
+
+        # Migration 1 -> 2: Add case-insensitive index for Mapping values
+        if current < 2:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mapping_value_lower ON Mapping(LOWER(value))")
+            current = 2
+
+        if current != self.CURRENT_SCHEMA_VERSION:
+            cursor.execute(f"PRAGMA user_version = {self.CURRENT_SCHEMA_VERSION}")
     
     def close(self) -> bool:
         """

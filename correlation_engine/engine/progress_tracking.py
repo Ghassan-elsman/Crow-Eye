@@ -108,7 +108,7 @@ class OverallProgressData:
     processing_rate_windows_per_second: Optional[float] = None
     memory_usage_mb: Optional[float] = None
     streaming_mode: bool = False
-    processing_mode: str = "sequential"  # "sequential" or "parallel"
+    processing_mode: str = "sequential" # "sequential" or "parallel"
     # Enhanced window statistics
     windows_with_data: int = 0
     empty_windows_skipped: int = 0
@@ -164,7 +164,7 @@ class ConsoleProgressListener(ProgressListener):
         current_percentage = int(progress.completion_percentage)
         
         if event.event_type == ProgressEventType.SCANNING_START:
-            print(f"[Progress] Starting time-window scanning: {progress.total_windows} windows")
+            logger.info(f"[Progress] Starting time-window scanning: {progress.total_windows} windows")
         
         elif event.event_type == ProgressEventType.WINDOW_PROGRESS:
             if current_percentage != self.last_percentage and current_percentage % 10 == 0:
@@ -194,11 +194,11 @@ class ConsoleProgressListener(ProgressListener):
                 if progress.processing_rate_windows_per_second:
                     msg_parts.append(f"| Rate: {progress.processing_rate_windows_per_second:.1f} win/s")
                 
-                print(" ".join(msg_parts))
+                logger.info(" ".join(msg_parts))
                 self.last_percentage = current_percentage
         
         elif event.event_type == ProgressEventType.STREAMING_ENABLED:
-            print(f"[Progress] Streaming mode enabled: {event.message}")
+            logger.info(f"[Progress] Streaming mode enabled: {event.message}")
         
         elif event.event_type == ProgressEventType.SCANNING_COMPLETE:
             # Enhanced completion message with statistics
@@ -213,16 +213,16 @@ class ConsoleProgressListener(ProgressListener):
                     f"saved ~{progress.time_saved_by_skipping_seconds:.1f}s)"
                 )
             
-            print(" ".join(msg_parts))
+            logger.info(" ".join(msg_parts))
         
         elif event.event_type == ProgressEventType.ERROR_OCCURRED:
-            print(f"[Progress] Error: {event.message}")
+            logger.info(f"[Progress] Error: {event.message}")
         
         # Verbose mode: print all events
         if self.verbose:
             if event.window_progress:
                 wp = event.window_progress
-                print(f"[Progress] Window {wp.window_id}: {wp.records_found} records, "
+                logger.info(f"[Progress] Window {wp.window_id}: {wp.records_found} records, "
                       f"{wp.matches_created} matches, {wp.processing_time_seconds:.3f}s")
 
 
@@ -374,7 +374,7 @@ class CancellationToken:
                     try:
                         callback()
                     except Exception as e:
-                        print(f"[Cancellation] Error in callback: {e}")
+                        logger.info(f"[Cancellation] Error in callback: {e}")
     
     def is_cancelled(self) -> bool:
         """Check if cancellation has been requested"""
@@ -437,18 +437,9 @@ class CorrelationStallMonitor:
         self.current_stage = "initialization"
         self.last_successful_operation = "monitor_initialized"
         
-        # Import and initialize StallDiagnosticsLogger
-        try:
-            from ..errors.stall_diagnostics import StallDiagnosticsLogger
-            self.diagnostics_logger = StallDiagnosticsLogger(
-                stall_timeout_seconds=stall_timeout_seconds,
-                debug_mode=debug_mode
-            )
-            self._has_diagnostics = True
-        except ImportError:
-            logger.warning("StallDiagnosticsLogger not available, using basic diagnostics")
-            self.diagnostics_logger = None
-            self._has_diagnostics = False
+        # StallDiagnosticsLogger is not yet implemented, using basic diagnostics
+        self.diagnostics_logger = None
+        self._has_diagnostics = False
     
     def update_progress(self, processed_count: int, current_stage: str = None, 
                        last_operation: str = None, **additional_info):
@@ -710,9 +701,10 @@ class CorrelationProgressReporter:
         rate = self.processed_items / elapsed if elapsed > 0 else 0
         
         # Use logger.info instead of print() to reduce GUI log widget updates
-        # print() causes immediate stdout redirection which floods the event queue
+        # logger.info() causes immediate stdout redirection which floods the event queue
         # logger.info is more efficient and can be throttled by the logging system
-        logger.info(f"{self.phase_name} Progress: {percentage:.1f}% ({self.processed_items}/{self.total_items}) - {rate:.1f} items/sec")
+        item_name = "windows" if "window" in self.phase_name.lower() else "items"
+        print(f"{self.phase_name} Progress: {percentage:.1f}% ({self.processed_items}/{self.total_items}) - {rate:.1f} {item_name}/sec")
         
         # Update GUI progress bar if available
         if self.progress_callback:
@@ -720,6 +712,12 @@ class CorrelationProgressReporter:
                 self.progress_callback(percentage, self.processed_items, self.total_items)
             except Exception as e:
                 logger.warning(f"Progress callback failed: {e}")
+            # Force GUI repaint so the progress bar updates visually
+            try:
+                from PyQt5.QtWidgets import QApplication
+                QApplication.processEvents()
+            except ImportError:
+                pass
     
     def force_report(self):
         """Force immediate progress report regardless of percentage threshold."""
@@ -794,14 +792,14 @@ class ProgressTracker:
         # Performance optimization: Cache overall progress data
         self._last_overall_progress_cache: Optional[OverallProgressData] = None
         self._last_overall_progress_time: float = 0.0
-        self._overall_progress_cache_duration: float = 0.25  # Cache for 250ms
+        self._overall_progress_cache_duration: float = 0.25 # Cache for 250ms
         
         # Track actual processing rate (windows per second including empty windows)
         self._actual_windows_processed_for_rate = 0
         
         # Add console listener in debug mode - DISABLED to reduce console output
         # if debug_mode:
-        #     self.add_listener(ConsoleProgressListener(verbose=False))
+        # self.add_listener(ConsoleProgressListener(verbose=False))
     
     def set_engine_type(self, engine_type: str):
         """
@@ -978,8 +976,8 @@ class ProgressTracker:
         
         # Estimate time saved: assume each empty window would have taken 50ms if fully processed
         # vs <1ms with quick check
-        estimated_full_processing_time_per_window = 0.050  # 50ms
-        actual_quick_check_time_per_window = 0.001  # 1ms
+        estimated_full_processing_time_per_window = 0.050 # 50ms
+        actual_quick_check_time_per_window = 0.001 # 1ms
         time_saved_per_empty_window = estimated_full_processing_time_per_window - actual_quick_check_time_per_window
         self.time_saved_by_skipping_seconds = self.empty_windows_skipped * time_saved_per_empty_window
         
@@ -1290,13 +1288,13 @@ class ProgressTracker:
         # Determine throttle duration based on event type
         throttle_duration = 0.0
         if event.event_type == ProgressEventType.DATABASE_QUERY_PROGRESS:
-            throttle_duration = 0.5  # 500ms for database queries (very frequent)
+            throttle_duration = 0.5 # 500ms for database queries (very frequent)
         elif event.event_type == ProgressEventType.WINDOW_PROGRESS:
-            throttle_duration = 0.25  # 250ms for progress updates
+            throttle_duration = 0.25 # 250ms for progress updates
         elif event.event_type == ProgressEventType.WINDOW_COMPLETE:
-            # Only emit completion for every N windows or based on time to reduce overhead
-            if self.windows_processed % 10 != 0 and self.windows_processed < self.total_windows:
-                throttle_duration = 0.1  # 100ms for window completion
+            # Always throttle window completion to 250ms to prevent GUI flooding when processing empty windows rapidly
+            if self.windows_processed < self.total_windows:
+                throttle_duration = 0.25
         
         # Apply throttling
         if throttle_duration > 0:
@@ -1314,5 +1312,5 @@ class ProgressTracker:
                 listener.on_progress_event(event)
             except Exception as e:
                 if self.debug_mode:
-                    # print(f"[Progress] Error in listener {type(listener).__name__}: {e}")
+                    # logger.info(f"[Progress] Error in listener {type(listener).__name__}: {e}")
                     pass

@@ -88,7 +88,7 @@ class WingValidator:
         if rules.time_window_minutes <= 0:
             errors.append("Time window must be greater than 0 minutes")
         
-        if rules.time_window_minutes > 1440:  # 24 hours
+        if rules.time_window_minutes > 1440: # 24 hours
             errors.append("Time window cannot exceed 1440 minutes (24 hours)")
         
         # Validate minimum matches
@@ -149,10 +149,10 @@ class WingValidator:
             Summary string
         """
         if not errors:
-            return "✓ Wing validation passed - No issues found"
+            return "[OK] Wing validation passed - No issues found"
         
         error_count = len(errors)
         if error_count == 1:
-            return f"✗ 1 validation error"
+            return f"[FAIL] 1 validation error"
         else:
-            return f"✗ {error_count} validation errors"
+            return f"[FAIL] {error_count} validation errors"

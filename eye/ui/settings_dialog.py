@@ -16,6 +16,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPalette, QColor
 from typing import Dict, Any
 
+from styles import CrowEyeStyles
+
 
 class ContextWindowSettingsDialog(QDialog):
     """
@@ -250,7 +252,7 @@ class ContextWindowSettingsDialog(QDialog):
             }
         """
         
-        self.setStyleSheet(dialog_style)
+        self.setStyleSheet(dialog_style + "\n" + CrowEyeStyles.SCROLLBAR_STYLE)
         
         # Button-specific styles
         self.save_button.setStyleSheet("""
@@ -498,6 +500,25 @@ class ContextWindowSettingsDialog(QDialog):
         window_info.setWordWrap(True)
         window_info.setStyleSheet("color: #9CA3AF; font-size: 9pt; background: transparent;")
         window_layout.addRow("", window_info)
+
+        # Max Tool Output Characters
+        tool_output_label = QLabel("Max Tool Output Chars:")
+        tool_output_label.setStyleSheet("font-weight: bold; color: #E5E7EB;")
+        
+        self.tool_output_spinbox = QSpinBox()
+        self.tool_output_spinbox.setRange(1000, 1000000)
+        self.tool_output_spinbox.setSingleStep(5000)
+        self.tool_output_spinbox.setValue(100000)
+        self.tool_output_spinbox.valueChanged.connect(self._on_config_changed)
+        
+        window_layout.addRow(tool_output_label, self.tool_output_spinbox)
+        
+        tool_output_info = QLabel(
+            "Maximum characters allowed for tool outputs before in-memory truncation. Adapts dynamically based on active context window."
+        )
+        tool_output_info.setWordWrap(True)
+        tool_output_info.setStyleSheet("color: #9CA3AF; font-size: 9pt; background: transparent;")
+        window_layout.addRow("", tool_output_info)
         
         window_group.setLayout(window_layout)
         layout.addWidget(window_group)
@@ -564,21 +585,28 @@ class ContextWindowSettingsDialog(QDialog):
         self.tabs.addTab(tab, "History Management")
     
     def _load_current_config(self):
-        """Load current configuration into UI widgets."""
+        """Load current configuration into UI widgets.
+
+        Defensive `.get(...)` everywhere: get_config_for_backend now fills missing
+        keys from the preset, but a partial/old config must never crash the dialog.
+        """
         # Max total tokens
-        self.max_tokens_spinbox.setValue(self.config["max_total_tokens"])
-        
+        self.max_tokens_spinbox.setValue(int(self.config.get("max_total_tokens", 64000)))
+
+        # Max tool output characters
+        self.tool_output_spinbox.setValue(int(self.config.get("max_tool_output_chars", 100000)))
+
         # Token budget
-        budget = self.config["token_budget"]
+        budget = self.config.get("token_budget", {}) or {}
         for key, spinbox in self.budget_spinboxes.items():
-            spinbox.setValue(budget[key])
-        
+            spinbox.setValue(int(budget.get(key, 0)))
+
         # History management
-        history = self.config["history_management"]
-        self.window_size_spinbox.setValue(history["sliding_window_size"])
-        self.preserve_first_checkbox.setChecked(history["preserve_first_message"])
-        self.preserve_tool_checkbox.setChecked(history["preserve_tool_messages"])
-        self.strategy_combo.setCurrentText(history["truncation_strategy"])
+        history = self.config.get("history_management", {}) or {}
+        self.window_size_spinbox.setValue(int(history.get("sliding_window_size", 10)))
+        self.preserve_first_checkbox.setChecked(bool(history.get("preserve_first_message", True)))
+        self.preserve_tool_checkbox.setChecked(bool(history.get("preserve_tool_messages", True)))
+        self.strategy_combo.setCurrentText(history.get("truncation_strategy", "sliding_window"))
         
         # Update budget summary
         self._update_budget_summary()
@@ -682,6 +710,7 @@ class ContextWindowSettingsDialog(QDialog):
         """
         return {
             "max_total_tokens": self.max_tokens_spinbox.value(),
+            "max_tool_output_chars": self.tool_output_spinbox.value(),
             "token_budget": {
                 key: spinbox.value()
                 for key, spinbox in self.budget_spinboxes.items()

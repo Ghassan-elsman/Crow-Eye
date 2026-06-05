@@ -29,7 +29,27 @@
         "occurred",
         "Occurred",
         "occurred_time",
-        "OccurredTime"
+        "OccurredTime",
+        "last_executed",
+        "last_execution",
+        "last_run_time",
+        "LastRunTime",
+        "execution_time",
+        "ExecutionTime",
+        "EventTimestampUTC",
+        "event_timestamp",
+        "deletion_time",
+        "DeletionTime",
+        "install_date",
+        "InstallDate",
+        "link_date",
+        "LinkDate",
+        "usn_timestamp",
+        "last_connected",
+        "LastConnected",
+        "Time_Access",
+        "Time_Creation",
+        "Time_Modification"
     ],
     "createdtime": [
         "created_time",
@@ -56,7 +76,10 @@
         "fn_created",
         "FNCreated",
         "si_created",
-        "SICreated"
+        "SICreated",
+        "si_creation_time",
+        "fn_creation_time",
+        "created_on"
     ],
     "modifiedtime": [
         "modified_time",
@@ -88,7 +111,13 @@
         "fn_modified",
         "FNModified",
         "si_modified",
-        "SIModified"
+        "SIModified",
+        "si_modification_time",
+        "fn_modification_time",
+        "si_mft_entry_change_time",
+        "fn_mft_entry_change_time",
+        "mft_modified_time",
+        "modified_on"
     ],
     "accessedtime": [
         "accessed_time",
@@ -110,6 +139,15 @@
         "fn_accessed",
         "FNAccessed",
         "si_accessed",
-        "SIAccessed"
+        "SIAccessed",
+        "si_access_time",
+        "fn_access_time",
+        "accessed_on"
+    ],
+    "bookkeeping": [
+        "parsed_at",
+        "parsed_timestamp",
+        "inserted_at",
+        "created_at"
     ]
 }

@@ -216,7 +216,7 @@ class JSONTab(QWidget):
                 else:
                     return None
             return value
-        except:
+        except Exception as e:
             return None
     
     def import_data(self):

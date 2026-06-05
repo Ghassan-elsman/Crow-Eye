@@ -21,10 +21,10 @@ from .correlation_result import CorrelationMatch
 class StreamingConfig:
     """Configuration for streaming mode."""
     database_path: str
-    batch_size: int = 1000  # Number of matches to batch before writing
-    enable_compression: bool = True  # Compress match data
-    auto_vacuum: bool = True  # Enable SQLite auto-vacuum
-    memory_limit_mb: int = 500  # Memory limit that triggers streaming mode
+    batch_size: int = 1000 # Number of matches to batch before writing
+    enable_compression: bool = True # Compress match data
+    auto_vacuum: bool = True # Enable SQLite auto-vacuum
+    memory_limit_mb: int = 500 # Memory limit that triggers streaming mode
 
 
 class StreamingMatchWriter:
@@ -81,14 +81,14 @@ class StreamingMatchWriter:
                 duplicates_prevented INTEGER DEFAULT 0,
                 anchor_feather_id TEXT DEFAULT '',
                 anchor_selection_reason TEXT DEFAULT '',
-                filters_applied TEXT DEFAULT '{}',  -- JSON
-                feather_metadata TEXT DEFAULT '{}',  -- JSON
-                performance_metrics TEXT DEFAULT '{}',  -- JSON
-                errors TEXT DEFAULT '[]',  -- JSON array
-                warnings TEXT DEFAULT '[]',  -- JSON array
+                filters_applied TEXT DEFAULT '{}', -- JSON
+                feather_metadata TEXT DEFAULT '{}', -- JSON
+                performance_metrics TEXT DEFAULT '{}', -- JSON
+                errors TEXT DEFAULT '[]', -- JSON array
+                warnings TEXT DEFAULT '[]', -- JSON array
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP NULL,
-                status TEXT DEFAULT 'active'  -- active, completed, error
+                status TEXT DEFAULT 'active' -- active, completed, error
             );
             
             -- Matches table for streaming storage
@@ -108,14 +108,14 @@ class StreamingMatchWriter:
                 confidence_category TEXT,
                 algorithm_version TEXT DEFAULT '2.0',
                 is_duplicate BOOLEAN DEFAULT 0,
-                feather_records TEXT NOT NULL,  -- JSON
-                score_breakdown TEXT,  -- JSON
-                weighted_score TEXT,  -- JSON
-                time_deltas TEXT,  -- JSON
-                field_similarity_scores TEXT,  -- JSON
-                candidate_counts TEXT,  -- JSON
-                semantic_data TEXT,  -- JSON
-                duplicate_info TEXT,  -- JSON
+                feather_records TEXT NOT NULL, -- JSON
+                score_breakdown TEXT, -- JSON
+                weighted_score TEXT, -- JSON
+                time_deltas TEXT, -- JSON
+                field_similarity_scores TEXT, -- JSON
+                candidate_counts TEXT, -- JSON
+                semantic_data TEXT, -- JSON
+                duplicate_info TEXT, -- JSON
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (result_id) REFERENCES streaming_results (result_id)
             );
@@ -238,7 +238,7 @@ class StreamingMatchWriter:
         self.total_matches_written += len(self.batch_buffer)
         
         # print(f"[StreamingWriter] Flushed batch of {len(self.batch_buffer)} matches "
-        #       f"(total: {self.total_matches_written})")
+        # f"(total: {self.total_matches_written})")
         
         # Clear buffer
         self.batch_buffer.clear()
@@ -296,12 +296,12 @@ class StreamingMatchWriter:
         self.conn.commit()
         
         # print(f"[StreamingWriter] Finalized result session {result_id}: "
-        #       f"{total_matches} matches, {execution_duration:.2f}s")
+        # f"{total_matches} matches, {execution_duration:.2f}s")
     
     def close(self):
         """Close the database connection."""
         if self.conn:
-            self.flush()  # Ensure all data is written
+            self.flush() # Ensure all data is written
             self.conn.close()
             self.conn = None
             # print(f"[StreamingWriter] Closed database connection")

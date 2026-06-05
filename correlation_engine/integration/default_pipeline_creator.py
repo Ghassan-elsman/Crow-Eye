@@ -94,7 +94,7 @@ class DefaultPipelineCreator:
         
         try:
             pipeline.save_to_file(str(pipeline_path))
-            logger.info(f"✓ Saved default pipeline to: {pipeline_path}")
+            logger.info(f"[OK] Saved default pipeline to: {pipeline_path}")
             return pipeline
         except Exception as e:
             logger.error(f"Failed to save pipeline: {e}")
@@ -119,24 +119,14 @@ class DefaultPipelineCreator:
         
         wings = []
         
-        # Look for Default Wing files
-        default_wing_names = [
-            "Execution_Proof_Correlation.json",
-            "User_Activity_Correlation.json"
-        ]
-        
-        for wing_filename in default_wing_names:
-            wing_path = wings_dir / wing_filename
-            
-            if wing_path.exists():
-                try:
-                    wing_config = WingConfig.load_from_file(str(wing_path))
-                    wings.append(wing_config)
-                    logger.info(f"✓ Loaded Default Wing: {wing_config.wing_name}")
-                except Exception as e:
-                    logger.error(f"Failed to load wing {wing_filename}: {e}")
-            else:
-                logger.warning(f"Default Wing not found: {wing_filename}")
+        # Look for all wing files in the directory
+        for wing_path in wings_dir.glob("*.json"):
+            try:
+                wing_config = WingConfig.load_from_file(str(wing_path))
+                wings.append(wing_config)
+                logger.info(f"[OK] Loaded Default Wing: {wing_config.wing_name}")
+            except Exception as e:
+                logger.error(f"Failed to load wing {wing_path.name}: {e}")
         
         return wings
     
@@ -179,10 +169,10 @@ class DefaultPipelineCreator:
                 
                 if feather_config:
                     feathers.append(feather_config)
-                    logger.info(f"  ✓ Loaded feather: {feather_name}")
+                    logger.info(f" [OK] Loaded feather: {feather_name}")
                 else:
                     # Create placeholder if feather doesn't exist
-                    logger.warning(f"  ⚠ Feather not found, creating placeholder: {feather_name}")
+                    logger.warning(f" [WARN] Feather not found, creating placeholder: {feather_name}")
                     placeholder = DefaultPipelineCreator._create_placeholder_feather(
                         feather_name,
                         feather_ref.feather_database_path,

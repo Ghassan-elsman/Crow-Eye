@@ -32,8 +32,8 @@ class StreamingMatchWriter:
         >>> writer = StreamingMatchWriter(db_path, batch_size=1000)
         >>> result_id = writer.create_result(execution_id, wing_id, wing_name)
         >>> for match in matches:
-        ...     writer.write_match(result_id, match)
-        >>> writer.flush()  # Write any remaining matches
+        ... writer.write_match(result_id, match)
+        >>> writer.flush() # Write any remaining matches
         >>> writer.close()
     """
     
@@ -48,8 +48,8 @@ class StreamingMatchWriter:
         self.db_path = db_path
         self.batch_size = batch_size
         self.conn = sqlite3.connect(db_path)
-        self.conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent access
-        self.conn.execute("PRAGMA synchronous=NORMAL")  # Faster writes
+        self.conn.execute("PRAGMA journal_mode=WAL") # Better concurrent access
+        self.conn.execute("PRAGMA synchronous=NORMAL") # Faster writes
         self._batch = []
         self._total_written = 0
         
@@ -82,33 +82,35 @@ class StreamingMatchWriter:
             )
         """)
         
-        # Migration: Add new columns if they don't exist (for existing databases)
+        # Migration: Add new columns if they don't exist (for existing databases).
+        # Use sqlite3.OperationalError specifically so genuine bugs (e.g.
+        # KeyboardInterrupt, MemoryError) aren't silently swallowed.
         try:
             cursor.execute("SELECT feather_metadata FROM results LIMIT 1")
-        except:
+        except sqlite3.OperationalError:
             try:
                 cursor.execute("ALTER TABLE results ADD COLUMN feather_metadata TEXT")
                 print("[Database] Migration: Added feather_metadata column to results table")
-            except:
-                pass
-        
+            except sqlite3.OperationalError:
+                pass # Column might already exist or table doesn't exist yet
+
         try:
             cursor.execute("SELECT status FROM results LIMIT 1")
-        except:
+        except sqlite3.OperationalError:
             try:
                 cursor.execute("ALTER TABLE results ADD COLUMN status TEXT DEFAULT 'COMPLETED'")
                 print("[Database] Migration: Added status column to results table")
-            except:
+            except sqlite3.OperationalError:
                 pass
-        
+
         try:
             cursor.execute("SELECT progress_info FROM results LIMIT 1")
-        except:
+        except sqlite3.OperationalError:
             try:
                 cursor.execute("ALTER TABLE results ADD COLUMN progress_info TEXT")
                 print("[Database] Migration: Added progress_info column to results table")
-            except:
-                pass  # Column might already exist or table doesn't exist yet
+            except sqlite3.OperationalError:
+                pass # Column might already exist or table doesn't exist yet
         
         # Create matches table if not exists
         cursor.execute("""
@@ -384,17 +386,17 @@ class StreamingMatchWriter:
         
         for row in cursor.fetchall():
             execution_data = dict(zip(columns, row))
-            
+
             # Parse progress info if available
             if execution_data['progress_info']:
                 import json
                 try:
                     execution_data['progress_details'] = json.loads(execution_data['progress_info'])
-                except:
+                except (json.JSONDecodeError, TypeError):
                     execution_data['progress_details'] = {}
             else:
                 execution_data['progress_details'] = {}
-            
+
             paused_executions.append(execution_data)
         
         return paused_executions
@@ -450,7 +452,7 @@ class ResultsDatabase:
         
         # Enable WAL mode for better concurrent access
         cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")  # 30 seconds in milliseconds
+        cursor.execute("PRAGMA busy_timeout=30000") # 30 seconds in milliseconds
         
         # Executions table - stores pipeline execution metadata
         cursor.execute("""
@@ -580,7 +582,7 @@ class ResultsDatabase:
                 cursor.execute("ALTER TABLE matches ADD COLUMN anchor_start_time TEXT")
                 print("[Database] Migration: Added anchor_start_time column")
             except Exception as e:
-                pass  # Column might already exist
+                pass # Column might already exist
         
         # Add anchor_end_time if missing
         if 'anchor_end_time' not in existing_columns:
@@ -616,7 +618,7 @@ class ResultsDatabase:
                 cursor.execute("ALTER TABLE results ADD COLUMN feather_metadata TEXT")
                 print("[Database] Migration: Added feather_metadata column to results table")
             except Exception as e:
-                pass  # Column might already exist
+                pass # Column might already exist
         
         # Add compressed flag if missing (for feather_records compression)
         if 'compressed' not in existing_columns:
@@ -675,7 +677,7 @@ class ResultsDatabase:
                 cursor.execute("ALTER TABLE feather_metadata ADD COLUMN identities_extracted INTEGER DEFAULT 0")
                 print("[Database] Migration: Added identities_extracted column to feather_metadata table")
             except Exception as e:
-                pass  # Column might already exist
+                pass # Column might already exist
                 pass
         
         self.conn.commit()
@@ -745,15 +747,15 @@ class ResultsDatabase:
             run_name,
             run_number,
             pipeline_name,
-            0.0,  # Placeholder - will be updated
-            0,    # Placeholder - will be updated
-            0,    # Placeholder - will be updated
-            0,    # Placeholder - will be updated
+            0.0, # Placeholder - will be updated
+            0, # Placeholder - will be updated
+            0, # Placeholder - will be updated
+            0, # Placeholder - will be updated
             output_dir,
             case_name,
             investigator,
-            json.dumps([]),  # Empty errors initially
-            json.dumps([]),  # Empty warnings initially
+            json.dumps([]), # Empty errors initially
+            json.dumps([]), # Empty warnings initially
             engine_type,
             json.dumps(wing_config) if wing_config else None,
             json.dumps(pipeline_config) if pipeline_config else None,
@@ -912,16 +914,16 @@ class ResultsDatabase:
             execution_id = cursor.lastrowid
             print(f"[Database] Saved execution '{run_name}' (ID: {execution_id})")
         
-        print(f"[Database]   - Engine: {engine_type}")
+        print(f"[Database] - Engine: {engine_type}")
         if time_period_start or time_period_end:
-            print(f"[Database]   - Time Filter: {time_period_start} to {time_period_end}")
+            print(f"[Database] - Time Filter: {time_period_start} to {time_period_end}")
         if identity_filters:
-            print(f"[Database]   - Identity Filters: {', '.join(identity_filters)}")
-        print(f"[Database]   - {len(results)} wings, {total_matches:,} total matches")
+            print(f"[Database] - Identity Filters: {', '.join(identity_filters)}")
+        print(f"[Database] - {len(results)} wings, {total_matches:,} total matches")
         
         # Save each result
         for i, result in enumerate(results, 1):
-            print(f"[Database]   - Saving wing {i}/{len(results)}: {result.wing_name} ({result.total_matches:,} matches)")
+            print(f"[Database] - Saving wing {i}/{len(results)}: {result.wing_name} ({result.total_matches:,} matches)")
             self.save_result(execution_id, result)
         
         self.conn.commit()
@@ -1054,9 +1056,9 @@ class ResultsDatabase:
             total_matches = len(result.matches)
             
             # DEBUG: Verify matches before saving
-            print(f"[Database] 🔍 DEBUG: Saving {total_matches} matches for result_id {result_id}")
+            print(f"[Database] DEBUG: Saving {total_matches} matches for result_id {result_id}")
             
-            batch_size = 1000  # Commit every 1000 matches for better performance
+            batch_size = 1000 # Commit every 1000 matches for better performance
             
             for i, match in enumerate(result.matches):
                 self.save_match(result_id, match)
@@ -1100,7 +1102,7 @@ class ResultsDatabase:
         
         # Compress if larger than 1MB
         compressed = False
-        if feather_records_size > 1024 * 1024:  # 1MB threshold
+        if feather_records_size > 1024 * 1024: # 1MB threshold
             feather_records_data = gzip.compress(feather_records_json.encode('utf-8'))
             compressed = True
             if self.debug_mode:
@@ -1448,89 +1450,103 @@ class ResultsDatabase:
         
         match_columns = [desc[0] for desc in cursor.description]
         for match_row in cursor.fetchall():
-            match_data = dict(zip(match_columns, match_row))
-            
-            # Parse JSON fields with decompression support
-            feather_records = {}
-            if match_data.get('feather_records'):
-                import gzip
-                
-                # Check if data is compressed
-                is_compressed = match_data.get('compressed', False)
-                feather_records_data = match_data['feather_records']
-                
-                if is_compressed:
-                    # Decompress the data
-                    try:
-                        if isinstance(feather_records_data, bytes):
-                            decompressed = gzip.decompress(feather_records_data)
-                        else:
-                            # Handle case where it's stored as string
-                            decompressed = gzip.decompress(feather_records_data.encode('latin1'))
-                        feather_records = json.loads(decompressed.decode('utf-8'))
-                        if self.debug_mode:
-                            print(f"[Database] Decompressed feather_records for match {match_data['match_id']}")
-                    except Exception as e:
-                        print(f"[Database] Error decompressing feather_records: {e}")
-                        # Try to parse as regular JSON as fallback
+            try:
+                match_data = dict(zip(match_columns, match_row))
+
+                # Parse JSON fields with decompression support
+                feather_records = {}
+                if match_data.get('feather_records'):
+                    import gzip
+
+                    # Check if data is compressed
+                    is_compressed = match_data.get('compressed', False)
+                    feather_records_data = match_data['feather_records']
+
+                    if is_compressed:
+                        # Decompress the data
+                        try:
+                            if isinstance(feather_records_data, bytes):
+                                decompressed = gzip.decompress(feather_records_data)
+                            else:
+                                # Handle case where it's stored as string
+                                decompressed = gzip.decompress(feather_records_data.encode('latin1'))
+                            feather_records = json.loads(decompressed.decode('utf-8'))
+                            if self.debug_mode:
+                                print(f"[Database] Decompressed feather_records for match {match_data['match_id']}")
+                        except Exception as e:
+                            print(f"[Database] Error decompressing feather_records: {e}")
+                            # Try to parse as regular JSON as fallback
+                            try:
+                                feather_records = json.loads(feather_records_data)
+                            except (json.JSONDecodeError, TypeError):
+                                feather_records = {}
+                    else:
+                        # Regular JSON parsing
                         try:
                             feather_records = json.loads(feather_records_data)
-                        except:
+                        except (json.JSONDecodeError, TypeError) as e:
+                            print(f"[Database] Error parsing feather_records for match {match_data.get('match_id', 'unknown')}: {e}")
                             feather_records = {}
-                else:
-                    # Regular JSON parsing
-                    feather_records = json.loads(feather_records_data)
-            
-            score_breakdown = {}
-            if match_data.get('score_breakdown'):
-                score_breakdown = json.loads(match_data['score_breakdown'])
-            
-            # Create weighted score dict
-            weighted_score = None
-            if match_data.get('weighted_score_value') is not None:
-                weighted_score = {
-                    'score': match_data['weighted_score_value'],
-                    'interpretation': match_data.get('weighted_score_interpretation', '')
-                }
-            
-            # Create CorrelationMatch object
-            match = CorrelationMatch(
-                match_id=match_data['match_id'],
-                timestamp=match_data['timestamp'],
-                match_score=match_data.get('match_score', 0.0),
-                confidence_score=match_data.get('confidence_score', 0.0),
-                confidence_category=match_data.get('confidence_category', 'unknown'),
-                feather_count=match_data.get('feather_count', 0),
-                time_spread_seconds=match_data.get('time_spread_seconds', 0),
-                anchor_feather_id=match_data.get('anchor_feather_id', ''),
-                anchor_artifact_type=match_data.get('anchor_artifact_type', ''),
-                matched_application=match_data.get('matched_application', ''),
-                matched_file_path=match_data.get('matched_file_path', ''),
-                feather_records=feather_records,
-                score_breakdown=score_breakdown,
-                weighted_score=weighted_score
-            )
-            
-            # Add anchor metadata if available
-            if match_data.get('anchor_start_time'):
-                match.anchor_start_time = match_data['anchor_start_time']
-            if match_data.get('anchor_end_time'):
-                match.anchor_end_time = match_data['anchor_end_time']
-            if match_data.get('anchor_record_count'):
-                match.anchor_record_count = match_data['anchor_record_count']
-            
-            # Add semantic data if available
-            if match_data.get('semantic_data'):
-                try:
-                    semantic_data_raw = json.loads(match_data['semantic_data'])
-                    match.semantic_data = semantic_data_raw
-                    
-                except (json.JSONDecodeError, TypeError) as e:
-                    # Handle corrupted semantic data gracefully
-                    print(f"[Database] Warning: Failed to parse semantic_data for match {match_data['match_id']}: {e}")
-                    match.semantic_data = {}
-            
-            matches.append(match)
+
+                score_breakdown = {}
+                if match_data.get('score_breakdown'):
+                    try:
+                        score_breakdown = json.loads(match_data['score_breakdown'])
+                    except (json.JSONDecodeError, TypeError) as e:
+                        print(f"[Database] Warning: Failed to parse score_breakdown for match {match_data.get('match_id', 'unknown')}: {e}")
+                        score_breakdown = {}
+
+                # Create weighted score dict
+                weighted_score = None
+                if match_data.get('weighted_score_value') is not None:
+                    weighted_score = {
+                        'score': match_data['weighted_score_value'],
+                        'interpretation': match_data.get('weighted_score_interpretation', '')
+                    }
+
+                # Create CorrelationMatch object
+                match = CorrelationMatch(
+                    match_id=match_data['match_id'],
+                    timestamp=match_data['timestamp'],
+                    match_score=match_data.get('match_score', 0.0),
+                    confidence_score=match_data.get('confidence_score', 0.0),
+                    confidence_category=match_data.get('confidence_category', 'unknown'),
+                    feather_count=match_data.get('feather_count', 0),
+                    time_spread_seconds=match_data.get('time_spread_seconds', 0),
+                    anchor_feather_id=match_data.get('anchor_feather_id', ''),
+                    anchor_artifact_type=match_data.get('anchor_artifact_type', ''),
+                    matched_application=match_data.get('matched_application', ''),
+                    matched_file_path=match_data.get('matched_file_path', ''),
+                    matched_event_id=match_data.get('matched_event_id'),
+                    feather_records=feather_records,
+                    score_breakdown=score_breakdown,
+                    weighted_score=weighted_score
+                )
+
+                # Add anchor metadata if available
+                if match_data.get('anchor_start_time'):
+                    match.anchor_start_time = match_data['anchor_start_time']
+                if match_data.get('anchor_end_time'):
+                    match.anchor_end_time = match_data['anchor_end_time']
+                if match_data.get('anchor_record_count'):
+                    match.anchor_record_count = match_data['anchor_record_count']
+
+                # Add semantic data if available
+                if match_data.get('semantic_data'):
+                    try:
+                        semantic_data_raw = json.loads(match_data['semantic_data'])
+                        match.semantic_data = semantic_data_raw
+
+                    except (json.JSONDecodeError, TypeError) as e:
+                        # Handle corrupted semantic data gracefully
+                        print(f"[Database] Warning: Failed to parse semantic_data for match {match_data['match_id']}: {e}")
+                        match.semantic_data = {}
+
+                matches.append(match)
+            except Exception as e:
+                match_id = match_data.get('match_id', 'unknown') if 'match_data' in locals() else 'unknown'
+                print(f"[Database] Error loading match {match_id}, skipping: {e}")
+                continue
         
         # Parse feather metadata
         feather_metadata = {}
@@ -1614,17 +1630,17 @@ class ResultsDatabase:
         
         for row in cursor.fetchall():
             execution_data = dict(zip(columns, row))
-            
+
             # Parse progress info if available
             if execution_data['progress_info']:
                 import json
                 try:
                     execution_data['progress_details'] = json.loads(execution_data['progress_info'])
-                except:
+                except (json.JSONDecodeError, TypeError):
                     execution_data['progress_details'] = {}
             else:
                 execution_data['progress_details'] = {}
-            
+
             paused_executions.append(execution_data)
         
         return paused_executions

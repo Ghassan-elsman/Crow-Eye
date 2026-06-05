@@ -1,9 +1,10 @@
-import React, { useEffect, useRef } from 'react';
-import type { Message, ThinkingStep } from './types';
+import React, { useEffect, useRef, useState } from 'react';
+import type { Message, ThinkingStep, EyeDialogueEntry } from './types';
 import DataViewer from './DataViewer';
 import ActionChips from './ActionChips';
 import OptionMenu from './OptionMenu';
 import ThinkingTrace from './ThinkingTrace';
+import EyeDialogue from './EyeDialogue';
 import MessagePinButton from './MessagePinButton';
 import ReactMarkdown from 'react-markdown';
 import eyeIcon from './assets/eye_icon.png';
@@ -15,8 +16,23 @@ interface MessageListProps {
   onOptionSelect: (query: string, label: string) => void;
   isLoading?: boolean;
   thinkingSteps?: ThinkingStep[];
+  liveDialogue?: EyeDialogueEntry[];
   onPinToggle?: (messageId: string, isPinned: boolean) => void;
 }
+
+/** Per-message collapsible "Show the Eye's thinking" transcript. */
+const RetainedDialogue: React.FC<{ entries: EyeDialogueEntry[] }> = ({ entries }) => {
+  const [open, setOpen] = useState(false);
+  if (!entries || entries.length === 0) return null;
+  return (
+    <div className="eye-dialogue-retained">
+      <button className="eye-dialogue-toggle" onClick={() => setOpen(!open)}>
+        {open ? '▾' : '▸'} 🧠 {open ? 'Hide' : 'Show'} the Eye's thinking (Eye ↔ LLM conversation)
+      </button>
+      {open && <EyeDialogue entries={entries} />}
+    </div>
+  );
+};
 
 const MessageList: React.FC<MessageListProps> = ({
   messages,
@@ -24,13 +40,14 @@ const MessageList: React.FC<MessageListProps> = ({
   onOptionSelect,
   isLoading,
   thinkingSteps = [],
+  liveDialogue = [],
   onPinToggle,
 }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading, thinkingSteps]);
+  }, [messages, isLoading, thinkingSteps, liveDialogue]);
 
   return (
     <div className="message-list" role="log" aria-live="polite" aria-label="Conversation">
@@ -73,7 +90,7 @@ const MessageList: React.FC<MessageListProps> = ({
               </span>
               {message.metadata?.pinned && (
                 <span className="message-badge message-badge--pinned" title="Pinned message">
-                  📌
+                  PINNED
                 </span>
               )}
               {message.metadata?.preserve_evidence && (
@@ -115,6 +132,11 @@ const MessageList: React.FC<MessageListProps> = ({
                   chips={message.action_chips}
                   onChipClick={onActionChipClick}
                 />
+              )}
+
+              {/* Retained Eye<->LLM conversation transcript (how the Eye thought). */}
+              {message.role === 'assistant' && message.eye_dialogue && message.eye_dialogue.length > 0 && (
+                <RetainedDialogue entries={message.eye_dialogue} />
               )}
 
               {/* Pin button for all messages */}
@@ -163,6 +185,8 @@ const MessageList: React.FC<MessageListProps> = ({
                   <span /><span /><span />
                 </div>
               )}
+              {/* Live Eye<->LLM conversation as it streams. */}
+              {liveDialogue.length > 0 && <EyeDialogue entries={liveDialogue} live />}
             </div>
           </div>
         </div>

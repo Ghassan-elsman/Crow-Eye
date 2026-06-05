@@ -18,13 +18,21 @@ import os
 import sys
 import time
 
-# Ensure proper package resolution for local and parent dependencies
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+# Task 11.2: Use PathUtils for robust root resolution in EXE mode
+try:
+    from utils.path_utils import PathUtils
+    app_root = PathUtils.get_app_root()
+    current_dir = app_root / 'Artifacts_Collectors' / 'Forensics_Image_parsing'
+    parent_dir = app_root / 'Artifacts_Collectors'
+except ImportError:
+    # Fallback if PathUtils is not accessible
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
+
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
 
 from typing import Optional, List, Union
 from datetime import datetime
@@ -61,17 +69,24 @@ try:
     from Offline_Importer.artifact_collector import CollectedArtifactInfo
     from Offline_Importer.parse_artifacts_dialog import ParseArtifactsDialog
 except ImportError:
-    # Fallback for direct execution/different sys.path
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    # Use PathUtils if available
+    try:
+        from utils.path_utils import PathUtils
+        importer_path = PathUtils.get_app_root() / 'Artifacts_Collectors' / 'Offline_Importer'
+        sys.path.insert(0, str(importer_path))
+    except ImportError:
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from Offline_Importer.collection_coordinator import (
         CollectionCoordinator, CollectionSummary, ProgressUpdate
     )
     from Offline_Importer.artifact_collector import CollectedArtifactInfo
     from Offline_Importer.parse_artifacts_dialog import ParseArtifactsDialog
 
-# Import Crow-eye styles
-try:
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+    # Use PathUtils for robust style loading
+    from utils.path_utils import PathUtils
+    styles_path = PathUtils.get_app_root()
+    if str(styles_path) not in sys.path:
+        sys.path.insert(0, str(styles_path))
     from styles import CrowEyeStyles, Colors
     STYLES_AVAILABLE = True
 except ImportError:
@@ -388,7 +403,6 @@ class ImageParsingDialog(QMainWindow):
                     padding: 6px;
                     border-bottom: 2px solid {Colors.BORDER_ACCENT};
                     font-weight: 700;
-                    letter-spacing: 0.5px;
                     background: transparent;
                 }}
             """)
@@ -1361,6 +1375,12 @@ class ImageParsingDialog(QMainWindow):
                     # If we have a reference to main window, trigger refresh
                     if hasattr(self, 'crow_eye_main_window') and self.crow_eye_main_window:
                         self._append_log("Triggering main GUI refresh...", "INFO")
+                        if hasattr(self.crow_eye_main_window, 'refresh_gui_tabs_after_parsing'):
+                            try:
+                                self.crow_eye_main_window.refresh_gui_tabs_after_parsing()
+                                self._append_log("Main GUI refresh triggered successfully.", "SUCCESS")
+                            except Exception as e:
+                                self._append_log(f"Refresh failed: {e}", "ERROR")
                 else:
                     self._append_log("Artifact parsing cancelled by user", "WARNING")
             else:
@@ -1399,12 +1419,6 @@ class ImageParsingDialog(QMainWindow):
                 
                 invoker = ParserInvoker(self.case_root)
                 
-                # Define callbacks
-                def progress_cb(current, total, name, type):
-                    # Safely emit signal from worker thread to update GUI
-                    if hasattr(self, 'parsing_worker'):
-                        self.parsing_worker.progress_update.emit(current, total, name, type)
-                
                 def error_log_path():
                     return os.path.join(self.case_root, "parsing_errors.log")
 
@@ -1412,18 +1426,15 @@ class ImageParsingDialog(QMainWindow):
                 self.parsing_worker = ParsingWorker(
                     parser=invoker,
                     artifacts=to_parse,
-                    progress_callback=progress_cb,
+                    progress_callback=None,
                     cancellation_check=lambda: False,
                     error_log_path=error_log_path()
                 )
                 
-                # Connect signals
-                self.parsing_worker.progress_update.connect(
-                    lambda curr, tot, name, typ: self.operation_value.setText(f"Parsing {typ}: {name} ({curr}/{tot})")
-                )
-                
-                self.parsing_worker.parsing_complete.connect(self._on_automated_parsing_complete)
-                self.parsing_worker.parsing_error.connect(lambda err: self._append_log(f"Parsing Error: {err}", "ERROR"))
+                # Connect signals via QueuedConnection to guarantee execution on the main GUI thread
+                self.parsing_worker.progress_update.connect(self._on_automated_progress_update, Qt.QueuedConnection)
+                self.parsing_worker.parsing_complete.connect(self._on_automated_parsing_complete, Qt.QueuedConnection)
+                self.parsing_worker.parsing_error.connect(self._on_automated_parsing_error, Qt.QueuedConnection)
                 
                 self.parsing_worker.start()
                 
@@ -1438,6 +1449,14 @@ class ImageParsingDialog(QMainWindow):
                 "Parser Error",
                 f"{error_msg}\n\nSee log for details."
             )
+
+    def _on_automated_progress_update(self, curr, tot, name, typ):
+        """Update progress description (runs on main thread)."""
+        self.operation_value.setText(f"Parsing {typ}: {name} ({curr}/{tot})")
+
+    def _on_automated_parsing_error(self, err):
+        """Log parsing error (runs on main thread)."""
+        self._append_log(f"Parsing Error: {err}", "ERROR")
     
     def _on_automated_parsing_complete(self, results):
         """Handle completion of automated parsing."""

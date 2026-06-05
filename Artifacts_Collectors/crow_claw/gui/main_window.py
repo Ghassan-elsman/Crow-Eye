@@ -22,8 +22,14 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QIcon, QPixmap
 
-# Add parent directory to path for importing modules
-crow_eye_root = Path(__file__).parent.parent.parent.resolve()
+# Add parent directory to path for importing modules (EXE-aware)
+try:
+    from utils.path_utils import PathUtils
+    crow_eye_root = PathUtils.get_app_root()
+except ImportError:
+    # Fallback if PathUtils is not accessible
+    crow_eye_root = Path(__file__).parent.parent.parent.resolve()
+
 if str(crow_eye_root) not in sys.path:
     sys.path.insert(0, str(crow_eye_root))
 
@@ -35,6 +41,37 @@ try:
     from Artifacts_Collectors.windows_partition_detector import WindowsPartitionDetector
 except ImportError:
     WindowsPartitionDetector = None
+
+try:
+    from styles import CrowEyeStyles, Colors
+except Exception:  # pragma: no cover — fallback if styles.py not importable
+    class Colors:
+        BG_PRIMARY = "#0F172A"
+        BG_PANELS = "#1E293B"
+        BG_TABLES = "#0B1220"
+        TEXT_PRIMARY = "#E2E8F0"
+        TEXT_SECONDARY = "#94A3B8"
+        TEXT_MUTED = "#64748B"
+        ACCENT_BLUE = "#3B82F6"
+        ACCENT_CYAN = "#00FFFF"
+        SUCCESS = "#10B981"
+        WARNING = "#F59E0B"
+        ERROR = "#EF4444"
+        BORDER_SUBTLE = "#334155"
+        BORDER_ACCENT = "#475569"
+    class CrowEyeStyles:
+        CROWCLAW_SECTION_HEADER = f"color: {Colors.ACCENT_BLUE}; font-weight: 700;"
+        CROWCLAW_LABEL_KEY = f"color: {Colors.TEXT_SECONDARY}; font-weight: 600;"
+        CROWCLAW_LABEL_PATH = f"color: {Colors.SUCCESS}; font-weight: 600;"
+        CROWCLAW_STATUS_PILL_OK = ""
+        CROWCLAW_STATUS_PILL_WARN = ""
+        CROWCLAW_STATUS_PILL_ERROR = ""
+        CROWCLAW_LOG_AREA = ""
+        CROWCLAW_TOOLBAR_BUTTON = ""
+        CROWCLAW_PRIMARY_BUTTON = ""
+        CROWCLAW_STEP_BUTTON_ACTIVE = ""
+        CROWCLAW_STEP_BUTTON_INACTIVE = ""
+        CROWCLAW_PROGRESS_BAR = ""
 
 
 class HeaderPanel(QWidget):
@@ -65,9 +102,8 @@ class HeaderPanel(QWidget):
         title_font.setFamily("Segoe UI")
         title.setFont(title_font)
         title.setStyleSheet(
-            "color: #FFFFFF; "
-            "background-color: transparent; "
-            "letter-spacing: 3px;"
+            f"color: {Colors.TEXT_PRIMARY}; "
+            f"background-color: transparent; "
         )
         layout.addWidget(title)
 
@@ -81,9 +117,8 @@ class HeaderPanel(QWidget):
         subtitle_font.setBold(False)
         subtitle.setFont(subtitle_font)
         subtitle.setStyleSheet(
-            "color: #94A3B8; "
-            "background-color: transparent; "
-            "letter-spacing: 0.5px;"
+            f"color: {Colors.TEXT_SECONDARY}; "
+            f"background-color: transparent; "
         )
         layout.addWidget(subtitle)
 
@@ -91,10 +126,10 @@ class HeaderPanel(QWidget):
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
         separator.setStyleSheet(
-            "background-color: #475569; "
-            "border: none; "
-            "height: 1px; "
-            "margin: 8px 0px;"
+            f"background-color: {Colors.BORDER_ACCENT}; "
+            f"border: none; "
+            f"height: 1px; "
+            f"margin: 8px 0px;"
         )
         layout.addWidget(separator)
 
@@ -111,7 +146,7 @@ class HeaderPanel(QWidget):
         admin_label_font.setPointSize(9)
         admin_label_font.setBold(True)
         admin_label.setFont(admin_label_font)
-        admin_label.setStyleSheet("color: #CBD5E1; font-weight: 600;")
+        admin_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
         admin_label.setMinimumWidth(150)
         
         self.admin_status_indicator = QLabel("Checking...")
@@ -120,9 +155,9 @@ class HeaderPanel(QWidget):
         indicator_font.setBold(True)
         self.admin_status_indicator.setFont(indicator_font)
         self.admin_status_indicator.setStyleSheet(
-            "color: #F59E0B; "
-            "font-weight: 600; "
-            "background-color: transparent;"
+            f"color: {Colors.WARNING}; "
+            f"font-weight: 600; "
+            f"background-color: transparent;"
         )
         admin_layout.addWidget(admin_label)
         admin_layout.addWidget(self.admin_status_indicator)
@@ -137,7 +172,7 @@ class HeaderPanel(QWidget):
         partition_label_font.setPointSize(9)
         partition_label_font.setBold(True)
         partition_label.setFont(partition_label_font)
-        partition_label.setStyleSheet("color: #CBD5E1; font-weight: 600;")
+        partition_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
         partition_label.setMinimumWidth(150)
         
         self.partition_info = QLabel("Detecting...")
@@ -146,9 +181,9 @@ class HeaderPanel(QWidget):
         partition_info_font.setBold(True)
         self.partition_info.setFont(partition_info_font)
         self.partition_info.setStyleSheet(
-            "color: #60A5FA; "
-            "font-weight: 600; "
-            "background-color: transparent;"
+            f"color: {Colors.ACCENT_BLUE}; "
+            f"font-weight: 600; "
+            f"background-color: transparent;"
         )
         partition_layout.addWidget(partition_label)
         partition_layout.addWidget(self.partition_info)
@@ -165,7 +200,7 @@ class HeaderPanel(QWidget):
             case_label_font.setPointSize(9)
             case_label_font.setBold(True)
             case_label.setFont(case_label_font)
-            case_label.setStyleSheet("color: #CBD5E1; font-weight: 600;")
+            case_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
             case_label.setMinimumWidth(150)
             
             self.case_path = QLabel("(No case directory)")
@@ -173,7 +208,7 @@ class HeaderPanel(QWidget):
             case_path_font.setPointSize(9)
             case_path_font.setBold(True)
             self.case_path.setFont(case_path_font)
-            self.case_path.setStyleSheet("color: #34D399; font-weight: 600; background-color: transparent;")
+            self.case_path.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_PATH)
             if self.case_directory:
                 self.case_path.setText(self.case_directory)
                 self.case_path.setToolTip(self.case_directory)
@@ -190,7 +225,7 @@ class HeaderPanel(QWidget):
             artifact_label_font.setPointSize(9)
             artifact_label_font.setBold(True)
             artifact_label.setFont(artifact_label_font)
-            artifact_label.setStyleSheet("color: #CBD5E1; font-weight: 600;")
+            artifact_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
             artifact_label.setMinimumWidth(150)
             
             self.target_artifact_path = QLabel("(Not set)")
@@ -198,7 +233,7 @@ class HeaderPanel(QWidget):
             target_font.setPointSize(9)
             target_font.setBold(True)
             self.target_artifact_path.setFont(target_font)
-            self.target_artifact_path.setStyleSheet("color: #34D399; font-weight: 600; background-color: transparent;")
+            self.target_artifact_path.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_PATH)
             if self.case_directory:
                 # In integrated mode, output goes directly to case_directory (live_acquisition)
                 self.target_artifact_path.setText(self.case_directory)
@@ -216,7 +251,7 @@ class HeaderPanel(QWidget):
             output_label_font.setPointSize(9)
             output_label_font.setBold(True)
             output_label.setFont(output_label_font)
-            output_label.setStyleSheet("color: #CBD5E1; font-weight: 600;")
+            output_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
             output_label.setMinimumWidth(150)
             
             # Output path - RED when not selected, GREEN when selected (no border)
@@ -226,9 +261,9 @@ class HeaderPanel(QWidget):
             output_path_font.setBold(True)
             self.output_path.setFont(output_path_font)
             self.output_path.setStyleSheet(
-                "color: #EF4444; "  # RED for not selected
-                "font-weight: 600; "
-                "background-color: transparent;"
+                f"color: {Colors.ERROR}; "
+                f"font-weight: 600; "
+                f"background-color: transparent;"
             )
             
             self.output_button = QPushButton("BROWSE...")
@@ -238,22 +273,7 @@ class HeaderPanel(QWidget):
             self.output_button.setFont(button_font)
             self.output_button.setMaximumWidth(120)
             self.output_button.setMinimumHeight(32)
-            self.output_button.setStyleSheet(
-                "QPushButton { "
-                "background-color: #3B82F6; "
-                "color: #FFFFFF; "
-                "border: none; "
-                "border-radius: 4px; "
-                "padding: 6px 16px; "
-                "font-weight: 600; "
-                "} "
-                "QPushButton:hover { "
-                "background-color: #2563EB; "
-                "} "
-                "QPushButton:pressed { "
-                "background-color: #1D4ED8; "
-                "}"
-            )
+            self.output_button.setStyleSheet(CrowEyeStyles.CROWCLAW_TOOLBAR_BUTTON)
 
             output_layout.addWidget(output_label)
             output_layout.addWidget(self.output_path, 1)  # Stretch to fill
@@ -267,7 +287,7 @@ class HeaderPanel(QWidget):
         self.setLayout(layout)
 
         # Apply dark background
-        self.setStyleSheet("background-color: #0F172A;")
+        self.setStyleSheet(f"background-color: {Colors.BG_PRIMARY};")
 
     def get_output_path(self) -> Optional[str]:
         """Get selected output path."""
@@ -284,11 +304,7 @@ class HeaderPanel(QWidget):
         self.output_path.setToolTip(path)
         
         # Change to GREEN when path is selected (no border)
-        self.output_path.setStyleSheet(
-            "color: #10B981; "  # GREEN for selected
-            "font-weight: 600; "
-            "background-color: transparent;"
-        )
+        self.output_path.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_PATH)
 
     def set_partition_info(self, partition: str):
         """Set Windows partition display."""
@@ -303,17 +319,11 @@ class HeaderPanel(QWidget):
         """
         if is_admin:
             self.admin_status_indicator.setText("✓ Administrator")
-            self.admin_status_indicator.setStyleSheet(
-                "color: #00FF88; font-weight: bold; padding: 5px; "
-                "background-color: #1E293B; border: 2px solid #00FF88; border-radius: 3px;"
-            )
+            self.admin_status_indicator.setStyleSheet(CrowEyeStyles.CROWCLAW_STATUS_PILL_OK)
             self.admin_status_indicator.setToolTip("Running with administrator privileges - all artifacts can be collected")
         else:
             self.admin_status_indicator.setText("⚠ Standard User")
-            self.admin_status_indicator.setStyleSheet(
-                "color: #FF6B6B; font-weight: bold; padding: 5px; "
-                "background-color: #1E293B; border: 2px solid #FF6B6B; border-radius: 3px;"
-            )
+            self.admin_status_indicator.setStyleSheet(CrowEyeStyles.CROWCLAW_STATUS_PILL_ERROR)
             self.admin_status_indicator.setToolTip("Not running as administrator - some artifacts require elevation")
 
 
@@ -464,16 +474,16 @@ class CrowClawMainWindow(QMainWindow):
     def apply_crow_eye_styles(self):
         """Apply Crow-Eye styling to the main window."""
         try:
-            # Add path to load styles from main app directory
-            if not hasattr(sys, 'frozen'):
-                # Running from source, go up to main project dir
-                main_app_dir = Path(__file__).parent.parent.parent.parent
+            # Use PathUtils for robust root resolution (Requirement 11.2)
+            from utils.path_utils import PathUtils
+            main_app_dir = PathUtils.get_app_root()
+            if str(main_app_dir) not in sys.path:
                 sys.path.append(str(main_app_dir))
 
             from styles import CrowEyeStyles
             style = getattr(CrowEyeStyles, 'MAIN_WINDOW', getattr(CrowEyeStyles, 'BODY', self.get_default_styles()))
             self.setStyleSheet(style)
-            
+
         except Exception as e:
             print(f"Warning: Could not load Crow-Eye styles, using fallback: {e}")
             self.setStyleSheet(self.get_default_styles())
@@ -712,7 +722,7 @@ class CrowClawMainWindow(QMainWindow):
 
         # Step indicator label
         step_label = QLabel("STEPS")
-        step_label.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 10px;")
+        step_label.setStyleSheet(CrowEyeStyles.CROWCLAW_SECTION_HEADER)
         steps_layout.addWidget(step_label)
 
         # Step buttons
@@ -725,10 +735,7 @@ class CrowClawMainWindow(QMainWindow):
         for step_text, step_id in steps:
             btn = QPushButton(step_text)
             btn.setMinimumHeight(60)
-            btn.setStyleSheet(
-                "background-color: #1E293B; color: #FFFFFF; border: 1px solid #00FFFF; "
-                "border-radius: 4px; padding: 8px; text-align: center; font-weight: bold; font-size: 10px;"
-            )
+            btn.setStyleSheet(CrowEyeStyles.CROWCLAW_STEP_BUTTON_INACTIVE)
             btn.clicked.connect(lambda checked, sid=step_id: self.switch_step(sid))
             self.step_buttons[step_id] = btn
             steps_layout.addWidget(btn)
@@ -767,15 +774,9 @@ class CrowClawMainWindow(QMainWindow):
             # Highlight current step button
             for btn_id, btn in self.step_buttons.items():
                 if btn_id == step_id:
-                    btn.setStyleSheet(
-                        "background-color: #00FFFF; color: #0F172A; border: 2px solid #00FFFF; "
-                        "border-radius: 4px; padding: 10px; text-align: left; font-weight: bold;"
-                    )
+                    btn.setStyleSheet(CrowEyeStyles.CROWCLAW_STEP_BUTTON_ACTIVE)
                 else:
-                    btn.setStyleSheet(
-                        "background-color: #1E293B; color: #FFFFFF; border: 1px solid #00FFFF; "
-                        "border-radius: 4px; padding: 10px; text-align: left; font-weight: bold;"
-                    )
+                    btn.setStyleSheet(CrowEyeStyles.CROWCLAW_STEP_BUTTON_INACTIVE)
 
     def create_artifact_config_widget(self) -> QWidget:
         """Create artifact configuration widget with details and paths."""
@@ -785,15 +786,18 @@ class CrowClawMainWindow(QMainWindow):
         # Left: Artifact list
         left_layout = QVBoxLayout()
         left_label = QLabel("Available Artifacts:")
-        left_label.setStyleSheet("color: #00FFFF; font-weight: bold;")
+        left_label.setStyleSheet(CrowEyeStyles.CROWCLAW_SECTION_HEADER)
         left_layout.addWidget(left_label)
 
         self.artifact_list = QListWidget()
         self.artifact_list.setStyleSheet(
-            "QListWidget { background-color: #1E293B; color: #FFFFFF; border: 1px solid #334155; border-radius: 4px; padding: 5px; font-weight: bold; } "
-            "QListWidget::item { border-bottom: 1px solid #0F172A; padding: 4px; } "
-            "QListWidget::item:selected { background-color: #334155; color: #00FFFF; border-left: 3px solid #00FFFF; } "
-            "QListWidget::item:hover { background-color: #0F172A; }"
+            f"QListWidget {{ background-color: {Colors.BG_PANELS}; color: {Colors.TEXT_PRIMARY}; "
+            f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 5px; "
+            f"font-weight: 600; }} "
+            f"QListWidget::item {{ border-bottom: 1px solid {Colors.BG_TABLES}; padding: 6px; }} "
+            f"QListWidget::item:selected {{ background-color: {Colors.SUCCESS}; "
+            f"color: {Colors.BG_PRIMARY}; }} "
+            f"QListWidget::item:hover {{ background-color: rgba(148, 163, 184, 0.08); }}"
         )
         for artifact in self.artifacts:
             # Add visual indicator for admin-required artifacts
@@ -807,7 +811,7 @@ class CrowClawMainWindow(QMainWindow):
             # Color code admin-required artifacts
             if artifact.required_admin:
                 from PyQt5.QtGui import QColor, QBrush
-                item.setForeground(QBrush(QColor("#FFAA00")))  # Orange color for admin-required
+                item.setForeground(QBrush(QColor(Colors.WARNING)))  # Amber for admin-required
                 item.setToolTip(f"{artifact.name} - Requires Administrator Privileges")
             
             self.artifact_list.addItem(item)
@@ -817,11 +821,7 @@ class CrowClawMainWindow(QMainWindow):
         # Right: Tab widget for Details and Paths
         from PyQt5.QtWidgets import QTabWidget
         right_tabs = QTabWidget()
-        right_tabs.setStyleSheet(
-            "QTabWidget::pane { border: 1px solid #334155; background: #0F1419; border-radius: 4px; } "
-            "QTabBar::tab { background-color: #1E293B; color: #FFFFFF; padding: 8px 16px; border: 1px solid #334155; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; } "
-            "QTabBar::tab:selected { background-color: #0F1419; color: #00FFFF; border-bottom: 2px solid #00FFFF; }"
-        )
+        right_tabs.setStyleSheet(CrowEyeStyles.UNIFIED_TAB_STYLE)
 
         # Tab 1: Artifact Details
         details_widget = QWidget()
@@ -836,17 +836,7 @@ class CrowClawMainWindow(QMainWindow):
         detail_font.setPointSize(10)
         self.detail_text.setFont(detail_font)
         
-        self.detail_text.setStyleSheet(
-            "QTextEdit { "
-            "background-color: #0F1419; "
-            "color: #E0E0E0; "
-            "border: none; "
-            "padding: 12px; "
-            "font-family: Consolas, monospace; "
-            "font-size: 10pt; "
-            "line-height: 1.5; "
-            "}"
-        )
+        self.detail_text.setStyleSheet(CrowEyeStyles.CROWCLAW_LOG_AREA)
         details_layout.addWidget(self.detail_text)
 
         # Enable/Disable checkbox
@@ -858,21 +848,19 @@ class CrowClawMainWindow(QMainWindow):
         checkbox_font.setBold(True)
         self.enable_checkbox.setFont(checkbox_font)
         self.enable_checkbox.setStyleSheet(
-            "QCheckBox { color: #00FF88; font-weight: bold; padding: 5px; } "
-            "QCheckBox::indicator { width: 18px; height: 18px; } "
-            "QCheckBox::indicator:checked { background-color: #00FF88; border: 2px solid #00FFFF; } "
-            "QCheckBox::indicator:unchecked { background-color: #1E293B; border: 2px solid #FF6B6B; }"
+            f"QCheckBox {{ color: {Colors.SUCCESS}; font-weight: 700; padding: 5px; }} "
+            f"QCheckBox::indicator {{ width: 18px; height: 18px; }} "
+            f"QCheckBox::indicator:checked {{ background-color: {Colors.SUCCESS}; "
+            f"border: 2px solid {Colors.SUCCESS}; border-radius: 3px; }} "
+            f"QCheckBox::indicator:unchecked {{ background-color: {Colors.BG_PANELS}; "
+            f"border: 2px solid {Colors.BORDER_SUBTLE}; border-radius: 3px; }}"
         )
         details_layout.addWidget(self.enable_checkbox)
 
         # Add custom path button
         add_button = QPushButton("Add Custom Path")
         add_button.clicked.connect(self.add_custom_path)
-        add_button.setStyleSheet(
-            "QPushButton { background-color: #1E293B; color: #FFFFFF; border: 2px solid #00FFFF; border-radius: 4px; padding: 8px; font-weight: 900; font-size: 11px; } "
-            "QPushButton:hover { background-color: #334155; color: #00FF88; } "
-            "QPushButton:pressed { background-color: #00FFFF; color: #0F172A; }"
-        )
+        add_button.setStyleSheet(CrowEyeStyles.CROWCLAW_TOOLBAR_BUTTON)
         details_layout.addWidget(add_button)
 
         details_widget.setLayout(details_layout)
@@ -883,20 +871,14 @@ class CrowClawMainWindow(QMainWindow):
         paths_layout = QVBoxLayout()
 
         self.path_text = QTextEdit()
-        self.path_text.setStyleSheet(
-            "background-color: #0F1419; color: #E0E0E0; border: none; padding: 12px; font-family: Consolas, monospace; font-size: 10pt;"
-        )
+        self.path_text.setStyleSheet(CrowEyeStyles.CROWCLAW_LOG_AREA)
         self.refresh_path_display()  # Initialize with all paths
         paths_layout.addWidget(self.path_text)
 
         # Refresh button
         refresh_button = QPushButton("Refresh Paths")
         refresh_button.clicked.connect(self.refresh_path_display)
-        refresh_button.setStyleSheet(
-            "QPushButton { background-color: #1E293B; color: #FFFFFF; border: 2px solid #00FFFF; border-radius: 4px; padding: 8px; font-weight: 900; font-size: 11px; } "
-            "QPushButton:hover { background-color: #334155; color: #00FF88; } "
-            "QPushButton:pressed { background-color: #00FFFF; color: #0F172A; }"
-        )
+        refresh_button.setStyleSheet(CrowEyeStyles.CROWCLAW_TOOLBAR_BUTTON)
         paths_layout.addWidget(refresh_button)
 
         paths_widget.setLayout(paths_layout)
@@ -928,13 +910,11 @@ class CrowClawMainWindow(QMainWindow):
         layout = QVBoxLayout()
 
         label = QLabel("Configured Artifact Paths:")
-        label.setStyleSheet("color: #00FFFF; font-weight: bold; padding: 10px;")
+        label.setStyleSheet(CrowEyeStyles.CROWCLAW_SECTION_HEADER)
         layout.addWidget(label)
 
         self.path_text = QTextEdit()
-        self.path_text.setStyleSheet(
-            "background-color: #1E293B; color: #FFFFFF; border: 1px solid #00FFFF; border-radius: 4px;"
-        )
+        self.path_text.setStyleSheet(CrowEyeStyles.CROWCLAW_LOG_AREA)
         self.refresh_path_display()
         layout.addWidget(self.path_text)
 
@@ -957,7 +937,9 @@ class CrowClawMainWindow(QMainWindow):
         # Status
         status_layout = QHBoxLayout()
         self.admin_status = QLabel(PathValidator.get_admin_status_string())
-        self.admin_status.setStyleSheet("color: #E0E0E0; padding: 10px; font-weight: bold;")
+        self.admin_status.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; padding: 10px; font-weight: 600;"
+        )
         status_layout.addWidget(self.admin_status)
         status_layout.addStretch()
         layout.addLayout(status_layout)
@@ -965,11 +947,7 @@ class CrowClawMainWindow(QMainWindow):
         # Collection button
         self.collect_button = QPushButton("Start Collection")
         self.collect_button.setMinimumHeight(50)
-        self.collect_button.setStyleSheet(
-            "QPushButton { background-color: #10B981; color: #000000; font-size: 16px; font-weight: 900; border: 2px solid #059669; border-radius: 6px; padding: 10px; } "
-            "QPushButton:hover { background-color: #059669; color: #FFFFFF; } "
-            "QPushButton:pressed { background-color: #00FFFF; color: #0F172A; border: 2px solid #0F172A; }"
-        )
+        self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
         self.collect_button.clicked.connect(self.start_collection)
         layout.addWidget(self.collect_button)
 
@@ -980,22 +958,7 @@ class CrowClawMainWindow(QMainWindow):
         self.progress.setTextVisible(True)
         self.progress.setAlignment(Qt.AlignCenter)
         self.progress.setMinimumHeight(30)
-        self.progress.setStyleSheet(
-            "QProgressBar { "
-            "background-color: #1E293B; "
-            "border: 2px solid #00FFFF; "
-            "border-radius: 6px; "
-            "text-align: center; "
-            "color: #FFFFFF; "
-            "font-weight: bold; "
-            "font-size: 12px; "
-            "padding: 2px; "
-            "} "
-            "QProgressBar::chunk { "
-            "background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00FF88, stop:1 #00FFFF); "
-            "border-radius: 4px; "
-            "}"
-        )
+        self.progress.setStyleSheet(CrowEyeStyles.CROWCLAW_PROGRESS_BAR)
         layout.addWidget(self.progress)
 
         # Current item being collected + Access Method on same line
@@ -1006,22 +969,30 @@ class CrowClawMainWindow(QMainWindow):
         current_section = QVBoxLayout()
         current_section.setSpacing(5)
         current_label = QLabel("Current Collection Progress:")
-        current_label.setStyleSheet("color: #00FF88; font-weight: bold;")
+        current_label.setStyleSheet(CrowEyeStyles.CROWCLAW_SECTION_HEADER)
         current_section.addWidget(current_label)
         
         self.current_item = QLabel("(Waiting to start)")
-        self.current_item.setStyleSheet("color: #E0E0E0; padding: 5px; background-color: #1E293B; border: 1px solid #334155; border-radius: 4px;")
+        self.current_item.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; padding: 6px 10px; "
+            f"background-color: {Colors.BG_PANELS}; "
+            f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;"
+        )
         current_section.addWidget(self.current_item)
         
         # Right side: Access Method
         access_section = QVBoxLayout()
         access_section.setSpacing(5)
         access_method_label = QLabel("Access Method:")
-        access_method_label.setStyleSheet("color: #00FFFF; font-weight: bold;")
+        access_method_label.setStyleSheet(CrowEyeStyles.CROWCLAW_SECTION_HEADER)
         access_section.addWidget(access_method_label)
         
         self.access_method_display = QLabel("(Not started)")
-        self.access_method_display.setStyleSheet("color: #E0E0E0; padding: 5px; background-color: #1E293B; border: 1px solid #334155; border-radius: 4px;")
+        self.access_method_display.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; padding: 6px 10px; "
+            f"background-color: {Colors.BG_PANELS}; "
+            f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;"
+        )
         access_section.addWidget(self.access_method_display)
         
         # Add both sections to horizontal layout
@@ -1032,32 +1003,22 @@ class CrowClawMainWindow(QMainWindow):
 
         # Status log
         log_label = QLabel("Collection Log:")
-        log_label.setStyleSheet("color: #00FFFF; font-weight: bold; padding: 10px 0px;")
+        log_label.setStyleSheet(CrowEyeStyles.CROWCLAW_SECTION_HEADER)
         layout.addWidget(log_label)
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setStyleSheet(
-            "background-color: #1E293B; color: #E0E0E0; border: 1px solid #00FFFF; border-radius: 4px;"
-        )
+        self.log_text.setStyleSheet(CrowEyeStyles.CROWCLAW_LOG_AREA)
         layout.addWidget(self.log_text)
 
         # Buttons
         button_layout = QHBoxLayout()
         open_button = QPushButton("Open Output Folder")
         open_button.clicked.connect(self.open_output_folder)
-        open_button.setStyleSheet(
-            "QPushButton { background-color: #1E293B; color: #FFFFFF; border: 2px solid #00FFFF; border-radius: 4px; padding: 8px; font-weight: 900; font-size: 11px; } "
-            "QPushButton:hover { background-color: #334155; color: #00FF88; } "
-            "QPushButton:pressed { background-color: #00FFFF; color: #0F172A; }"
-        )
+        open_button.setStyleSheet(CrowEyeStyles.CROWCLAW_TOOLBAR_BUTTON)
         manifest_button = QPushButton("View Manifest")
         manifest_button.clicked.connect(self.view_manifest)
-        manifest_button.setStyleSheet(
-            "QPushButton { background-color: #1E293B; color: #FFFFFF; border: 2px solid #00FFFF; border-radius: 4px; padding: 8px; font-weight: 900; font-size: 11px; } "
-            "QPushButton:hover { background-color: #334155; color: #00FF88; } "
-            "QPushButton:pressed { background-color: #00FFFF; color: #0F172A; }"
-        )
+        manifest_button.setStyleSheet(CrowEyeStyles.CROWCLAW_TOOLBAR_BUTTON)
         button_layout.addWidget(open_button)
         button_layout.addWidget(manifest_button)
         button_layout.addStretch()
@@ -1329,12 +1290,12 @@ class CrowClawMainWindow(QMainWindow):
         dialog.setModal(True)
         
         # Set dialog background
-        dialog.setStyleSheet("QDialog { background-color: #0F172A; }")
-        
+        dialog.setStyleSheet(f"QDialog {{ background-color: {Colors.BG_PRIMARY}; }}")
+
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
-        
+
         # Icon and title based on type
         icon_map = {
             "success": "✓",
@@ -1343,14 +1304,14 @@ class CrowClawMainWindow(QMainWindow):
             "info": "ℹ"
         }
         color_map = {
-            "success": "#00FF88",
-            "error": "#FF6B6B",
-            "warning": "#FFAA00",
-            "info": "#00FFFF"
+            "success": Colors.SUCCESS,
+            "error": Colors.ERROR,
+            "warning": Colors.WARNING,
+            "info": Colors.ACCENT_BLUE,
         }
         
         icon = icon_map.get(msg_type, "ℹ")
-        color = color_map.get(msg_type, "#00FFFF")
+        color = color_map.get(msg_type, Colors.ACCENT_BLUE)
         
         # Title with icon
         title_label = QLabel(f"{icon} {title}")
@@ -1375,7 +1336,12 @@ class CrowClawMainWindow(QMainWindow):
         msg_font.setFamily("Consolas")
         msg_label.setFont(msg_font)
         msg_label.setWordWrap(True)
-        msg_label.setStyleSheet("color: #E0E0E0; background-color: #1E293B; padding: 15px; border-radius: 4px; border: 1px solid #334155;")
+        msg_label.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; "
+            f"background-color: {Colors.BG_PANELS}; "
+            f"padding: 15px; border-radius: 6px; "
+            f"border: 1px solid {Colors.BORDER_SUBTLE};"
+        )
         layout.addWidget(msg_label)
         
         # OK button
@@ -1387,21 +1353,19 @@ class CrowClawMainWindow(QMainWindow):
         ok_button.setMinimumHeight(40)
         ok_button.setStyleSheet(
             f"QPushButton {{ "
-            f"background-color: #1E293B; "
+            f"background-color: {Colors.BG_PANELS}; "
             f"color: {color}; "
-            f"border: 2px solid {color}; "
+            f"border: 1px solid {color}; "
             f"border-radius: 4px; "
             f"padding: 8px 20px; "
-            f"font-weight: 900; "
-            f"letter-spacing: 2px; "
+            f"font-weight: 700; "
             f"}} "
             f"QPushButton:hover {{ "
             f"background-color: {color}; "
-            f"color: #0F172A; "
+            f"color: {Colors.BG_PRIMARY}; "
             f"}} "
-            f"QPushButton:pressed {{ "
-            f"background-color: #00FFFF; "
-            f"color: #0F172A; "
+            f"QPushButton:focus {{ "
+            f"outline: 1px solid {Colors.ACCENT_CYAN}; "
             f"}}"
         )
         ok_button.clicked.connect(dialog.accept)
@@ -1516,7 +1480,8 @@ class CrowClawMainWindow(QMainWindow):
         self.collect_button.setText("⏳ Collecting...")
         self.collect_button.setEnabled(False)
         self.collect_button.setStyleSheet(
-            "QPushButton { background-color: #FFAA00; color: #000000; font-size: 16px; font-weight: 900; border: 2px solid #FF8800; border-radius: 6px; padding: 10px; } "
+            f"QPushButton {{ background-color: {Colors.WARNING}; color: {Colors.BG_PRIMARY}; "
+            f"font-size: 14px; font-weight: 800; border: none; border-radius: 6px; padding: 10px 18px; }}"
         )
 
         # Track current artifact for progress display
@@ -1738,11 +1703,7 @@ class CrowClawMainWindow(QMainWindow):
         # Reset button to original state
         self.collect_button.setText("Start Collection")
         self.collect_button.setEnabled(True)
-        self.collect_button.setStyleSheet(
-            "QPushButton { background-color: #10B981; color: #000000; font-size: 16px; font-weight: 900; border: 2px solid #059669; border-radius: 6px; padding: 10px; } "
-            "QPushButton:hover { background-color: #059669; color: #FFFFFF; } "
-            "QPushButton:pressed { background-color: #00FFFF; color: #0F172A; border: 2px solid #0F172A; }"
-        )
+        self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
 
         # Generate collection manifest using the collector's results
         self.generate_collection_manifest_from_collector(self.worker.collector, statistics, end_time)
@@ -1765,11 +1726,7 @@ class CrowClawMainWindow(QMainWindow):
         # Reset button
         self.collect_button.setText("Start Collection")
         self.collect_button.setEnabled(True)
-        self.collect_button.setStyleSheet(
-            "QPushButton { background-color: #10B981; color: #000000; font-size: 16px; font-weight: 900; border: 2px solid #059669; border-radius: 6px; padding: 10px; } "
-            "QPushButton:hover { background-color: #059669; color: #FFFFFF; } "
-            "QPushButton:pressed { background-color: #00FFFF; color: #0F172A; border: 2px solid #0F172A; }"
-        )
+        self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
         
         self.show_styled_message("✗ Collection Error", f"An error occurred during collection:\n\n{error_message}", "error")
 
@@ -1915,15 +1872,11 @@ class CrowClawMainWindow(QMainWindow):
         dialog.setMaximumWidth(900)
         
         # Apply dark theme to dialog
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: #0F172A;
-                color: #FFFFFF;
-            }
-            QLabel {
-                color: #FFFFFF;
-            }
-        """)
+        dialog.setStyleSheet(
+            f"QDialog {{ background-color: {Colors.BG_PRIMARY}; "
+            f"color: {Colors.TEXT_PRIMARY}; }} "
+            f"QLabel {{ color: {Colors.TEXT_PRIMARY}; }}"
+        )
         
         # Main layout
         layout = QVBoxLayout()
@@ -1939,16 +1892,16 @@ class CrowClawMainWindow(QMainWindow):
         icon_font.setPointSize(36)
         icon_font.setBold(True)
         icon_label.setFont(icon_font)
-        icon_label.setStyleSheet(f"""
-            color: {'#10B981' if statistics.total_errors == 0 else '#F59E0B'}; 
-            background-color: {'#064E3B' if statistics.total_errors == 0 else '#78350F'};
-            padding: 16px;
-            border-radius: 8px;
-            min-width: 60px;
-            max-width: 60px;
-            min-height: 60px;
-            max-height: 60px;
-        """)
+        _icon_fg = Colors.SUCCESS if statistics.total_errors == 0 else Colors.WARNING
+        icon_label.setStyleSheet(
+            f"color: {_icon_fg}; "
+            f"background-color: {Colors.BG_PANELS}; "
+            f"padding: 16px; "
+            f"border-radius: 8px; "
+            f"border: 1px solid {_icon_fg}; "
+            f"min-width: 60px; max-width: 60px; "
+            f"min-height: 60px; max-height: 60px;"
+        )
         icon_label.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(icon_label)
         
@@ -1957,7 +1910,7 @@ class CrowClawMainWindow(QMainWindow):
         title_font = QFont("Segoe UI", 18)
         title_font.setBold(True)
         title_label.setFont(title_font)
-        title_label.setStyleSheet("color: #FFFFFF; padding-left: 12px;")
+        title_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; padding-left: 12px;")
         header_layout.addWidget(title_label)
         header_layout.addStretch()
         
@@ -1966,14 +1919,11 @@ class CrowClawMainWindow(QMainWindow):
         # Summary section (dark theme)
         summary_frame = QFrame()
         summary_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        summary_frame.setStyleSheet("""
-            QFrame { 
-                background-color: #1E293B; 
-                border: 1px solid #334155; 
-                border-radius: 6px; 
-                padding: 14px; 
-            }
-        """)
+        summary_frame.setStyleSheet(
+            f"QFrame {{ background-color: {Colors.BG_PANELS}; "
+            f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+            f"border-radius: 6px; padding: 14px; }}"
+        )
         summary_layout = QVBoxLayout(summary_frame)
         summary_layout.setSpacing(8)
         
@@ -1982,20 +1932,33 @@ class CrowClawMainWindow(QMainWindow):
         summary_title_font = QFont("Segoe UI", 10)
         summary_title_font.setBold(True)
         summary_title.setFont(summary_title_font)
-        summary_title.setStyleSheet("color: #94A3B8; letter-spacing: 1px;")
+        summary_title.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; letter-spacing: 1px;")
         summary_layout.addWidget(summary_title)
         
         # Summary stats in compact format with dark theme
-        summary_text = f"<table style='width: 100%; font-size: 11pt; color: #E2E8F0;'>"
-        summary_text += f"<tr><td style='padding: 4px 0;'><b>Artifacts:</b></td><td align='right' style='padding: 4px 0;'><span style='color: #60A5FA;'>{statistics.total_artifacts_collected}/{statistics.total_artifacts_requested}</span></td></tr>"
-        summary_text += f"<tr><td style='padding: 4px 0;'><b>Files:</b></td><td align='right' style='padding: 4px 0;'><span style='color: #60A5FA;'>{statistics.total_files_collected}</span></td></tr>"
-        summary_text += f"<tr><td style='padding: 4px 0;'><b>Size:</b></td><td align='right' style='padding: 4px 0;'><span style='color: #60A5FA;'>{self._format_size(statistics.total_bytes_collected)}</span></td></tr>"
-        summary_text += f"<tr><td style='padding: 4px 0;'><b>Errors:</b></td><td align='right' style='padding: 4px 0;'><span style='color: {'#EF4444' if statistics.total_errors > 0 else '#10B981'};'><b>{statistics.total_errors}</b></span></td></tr>"
-        summary_text += "</table>"
-        
+        _err_color = Colors.ERROR if statistics.total_errors > 0 else Colors.SUCCESS
+        summary_text = (
+            f"<table style='width: 100%; font-size: 11pt; color: {Colors.TEXT_PRIMARY};'>"
+            f"<tr><td style='padding: 4px 0;'><b>Artifacts:</b></td>"
+            f"<td align='right' style='padding: 4px 0;'>"
+            f"<span style='color: {Colors.ACCENT_BLUE};'>"
+            f"{statistics.total_artifacts_collected}/{statistics.total_artifacts_requested}</span></td></tr>"
+            f"<tr><td style='padding: 4px 0;'><b>Files:</b></td>"
+            f"<td align='right' style='padding: 4px 0;'>"
+            f"<span style='color: {Colors.ACCENT_BLUE};'>{statistics.total_files_collected}</span></td></tr>"
+            f"<tr><td style='padding: 4px 0;'><b>Size:</b></td>"
+            f"<td align='right' style='padding: 4px 0;'>"
+            f"<span style='color: {Colors.ACCENT_BLUE};'>"
+            f"{self._format_size(statistics.total_bytes_collected)}</span></td></tr>"
+            f"<tr><td style='padding: 4px 0;'><b>Errors:</b></td>"
+            f"<td align='right' style='padding: 4px 0;'>"
+            f"<span style='color: {_err_color};'><b>{statistics.total_errors}</b></span></td></tr>"
+            f"</table>"
+        )
+
         summary_label = QLabel(summary_text)
         summary_label.setTextFormat(Qt.RichText)
-        summary_label.setStyleSheet("color: #E2E8F0;")
+        summary_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
         summary_layout.addWidget(summary_label)
         
         layout.addWidget(summary_frame)
@@ -2004,14 +1967,11 @@ class CrowClawMainWindow(QMainWindow):
         if hasattr(collector, 'access_method_stats') and collector.access_method_stats:
             access_frame = QFrame()
             access_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-            access_frame.setStyleSheet("""
-                QFrame { 
-                    background-color: #1E3A5F; 
-                    border: 1px solid #2563EB; 
-                    border-radius: 6px; 
-                    padding: 12px; 
-                }
-            """)
+            access_frame.setStyleSheet(
+                f"QFrame {{ background-color: {Colors.BG_PANELS}; "
+                f"border: 1px solid {Colors.ACCENT_BLUE}; "
+                f"border-radius: 6px; padding: 12px; }}"
+            )
             access_layout = QVBoxLayout(access_frame)
             access_layout.setSpacing(6)
             
@@ -2019,14 +1979,18 @@ class CrowClawMainWindow(QMainWindow):
             access_title_font = QFont("Segoe UI", 9)
             access_title_font.setBold(True)
             access_title.setFont(access_title_font)
-            access_title.setStyleSheet("color: #93C5FD; letter-spacing: 1px;")
+            access_title.setStyleSheet(f"color: {Colors.ACCENT_BLUE}; letter-spacing: 1px;")
             access_layout.addWidget(access_title)
             
             access_text = ""
             for method, count in collector.access_method_stats.items():
                 if count > 0:
                     method_display = self._format_access_method(method)
-                    access_text += f"<span style='font-size: 10pt; color: #DBEAFE;'>{method_display}: <b style='color: #60A5FA;'>{count}</b></span><br>"
+                    access_text += (
+                        f"<span style='font-size: 10pt; color: {Colors.TEXT_PRIMARY};'>"
+                        f"{method_display}: <b style='color: {Colors.ACCENT_BLUE};'>{count}</b>"
+                        f"</span><br>"
+                    )
             
             access_label = QLabel(access_text)
             access_label.setTextFormat(Qt.RichText)
@@ -2039,36 +2003,15 @@ class CrowClawMainWindow(QMainWindow):
         details_label_font = QFont("Segoe UI", 10)
         details_label_font.setBold(True)
         details_label.setFont(details_label_font)
-        details_label.setStyleSheet("color: #94A3B8; letter-spacing: 1px; margin-top: 8px;")
+        details_label.setStyleSheet(
+            f"color: {Colors.TEXT_SECONDARY}; letter-spacing: 1px; margin-top: 8px;"
+        )
         layout.addWidget(details_label)
         
         details_text = QTextEdit()
         details_text.setReadOnly(True)
         details_text.setMaximumHeight(300)
-        details_text.setStyleSheet("""
-            QTextEdit { 
-                background-color: #0F172A; 
-                border: 1px solid #334155; 
-                border-radius: 6px; 
-                padding: 12px; 
-                font-family: 'Consolas', 'Courier New', monospace; 
-                font-size: 9pt; 
-                color: #E2E8F0;
-            }
-            QScrollBar:vertical {
-                background-color: #1E293B;
-                width: 12px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #475569;
-                border-radius: 6px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #64748B;
-            }
-        """)
+        details_text.setStyleSheet(CrowEyeStyles.CROWCLAW_LOG_AREA)
         
         # Build detailed results with dark theme colors
         details_content = ""
@@ -2076,25 +2019,34 @@ class CrowClawMainWindow(QMainWindow):
             # Determine status and icon
             if result.status.value == "success":
                 status_icon = "✓"
-                status_color = "#10B981"
+                status_color = Colors.SUCCESS
             elif result.status.value == "skipped":
                 status_icon = "⊘"
-                status_color = "#6B7280"
+                status_color = Colors.TEXT_MUTED
             else:
                 status_icon = "✗"
-                status_color = "#EF4444"
-            
+                status_color = Colors.ERROR
+
             # Format size
             size_str = self._format_size(result.bytes_collected)
-            
+
             # Build artifact line
-            details_content += f"<span style='color: {status_color}; font-weight: bold;'>{status_icon} {result.artifact_name}:</span> "
-            details_content += f"<span style='color: #94A3B8;'>{result.status.value.upper()}</span><br>"
-            details_content += f"&nbsp;&nbsp;&nbsp;<span style='color: #CBD5E1;'>Files: <b style='color: #60A5FA;'>{result.files_collected}</b> | Size: <b style='color: #60A5FA;'>{size_str}</b></span><br>"
-            
+            details_content += (
+                f"<span style='color: {status_color}; font-weight: bold;'>"
+                f"{status_icon} {result.artifact_name}:</span> "
+                f"<span style='color: {Colors.TEXT_SECONDARY};'>"
+                f"{result.status.value.upper()}</span><br>"
+                f"&nbsp;&nbsp;&nbsp;<span style='color: {Colors.TEXT_PRIMARY};'>"
+                f"Files: <b style='color: {Colors.ACCENT_BLUE};'>{result.files_collected}</b> | "
+                f"Size: <b style='color: {Colors.ACCENT_BLUE};'>{size_str}</b></span><br>"
+            )
+
             # Show errors if any (compact)
             if result.errors:
-                details_content += f"&nbsp;&nbsp;&nbsp;<span style='color: #EF4444;'>Errors: {len(result.errors)}</span><br>"
+                details_content += (
+                    f"&nbsp;&nbsp;&nbsp;<span style='color: {Colors.ERROR};'>"
+                    f"Errors: {len(result.errors)}</span><br>"
+                )
             
             details_content += "<br>"
         
@@ -2107,23 +2059,15 @@ class CrowClawMainWindow(QMainWindow):
         ok_button = QPushButton("OK")
         ok_button.setMinimumWidth(120)
         ok_button.setMinimumHeight(40)
-        ok_button.setStyleSheet("""
-            QPushButton { 
-                background-color: #2563EB; 
-                color: white; 
-                border: none; 
-                padding: 10px 20px; 
-                border-radius: 6px; 
-                font-weight: bold; 
-                font-size: 11pt;
-            } 
-            QPushButton:hover { 
-                background-color: #1D4ED8; 
-            }
-            QPushButton:pressed {
-                background-color: #1E40AF;
-            }
-        """)
+        ok_button.setStyleSheet(
+            f"QPushButton {{ background-color: {Colors.ACCENT_BLUE}; "
+            f"color: {Colors.TEXT_PRIMARY}; border: none; "
+            f"padding: 10px 20px; border-radius: 6px; "
+            f"font-weight: 700; font-size: 11pt; }} "
+            f"QPushButton:hover {{ background-color: #1D4ED8; }} "
+            f"QPushButton:pressed {{ background-color: #1E40AF; }} "
+            f"QPushButton:focus {{ outline: 2px solid {Colors.ACCENT_CYAN}; outline-offset: 2px; }}"
+        )
         ok_button.clicked.connect(dialog.accept)
         button_layout.addWidget(ok_button)
         

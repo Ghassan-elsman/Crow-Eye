@@ -8,6 +8,7 @@ This module handles all interactions with the Report Engine:
 - Editing and deleting report blocks
 """
 
+import os
 import logging
 from typing import Dict, Any
 
@@ -28,33 +29,35 @@ class ReportHandlers:
         if not content:
             return {"success": False, "error": "No content provided for report section."}
             
+        # Provenance (source_query + timestamp) is stamped centrally by
+        # ReportEngine._stamp_and_append for every block type.
         block_id = self.cm.report_engine.append_section(title, content, author="ai")
         self.cm.report_engine.save_report() # Auto-save
         return {"success": True, "block_id": block_id, "message": f"Section '{title}' added to report."}
 
     def handle_report_add_data_table(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Add an interactive data table to the report based on a query."""
+        """Add an interactive data table to the report."""
         db_name = params.get("database_name")
-        sql_query = params.get("sql_query")
+        sql_query = params.get("sql_query", "")
         columns = params.get("columns", [])
+        data = params.get("rows", []) # AI can now provide data directly
+        caption = params.get("caption", "")
         
-
-        ROW_LIMIT = 500
+        # INCREASED ROW LIMIT: Matches ReportEngine's internal cap for forensic rigor.
+        ROW_LIMIT = 1000
         
-        if not db_name or not sql_query:
-            return {"success": False, "error": "Missing database_name or sql_query."}
-            
-        # Execute the query to get data for the report
-        res = self.cm.database_service.execute_query(db_name, sql_query)
-        if not res.get("success"):
-            return {"success": False, "error": f"Failed to retrieve data for table: {res.get('error')}"}
-            
-        # Handle different data structure variations from DatabaseService
-        data = res.get("data", [])
-        if not data and "rows" in res:
-            data = res.get("rows", [])
-            
-
+        # IMPROVEMENT: If we have a query and database, ALWAYS fetch the FULL data
+        # from the database, even if 'rows' were provided. This ensures the report
+        # gets the complete evidence, not just the AI's context sample (TOON).
+        if db_name and sql_query:
+            self.logger.info(f"Fetching full data for report table from {db_name} using query.")
+            res = self.cm.database_service.execute_query(db_name, sql_query)
+            if res.get("success"):
+                data = res.get("data", []) or res.get("rows", [])
+            elif not data:
+                # Only return error if we didn't have fallback rows
+                return {"success": False, "error": f"Failed to retrieve data for table: {res.get('error')}"}
+                
         original_count = len(data)
         if original_count > ROW_LIMIT:
             data = data[:ROW_LIMIT]
@@ -64,11 +67,16 @@ class ReportHandlers:
         if not columns and data:
             columns = list(data[0].keys())
             
+        # Determine caption if not provided
+        if not caption and original_count > ROW_LIMIT:
+            caption = f"Showing top {len(data)} results"
+
         block_id = self.cm.report_engine.add_data_table(
-            sql_query, columns, data, 
-            caption=f"Showing top {len(data)} results" if original_count > ROW_LIMIT else "",
+            sql_query, columns, data,
+            caption=caption,
             author="ai"
         )
+        # Provenance stamped centrally in ReportEngine._stamp_and_append.
         self.cm.report_engine.save_report() # Auto-save
         
         message = f"Data table with {len(data)} rows added to report (ID: {block_id})."
@@ -81,15 +89,59 @@ class ReportHandlers:
             "message": message
         }
 
+    def handle_report_add_evidence(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Add an expandable evidence reference block to the report."""
+        text = params.get("reference_text", "Forensic Evidence")
+        link = params.get("source_link", "")
+        data = params.get("evidence_data", [])
+        columns = params.get("columns") # Pass columns if provided
+        
+        if not data and not text:
+            return {"success": False, "error": "Missing evidence_data or reference_text."}
+            
+        block_id = self.cm.report_engine.add_evidence(
+            reference_text=text, 
+            source_link=link, 
+            evidence_data=data, 
+            columns=columns,
+            author="ai"
+        )
+        self.cm.report_engine.save_report()
+        return {"success": True, "block_id": block_id, "message": f"Evidence reference added to report."}
+
     def handle_report_add_image(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Include a forensic image or screenshot in the report."""
         path = params.get("image_path")
         caption = params.get("caption", "Forensic Image")
-        
+
         if not path:
             return {"success": False, "error": "Missing image_path."}
-            
-        block_id = self.cm.report_engine.add_image(path, caption, author="ai")
+
+        # Security: only embed real image files that live INSIDE the case
+        # directory. The path is model-supplied; without this it could embed
+        # arbitrary local file bytes into the report (info disclosure).
+        allowed_ext = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"}
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in allowed_ext:
+            return {"success": False,
+                    "error": f"Unsupported image type '{ext}'. Allowed: {', '.join(sorted(allowed_ext))}."}
+
+        case_dir = getattr(self.cm, "case_directory", None)
+        if not case_dir:
+            return {"success": False, "error": "No case directory available; cannot validate image path."}
+        try:
+            real_path = os.path.realpath(path)
+            real_case = os.path.realpath(str(case_dir))
+        except Exception as e:
+            return {"success": False, "error": f"Invalid image path: {e}"}
+        if not (real_path == real_case or real_path.startswith(real_case + os.sep)):
+            return {"success": False,
+                    "error": "Access Denied: image must be inside the case directory. "
+                             "Place exhibits in the case folder and reference them there."}
+        if not os.path.isfile(real_path):
+            return {"success": False, "error": f"Image not found: {path}"}
+
+        block_id = self.cm.report_engine.add_image(real_path, caption, author="ai")
         self.cm.report_engine.save_report() # Auto-save
         return {"success": True, "block_id": block_id, "message": f"Image added to report (ID: {block_id})."}
 

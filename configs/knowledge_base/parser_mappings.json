@@ -1,74 +1,113 @@
 {
+  "_doc": "Maps each supported artifact to its parser file, offline parser, output database, and (when available) its visual-anatomy reference page on https://crow-eye.com/eye-describe . The Eye Agent reads anatomy_url whenever it needs to explain the BINARY-LEVEL STRUCTURE of an artifact (offsets, field widths, signature bytes, on-disk layout). Knowledge .md files in this directory cover the SEMANTIC and FORENSIC questions; the anatomy pages cover the byte-level layout.",
   "parser_mappings": {
     "prefetch": {
       "parser_file": "Artifacts_Collectors/Prefetch_claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_PrefetchClaw.py",
       "database": "prefetch_data.db",
       "table": "prefetch_data",
-      "description": "Windows Prefetch file parser for program execution evidence"
+      "description": "Windows Prefetch file parser for program execution evidence",
+      "anatomy_url": "https://crow-eye.com/eye-describe/prefetch_anatomy.html",
+      "anatomy_summary": "Interactive byte-level walk of a .pf file: SCCA header, file version (Win 8/10/11 differences), executable name UTF-16 block, file metrics array, trace chains, volume info block with run_times array, and directory strings."
     },
     "mft": {
       "parser_file": "Artifacts_Collectors/MFT and USN journal/MFT_Claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_MFTClaw.py",
       "database": "mft_data.db",
       "table": "mft_data",
-      "description": "Master File Table parser for NTFS file system metadata"
+      "description": "Master File Table parser for NTFS file system metadata",
+      "anatomy_url": "https://crow-eye.com/eye-describe/mft_anatomy.html",
+      "anatomy_summary": "Byte-level walk of an MFT record: FILE0/FILE* signature, fixup array, sequence number, hard-link count, attribute list ($STANDARD_INFORMATION, $FILE_NAME, $DATA), MACB timestamps in $SIA vs $FNA streams, resident vs non-resident attributes, data runs."
     },
     "amcache": {
       "parser_file": "Artifacts_Collectors/amcacheparser.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_AmCacheClaw.py",
       "database": "amcache_data.db",
       "table": "amcache_data",
-      "description": "Amcache.hve parser for application execution tracking"
+      "description": "Amcache.hve parser for application execution tracking",
+      "anatomy_url": null,
+      "anatomy_summary": "Visual anatomy page not yet published."
     },
     "shimcache": {
       "parser_file": "Artifacts_Collectors/shimcache_claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_ShimCacheClaw.py",
       "database": "shimcache_data.db",
       "table": "shimcache_data",
-      "description": "ShimCache (Application Compatibility Cache) parser"
+      "description": "ShimCache (Application Compatibility Cache) parser",
+      "anatomy_url": "https://crow-eye.com/eye-describe/shimcache_anatomy.html",
+      "anatomy_summary": "Byte-level walk of the AppCompatCache registry value: signature, entry-count header, per-entry layout (path length, path UTF-16, last-modified FILETIME, insertion flags, executed flag), and the Windows-version differences (Win7/8/10/11) that change entry size and field order."
     },
     "registry": {
       "parser_file": "Artifacts_Collectors/Regclaw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_RegClaw.py",
       "database": "registry_data.db",
       "table": "registry_data",
-      "description": "Windows Registry hive parser"
+      "description": "Windows Registry hive parser",
+      "anatomy_url": null,
+      "anatomy_summary": "Visual anatomy page not yet published."
     },
     "usn": {
       "parser_file": "Artifacts_Collectors/MFT and USN journal/USN_Claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_USNClaw.py",
       "database": "usn_data.db",
       "table": "usn_data",
-      "description": "USN Journal parser for NTFS change log"
+      "description": "USN Journal parser for NTFS change log",
+      "anatomy_url": "https://crow-eye.com/eye-describe/usn_anatomy.html",
+      "anatomy_summary": "Byte-level walk of a USN journal record: record length, major/minor version, file reference number, parent reference number, USN sequence, timestamp, reason flags (FILE_CREATE / FILE_DELETE / RENAME bitmask), source info, security ID, file attributes, file-name length + UTF-16 name."
     },
     "jumplist": {
       "parser_file": "Artifacts_Collectors/A_CJL_LNK_Claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_ACJLClaw.py",
       "database": "jumplist_data.db",
       "table": "jumplist_data",
-      "description": "Jump List and LNK file parser"
+      "description": "Jump List and LNK file parser",
+      "anatomy_url": "https://crow-eye.com/eye-describe/automatic_jumplist.html",
+      "related_anatomy_urls": [
+        "https://crow-eye.com/eye-describe/automatic_jumplist.html",
+        "https://crow-eye.com/eye-describe/custom_jumplist.html",
+        "https://crow-eye.com/eye-describe/lnk_anatomy.html"
+      ],
+      "anatomy_summary": "Three complementary pages. AutomaticDestinations: OLE compound document (MS-CFB) with DestList stream + per-entry LNK substreams. CustomDestinations: header + entry blocks each containing a full LNK shortcut. LNK Anatomy: ShellLinkHeader, LinkTargetIDList, LinkInfo, StringData (name/relative/working/arguments/icon), extra data blocks (Tracker, Console, EnvironmentVariableDataBlock, etc.)."
     },
     "recyclebin": {
       "parser_file": "Artifacts_Collectors/recyclebin_claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_RecycleBinClaw.py",
       "database": "recyclebin_data.db",
       "table": "recyclebin_data",
-      "description": "Recycle Bin artifact parser"
+      "description": "Recycle Bin artifact parser",
+      "anatomy_url": null,
+      "anatomy_summary": "Visual anatomy page not yet published."
     },
     "srum": {
       "parser_file": "Artifacts_Collectors/SRUM_Claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_SRUM_Claw.py",
       "database": "srum_data.db",
       "table": "srum_data",
-      "description": "System Resource Usage Monitor parser"
+      "description": "System Resource Usage Monitor parser",
+      "anatomy_url": null,
+      "anatomy_summary": "Visual anatomy page not yet published."
     },
     "eventlog": {
       "parser_file": "Artifacts_Collectors/WinLog_Claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_WinLog_Claw.py",
       "database": "eventlog_data.db",
       "table": "eventlog_data",
-      "description": "Windows Event Log (.evtx) parser"
+      "description": "Windows Event Log (.evtx) parser",
+      "anatomy_url": null,
+      "anatomy_summary": "Visual anatomy page not yet published."
+    }
+  },
+  "anatomy_index": {
+    "_doc": "Quick lookup: artifact_key -> anatomy_url. Use this when the user / agent asks 'how is artifact X structured at the byte level' — fetch the URL for a guided visual walkthrough.",
+    "landing_page": "https://crow-eye.com/eye-describe/",
+    "windows_boot_and_disk": "https://crow-eye.com/eye-describe/windows_boot_disk_explorer.html",
+    "by_artifact": {
+      "prefetch": "https://crow-eye.com/eye-describe/prefetch_anatomy.html",
+      "mft": "https://crow-eye.com/eye-describe/mft_anatomy.html",
+      "usn": "https://crow-eye.com/eye-describe/usn_anatomy.html",
+      "lnk": "https://crow-eye.com/eye-describe/lnk_anatomy.html",
+      "jumplist_automatic": "https://crow-eye.com/eye-describe/automatic_jumplist.html",
+      "jumplist_custom": "https://crow-eye.com/eye-describe/custom_jumplist.html"
     }
   },
   "consolidated_database": {
@@ -77,6 +116,8 @@
     "note": "Alternative to querying individual artifact databases"
   },
   "github_base_url": "https://github.com/crow-eye/crow-eye",
-  "version": "1.0",
-  "last_updated": "2024"
+  "website_base_url": "https://crow-eye.com",
+  "eye_describe_base_url": "https://crow-eye.com/eye-describe",
+  "version": "1.1",
+  "last_updated": "2026-05-25"
 }

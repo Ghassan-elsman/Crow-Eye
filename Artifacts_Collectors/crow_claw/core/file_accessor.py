@@ -77,12 +77,19 @@ class FileAccessor:
         # Use importlib to handle directory name with spaces
         
         # Get the path to Artifacts_Collectors directory
-        artifacts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-        forensics_dir = os.path.join(artifacts_dir, 'Forensics_Image_parsing', 'strategies')
+        try:
+            from utils.path_utils import PathUtils
+            app_root = PathUtils.get_app_root()
+            artifacts_dir = app_root / 'Artifacts_Collectors'
+        except ImportError:
+            # Fallback if PathUtils is not accessible
+            artifacts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            
+        forensics_dir = os.path.join(str(artifacts_dir), 'Forensics_Image_parsing', 'strategies')
         
         # Add to sys.path temporarily if needed
-        if artifacts_dir not in sys.path:
-            sys.path.insert(0, artifacts_dir)
+        if str(artifacts_dir) not in sys.path:
+            sys.path.insert(0, str(artifacts_dir))
         
         try:
             # Import E01AccessStrategy

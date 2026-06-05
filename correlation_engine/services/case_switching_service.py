@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
 
-from ..config.case_configuration_manager import CaseConfigurationManager, ConfigurationChangeEvent
+from ..config._case_coordinator_service import CaseConfigurationManager, ConfigurationChangeEvent
 from ..integration.case_specific_configuration_integration import CaseSpecificConfigurationIntegration
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class CaseSwitchEvent:
     previous_case_id: Optional[str]
     new_case_id: str
     switch_time: str
-    switch_reason: str  # 'manual', 'automatic', 'startup'
+    switch_reason: str # 'manual', 'automatic', 'startup'
     configuration_loaded: bool
     load_time_ms: float
 
@@ -346,7 +346,7 @@ class CaseSwitchingService:
         """Background worker for cache maintenance and monitoring"""
         logger.info("Started case switching service background worker")
         
-        while not self.stop_event.wait(60):  # Check every minute
+        while not self.stop_event.wait(60): # Check every minute
             try:
                 self._perform_cache_maintenance()
                 self._monitor_case_changes()

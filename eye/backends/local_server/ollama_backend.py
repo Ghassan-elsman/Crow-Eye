@@ -360,6 +360,36 @@ class OllamaBackend(LLMBackend):
             self.logger.error(f"Error listing Ollama models: {e}")
             return []
     
+    def get_context_window(self) -> Optional[int]:
+        """Report the loaded model's trained context window via ``/api/show``.
+
+        Ollama returns a ``model_info`` map whose architecture-specific
+        ``*.context_length`` key (e.g. ``llama.context_length``) is the model's
+        trained window. This is an upper bound — the actually-loaded window
+        depends on how the model was started (``num_ctx``); the runtime n_ctx
+        probe in query_processor still corrects downward if needed.
+
+        Best-effort: returns None on any failure. Cached per instance.
+        """
+        if getattr(self, "_context_window_cache", None):
+            return self._context_window_cache
+        try:
+            response = self.session.post(
+                f"{self.api_endpoint}/api/show",
+                json={"model": self.model_name},
+                timeout=self.connect_timeout,
+            )
+            if response.status_code == 200:
+                model_info = (response.json() or {}).get("model_info", {}) or {}
+                for key, value in model_info.items():
+                    if key.endswith(".context_length") and value:
+                        self._context_window_cache = int(value)
+                        self.logger.info(f"Ollama reported context window {self._context_window_cache:,} for {self.model_name}")
+                        return self._context_window_cache
+        except Exception as e:
+            self.logger.debug(f"Ollama context-window lookup failed: {e}")
+        return None
+
     def get_models_with_quota(self) -> List[Dict[str, str]]:
         """
         Ollama is local, so quota is effectively unlimited.

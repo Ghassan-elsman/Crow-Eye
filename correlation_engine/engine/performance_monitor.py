@@ -220,7 +220,7 @@ class PerformanceMonitor:
         self.active_windows: Dict[str, WindowMetrics] = {}
         
         # Memory monitoring
-        self.memory_samples: deque = deque(maxlen=1000)  # Keep last 1000 samples
+        self.memory_samples: deque = deque(maxlen=1000) # Keep last 1000 samples
         self.memory_monitoring_active = False
         self.memory_monitor_thread: Optional[threading.Thread] = None
         
@@ -765,7 +765,7 @@ class PerformanceMonitor:
         try:
             process = psutil.Process()
             memory_info = process.memory_info()
-            return memory_info.rss / (1024 * 1024)  # Convert bytes to MB
+            return memory_info.rss / (1024 * 1024) # Convert bytes to MB
         except Exception:
             return 0.0
     
@@ -911,7 +911,7 @@ def benchmark_engines(time_window_engine_func, anchor_engine_func,
             memory_peak_mb=anchor_report.peak_memory_mb,
             records_processed=anchor_report.total_records_processed,
             matches_found=anchor_report.total_matches_found,
-            windows_processed=0  # Anchor-based doesn't use windows
+            windows_processed=0 # Anchor-based doesn't use windows
         )
     except Exception as e:
         print(f"Anchor-based engine benchmark failed: {e}")

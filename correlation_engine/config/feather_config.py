@@ -19,23 +19,31 @@ class FeatherConfig:
     artifact_type: str
     
     # Source information
-    source_database: str  # Path to source database
-    source_table: str  # Table name in source database
+    source_database: str # Path to source database
+    source_table: str # Table name in source database
     
     # Column mapping
-    selected_columns: List[str]  # Columns selected from source
-    column_mapping: Dict[str, str]  # Original column -> Feather column mapping
+    selected_columns: List[str] # Columns selected from source
+    column_mapping: Dict[str, str] # Original column -> Feather column mapping
     
     # Transformation settings
-    timestamp_column: str  # Which column contains timestamps
-    timestamp_format: str  # Format of timestamps
-    
+    timestamp_column: str # Which column contains timestamps
+    timestamp_format: str # Format of timestamps
+
     # Output
-    output_database: str  # Path where feather database was saved
+    output_database: str # Path where feather database was saved
+
+    # Source timezone for naive timestamps. IANA name ("UTC", "America/New_York",
+    # "Europe/Berlin") or a fixed-offset string ZoneInfo accepts. Used by the
+    # timestamp parser to localize naive strings before converting to UTC.
+    # Defaults to "UTC" for backward compatibility — every existing feather
+    # is parsed exactly as before. Set to the acquisition workstation's
+    # timezone when ingesting Autopsy or other local-time exports.
+    source_timezone: str = "UTC"
     
     # Optional fields
-    application_column: Optional[str] = None  # Column containing app/file names
-    path_column: Optional[str] = None  # Column containing file paths
+    application_column: Optional[str] = None # Column containing app/file names
+    path_column: Optional[str] = None # Column containing file paths
     
     # Metadata
     created_date: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -63,8 +71,11 @@ class FeatherConfig:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'FeatherConfig':
-        """Create from dictionary"""
-        return cls(**data)
+        """Create from dictionary, filtering extra keys"""
+        from dataclasses import fields
+        valid_keys = {f.name for f in fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**filtered_data)
     
     @classmethod
     def from_json(cls, json_str: str) -> 'FeatherConfig':

@@ -5,15 +5,16 @@ Professional cyberpunk-styled PyQt5 interface for data import and normalization.
 
 import os
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QTabWidget, QLabel, QLineEdit, QPushButton, 
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QTabWidget, QLabel, QLineEdit, QPushButton, QToolButton,
     QFileDialog, QMenuBar, QMenu, QAction, QStatusBar,
-    QMessageBox, QProgressDialog, QInputDialog
+    QMessageBox, QProgressDialog, QInputDialog, QStyle
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 from ..database import FeatherDatabase
 from ..transformer import DataTransformer
+from ...gui.crow_eye_icons import apply_status_to_label
 
 # Import config system
 try:
@@ -48,14 +49,14 @@ class FeatherBuilderWindow(QMainWindow):
         self.feather_name = ""
         self.feather_path = ""
         self.feather_db = None
-        self.current_config = None  # Store current feather config
+        self.current_config = None # Store current feather config
         self.config_manager = ConfigManager() if CONFIG_AVAILABLE else None
         self.configuration_manager = ConfigurationManager.get_instance() if CONFIG_MANAGER_AVAILABLE else None
-        self.artifact_type = "Unknown"  # Track selected artifact type
-        self.detection_method = "unknown"  # Track how artifact type was detected
-        self.detection_confidence = "low"  # Track detection confidence
-        self.auto_registration_service = None  # Set by pipeline builder
-        self.source_database_path = None  # Track source database for detection
+        self.artifact_type = "Unknown" # Track selected artifact type
+        self.detection_method = "unknown" # Track how artifact type was detected
+        self.detection_confidence = "low" # Track detection confidence
+        self.auto_registration_service = None # Set by pipeline builder
+        self.source_database_path = None # Track source database for detection
         
         # Auto-set feather path to Configuration Manager's feathers directory
         if self.configuration_manager and self.configuration_manager.feathers_dir:
@@ -162,7 +163,8 @@ class FeatherBuilderWindow(QMainWindow):
         detection_layout = QHBoxLayout()
         detection_label = QLabel("Auto-Detected:")
         detection_label.setMinimumWidth(120)
-        self.artifact_detection_label = QLabel("⚠ Not detected yet")
+        self.artifact_detection_label = QLabel()
+        apply_status_to_label(self.artifact_detection_label, "WARN", "Not detected yet")
         self.artifact_detection_label.setStyleSheet("color: #00d9ff; font-weight: bold;")
         detection_layout.addWidget(detection_label)
         detection_layout.addWidget(self.artifact_detection_label)
@@ -179,18 +181,119 @@ class FeatherBuilderWindow(QMainWindow):
         type_layout.addWidget(type_label)
         type_layout.addWidget(self.artifact_type_combo, 1)
         layout.addLayout(type_layout)
-        
-        # Help text
+
+        # Source timezone selection — used by the correlation engine to
+        # localize naive timestamp strings before converting to UTC. Leave
+        # "UTC" for sources already in UTC (Plaso CSV, anything ISO-8601
+        # with explicit "+00:00"). Choose the acquisition workstation's
+        # timezone for local-time exports (typical Autopsy CSV).
+        # Use the canonical Crow-Eye input-field styling so the timezone
+        # combo matches the artifact-type combo (both are dropdowns inside
+        # the same group box).
+        try:
+            from styles import Colors as _Colors, CrowEyeStyles as _Styles
+            _tz_input_style = _Styles.INPUT_FIELD
+            _label_color = _Colors.TEXT_SECONDARY
+            _warning_color = _Colors.WARNING
+        except ImportError:
+            _tz_input_style = ""
+            _label_color = "#94A3B8"
+            _warning_color = "#F59E0B"
+
+        tz_layout = QHBoxLayout()
+        tz_label = QLabel("Source Timezone:")
+        tz_label.setMinimumWidth(120)
+        self.source_timezone_combo = QComboBox()
+        self.source_timezone_combo.setEditable(True)
+        self.source_timezone_combo.addItems(self._curated_timezones())
+        self.source_timezone_combo.setCurrentText("UTC")
+        self._TZ_TOOLTIP = (
+            "IANA timezone (e.g. 'UTC', 'America/New_York', 'Europe/Berlin'). "
+            "Type any valid IANA name if it's not in the list. The correlation "
+            "engine uses this to localize naive timestamps from the source "
+            "before converting to UTC."
+        )
+        self.source_timezone_combo.setToolTip(self._TZ_TOOLTIP)
+        # Apply canonical input-field chrome.
+        self.source_timezone_combo.setStyleSheet(_tz_input_style)
+
+        # Discoverable help icon next to the combo, using the Crow-Eye
+        # info icon so the whole app's icon set stays consistent.
+        # Clicking does nothing visible — the tooltip on hover carries
+        # the help text.
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.tz_help_button = QToolButton()
+        self.tz_help_button.setIcon(CrowEyeIcons.info())
+        self.tz_help_button.setToolTip(self._TZ_TOOLTIP)
+        self.tz_help_button.setAutoRaise(True) # flat, no button chrome
+        self.tz_help_button.setCursor(Qt.WhatsThisCursor)
+        self.tz_help_button.setFocusPolicy(Qt.NoFocus)
+
+        tz_layout.addWidget(tz_label)
+        tz_layout.addWidget(self.source_timezone_combo, 1)
+        tz_layout.addWidget(self.tz_help_button)
+        layout.addLayout(tz_layout)
+
+        # Non-blocking hint label below the combo, only visible when
+        # the selected artifact type typically produces local-time
+        # exports (e.g., Autopsy). Empty by default; populated by
+        # _apply_artifact_type_tz_default on artifact_type_changed.
+        self.source_timezone_hint = QLabel("")
+        self.source_timezone_hint.setWordWrap(True)
+        self.source_timezone_hint.setStyleSheet(
+            f"color: {_warning_color}; font-size: 9pt; padding-left: 124px;"
+        )
+        self.source_timezone_hint.setVisible(False)
+        layout.addWidget(self.source_timezone_hint)
+
+        # Help text using the secondary-text token (consistent with the
+        # tz_label color and other help captions in the app).
         help_label = QLabel(
             "The artifact type helps the correlation engine understand your data. "
-            "This will be saved to the feather_metadata table."
+            "This will be saved to the feather_metadata table. The source timezone "
+            "controls how naive timestamps in the source get converted to UTC."
         )
         help_label.setWordWrap(True)
-        help_label.setStyleSheet("color: #888; font-size: 9pt;")
+        help_label.setStyleSheet(f"color: {_label_color}; font-size: 9pt;")
         layout.addWidget(help_label)
-        
+
         group.setLayout(layout)
         return group
+
+    @staticmethod
+    def _curated_timezones():
+        """Small curated list of common IANA timezones for the dropdown.
+        The combo is editable so analysts can still type any valid zone."""
+        return [
+            "UTC",
+            "America/New_York",
+            "America/Chicago",
+            "America/Denver",
+            "America/Los_Angeles",
+            "America/Anchorage",
+            "America/Sao_Paulo",
+            "Europe/London",
+            "Europe/Berlin",
+            "Europe/Paris",
+            "Europe/Moscow",
+            "Africa/Cairo",
+            "Asia/Dubai",
+            "Asia/Karachi",
+            "Asia/Kolkata",
+            "Asia/Shanghai",
+            "Asia/Tokyo",
+            "Australia/Sydney",
+        ]
+
+    def _selected_source_timezone(self) -> str:
+        """Read the current source-timezone selection. Falls back to UTC
+        when the combo isn't built yet (e.g. early auto-import paths) or
+        when the user cleared the field."""
+        combo = getattr(self, 'source_timezone_combo', None)
+        if combo is None:
+            return "UTC"
+        text = (combo.currentText() or "").strip()
+        return text or "UTC"
     
     def populate_artifact_types(self):
         """Populate artifact type combo box."""
@@ -199,17 +302,53 @@ class FeatherBuilderWindow(QMainWindow):
         self.artifact_type_combo.clear()
         
         # Add "Unknown" option
-        self.artifact_type_combo.addItem("⚠ Unknown - Please select")
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.artifact_type_combo.addItem(CrowEyeIcons.warning(), "Unknown - Please select")
         
         # Add all artifact types
         for artifact_type in ArtifactDetector.get_all_artifact_types():
             self.artifact_type_combo.addItem(artifact_type)
     
+    # Map of artifact types whose source data typically has a known timezone
+    # convention. The map is intentionally conservative — only artifact types
+    # with well-understood export defaults are listed; everything else leaves
+    # the user's current selection alone.
+    _ARTIFACT_TZ_DEFAULTS = {
+        # Plaso super-timeline output is normalized to UTC on export.
+        "Plaso": ("UTC", None),
+        # Autopsy timeline CSV exports are typically the acquisition host's
+        # local time; surface a hint so the analyst confirms the choice.
+        "Autopsy": (None, "Autopsy exports are often local time — confirm timezone matches the acquisition host."),
+    }
+
+    def _apply_artifact_type_tz_default(self, artifact_type: str):
+        """If the newly-selected artifact type has a known timezone default,
+        apply it to the source_timezone_combo and surface a hint. Both the
+        combo and the hint are guarded with hasattr so this is safe to call
+        before the timezone section has been built (e.g., during early
+        init ordering)."""
+        combo = getattr(self, 'source_timezone_combo', None)
+        hint = getattr(self, 'source_timezone_hint', None)
+        if combo is None or hint is None:
+            return
+
+        default, hint_text = self._ARTIFACT_TZ_DEFAULTS.get(artifact_type, (None, None))
+        if default is not None:
+            combo.setCurrentText(default)
+        if hint_text:
+            hint.setText(hint_text)
+            hint.setVisible(True)
+        else:
+            hint.setText("")
+            hint.setVisible(False)
+
     def on_artifact_type_changed(self):
         """Handle artifact type selection change."""
         selected_text = self.artifact_type_combo.currentText()
         
-        if selected_text.startswith("⚠ Unknown"):
+        # First combo entry is the "Unknown - Please select" placeholder
+        # (now decorated with the Crow-Eye warning icon, text is icon-free).
+        if selected_text.startswith("Unknown"):
             self.artifact_type = "Unknown"
         else:
             self.artifact_type = selected_text
@@ -228,11 +367,13 @@ class FeatherBuilderWindow(QMainWindow):
                         if len(parts) > 1:
                             original_type = parts[1]
                     
-                    self.artifact_detection_label.setText(
-                        f"✓ {self.artifact_type} (manually selected, was {original_type})"
-                    )
+                    apply_status_to_label(self.artifact_detection_label, "OK", f"{self.artifact_type} (manually selected, was {original_type})")
                     self.detection_method = "manual"
-        
+
+        # Apply per-artifact-type timezone defaults / hints. Safe no-op
+        # for artifact types not in the map (most of them).
+        self._apply_artifact_type_tz_default(self.artifact_type)
+
         self.update_status()
     
     def detect_artifact_type_from_database(self):
@@ -259,9 +400,7 @@ class FeatherBuilderWindow(QMainWindow):
         # Priority 1: Check existing metadata
         existing_type = self._read_artifact_type_from_metadata(db_path)
         if existing_type:
-            self.artifact_detection_label.setText(
-                f"✓ {existing_type} (from existing metadata)"
-            )
+            apply_status_to_label(self.artifact_detection_label, "OK", f"{existing_type} (from existing metadata)")
             self._select_artifact_type(existing_type)
             self.detection_method = "metadata"
             return
@@ -329,7 +468,7 @@ class FeatherBuilderWindow(QMainWindow):
         
         selected_type = self.artifact_type_combo.currentText()
         
-        if selected_type.startswith("⚠"):
+        if selected_type.startswith("[WARN]"):
             # User hasn't selected a valid type
             reply = QMessageBox.question(
                 self, "Artifact Type Not Set",
@@ -540,7 +679,7 @@ class FeatherBuilderWindow(QMainWindow):
         if self.feather_db:
             try:
                 self.feather_db.close()
-            except:
+            except Exception as e:
                 pass
             self.feather_db = None
         
@@ -564,7 +703,7 @@ class FeatherBuilderWindow(QMainWindow):
             if self.feather_db:
                 try:
                     self.feather_db.close()
-                except:
+                except Exception as e:
                     pass
                 self.feather_db = None
             
@@ -596,19 +735,19 @@ class FeatherBuilderWindow(QMainWindow):
         """Connect import button signals from tabs."""
         try:
             self.db_tab.import_btn.clicked.disconnect()
-        except:
+        except Exception as e:
             pass
         self.db_tab.import_btn.clicked.connect(self.handle_database_import)
         
         try:
             self.csv_tab.import_btn.clicked.disconnect()
-        except:
+        except Exception as e:
             pass
         self.csv_tab.import_btn.clicked.connect(self.handle_csv_import)
         
         try:
             self.json_tab.import_btn.clicked.disconnect()
-        except:
+        except Exception as e:
             pass
         self.json_tab.import_btn.clicked.connect(self.handle_json_import)
     
@@ -630,7 +769,7 @@ class FeatherBuilderWindow(QMainWindow):
         if self.feather_db:
             try:
                 self.feather_db.close()
-            except:
+            except Exception as e:
                 pass
         
         # Create new database connection
@@ -851,7 +990,7 @@ class FeatherBuilderWindow(QMainWindow):
                 else:
                     return None
             return value
-        except:
+        except Exception as e:
             return None
     
     def closeEvent(self, event):
@@ -860,14 +999,14 @@ class FeatherBuilderWindow(QMainWindow):
         if self.feather_db:
             try:
                 self.feather_db.close()
-            except:
+            except Exception as e:
                 pass
         
         # Close source database connections from tabs
         if hasattr(self, 'db_tab') and self.db_tab.db_connection:
             try:
                 self.db_tab.db_connection.close()
-            except:
+            except Exception as e:
                 pass
         
         event.accept()
@@ -899,14 +1038,15 @@ class FeatherBuilderWindow(QMainWindow):
             config = FeatherConfig(
                 config_name=config_name,
                 feather_name=self.feather_name or "Unnamed Feather",
-                artifact_type="Unknown",  # Should be detected or selected
-                source_database="",  # Capture from active tab
-                source_table="",  # Capture from active tab
-                selected_columns=[],  # Capture from active tab
-                column_mapping={},  # Capture from active tab
+                artifact_type="Unknown", # Should be detected or selected
+                source_database="", # Capture from active tab
+                source_table="", # Capture from active tab
+                selected_columns=[], # Capture from active tab
+                column_mapping={}, # Capture from active tab
                 timestamp_column="timestamp",
                 timestamp_format="ISO8601",
                 output_database=self.feather_path or "",
+                source_timezone=self._selected_source_timezone(),
                 created_by=os.getenv('USERNAME', 'Unknown'),
                 description=f"Configuration for {self.feather_name}"
             )
@@ -946,11 +1086,12 @@ class FeatherBuilderWindow(QMainWindow):
                 source_database=import_config.get('source_path', ''),
                 source_table=import_config.get('source_table', table_name),
                 selected_columns=[col['name'] for col in import_config.get('columns', [])],
-                column_mapping={col['name']: col.get('feather_name', col['name']) 
+                column_mapping={col['name']: col.get('feather_name', col['name'])
                                for col in import_config.get('columns', [])},
                 timestamp_column=import_config.get('timestamp_column', 'timestamp'),
                 timestamp_format=import_config.get('timestamp_format', 'ISO8601'),
                 output_database=self.feather_path or "",
+                source_timezone=self._selected_source_timezone(),
                 created_by=os.getenv('USERNAME', 'Unknown'),
                 description=f"Auto-saved configuration for {self.feather_name}",
                 total_records=record_count
@@ -959,7 +1100,7 @@ class FeatherBuilderWindow(QMainWindow):
             # Save configuration silently
             saved_path = self.config_manager.save_feather_config(config)
             self.current_config = config
-            self.status_bar.showMessage(f"✓ Config auto-saved: {config_name}")
+            self.status_bar.showMessage(f"[OK] Config auto-saved: {config_name}")
             
         except Exception as e:
             # Don't show error to user, just log it
@@ -1047,10 +1188,10 @@ class FeatherBuilderWindow(QMainWindow):
                     info = self.config_manager.get_config_info("feather", config_name)
                     config_list.append(
                         f"• {config_name}\n"
-                        f"  Type: {info.get('artifact_type', 'Unknown')}\n"
-                        f"  Records: {info.get('records', 0)}\n"
+                        f" Type: {info.get('artifact_type', 'Unknown')}\n"
+                        f" Records: {info.get('records', 0)}\n"
                     )
-                except:
+                except Exception as e:
                     config_list.append(f"• {config_name}\n")
             
             message = "Available Feather Configurations:\n\n" + "\n".join(config_list)
@@ -1085,7 +1226,7 @@ class FeatherBuilderWindow(QMainWindow):
             
             if artifact_type:
                 # Update detection display
-                confidence_icon = "✓" if confidence >= 0.8 else "●" if confidence >= 0.6 else "○"
+                confidence_icon = "[OK]" if confidence >= 0.8 else "" if confidence >= 0.6 else ""
                 self.artifact_detection_label.setText(
                     f"{confidence_icon} {artifact_type} ({confidence:.0%} confidence)"
                 )
@@ -1109,13 +1250,13 @@ class FeatherBuilderWindow(QMainWindow):
                 self.status_bar.showMessage(f"Detected artifact type: {artifact_type} - {reason}", 5000)
             else:
                 # No detection
-                self.artifact_detection_label.setText("⚠ Could not detect artifact type")
+                apply_status_to_label(self.artifact_detection_label, "WARN", "Could not detect artifact type")
                 self.artifact_detection_label.setStyleSheet("color: #ff9900; font-weight: bold;")
                 self.status_bar.showMessage(f"Artifact detection: {reason}", 5000)
                 
         except Exception as e:
             print(f"Error during artifact detection: {e}")
-            self.artifact_detection_label.setText("⚠ Detection error")
+            apply_status_to_label(self.artifact_detection_label, "WARN", "Detection error")
             self.artifact_detection_label.setStyleSheet("color: #ff0000; font-weight: bold;")
     
     def _auto_register_feather_if_available(self):
@@ -1147,7 +1288,7 @@ class FeatherBuilderWindow(QMainWindow):
                 # Prepare metadata
                 metadata = {
                     'source_database': self.source_database_path,
-                    'import_date': __import__('datetime').datetime.now().isoformat(),
+                    'import_date': datetime.now().isoformat(),
                     'record_count': record_count,
                     'detection_method': self.detection_method,
                     'detection_confidence': self.detection_confidence
@@ -1163,7 +1304,7 @@ class FeatherBuilderWindow(QMainWindow):
                 
                 if success:
                     self.status_bar.showMessage(
-                        f"✓ Feather registered: {self.feather_name}",
+                        f"[OK] Feather registered: {self.feather_name}",
                         5000
                     )
                     print(f"[Feather Builder] Registered feather: {self.feather_name}")
@@ -1193,7 +1334,7 @@ class FeatherBuilderWindow(QMainWindow):
             
             # Show success notification
             self.status_bar.showMessage(
-                f"✓ Feather auto-registered: {feather_config.feather_name}",
+                f"[OK] Feather auto-registered: {feather_config.feather_name}",
                 5000
             )
             
@@ -1201,7 +1342,7 @@ class FeatherBuilderWindow(QMainWindow):
             # Don't fail the import if auto-registration fails
             print(f"Auto-registration failed: {e}")
             self.status_bar.showMessage(
-                f"⚠ Auto-registration failed: {str(e)}",
+                f"[WARN] Auto-registration failed: {str(e)}",
                 5000
             )
     

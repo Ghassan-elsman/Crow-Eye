@@ -88,7 +88,7 @@ class SemanticInfoDisplayWidget(QWidget):
         
         # Process all fields in the record
         for field_name, field_value in self.current_record.items():
-            if field_name.startswith('_'):  # Skip internal fields
+            if field_name.startswith('_'): # Skip internal fields
                 continue
             
             total_fields += 1

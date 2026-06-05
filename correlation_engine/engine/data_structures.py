@@ -23,24 +23,24 @@ class EvidenceRow:
     Evidence rows never duplicate Feather data - they only reference it.
     Enhanced with identity-based correlation fields.
     """
-    artifact: str  # e.g., "prefetch", "srum", "shimcache"
-    table: str  # Feather table name
-    row_id: int  # Feather row identifier
-    timestamp: Optional[datetime]  # When this evidence occurred (nullable for non-timestamped evidence)
-    semantic: Dict[str, Any]  # Extracted semantic data (name, path, etc.)
+    artifact: str # e.g., "prefetch", "srum", "shimcache"
+    table: str # Feather table name
+    row_id: int # Feather row identifier
+    timestamp: Optional[datetime] # When this evidence occurred (nullable for non-timestamped evidence)
+    semantic: Dict[str, Any] # Extracted semantic data (name, path, etc.)
     
     # NEW: Identity-based correlation fields
-    feather_id: str = ""  # Feather identifier
-    anchor_id: Optional[str] = None  # Anchor this evidence belongs to (nullable for supporting evidence)
-    is_primary: bool = False  # Is this the primary evidence in its anchor?
-    has_anchor: bool = True  # Does this evidence have a valid timestamp and anchor?
-    role: str = "secondary"  # Evidence role: 'primary', 'secondary', 'supporting'
-    match_reason: str = ""  # How this evidence was matched to identity
-    match_method: str = ""  # Matching strategy used: 'exact', 'fuzzy', 'hash', 'partial_path'
-    similarity_score: float = 0.0  # Similarity score for fuzzy matching
-    confidence: float = 1.0  # Confidence in this evidence match
-    original_data: Dict[str, Any] = field(default_factory=dict)  # Complete original record data
-    semantic_data: Dict[str, Any] = field(default_factory=dict)  # Enhanced semantic mappings
+    feather_id: str = "" # Feather identifier
+    anchor_id: Optional[str] = None # Anchor this evidence belongs to (nullable for supporting evidence)
+    is_primary: bool = False # Is this the primary evidence in its anchor?
+    has_anchor: bool = True # Does this evidence have a valid timestamp and anchor?
+    role: str = "secondary" # Evidence role: 'primary', 'secondary', 'supporting'
+    match_reason: str = "" # How this evidence was matched to identity
+    match_method: str = "" # Matching strategy used: 'exact', 'fuzzy', 'hash', 'partial_path'
+    similarity_score: float = 0.0 # Similarity score for fuzzy matching
+    confidence: float = 1.0 # Confidence in this evidence match
+    original_data: Dict[str, Any] = field(default_factory=dict) # Complete original record data
+    semantic_data: Dict[str, Any] = field(default_factory=dict) # Enhanced semantic mappings
     
     def __post_init__(self):
         """Validate evidence row data."""
@@ -67,22 +67,22 @@ class Anchor:
     Enhanced with role counts and semantic summary.
     """
     anchor_id: str = field(default_factory=lambda: str(uuid4()))
-    identity_id: Optional[str] = None  # Identity this anchor belongs to
+    identity_id: Optional[str] = None # Identity this anchor belongs to
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     rows: List[EvidenceRow] = field(default_factory=list)
     
     # NEW: Enhanced anchor fields
-    duration_minutes: float = 0.0  # Duration of this anchor window
-    primary_artifact: str = ""  # Artifact type of primary evidence
-    primary_row_id: int = 0  # Row ID of primary evidence
-    evidence_count: int = 0  # Total evidence in this anchor
-    primary_count: int = 0  # Count of primary evidence
-    secondary_count: int = 0  # Count of secondary evidence
-    supporting_count: int = 0  # Count of supporting evidence (no timestamp)
-    confidence: float = 1.0  # Confidence in this anchor
-    semantic_summary: Dict[str, Any] = field(default_factory=dict)  # Semantic event summary
-    metadata: Dict[str, Any] = field(default_factory=dict)  # Additional metadata
+    duration_minutes: float = 0.0 # Duration of this anchor window
+    primary_artifact: str = "" # Artifact type of primary evidence
+    primary_row_id: int = 0 # Row ID of primary evidence
+    evidence_count: int = 0 # Total evidence in this anchor
+    primary_count: int = 0 # Count of primary evidence
+    secondary_count: int = 0 # Count of secondary evidence
+    supporting_count: int = 0 # Count of supporting evidence (no timestamp)
+    confidence: float = 1.0 # Confidence in this anchor
+    semantic_summary: Dict[str, Any] = field(default_factory=dict) # Semantic event summary
+    metadata: Dict[str, Any] = field(default_factory=dict) # Additional metadata
     
     def add_evidence(self, evidence: EvidenceRow):
         """
@@ -137,22 +137,22 @@ class Identity:
     Enhanced with complete evidence storage and metadata.
     """
     identity_id: str = field(default_factory=lambda: str(uuid4()))
-    identity_type: str = ""  # "name", "path", "hash"
-    identity_value: str = ""  # normalized value
+    identity_type: str = "" # "name", "path", "hash"
+    identity_value: str = "" # normalized value
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     anchors: List[Anchor] = field(default_factory=list)
     
     # NEW: Enhanced identity fields
-    primary_name: str = ""  # Primary display name
-    normalized_name: str = ""  # Normalized name for matching
-    confidence: float = 1.0  # Confidence in identity match
-    match_method: str = ""  # Method used to create identity: 'exact', 'fuzzy', 'hash', 'partial_path'
-    total_evidence: int = 0  # Total evidence records for this identity
-    total_anchors: int = 0  # Total temporal anchors
-    artifacts_involved: List[str] = field(default_factory=list)  # List of artifact types
-    all_evidence: List[EvidenceRow] = field(default_factory=list)  # ALL evidence (timestamped + non-timestamped)
-    metadata: Dict[str, Any] = field(default_factory=dict)  # Additional metadata
+    primary_name: str = "" # Primary display name
+    normalized_name: str = "" # Normalized name for matching
+    confidence: float = 1.0 # Confidence in identity match
+    match_method: str = "" # Method used to create identity: 'exact', 'fuzzy', 'hash', 'partial_path'
+    total_evidence: int = 0 # Total evidence records for this identity
+    total_anchors: int = 0 # Total temporal anchors
+    artifacts_involved: List[str] = field(default_factory=list) # List of artifact types
+    all_evidence: List[EvidenceRow] = field(default_factory=list) # ALL evidence (timestamped + non-timestamped)
+    metadata: Dict[str, Any] = field(default_factory=dict) # Additional metadata
     
     def __post_init__(self):
         """Validate identity data."""
@@ -270,18 +270,18 @@ class QueryFilters:
     identity_value: Optional[str] = None
     
     # NEW: Semantic filtering fields
-    semantic_category: Optional[str] = None  # Filter by semantic category
-    semantic_meaning: Optional[str] = None  # Filter by semantic meaning
-    severity: Optional[str] = None  # Filter by severity level
-    evidence_role: Optional[str] = None  # Filter by evidence role (primary/secondary/supporting)
-    mapping_source: Optional[str] = None  # Filter by mapping source (global/wing/built-in)
+    semantic_category: Optional[str] = None # Filter by semantic category
+    semantic_meaning: Optional[str] = None # Filter by semantic meaning
+    severity: Optional[str] = None # Filter by severity level
+    evidence_role: Optional[str] = None # Filter by evidence role (primary/secondary/supporting)
+    mapping_source: Optional[str] = None # Filter by mapping source (global/wing/built-in)
     
     # NEW: Pagination fields
-    page: int = 0  # Page number (0-indexed)
-    page_size: int = 100  # Records per page
+    page: int = 0 # Page number (0-indexed)
+    page_size: int = 100 # Records per page
     
     # NEW: Time-based filtering fields
-    time_window_minutes: float = 30.0  # Time window for anchor grouping
+    time_window_minutes: float = 30.0 # Time window for anchor grouping
 
 
 # NEW: Enhanced correlation result data structures
@@ -318,9 +318,9 @@ class CorrelationStatistics:
     # Performance comparison metrics (old vs new approach)
     # Old approach: semantic matching during correlation (per-record)
     # New approach: semantic matching after correlation (per-identity)
-    estimated_old_approach_duration_seconds: float = 0.0  # Estimated time if done per-record
-    performance_improvement_factor: float = 0.0  # How much faster new approach is
-    performance_improvement_percentage: float = 0.0  # Percentage improvement
+    estimated_old_approach_duration_seconds: float = 0.0 # Estimated time if done per-record
+    performance_improvement_factor: float = 0.0 # How much faster new approach is
+    performance_improvement_percentage: float = 0.0 # Percentage improvement
     
     def calculate_performance_comparison(self):
         """
@@ -377,7 +377,7 @@ class CorrelationResults:
     configuration: Dict[str, Any] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    status: str = "Completed"  # "Completed" or "Cancelled"
+    status: str = "Completed" # "Completed" or "Cancelled"
     cancellation_timestamp: Optional[datetime] = None
     
     def add_identity(self, identity: Identity):
@@ -518,8 +518,8 @@ class AnchorTimeGroup:
     identities: List[IdentityWithAnchors] = field(default_factory=list)
     total_identities: int = 0
     total_evidence: int = 0
-    primary_artifacts: List[str] = field(default_factory=list)  # Most common artifacts at this time
-    time_window_minutes: float = 0.0  # Time window used for grouping
+    primary_artifacts: List[str] = field(default_factory=list) # Most common artifacts at this time
+    time_window_minutes: float = 0.0 # Time window used for grouping
     
     def __post_init__(self):
         """Calculate derived fields."""
@@ -570,7 +570,7 @@ class TimeBasedQueryResult:
     total_identities: int = 0
     total_evidence: int = 0
     time_range: Optional[Tuple[datetime, datetime]] = None
-    time_window_minutes: float = 30.0  # Default time window for grouping
+    time_window_minutes: float = 30.0 # Default time window for grouping
     
     def __post_init__(self):
         """Calculate derived statistics."""

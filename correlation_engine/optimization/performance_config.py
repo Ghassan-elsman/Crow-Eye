@@ -36,14 +36,14 @@ class PerformanceConfig:
     window_size_minutes: int = 60
 
     # Parallel processing (Requirement 8.2)
-    max_workers: Optional[int] = None  # None = auto-detect
+    max_workers: Optional[int] = None # None = auto-detect
     enable_parallel: bool = True
-    parallel_threshold_windows: int = 100  # Min windows for parallel to be worth it
+    parallel_threshold_windows: int = 100 # Min windows for parallel to be worth it
 
     # Memory management (Requirement 8.4)
     memory_threshold_mb: int = 4096
-    streaming_threshold_mb: Optional[int] = None  # Auto-calculated if None
-    cache_reduction_threshold_mb: Optional[int] = None  # Auto-calculated if None
+    streaming_threshold_mb: Optional[int] = None # Auto-calculated if None
+    cache_reduction_threshold_mb: Optional[int] = None # Auto-calculated if None
 
     # Cache configuration (Requirement 8.3)
     query_cache_size_mb: int = 512
@@ -78,7 +78,7 @@ class PerformanceConfig:
         # Window size validation
         if self.window_size_minutes < 1:
             errors.append("window_size_minutes must be >= 1")
-        if self.window_size_minutes > 1440:  # 24 hours
+        if self.window_size_minutes > 1440: # 24 hours
             errors.append("window_size_minutes should not exceed 1440 (24 hours)")
 
         # Worker count validation

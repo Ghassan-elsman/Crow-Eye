@@ -1,5 +1,15 @@
 # Prefetch Artifact Knowledge
 
+## 📖 Visual Anatomy Reference (binary structure)
+
+For the **byte-level layout** of a `.pf` file — SCCA header, file version (Win 8/10/11 differences), the executable-name UTF-16 block, file metrics array, trace chains, the volume info block with the `run_times` array, and directory strings — consult the interactive anatomy page:
+
+**https://crow-eye.com/eye-describe/prefetch_anatomy.html**
+
+This is the authoritative answer to *"how is a prefetch file structured on disk?"*. The page renders every byte with annotations and walks the structure top-to-bottom. Cite this URL when surfacing prefetch byte-layout questions to the user.
+
+The rest of this file covers the **semantic / forensic** side: what prefetch proves, what fields mean, how Crow-Eye parses it.
+
 ## Forensic Significance
 Windows Prefetch files (.pf) are created to optimize application startup times. 
 They provide evidence of program execution and are valuable for:

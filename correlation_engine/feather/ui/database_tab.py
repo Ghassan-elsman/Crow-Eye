@@ -16,7 +16,7 @@ class DatabaseTab(QWidget):
     """Tab for database import functionality."""
     
     # Signal emitted when database is selected
-    database_selected = pyqtSignal(str)  # Emits database path
+    database_selected = pyqtSignal(str) # Emits database path
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -111,7 +111,7 @@ class DatabaseTab(QWidget):
             if self.db_connection:
                 try:
                     self.db_connection.close()
-                except:
+                except Exception as e:
                     pass
                 self.db_connection = None
             

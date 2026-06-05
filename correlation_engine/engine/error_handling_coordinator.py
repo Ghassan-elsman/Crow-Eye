@@ -61,7 +61,7 @@ class ErrorEvent:
 @dataclass
 class SystemHealthStatus:
     """Overall system health status"""
-    overall_health: str  # "healthy", "degraded", "critical"
+    overall_health: str # "healthy", "degraded", "critical"
     database_health: str
     memory_health: str
     timestamp_health: str
@@ -116,7 +116,7 @@ class ErrorHandlingCoordinator:
         self.error_lock = threading.Lock()
         
         # Health monitoring
-        self.health_check_interval = 300  # 5 minutes
+        self.health_check_interval = 300 # 5 minutes
         self.last_health_check = datetime.now()
         self.system_start_time = datetime.now()
         
@@ -145,7 +145,7 @@ class ErrorHandlingCoordinator:
             self.logger.setLevel(logging.DEBUG)
         
         if self.debug_mode:
-            print("[ErrorCoordinator] Initialized comprehensive error handling coordination")
+            self.logger.info("[ErrorCoordinator] Initialized comprehensive error handling coordination")
     
     def register_error_handlers(self,
                                database_handler: DatabaseErrorHandler,
@@ -164,7 +164,7 @@ class ErrorHandlingCoordinator:
         self.memory_manager = memory_manager
         
         if self.debug_mode:
-            print("[ErrorCoordinator] Registered all error handling components")
+            self.logger.info("[ErrorCoordinator] Registered all error handling components")
     
     def handle_error(self, 
                     category: ErrorCategory,
@@ -259,7 +259,7 @@ class ErrorHandlingCoordinator:
         self.last_health_check = now
         
         if self.debug_mode:
-            print(f"[ErrorCoordinator] Health check: {overall_health} "
+            self.logger.info(f"[ErrorCoordinator] Health check: {overall_health} "
                   f"(DB: {database_health}, Mem: {memory_health}, TS: {timestamp_health})")
         
         return health_status
@@ -305,7 +305,7 @@ class ErrorHandlingCoordinator:
             
             # Calculate system uptime percentage
             uptime_seconds = (datetime.now() - self.system_start_time).total_seconds()
-            downtime_seconds = sum(recovery_times)  # Approximate downtime
+            downtime_seconds = sum(recovery_times) # Approximate downtime
             uptime_percentage = ((uptime_seconds - downtime_seconds) / uptime_seconds * 100) if uptime_seconds > 0 else 100
         
         return ErrorHandlingStats(
@@ -328,7 +328,7 @@ class ErrorHandlingCoordinator:
             self.error_history.clear()
         
         if self.debug_mode:
-            print("[ErrorCoordinator] Error history cleared")
+            self.logger.info("[ErrorCoordinator] Error history cleared")
     
     def _attempt_recovery(self, error_event: ErrorEvent) -> Tuple[bool, str]:
         """
@@ -347,11 +347,11 @@ class ErrorHandlingCoordinator:
                 success, action_description = strategy(error_event)
                 if success:
                     if self.debug_mode:
-                        print(f"[ErrorCoordinator] Recovery successful: {action_description}")
+                        self.logger.info(f"[ErrorCoordinator] Recovery successful: {action_description}")
                     return True, action_description
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[ErrorCoordinator] Recovery strategy failed: {e}")
+                    self.logger.info(f"[ErrorCoordinator] Recovery strategy failed: {e}")
                 continue
         
         return False, "No recovery strategy succeeded"
@@ -537,4 +537,4 @@ class ErrorHandlingCoordinator:
             self.logger.info(log_message)
         
         if self.debug_mode:
-            print(f"[ErrorCoordinator] {error_event.severity.value.upper()}: {log_message}")
+            self.logger.info(f"[ErrorCoordinator] {error_event.severity.value.upper()}: {log_message}")

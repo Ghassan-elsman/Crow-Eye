@@ -30,8 +30,8 @@ from ..engine.correlation_result import CorrelationResult, CorrelationMatch
 class ExportWorker(QThread):
     """Worker thread for exporting results to avoid UI blocking."""
     
-    progress_updated = pyqtSignal(int, str)  # progress, status
-    export_completed = pyqtSignal(str, bool, str)  # filepath, success, message
+    progress_updated = pyqtSignal(int, str) # progress, status
+    export_completed = pyqtSignal(str, bool, str) # filepath, success, message
     
     def __init__(self, export_config: Dict[str, Any]):
         """
@@ -539,30 +539,30 @@ class ExportOptionsDialog(QDialog):
         xml_lines = [
             '<?xml version="1.0" encoding="UTF-8"?>',
             '<correlation_results>',
-            '  <export_metadata>',
-            f'    <timestamp>{datetime.now().isoformat()}</timestamp>',
-            '    <format>xml</format>',
-            f'    <tabs_exported>{len(selected_tabs)}</tabs_exported>',
-            '  </export_metadata>'
+            ' <export_metadata>',
+            f' <timestamp>{datetime.now().isoformat()}</timestamp>',
+            ' <format>xml</format>',
+            f' <tabs_exported>{len(selected_tabs)}</tabs_exported>',
+            ' </export_metadata>'
         ]
         
         if self.include_semantic_mappings.isChecked():
             xml_lines.extend([
-                '  <semantic_mappings>',
-                '    <enabled>true</enabled>',
-                '    <mappings_count>...</mappings_count>',
-                '  </semantic_mappings>'
+                ' <semantic_mappings>',
+                ' <enabled>true</enabled>',
+                ' <mappings_count>...</mappings_count>',
+                ' </semantic_mappings>'
             ])
         
         xml_lines.extend([
-            '  <tabs>',
-            '    <!-- Tab data would appear here -->',
-            '    <tab id="..." wing_name="..." matches_count="...">',
-            '      <matches>',
-            '        <!-- Match data with semantic and scoring info -->',
-            '      </matches>',
-            '    </tab>',
-            '  </tabs>',
+            ' <tabs>',
+            ' <!-- Tab data would appear here -->',
+            ' <tab id="..." wing_name="..." matches_count="...">',
+            ' <matches>',
+            ' <!-- Match data with semantic and scoring info -->',
+            ' </matches>',
+            ' </tab>',
+            ' </tabs>',
             '</correlation_results>'
         ])
         
@@ -573,23 +573,23 @@ class ExportOptionsDialog(QDialog):
         preview_lines = [
             "Archive Contents:",
             "",
-            "📁 correlation_results.zip",
-            "  📄 export_metadata.json",
-            "  📄 semantic_mappings.json",
-            "  📄 scoring_configuration.json",
-            "  📁 tabs/",
+            "correlation_results.zip",
+            " export_metadata.json",
+            " semantic_mappings.json",
+            " scoring_configuration.json",
+            " tabs/",
         ]
         
         for tab_id in selected_tabs[:3]:
             tab_state = self.tab_states[tab_id]
             wing_name = tab_state.get('wing_name', 'Unknown')
-            preview_lines.append(f"    📄 {wing_name}_{tab_id[:8]}.json")
+            preview_lines.append(f" {wing_name}_{tab_id[:8]}.json")
         
         if len(selected_tabs) > 3:
-            preview_lines.append(f"    📄 ... ({len(selected_tabs) - 3} more tab files)")
+            preview_lines.append(f" ... ({len(selected_tabs) - 3} more tab files)")
         
         preview_lines.extend([
-            "  📄 summary_statistics.json",
+            " summary_statistics.json",
             "",
             "Each tab file contains:",
             "- Match data with feather records",
@@ -830,7 +830,7 @@ class ResultsExporter:
                             elem.text = str(value)
             
             tree = ET.ElementTree(root)
-            ET.indent(tree, space="  ", level=0)
+            ET.indent(tree, space=" ", level=0)
             tree.write(output_path, encoding='utf-8', xml_declaration=True)
             
             return True, f"Successfully exported to XML: {output_path}"

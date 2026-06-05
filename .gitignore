@@ -1,4 +1,6 @@
+# =============================================================================
 # Python
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,13 +24,27 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual Environment
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# =============================================================================
+# Virtual environments
+# =============================================================================
 venv/
 env/
 ENV/
 crow_eye_venv/
+.venv/
 
-# Node.js
+# =============================================================================
+# Node.js (used by the React-based EYE UI)
+# =============================================================================
 node_modules/
 npm-debug.log*
 yarn-debug.log*
@@ -36,14 +52,18 @@ yarn-error.log*
 .npm
 nodejs/
 
-# UI Build Artifacts
+# UI build artifacts
 eye/ui/react/dist/
 
+# =============================================================================
 # Logs
+# =============================================================================
 *.log
 regclaw_errors.log
 
-# Databases & Forensic Data
+# =============================================================================
+# Databases & forensic case data — NEVER commit these to a public repo.
+# =============================================================================
 cases/*
 !cases/templates/
 !cases/archive/
@@ -52,15 +72,43 @@ Target_Artifacts/*
 *.db
 *.sqlite
 *.sqlite3
+# Windows ESE database working files (created by the live registry parser)
+edb.chk
+edb*.log
+edbres*.jrs
+edbtmp.log
+edb*.jrs
+# Pipeline outputs
+partial_results/
+audit_trail.json
+mft_usn_forensic_report.txt
 
-# Local Configuration
+# =============================================================================
+# Local configuration / secrets
+# =============================================================================
 configs/eye_config.json
 config/last_case.json
 config/case_*.json
 .env
-.venv
 
-# OS specific files
+# =============================================================================
+# Dev / diagnostic scripts (not part of the shipped product). Re-add only
+# if a contributor needs to re-run the end-to-end validation harness
+# locally; do not commit the report output.
+# =============================================================================
+validate_pipeline.py
+validation_report.json
+
+# =============================================================================
+# Internal test suite — kept locally for development, excluded from the
+# public release per maintainer preference. Contributors who want to run
+# the test suite should request access to the dev branch.
+# =============================================================================
+correlation_engine/tests/
+
+# =============================================================================
+# OS files
+# =============================================================================
 .DS_Store
 .DS_Store?
 ._*
@@ -70,12 +118,22 @@ ehthumbs.db
 Thumbs.db
 desktop.ini
 
-# IDEs
+# =============================================================================
+# IDE / editor
+# =============================================================================
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# Temporary files
+# =============================================================================
+# Scratch / one-shot diagnostic output
+# =============================================================================
 scratch/
 temp_scripts/
+*.tmp
+debug_*.py
+diagnose_*.py
+audit_*.py
+check_*.py

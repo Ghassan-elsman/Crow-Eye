@@ -12,9 +12,9 @@ from typing import Optional
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QToolBar, QPushButton,
-    QSizePolicy, QLabel, QMessageBox, QFrame
+    QSizePolicy, QLabel, QMessageBox, QFrame, QApplication
 )
-from PyQt5.QtCore import Qt, QUrl, QSize
+from PyQt5.QtCore import Qt, QUrl, QSize, QTimer, QCoreApplication, QEventLoop
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage
 from PyQt5.QtWebChannel import QWebChannel
@@ -36,12 +36,56 @@ from eye.ui import message_box_helper
 
 logger = logging.getLogger(__name__)
 
+
+class OnboardingCancelled(Exception):
+    """Raised when the user closes the OnboardingWizard without saving a config —
+    distinguished from real init errors so callers can bail silently instead of
+    showing a 'Failed to load' dialog or leaving a half-built window on screen."""
+
+
 class SilentWebEnginePage(QWebEnginePage):
     """Custom WebEnginePage that suppresses harmless CSS warnings."""
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
         if "Unknown property transition" in message or "Unknown property transform" in message:
             return
         super().javaScriptConsoleMessage(level, message, lineNumber, sourceID)
+
+
+class EYECompliancePopupWindow(QWidget):
+    """
+    Standalone OS window hosting the GEP Compliance dashboard.
+    Shares the same EYEBridge instance as the main Eye AI window via a fresh
+    QWebChannel, so calls from the popup land in the same backend state.
+    """
+
+    def __init__(self, react_build_url: str, bridge, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Window)
+        self.setWindowTitle("Eye AI — GEP Compliance")
+        self.setWindowIcon(QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        self.resize(900, 800)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.view = QWebEngineView(self)
+        self.view.setPage(SilentWebEnginePage(self.view))
+        self.view.setAttribute(Qt.WA_TranslucentBackground)
+        self.view.page().setBackgroundColor(Qt.transparent)
+        settings = self.view.settings()
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
+        settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, True)
+
+        self.web_channel = QWebChannel(self.view.page())
+        self.web_channel.registerObject("bridge", bridge)
+        self.view.page().setWebChannel(self.web_channel)
+
+        self.view.load(QUrl(react_build_url + "?view=compliance"))
+        layout.addWidget(self.view)
+        self.setStyleSheet("background-color: #0B1220;")
+
 
 class EYEAssistantWindow(QWidget):
     """
@@ -74,6 +118,16 @@ class EYEAssistantWindow(QWidget):
         self.report_view = None
         self.web_channel = None
         self.bridge = None
+        self._compliance_window = None  # lazy-instantiated EYECompliancePopupWindow
+        self._session_started = False  # gate so start_session() runs once per window
+
+        # Debounce chart reflow so dragging the splitter doesn't fire dozens of
+        # signals per second across the bridge. The timer is restarted on every
+        # splitterMoved; it fires once 150 ms after motion settles.
+        self._chart_reflow_timer = QTimer(self)
+        self._chart_reflow_timer.setSingleShot(True)
+        self._chart_reflow_timer.setInterval(150)
+        self._chart_reflow_timer.timeout.connect(self._emit_chart_reflow)
         
         # Services
         self.credential_manager = None
@@ -89,18 +143,77 @@ class EYEAssistantWindow(QWidget):
         try:
             message_box_helper.apply_messagebox_style()
             self.config_manager = ConfigManager()
-            
+            # is_configured() reads + validates eye_config.json — give the
+            # splash a tick before that I/O and schema-load runs.
+            self._pump_splash()
+
+            # 1. Eye AI configuration wizard (only if not already configured).
+            #    Raises OnboardingCancelled if the user dismisses it.
             if not self.config_manager.is_configured():
                 self._show_onboarding_wizard()
-            else:
-                self._init_services()
-                self._init_ui()
-                self._setup_bridge()
-                self._load_react_apps()
+
+            # Pump once between the config branch and the heavy init below
+            # — the wizard path runs its own nested event loop (exec_) so the
+            # splash animates during it, but the moment exec_() returns we go
+            # straight into _init_services which would otherwise freeze again.
+            self._pump_splash()
+
+            # 2. Build services / UI / bridge. case_context_manager is created
+            #    inside _init_services so it must run before _check_case_context.
+            #    NOTE: the case-setup dialog and React load are deliberately
+            #    NOT run here — see start_session(). The constructor only builds
+            #    structure so the splash can be torn down before any modal opens.
+            #
+            #    processEvents() between steps lets _EyeInstantSplash's QTimer
+            #    fire so the spinner keeps animating instead of freezing for
+            #    the full duration of the constructor. ExcludeUserInputEvents
+            #    prevents accidental clicks reaching the half-built window.
+            self._init_services()
+            self._pump_splash()
+            self._init_ui()
+            self._pump_splash()
+            self._setup_bridge()
+            self._pump_splash()
         except Exception as e:
             logger.error(f"Error initializing Eye AI Window: {e}", exc_info=True)
             raise
+
+    def start_session(self):
+        """Run the user-facing session start: prompt for case context (first
+        time on this case only) and then load the React UI. Called by
+        EYEWindowManager after the loading splash has been torn down and the
+        Eye window is on screen, so the case-setup modal opens cleanly and the
+        automated triage in the React frontend doesn't kick off until the
+        investigation reason / objectives / suspects are set.
+
+        Idempotent: a re-show of an already-running Eye window (same case, no
+        reinit) must not reload React, which would restart the triage."""
+        if self._session_started:
+            return
+        self._session_started = True
+
+        # Case setup dialog — only opens on first-time-on-this-case
+        # (is_context_initialized() returns False until the user fills it).
+        # Must run BEFORE _load_react_apps because the React frontend kicks
+        # off the automated triage (initialize_triage) as soon as it boots.
+        self._check_case_context()
+
+        # Now that config + case context are ready, boot the React UI.
+        # Its onBridgeReady handler will call initialize_triage().
+        self._load_react_apps()
     
+    @staticmethod
+    def _pump_splash():
+        """Drain the Qt event queue briefly so the instant splash's QTimer
+        gets a tick — its spinner / progress bar / status text are all driven
+        by that timer, and without periodic pumps during the synchronous
+        constructor the animation freezes for the full duration of init.
+
+        ExcludeUserInputEvents keeps stray clicks from reaching the
+        half-built window. The 15 ms cap bounds the pump so a single slow
+        widget can't stall the next init step waiting on unrelated events."""
+        QCoreApplication.processEvents(QEventLoop.ExcludeUserInputEvents, 15)
+
     def _init_services(self):
         """Initialize all AI backend services."""
         self.credential_manager = CredentialManager()
@@ -113,13 +226,15 @@ class EYEAssistantWindow(QWidget):
             artifacts_dir = self.case_directory
             
         self.database_service = ForensicDatabaseService(artifacts_dir)
+        self._pump_splash()
         self.search_service = ForensicSearchService(artifacts_dir)
+        self._pump_splash()
         self.rag_service = RAGService()
-        
+        self._pump_splash()
 
         self.report_engine = ReportEngine(self.case_directory)
         self.case_context_manager = CaseContextManager(self.case_directory)
-        
+        self._pump_splash()
 
         self.context_manager = ContextManager(
             model_router=self.model_router,
@@ -130,6 +245,7 @@ class EYEAssistantWindow(QWidget):
             case_directory=self.case_directory,
             case_context_manager=self.case_context_manager
         )
+        self._pump_splash()
 
     def _init_ui(self):
         """Setup the window UI."""
@@ -150,11 +266,17 @@ class EYEAssistantWindow(QWidget):
         self.splitter.setHandleWidth(2)
         self.splitter.setStyleSheet("QSplitter::handle { background-color: #334155; } QSplitter::handle:hover { background-color: #00FFFF; }")
         
+        # QWebEngineView construction is the single biggest freeze source on
+        # first launch (cold WebEngine process spin-up, ~hundreds of ms each).
+        # Pump events around each one so the instant splash keeps animating.
+        self._pump_splash()
         self.chat_view = QWebEngineView(self)
         self.chat_view.setPage(SilentWebEnginePage(self.chat_view))
-        
+        self._pump_splash()
+
         self.report_view = QWebEngineView(self)
         self.report_view.setPage(SilentWebEnginePage(self.report_view))
+        self._pump_splash()
         
         # Security: Enable local content access to resources (for qrc:/// qwebchannel)
         for view in [self.chat_view, self.report_view]:
@@ -164,8 +286,10 @@ class EYEAssistantWindow(QWidget):
             settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
             settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
             settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, True)
-        
+            self._pump_splash()
+
         self.splitter.addWidget(self.chat_view)
+        self._pump_splash()
         
         # Central Toggle Bar (Between Chat and Report)
         self.toggle_bar = QFrame()
@@ -201,13 +325,14 @@ class EYEAssistantWindow(QWidget):
         # Add toggle bar and report view to splitter
         self.splitter.addWidget(self.toggle_bar)
         self.splitter.addWidget(self.report_view)
-        
+
         self.splitter.setSizes([700, 24, 476])
-        
+
         # Ensure the toggle bar doesn't collapse
-        self.splitter.setCollapsible(1, False) 
-        
+        self.splitter.setCollapsible(1, False)
+
         layout.addWidget(self.splitter)
+        self._pump_splash()
         self.setStyleSheet("""
             QWidget { 
                 background-color: #0B1220; 
@@ -291,12 +416,27 @@ class EYEAssistantWindow(QWidget):
                 self.splitter.setSizes(self.last_splitter_sizes)
             else:
                 self.splitter.setSizes([780, 20, 400])
-                
+
             self.report_pane_visible = True
             self.btn_side_toggle.setText("◀") # Point left to hide
+            # Pane just became visible — its width changed, so charts need to reflow.
+            self._chart_reflow_timer.start()
+
+    def _emit_chart_reflow(self):
+        """Tell the React layer to re-measure and re-render charts. Called via
+        the debounced timer after splitter drags, pane toggles, or window resize."""
+        if self.bridge is not None:
+            self.bridge.reflow_charts.emit()
+
+    def resizeEvent(self, event):
+        """Trigger a debounced chart reflow on OS-level window resize."""
+        super().resizeEvent(event)
+        if getattr(self, '_chart_reflow_timer', None) is not None:
+            self._chart_reflow_timer.start()
 
     def _setup_bridge(self):
         self.web_channel = QWebChannel()
+        self._pump_splash()
         self.bridge = EYEBridge(
             context_manager=self.context_manager,
             database_service=self.database_service,
@@ -304,18 +444,29 @@ class EYEAssistantWindow(QWidget):
             report_engine=self.report_engine,
             parent=self
         )
-        
+        self._pump_splash()
+
         # Connect layout signals
         self.bridge.layout_requested.connect(self._handle_layout_request)
-        
+
         self.web_channel.registerObject("bridge", self.bridge)
+        # setWebChannel on a QWebEnginePage can trigger renderer-side
+        # bookkeeping; pump between the two so the splash keeps animating.
         self.chat_view.page().setWebChannel(self.web_channel)
+        self._pump_splash()
         self.report_view.page().setWebChannel(self.web_channel)
+        self._pump_splash()
         
         # Connect bridge signals for UI integration
         self.bridge.case_context_requested.connect(self._on_case_context_clicked)
         self.bridge.case_summary_requested.connect(self._on_case_summary_clicked)
         self.bridge.settings_requested.connect(self._show_onboarding_wizard)
+        self.bridge.compliance_window_requested.connect(self._open_compliance_window)
+
+        # Reflow report-pane charts whenever the splitter is dragged so charts
+        # stay aligned with their container width. Debounced via _chart_reflow_timer.
+        if self.splitter is not None:
+            self.splitter.splitterMoved.connect(lambda *_: self._chart_reflow_timer.start())
         
         # Hide the redundant PyQt toolbar (navigation moved to React header)
         if hasattr(self, 'toolbar') and self.toolbar:
@@ -356,17 +507,45 @@ class EYEAssistantWindow(QWidget):
         # Ensure we have a credential manager instance
         if self.credential_manager is None:
             self.credential_manager = CredentialManager()
-            
+
+        # The wizard saves config (and stores API keys) on accept. The main
+        # __init__ flow picks up from where this returns, so we no longer wire
+        # the configuration_complete signal — it would race the linear init
+        # below and end up loading React twice.
         wizard = OnboardingWizard(self.config_manager, self.credential_manager, None, self)
-        wizard.configuration_complete.connect(self._on_configuration_complete)
         wizard.exec_()
 
-    def _on_configuration_complete(self, config):
-        self._init_services()
-        self._init_ui()
-        self._setup_bridge()
-        self._load_react_apps()
-        self._check_case_context()
+        # If the user dismissed the wizard without saving, the config file was
+        # never written. Aborting here prevents the rest of __init__ from being
+        # skipped silently and leaving an empty Eye window with no layout or
+        # services on screen.
+        if not self.config_manager.is_configured():
+            raise OnboardingCancelled("Eye AI onboarding was cancelled before configuration was saved.")
+
+        # Re-initialize services with the new configuration. This ensures that
+        # any changes to backend, model, or credentials take effect immediately.
+        # We call _init_services which recreates the ModelRouter and ContextManager.
+        try:
+            # Clean up old database connections before recreating services
+            if self.database_service:
+                self.database_service.close_all()
+                
+            self._init_services()
+            
+            # Sync the bridge with new service instances so React calls land on the 
+            # new backend immediately without requiring a window restart.
+            if self.bridge:
+                self.bridge.context_manager = self.context_manager
+                self.bridge.database_service = self.database_service
+                self.bridge.search_service = self.search_service
+                self.bridge.report_engine = self.report_engine
+                logger.info("Eye AI services refreshed successfully after configuration update.")
+                
+        except Exception as e:
+            logger.error(f"Failed to refresh services after configuration: {e}", exc_info=True)
+            QMessageBox.warning(self, "Service Refresh Error", 
+                               f"Configuration was saved, but some services failed to restart: {str(e)}\n\n"
+                               "Please restart the Eye AI Assistant window.")
 
     def _check_case_context(self):
         if not self.case_context_manager:
@@ -411,9 +590,53 @@ class EYEAssistantWindow(QWidget):
     def _on_case_summary_clicked(self):
         """Handle case summary button click."""
         timeline = self.case_context_manager.get_investigation_timeline() if self.case_context_manager else []
-        # Always open the dialog so user can see Report Findings and Charts tabs even if timeline is empty
         report_blocks = self.report_engine.blocks if self.report_engine else []
-        dialog = CaseSummaryDialog(timeline, report_blocks, self)
+        # Full chat conversation history — the dialog's Queries tab shows all
+        # user-side queries, broader than the AI-curated investigation timeline.
+        conversation = self.context_manager.conversation_history if self.context_manager else []
+        # Case context drives the dialog's overview band (case name, reason, time range, counts).
+        case_context = self.case_context_manager.case_context if self.case_context_manager else {}
+        dialog = CaseSummaryDialog(timeline, report_blocks, conversation, case_context, self)
         dialog.exec_()
+
+    def _open_compliance_window(self):
+        """Open the GEP Compliance dashboard as a separate OS window so the
+        investigator can view chat, report, and compliance simultaneously."""
+        # If a popup already exists, re-use it whether visible or hidden — we
+        # used to gate on isVisible() and construct a new window every time the
+        # user closed and re-opened, leaking the previous QWebEngineView.
+        if self._compliance_window is not None:
+            try:
+                if not self._compliance_window.isVisible():
+                    self._compliance_window.show()
+                self._compliance_window.raise_()
+                self._compliance_window.activateWindow()
+                return
+            except RuntimeError:
+                # Underlying C++ object was deleted (e.g. WA_DeleteOnClose) —
+                # drop the dangling ref and rebuild below.
+                self._compliance_window = None
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        react_build_path = os.path.join(base_dir, 'ui', 'react', 'dist', 'index.html')
+        if not os.path.exists(react_build_path):
+            logger.error("Cannot open Compliance window: React build missing at %s", react_build_path)
+            return
+        react_build_url = QUrl.fromLocalFile(react_build_path).toString()
+
+        self._compliance_window = EYECompliancePopupWindow(react_build_url, self.bridge, parent=self)
+        # If the widget ever gets destroyed (manual close + delete, parent
+        # teardown), clear the reference so the next click rebuilds cleanly.
+        self._compliance_window.destroyed.connect(lambda *_: setattr(self, '_compliance_window', None))
+        self._compliance_window.show()
+        self._compliance_window.raise_()
+        self._compliance_window.activateWindow()
+
+    def closeEvent(self, event):
+        """Close the Compliance popup when the main Eye AI window closes."""
+        if self._compliance_window is not None:
+            self._compliance_window.close()
+            self._compliance_window = None
+        super().closeEvent(event)
 
 

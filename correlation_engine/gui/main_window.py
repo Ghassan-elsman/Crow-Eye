@@ -19,6 +19,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QSettings
 from PyQt5.QtGui import QIcon, QKeySequence
 
 from ..config import PipelineConfig
+from ..integration.default_wings_loader import sync_and_augment_pipeline_wings
 from .pipeline_builder import PipelineBuilderWidget
 from .execution_control import ExecutionControlWidget
 from .results_viewer import DynamicResultsTabWidget
@@ -28,6 +29,7 @@ from ..integration.default_wings_loader import DefaultWingsLoader
 
 from ..integration.auto_feather_generator import AutoFeatherGenerator
 from ..integration.default_wings_loader import DefaultWingsLoader
+from .crow_eye_icons import apply_status_to_label
 
 
 class PipelineManagerTab(QWidget):
@@ -48,26 +50,26 @@ class PipelineManagerTab(QWidget):
         info_layout = QHBoxLayout(info_bar)
         info_layout.setContentsMargins(0, 0, 0, 10)
         
-        info_label = QLabel("💡 Feathers are auto-generated from Crow-Eye artifacts on first case load. This may take a few moments.")
+        info_label = QLabel("Tip: Feathers are auto-generated from Crow-Eye artifacts on first case load. This may take a few moments.")
         info_label.setStyleSheet("color: #888; font-size: 9pt;")
         info_label.setWordWrap(True)
         info_layout.addWidget(info_label)
         
         # Add status indicator
-        self.feather_status_label = QLabel("⏳ Checking feathers...")
+        self.feather_status_label = QLabel("Checking feathers...")
         self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
         info_layout.addWidget(self.feather_status_label)
-        self.feather_status_label.hide()  # Hidden by default
+        self.feather_status_label.hide() # Hidden by default
         
         info_layout.addStretch()
         
-        self.regenerate_btn = QPushButton("🔄 Regenerate Feathers")
+        self.regenerate_btn = QPushButton("Regenerate Feathers")
         self.regenerate_btn.setToolTip("Manually regenerate all feathers from Crow-Eye artifacts")
         self.regenerate_btn.clicked.connect(self._manual_generate_feathers)
         self.regenerate_btn.setEnabled(False)
         info_layout.addWidget(self.regenerate_btn)
         
-        self.update_wings_btn = QPushButton("🔄 Update Default Wings")
+        self.update_wings_btn = QPushButton("Update Default Wings")
         self.update_wings_btn.setToolTip("Update default Wings with latest feather configurations (includes MFT_USN)")
         self.update_wings_btn.clicked.connect(self._update_default_wings)
         self.update_wings_btn.setEnabled(False)
@@ -81,7 +83,7 @@ class PipelineManagerTab(QWidget):
     def set_case_directory(self, case_directory: str):
         """Set the case directory for auto-generation"""
         self.case_directory = case_directory
-        self.feathers_generated = False  # Reset flag when case changes
+        self.feathers_generated = False # Reset flag when case changes
         # Enable buttons when case directory is set
         self.regenerate_btn.setEnabled(True)
         self.update_wings_btn.setEnabled(True)
@@ -183,7 +185,7 @@ class PipelineManagerTab(QWidget):
             # Show status label
             if hasattr(self, 'feather_status_label'):
                 self.feather_status_label.show()
-                self.feather_status_label.setText("⏳ Checking feathers...")
+                self.feather_status_label.setText("Checking feathers...")
                 self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
                 QApplication.processEvents()
             
@@ -192,7 +194,7 @@ class PipelineManagerTab(QWidget):
             
             if not feathers_dir.exists():
                 if hasattr(self, 'feather_status_label'):
-                    self.feather_status_label.setText("⚠️ Feathers not found")
+                    apply_status_to_label(self.feather_status_label, "WARN", "Feathers not found")
                     self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
                 return (True, "Feathers directory does not exist")
             
@@ -201,7 +203,7 @@ class PipelineManagerTab(QWidget):
             
             if len(json_files) == 0:
                 if hasattr(self, 'feather_status_label'):
-                    self.feather_status_label.setText("⚠️ No feathers configured")
+                    apply_status_to_label(self.feather_status_label, "WARN", "No feathers configured")
                     self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
                 return (True, "No feather configuration files found")
             
@@ -213,7 +215,7 @@ class PipelineManagerTab(QWidget):
             # Check if we have all expected feathers
             if len(json_files) < expected_count:
                 if hasattr(self, 'feather_status_label'):
-                    self.feather_status_label.setText(f"⚠️ Missing feathers ({len(json_files)}/{expected_count})")
+                    apply_status_to_label(self.feather_status_label, "WARN", f"Missing feathers ({len(json_files)}/{expected_count})")
                     self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
                 return (True, f"Missing feathers: found {len(json_files)}, expected {expected_count}")
             
@@ -226,20 +228,20 @@ class PipelineManagerTab(QWidget):
             
             if missing_dbs:
                 if hasattr(self, 'feather_status_label'):
-                    self.feather_status_label.setText(f"⚠️ Generating databases... ({len(missing_dbs)} remaining)")
+                    apply_status_to_label(self.feather_status_label, "WARN", f"Generating databases... ({len(missing_dbs)} remaining)")
                     self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
                 return (True, f"Missing database files for: {', '.join(missing_dbs[:3])}")
             
             # All checks passed
             if hasattr(self, 'feather_status_label'):
-                self.feather_status_label.setText("✅ Feathers ready")
+                apply_status_to_label(self.feather_status_label, "OK", "Feathers ready")
                 self.feather_status_label.setStyleSheet("color: #4CAF50; font-size: 9pt; font-weight: bold;")
             return (False, "All feathers present and complete")
             
         except Exception as e:
             print(f"[Auto-Generation] Error checking feather status: {e}")
             if hasattr(self, 'feather_status_label'):
-                self.feather_status_label.setText("❌ Error checking feathers")
+                apply_status_to_label(self.feather_status_label, "ERROR", "Error checking feathers")
                 self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
             # If we can't check, assume we need to generate
             return (True, f"Error checking status: {e}")
@@ -253,7 +255,7 @@ class PipelineManagerTab(QWidget):
             # Update status label
             if hasattr(self, 'feather_status_label'):
                 self.feather_status_label.show()
-                self.feather_status_label.setText("🔄 Generating feathers...")
+                self.feather_status_label.setText("Generating feathers...")
                 self.feather_status_label.setStyleSheet("color: #00BFFF; font-size: 9pt; font-weight: bold;")
                 QApplication.processEvents()
             
@@ -266,7 +268,7 @@ class PipelineManagerTab(QWidget):
             if not target_artifacts.exists() and not live_acquisition.exists():
                 print(f"[Auto-Generation] Neither Target_Artifacts nor live_acquisition found")
                 if hasattr(self, 'feather_status_label'):
-                    self.feather_status_label.setText("⚠️ No artifact directories found")
+                    apply_status_to_label(self.feather_status_label, "WARN", "No artifact directories found")
                     self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
                 return
             
@@ -279,7 +281,7 @@ class PipelineManagerTab(QWidget):
             )
             progress.setWindowTitle("Generating Feathers")
             progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(0)  # Show immediately
+            progress.setMinimumDuration(0) # Show immediately
             progress.setValue(0)
             
             # Apply Crow Eye styling
@@ -303,11 +305,11 @@ class PipelineManagerTab(QWidget):
                 if status == 'processing':
                     progress.setLabelText(f"Generating {feather_name}...\n({current}/{total})")
                 elif status == 'success':
-                    progress.setLabelText(f"✓ Generated {feather_name}\n({current}/{total})")
+                    progress.setLabelText(f"[OK] Generated {feather_name}\n({current}/{total})")
                 elif status == 'skipped':
                     progress.setLabelText(f"⊘ Skipped {feather_name} (source not found)\n({current}/{total})")
                 elif status == 'failed':
-                    progress.setLabelText(f"✗ Failed {feather_name}\n({current}/{total})")
+                    progress.setLabelText(f"[FAIL] Failed {feather_name}\n({current}/{total})")
                 
                 # Process events to keep UI responsive
                 from PyQt5.QtWidgets import QApplication
@@ -338,8 +340,8 @@ class PipelineManagerTab(QWidget):
                 
                 if results['failed']:
                     message += f"{failure_count} Feathers were skipped or failed:\n\n"
-                    for name, error in results['failed'][:5]:  # Show first 5
-                        message += f"• {name}\n  {error}\n\n"
+                    for name, error in results['failed'][:5]: # Show first 5
+                        message += f"• {name}\n {error}\n\n"
                     
                     if len(results['failed']) > 5:
                         message += f"... and {len(results['failed']) - 5} more.\n\n"
@@ -413,8 +415,8 @@ class PipelineManagerTab(QWidget):
                     self,
                     "No Database Files",
                     f"No database files found in:\n"
-                    f"  - {target_artifacts}\n"
-                    f"  - {live_acquisition}\n\n"
+                    f" - {target_artifacts}\n"
+                    f" - {live_acquisition}\n\n"
                     "Please run Crow-Eye parsers or offline parsers first to generate artifact databases."
                 )
                 return
@@ -438,7 +440,7 @@ class PipelineManagerTab(QWidget):
                 self,
                 "Generate Feathers",
                 f"This will generate Feathers from databases in:\n"
-                + "\n".join(f"  • {src}" for src in artifact_sources) + "\n\n"
+                + "\n".join(f" • {src}" for src in artifact_sources) + "\n\n"
                 f"Output directory:\n{feathers_dir}\n\n"
                 "Continue?",
                 QMessageBox.Yes | QMessageBox.No,
@@ -457,7 +459,7 @@ class PipelineManagerTab(QWidget):
             )
             progress.setWindowTitle("Generating Feathers")
             progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(0)  # Show immediately
+            progress.setMinimumDuration(0) # Show immediately
             progress.setValue(0)
             
             # Apply Crow Eye styling
@@ -481,11 +483,11 @@ class PipelineManagerTab(QWidget):
                 if status == 'processing':
                     progress.setLabelText(f"Generating {feather_name}...\n({current}/{total})")
                 elif status == 'success':
-                    progress.setLabelText(f"✓ Generated {feather_name}\n({current}/{total})")
+                    progress.setLabelText(f"[OK] Generated {feather_name}\n({current}/{total})")
                 elif status == 'skipped':
                     progress.setLabelText(f"⊘ Skipped {feather_name} (source not found)\n({current}/{total})")
                 elif status == 'failed':
-                    progress.setLabelText(f"✗ Failed {feather_name}\n({current}/{total})")
+                    progress.setLabelText(f"[FAIL] Failed {feather_name}\n({current}/{total})")
                 
                 # Process events to keep UI responsive
                 from PyQt5.QtWidgets import QApplication
@@ -516,8 +518,8 @@ class PipelineManagerTab(QWidget):
                 
                 if results['failed']:
                     message += f"{failure_count} Feathers were skipped or failed:\n\n"
-                    for name, error in results['failed'][:5]:  # Show first 5
-                        message += f"• {name}\n  {error}\n\n"
+                    for name, error in results['failed'][:5]: # Show first 5
+                        message += f"• {name}\n {error}\n\n"
                     
                     if len(results['failed']) > 5:
                         message += f"... and {len(results['failed']) - 5} more.\n\n"
@@ -562,7 +564,7 @@ class MainWindow(QMainWindow):
         self.current_pipeline: Optional[PipelineConfig] = None
         self.current_pipeline_path: Optional[str] = None
         self.is_modified = False
-        self.default_directory = None  # Will be set by correlation integration
+        self.default_directory = None # Will be set by correlation integration
         
         # Settings
         self.settings = QSettings("Crow-Eye", "CorrelationEngine")
@@ -610,6 +612,27 @@ class MainWindow(QMainWindow):
                 print("[Main Window] Default Wings already exist in case directory")
         except Exception as e:
             print(f"[Main Window] Error initializing default Wings: {e}")
+
+        # Load default Wings into the pipeline builder
+        try:
+            from PyQt5.QtCore import Qt
+            default_wings = DefaultWingsLoader.load_all_default_wings()
+            added_count = 0
+            for wing_config in default_wings:
+                already_exists = False
+                for i in range(self.pipeline_builder.wings_list.count()):
+                    item = self.pipeline_builder.wings_list.item(i)
+                    existing = item.data(Qt.UserRole)
+                    if existing and existing.wing_id == wing_config.wing_id:
+                        already_exists = True
+                        break
+                if not already_exists:
+                    self.pipeline_builder._add_wing_to_list(wing_config)
+                    added_count += 1
+            if added_count:
+                print(f"[Main Window] Loaded {added_count} default Wings into pipeline")
+        except Exception as e:
+            print(f"[Main Window] Error loading default Wings into pipeline: {e}")
         
         # Auto-load session if available
         self._load_session_state()
@@ -658,7 +681,6 @@ class MainWindow(QMainWindow):
                 font-weight: 600;
                 font-family: 'Segoe UI', sans-serif;
                 font-size: 9px;
-                letter-spacing: 0.3px;
             }
             QTabBar::tab:selected {
                 background-color: #0B1220;
@@ -718,7 +740,7 @@ class MainWindow(QMainWindow):
         # Add execution control widget
         self.execution_control = ExecutionControlWidget()
         self.execution_control.execution_completed.connect(self._on_execution_completed)
-        self.execution_control.wing_completed.connect(self._on_wing_completed)  # NEW: Connect wing_completed signal
+        self.execution_control.wing_completed.connect(self._on_wing_completed) # NEW: Connect wing_completed signal
         self.execution_control.load_results_requested.connect(self._on_load_results_requested)
         execution_layout.addWidget(self.execution_control)
         
@@ -831,11 +853,18 @@ class MainWindow(QMainWindow):
         
         # Create list widget
         self.recent_list = QListWidget()
-        self.recent_list.itemDoubleClicked.connect(self._open_recent_pipeline)
-        
+        self.recent_list.itemDoubleClicked.connect(self._open_recent_pipeline_item)
+
         self.recent_dock.setWidget(self.recent_list)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.recent_dock)
-        
+
+    def _open_recent_pipeline_item(self, item):
+        """Open a pipeline from the Recent Pipelines list via double-click.
+        Path is stored on the item (UserRole) or falls back to item text."""
+        filepath = item.data(Qt.UserRole) or item.text()
+        if filepath and os.path.exists(str(filepath)):
+            self.load_pipeline(str(filepath))
+
     def load_pipeline(self, filepath: str) -> bool:
         """
         Load pipeline configuration from file.
@@ -851,11 +880,19 @@ class MainWindow(QMainWindow):
             if not os.path.exists(filepath):
                 self.show_notification(f"File not found: {filepath}", "error")
                 return False
-            
+
             # Load pipeline config
             self.current_pipeline = PipelineConfig.load_from_file(filepath)
             self.current_pipeline_path = filepath
             self.is_modified = False
+
+            # Sync newly-shipped default Wings into the case folder and append
+            # any case Wings (defaults + user-created) missing from the JSON.
+            # default_directory IS the case's Correlation directory.
+            if self.default_directory:
+                sync_and_augment_pipeline_wings(
+                    self.current_pipeline, Path(self.default_directory)
+                )
             
             # Update window title
             self._update_window_title()
@@ -1576,7 +1613,7 @@ class MainWindow(QMainWindow):
                     progress.setValue(total_progress)
                     QApplication.processEvents()
                     
-                    print(f"[MainWindow]   Creating viewer for wing: {wing_name} ({wing_engine_type})")
+                    print(f"[MainWindow] Creating viewer for wing: {wing_name} ({wing_engine_type})")
                     
                     # Create appropriate viewer based on engine type
                     viewer = None
@@ -1587,14 +1624,14 @@ class MainWindow(QMainWindow):
                     
                     if viewer:
                         combined_viewer.addTab(viewer, wing_name)
-                        print(f"[MainWindow]     ✓ Added {wing_name} to combined viewer")
+                        print(f"[MainWindow] [OK] Added {wing_name} to combined viewer")
                     
                     # Update progress after wing is loaded
                     QApplication.processEvents()
                 
                 # Add the combined viewer as a single Results tab for this execution
                 tab_widget.addTab(combined_viewer, f"Results - Exec {exec_id_display}")
-                print(f"[MainWindow]   ✓ Results tab created for execution {exec_id_display} with {len(wing_summaries)} wings")
+                print(f"[MainWindow] [OK] Results tab created for execution {exec_id_display} with {len(wing_summaries)} wings")
             
             # Update Summary tab with aggregate statistics
             progress.setLabelText("Calculating aggregate statistics...")
@@ -1651,12 +1688,12 @@ class MainWindow(QMainWindow):
             print(f"[MainWindow] Successfully loaded {len(selected_executions)} execution(s)")
             
             # Build tab list for message
-            tab_list = ["  • Summary (aggregate statistics)"]
+            tab_list = [" • Summary (aggregate statistics)"]
             for db_path, execution_id, engine_type in selected_executions:
                 exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
                 exec_id_display = exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str
                 wing_count = len(self.results_viewer._detect_wings_from_execution(db_path, execution_id))
-                tab_list.append(f"  • Results - Exec {exec_id_display} ({wing_count} wings)")
+                tab_list.append(f" • Results - Exec {exec_id_display} ({wing_count} wings)")
             
             QMessageBox.information(
                 self,

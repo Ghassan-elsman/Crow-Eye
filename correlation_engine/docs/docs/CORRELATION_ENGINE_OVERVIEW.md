@@ -51,13 +51,15 @@ The **Correlation Engine** is a forensic analysis system that finds temporal and
 
 The system implements a **dual-engine architecture** with two distinct correlation strategies:
 
-1. **Time-Based Correlation Engine** - Uses temporal proximity as the primary factor with comprehensive field matching. Ideal for small datasets (< 1,000 records) requiring detailed analysis.
+1. **Time-Window Scanning Engine (TWSE)** - Scans the timeline in fixed windows using indexed timestamp queries. Recommended for time-bucketed temporal analysis. **O(N log N)** complexity.
 
-2. **Identity-Based Correlation Engine** - Groups records by identity first, then creates temporal anchors. Optimized for large datasets (> 1,000 records) with O(N log N) performance and streaming support.
+2. **Identity-Based Correlation Engine (IBCE)** - Groups records by identity first, then creates temporal anchors. Recommended for identity tracking and filtering. **O(N log N)** complexity with streaming support.
+
+Both engines share the same asymptotic complexity. Choose by *question* (time-bucketed vs identity-bucketed), not by dataset size.
 
 ### Key Capabilities
 
-1. **Dual-Engine Architecture**: Choose between Time-Based (O(N²)) and Identity-Based (O(N log N)) engines based on dataset size and analysis goals
+1. **Dual-Engine Architecture**: Choose between Time-Window Scanning (O(N log N)) and Identity-Based (O(N log N)) engines based on your analysis goals — not dataset size
 2. **Engine Selection**: Automatic or manual engine selection via `EngineSelector` factory
 3. **Temporal Correlation**: Find events that occurred within a specified time window
 4. **Identity Tracking**: Track applications and files across multiple artifacts (Identity-Based engine)
@@ -376,7 +378,7 @@ The correlation_engine is organized into 7 main directories, each with a specifi
 - `feather_loader.py` - Loads and queries feather databases
 - `correlation_result.py` - Result data structures
 - `weighted_scoring.py` - Confidence score calculation
-- `identifier_correlation_engine.py` - Identifier-based correlation
+- `identity_state_builder.py` - Identifier-based correlation
 - `identity_extractor.py` - Extract identity information
 - `timestamp_parser.py` - Parse various timestamp formats
 - `query_interface.py` - Query correlation results
@@ -495,10 +497,9 @@ The correlation_engine is organized into 7 main directories, each with a specifi
 #### 2. Selecting the Right Correlation Engine
 
 **Decision Factors**:
-- **Dataset Size**: Identity-Based for large datasets (> 1,000 records)
-- **Analysis Goal**: Time-Based for detailed field matching, Identity-Based for identity tracking
-- **Performance**: Identity-Based provides O(N log N) vs Time-Based O(N²)
-- **Memory**: Identity-Based supports streaming mode for constant memory usage
+- **Analysis Goal**: Time-Window Scanning for time-bucketed temporal analysis; Identity-Based for identity tracking and filtering
+- **Performance**: Both engines run at O(N log N) — not a choice factor
+- **Memory**: Both engines support streaming for constant memory usage (`query_time_range_iter` on the time-window engine, anchor streaming on the identity engine)
 
 **See**: [Engine Selection Guide](docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) for detailed decision criteria and use case scenarios.
 

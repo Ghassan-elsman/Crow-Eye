@@ -23,7 +23,7 @@ from ..engine.database_persistence import ResultsDatabase
 class DatabaseResultsLoaderDialog(QDialog):
     """Dialog for browsing and loading correlation results from databases."""
     
-    results_selected = pyqtSignal(list)  # List of (database_path, execution_id, engine_type) tuples
+    results_selected = pyqtSignal(list) # List of (database_path, execution_id, engine_type) tuples
     
     def __init__(self, parent=None, default_db_path: str = None):
         super().__init__(parent)

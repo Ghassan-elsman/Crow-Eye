@@ -344,6 +344,14 @@ graph TB
 
 ## Version History
 
+### v1.6 - Context Integrity & Chain of Custody
+- Added **`eye_architecture.md` §6 "Context Integrity & Chain of Custody"**: the
+  self-healing fail-hard guardrail (`guarded_generate`), `EvidenceSeal` hash-chained
+  payload log, `analyze_large_dataset` map-reduce, the Compliance panel surfaces
+  (Evidence Seals + Chain-of-Custody Events + Per-Answer GEP), and the `EYE_Logs/`
+  artifact inventory.
+- Documented the **`analyze_large_dataset`** tool in `eye_tools_reference.md`.
+
 ### v1.5 (Current) - Documentation Reorganization
 - Split monolithic file into focused documents
 - Created separate testing and enhancement files

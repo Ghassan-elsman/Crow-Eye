@@ -87,7 +87,7 @@ class WingConfigurationAdapter:
         adapted_config = TimeWindowScanningConfig(
             # Use wing's time window as scanning window size
             window_size_minutes=wing_settings['time_window_minutes'],
-            scanning_interval_minutes=wing_settings['time_window_minutes'],  # Non-overlapping by default
+            scanning_interval_minutes=wing_settings['time_window_minutes'], # Non-overlapping by default
             
             # Use wing's max_time_range_years if specified
             max_time_range_years=wing_settings['max_time_range_years'],
@@ -166,7 +166,7 @@ class WingConfigurationAdapter:
         if hasattr(wing, 'correlation_rules') and hasattr(wing.correlation_rules, 'max_time_range_years'):
             settings['max_time_range_years'] = wing.correlation_rules.max_time_range_years
         else:
-            settings['max_time_range_years'] = 20  # Default
+            settings['max_time_range_years'] = 20 # Default
         
         # Extract anchor priority (if exists)
         if hasattr(wing, 'correlation_rules') and hasattr(wing.correlation_rules, 'anchor_priority'):
@@ -272,7 +272,7 @@ class WingConfigurationAdapter:
                 if priority is None:
                     priority = anchor_priority.get(artifact_type)
                 if priority is None:
-                    priority = 1.0  # Default priority
+                    priority = 1.0 # Default priority
                 
                 feather_priority_mapping[feather_id] = float(priority)
                 
@@ -390,7 +390,7 @@ class WingConfigurationAdapter:
             issues.append("window_size_minutes must be positive")
         
         # Check memory requirements
-        estimated_memory_per_window = wing_settings['feather_count'] * config.max_records_per_window * 0.001  # Rough estimate in MB
+        estimated_memory_per_window = wing_settings['feather_count'] * config.max_records_per_window * 0.001 # Rough estimate in MB
         if estimated_memory_per_window > config.memory_limit_mb:
             issues.append(
                 f"Estimated memory per window ({estimated_memory_per_window:.1f} MB) "
@@ -420,28 +420,28 @@ class WingConfigurationAdapter:
         
         summary_lines = [
             "Wing Configuration Adaptation Summary:",
-            f"  Window Size: {config.window_size_minutes} minutes",
-            f"  Scanning Interval: {config.scanning_interval_minutes} minutes",
-            f"  Window Mode: {'Overlapping' if config.is_overlapping_mode() else 'Non-overlapping'}",
-            f"  Starting Epoch: {config.starting_epoch.strftime('%Y-%m-%d')}",
-            f"  Memory Limit: {config.memory_limit_mb} MB",
-            f"  Parallel Processing: {'Enabled' if config.parallel_window_processing else 'Disabled'}",
+            f" Window Size: {config.window_size_minutes} minutes",
+            f" Scanning Interval: {config.scanning_interval_minutes} minutes",
+            f" Window Mode: {'Overlapping' if config.is_overlapping_mode() else 'Non-overlapping'}",
+            f" Starting Epoch: {config.starting_epoch.strftime('%Y-%m-%d')}",
+            f" Memory Limit: {config.memory_limit_mb} MB",
+            f" Parallel Processing: {'Enabled' if config.parallel_window_processing else 'Disabled'}",
         ]
         
         if result.feather_priority_mapping:
-            summary_lines.append("  Feather Priorities:")
+            summary_lines.append(" Feather Priorities:")
             for feather_id, priority in result.feather_priority_mapping.items():
-                summary_lines.append(f"    {feather_id}: {priority}")
+                summary_lines.append(f" {feather_id}: {priority}")
         
         if result.warnings:
-            summary_lines.append("  Warnings:")
+            summary_lines.append(" Warnings:")
             for warning in result.warnings:
-                summary_lines.append(f"    - {warning}")
+                summary_lines.append(f" - {warning}")
         
         if result.incompatibilities:
-            summary_lines.append("  Incompatibilities:")
+            summary_lines.append(" Incompatibilities:")
             for incompatibility in result.incompatibilities:
-                summary_lines.append(f"    - {incompatibility}")
+                summary_lines.append(f" - {incompatibility}")
         
         return "\n".join(summary_lines)
 

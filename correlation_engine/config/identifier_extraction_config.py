@@ -17,8 +17,8 @@ class IdentifierExtractionConfig:
     """Configuration for identifier extraction strategy."""
     extract_from_names: bool = True
     extract_from_paths: bool = True
-    name_columns: List[str] = field(default_factory=list)  # Optional override
-    path_columns: List[str] = field(default_factory=list)  # Optional override
+    name_columns: List[str] = field(default_factory=list) # Optional override
+    path_columns: List[str] = field(default_factory=list) # Optional override
 
 
 @dataclass
@@ -132,7 +132,7 @@ def create_default_config() -> WingsConfig:
             name_columns=[],
             path_columns=[]
         ),
-        anchor_time_window_minutes=180,  # Default: 3 hours for better correlation accuracy
+        anchor_time_window_minutes=180, # Default: 3 hours for better correlation accuracy
         timestamp_parsing=TimestampParsingConfig(
             custom_formats=[],
             default_timezone="UTC",
@@ -148,8 +148,8 @@ def create_example_config_file(output_path: str = "wings_config_example.json"):
     
     # Add some example custom formats
     config.timestamp_parsing.custom_formats = [
-        "%d-%b-%Y %H:%M:%S",  # Example: "01-Jan-2024 10:00:00"
-        "%Y%m%d%H%M%S"        # Example: "20240101100000"
+        "%d-%b-%Y %H:%M:%S", # Example: "01-Jan-2024 10:00:00"
+        "%Y%m%d%H%M%S" # Example: "20240101100000"
     ]
     
     config.save_to_file(output_path)

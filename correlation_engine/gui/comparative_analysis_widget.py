@@ -47,7 +47,7 @@ class ComparisonMetrics:
     artifact_breakdown: Dict[str, int]
     identity_type_breakdown: Dict[str, int]
     evidence_role_breakdown: Dict[str, int]
-    activity_density: float  # Evidence per minute
+    activity_density: float # Evidence per minute
     peak_activity_time: Optional[datetime]
     common_artifacts: List[str]
     dominant_identity_type: str
@@ -66,8 +66,8 @@ class ComparisonResult:
 class ComparativeAnalysisWorker(QThread):
     """Worker thread for performing comparative analysis."""
     
-    analysis_complete = pyqtSignal(object)  # ComparisonResult
-    progress_updated = pyqtSignal(int)  # Progress percentage
+    analysis_complete = pyqtSignal(object) # ComparisonResult
+    progress_updated = pyqtSignal(int) # Progress percentage
     
     def __init__(self, anchor_time_groups: List[AnchorTimeGroup], 
                  period_1: TimePeriod, period_2: TimePeriod):
@@ -338,8 +338,8 @@ class ComparativeAnalysisWidget(QWidget):
     """
     
     # Signals
-    comparison_complete = pyqtSignal(object)  # ComparisonResult
-    period_selected = pyqtSignal(object)  # TimePeriod
+    comparison_complete = pyqtSignal(object) # ComparisonResult
+    period_selected = pyqtSignal(object) # TimePeriod
     analysis_started = pyqtSignal()
     
     def __init__(self, parent=None):
@@ -421,7 +421,7 @@ class ComparativeAnalysisWidget(QWidget):
         layout = QHBoxLayout(section)
         
         # Start analysis button
-        self.start_analysis_btn = QPushButton("🔍 Start Analysis")
+        self.start_analysis_btn = QPushButton("Start Analysis")
         self.start_analysis_btn.setMaximumWidth(120)
         self.start_analysis_btn.clicked.connect(self._start_analysis)
         layout.addWidget(self.start_analysis_btn)
@@ -457,7 +457,7 @@ class ComparativeAnalysisWidget(QWidget):
         export_layout = QHBoxLayout()
         export_layout.addStretch()
         
-        export_btn = QPushButton("📊 Export Results")
+        export_btn = QPushButton("Export Results")
         export_btn.setMaximumWidth(120)
         export_btn.clicked.connect(self._export_results)
         export_layout.addWidget(export_btn)
@@ -536,7 +536,7 @@ class ComparativeAnalysisWidget(QWidget):
             return
         
         if not self.current_periods or len(self.current_periods) < 2:
-            self._on_period_changed()  # Update periods
+            self._on_period_changed() # Update periods
         
         if len(self.current_periods) < 2:
             self.results_text.setPlainText("Please select valid time periods for comparison")
@@ -600,41 +600,41 @@ class ComparativeAnalysisWidget(QWidget):
         text_parts.append("=== COMPARATIVE ANALYSIS RESULTS ===\n")
         
         # Period summaries
-        text_parts.append(f"📊 {result.period_1.period_name}:")
-        text_parts.append(f"  • Identities: {result.period_1.total_identities}")
-        text_parts.append(f"  • Evidence: {result.period_1.total_evidence}")
-        text_parts.append(f"  • Activity Density: {result.period_1.activity_density:.2f} evidence/min")
-        text_parts.append(f"  • Dominant Identity Type: {result.period_1.dominant_identity_type}")
+        text_parts.append(f"{result.period_1.period_name}:")
+        text_parts.append(f" • Identities: {result.period_1.total_identities}")
+        text_parts.append(f" • Evidence: {result.period_1.total_evidence}")
+        text_parts.append(f" • Activity Density: {result.period_1.activity_density:.2f} evidence/min")
+        text_parts.append(f" • Dominant Identity Type: {result.period_1.dominant_identity_type}")
         text_parts.append("")
         
-        text_parts.append(f"📊 {result.period_2.period_name}:")
-        text_parts.append(f"  • Identities: {result.period_2.total_identities}")
-        text_parts.append(f"  • Evidence: {result.period_2.total_evidence}")
-        text_parts.append(f"  • Activity Density: {result.period_2.activity_density:.2f} evidence/min")
-        text_parts.append(f"  • Dominant Identity Type: {result.period_2.dominant_identity_type}")
+        text_parts.append(f"{result.period_2.period_name}:")
+        text_parts.append(f" • Identities: {result.period_2.total_identities}")
+        text_parts.append(f" • Evidence: {result.period_2.total_evidence}")
+        text_parts.append(f" • Activity Density: {result.period_2.activity_density:.2f} evidence/min")
+        text_parts.append(f" • Dominant Identity Type: {result.period_2.dominant_identity_type}")
         text_parts.append("")
         
         # Overlap analysis
         overlap = result.overlap_analysis
-        text_parts.append("🔗 OVERLAP ANALYSIS:")
-        text_parts.append(f"  • Common Identities: {overlap.get('common_identities', 0)}")
-        text_parts.append(f"  • Common Artifacts: {len(overlap.get('common_artifact_types', []))}")
-        text_parts.append(f"  • Overlap Percentage: {overlap.get('overlap_percentage', 0):.1f}%")
+        text_parts.append("OVERLAP ANALYSIS:")
+        text_parts.append(f" • Common Identities: {overlap.get('common_identities', 0)}")
+        text_parts.append(f" • Common Artifacts: {len(overlap.get('common_artifact_types', []))}")
+        text_parts.append(f" • Overlap Percentage: {overlap.get('overlap_percentage', 0):.1f}%")
         text_parts.append("")
         
         # Trend analysis
         trends = result.trend_analysis
-        text_parts.append("📈 TREND ANALYSIS:")
-        text_parts.append(f"  • Activity Change: {trends.get('activity_change', 'N/A')}")
-        text_parts.append(f"  • Identity Growth: {trends.get('identity_growth', 'N/A')}")
-        text_parts.append(f"  • Dominant Pattern: {trends.get('dominant_pattern', 'N/A')}")
+        text_parts.append("TREND ANALYSIS:")
+        text_parts.append(f" • Activity Change: {trends.get('activity_change', 'N/A')}")
+        text_parts.append(f" • Identity Growth: {trends.get('identity_growth', 'N/A')}")
+        text_parts.append(f" • Dominant Pattern: {trends.get('dominant_pattern', 'N/A')}")
         text_parts.append("")
         
         # Recommendations
         if result.recommendations:
-            text_parts.append("💡 RECOMMENDATIONS:")
+            text_parts.append("Tip: RECOMMENDATIONS:")
             for i, rec in enumerate(result.recommendations, 1):
-                text_parts.append(f"  {i}. {rec}")
+                text_parts.append(f" {i}. {rec}")
         
         self.results_text.setPlainText("\n".join(text_parts))
     
@@ -684,7 +684,7 @@ class ComparativeAnalysisWidget(QWidget):
                 with open(filename, 'w') as f:
                     json.dump(export_data, f, indent=2, default=str)
                 
-                self.results_text.append(f"\n✅ Results exported to: {filename}")
+                self.results_text.append(f"\n[OK] Results exported to: {filename}")
                 
             except Exception as e:
-                self.results_text.append(f"\n❌ Export failed: {str(e)}")
+                self.results_text.append(f"\n[ERROR] Export failed: {str(e)}")

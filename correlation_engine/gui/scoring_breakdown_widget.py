@@ -111,12 +111,12 @@ class ScoringBreakdownWidget(QWidget):
         
         # Set column resize modes
         header = self.breakdown_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Feather name
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Status
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Weight
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Contribution
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Tier
-        header.setSectionResizeMode(5, QHeaderView.Stretch)  # Tier description
+        header.setSectionResizeMode(0, QHeaderView.Stretch) # Feather name
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents) # Status
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents) # Weight
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents) # Contribution
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents) # Tier
+        header.setSectionResizeMode(5, QHeaderView.Stretch) # Tier description
         
         layout.addWidget(self.breakdown_table)
         
@@ -124,11 +124,14 @@ class ScoringBreakdownWidget(QWidget):
         legend_layout = QHBoxLayout()
         legend_layout.addWidget(QLabel("Legend:"))
         
-        matched_label = QLabel("✓ = Matched")
+        from .crow_eye_icons import apply_status_to_label
+        matched_label = QLabel()
+        apply_status_to_label(matched_label, "OK", "= Matched")
         matched_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
         legend_layout.addWidget(matched_label)
-        
-        unmatched_label = QLabel("✗ = Not Matched")
+
+        unmatched_label = QLabel()
+        apply_status_to_label(unmatched_label, "FAIL", "= Not Matched")
         unmatched_label.setStyleSheet("color: #9E9E9E;")
         legend_layout.addWidget(unmatched_label)
         
@@ -191,26 +194,26 @@ class ScoringBreakdownWidget(QWidget):
     def _apply_score_color(self, score: float, interpretation: str):
         """Apply color coding to score based on interpretation"""
         if 'Confirmed' in interpretation:
-            color = CorrelationEngineStyles.SCORE_CONFIRMED  # Green
+            color = CorrelationEngineStyles.SCORE_CONFIRMED # Green
         elif 'Probable' in interpretation or 'Likely' in interpretation:
-            color = CorrelationEngineStyles.SCORE_PROBABLE  # Orange
+            color = CorrelationEngineStyles.SCORE_PROBABLE # Orange
         elif 'Weak' in interpretation or 'Insufficient' in interpretation:
-            color = CorrelationEngineStyles.SCORE_WEAK  # Red
+            color = CorrelationEngineStyles.SCORE_WEAK # Red
         else:
-            color = CorrelationEngineStyles.SCORE_DEFAULT  # Blue (default)
+            color = CorrelationEngineStyles.SCORE_DEFAULT # Blue (default)
         
         self.score_value_label.setStyleSheet(f"color: {color};")
     
     def _apply_interpretation_color(self, interpretation: str):
         """Apply color coding to interpretation label"""
         if 'Confirmed' in interpretation:
-            color = CorrelationEngineStyles.SCORE_CONFIRMED  # Green
+            color = CorrelationEngineStyles.SCORE_CONFIRMED # Green
         elif 'Probable' in interpretation or 'Likely' in interpretation:
-            color = CorrelationEngineStyles.SCORE_PROBABLE  # Orange
+            color = CorrelationEngineStyles.SCORE_PROBABLE # Orange
         elif 'Weak' in interpretation or 'Insufficient' in interpretation:
-            color = CorrelationEngineStyles.SCORE_WEAK  # Red
+            color = CorrelationEngineStyles.SCORE_WEAK # Red
         else:
-            color = CorrelationEngineStyles.SCORE_DEFAULT  # Blue (default)
+            color = CorrelationEngineStyles.SCORE_DEFAULT # Blue (default)
         
         self.interpretation_label.setStyleSheet(f"color: {color};")
     
@@ -250,17 +253,20 @@ class ScoringBreakdownWidget(QWidget):
                 feather_item.setFont(QFont("Arial", 9, QFont.Bold))
             self.breakdown_table.setItem(row, 0, feather_item)
             
-            # Status (matched/unmatched)
-            status_item = QTableWidgetItem("✓" if matched else "✗")
+            # Status (matched/unmatched) — Crow-Eye icon on the item;
+            # leave the text blank so the icon is the indicator.
+            from .crow_eye_icons import CrowEyeIcons
+            status_item = QTableWidgetItem("")
+            status_item.setIcon(CrowEyeIcons.success() if matched else CrowEyeIcons.fail())
             status_font = QFont("Arial", 12, QFont.Bold)
             status_item.setFont(status_font)
             status_item.setTextAlignment(Qt.AlignCenter)
             
             if matched:
-                status_item.setForeground(QColor(CorrelationEngineStyles.MATCHED_COLOR))  # Green
-                status_item.setBackground(QColor(CorrelationEngineStyles.MATCHED_BG))  # Light green background
+                status_item.setForeground(QColor(CorrelationEngineStyles.MATCHED_COLOR)) # Green
+                status_item.setBackground(QColor(CorrelationEngineStyles.MATCHED_BG)) # Light green background
             else:
-                status_item.setForeground(QColor(CorrelationEngineStyles.UNMATCHED_COLOR))  # Gray
+                status_item.setForeground(QColor(CorrelationEngineStyles.UNMATCHED_COLOR)) # Gray
             
             self.breakdown_table.setItem(row, 1, status_item)
             
@@ -276,10 +282,10 @@ class ScoringBreakdownWidget(QWidget):
             contrib_item.setTextAlignment(Qt.AlignCenter)
             
             if matched and contribution > 0:
-                contrib_item.setForeground(QColor(CorrelationEngineStyles.MATCHED_COLOR))  # Green
+                contrib_item.setForeground(QColor(CorrelationEngineStyles.MATCHED_COLOR)) # Green
                 contrib_item.setFont(QFont("Arial", 9, QFont.Bold))
             else:
-                contrib_item.setForeground(QColor(CorrelationEngineStyles.UNMATCHED_COLOR))  # Gray
+                contrib_item.setForeground(QColor(CorrelationEngineStyles.UNMATCHED_COLOR)) # Gray
             
             self.breakdown_table.setItem(row, 3, contrib_item)
             
@@ -298,8 +304,8 @@ class ScoringBreakdownWidget(QWidget):
             if matched:
                 for col in range(self.breakdown_table.columnCount()):
                     item = self.breakdown_table.item(row, col)
-                    if item and col not in [1]:  # Skip status column (already colored)
-                        item.setBackground(QColor(CorrelationEngineStyles.MATCHED_BG))  # Very light green
+                    if item and col not in [1]: # Skip status column (already colored)
+                        item.setBackground(QColor(CorrelationEngineStyles.MATCHED_BG)) # Very light green
         
         self.breakdown_table.resizeRowsToContents()
     

@@ -8,6 +8,11 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+import logging
+from correlation_engine.config.centralized_score_config import CentralizedScoreConfig
+
+logger = logging.getLogger(__name__)
+
 
 
 @dataclass
@@ -16,12 +21,12 @@ class FeatherSpec:
     feather_id: str
     database_filename: str
     artifact_type: str
-    detection_confidence: str  # 'high', 'medium', 'low'
+    detection_confidence: str # 'high', 'medium', 'low'
     manually_overridden: bool
-    detection_method: str = "filename"  # 'metadata', 'table_name', 'filename', 'unknown'
+    detection_method: str = "filename" # 'metadata', 'table_name', 'filename', 'unknown'
     required_fields: List[str] = field(default_factory=list)
     original_detection: Optional[str] = None
-    feather_config_name: Optional[str] = None  # Preserve original config name for path resolution
+    feather_config_name: Optional[str] = None # Preserve original config name for path resolution
     
     # Weighted scoring fields
     weight: float = 0.0
@@ -53,7 +58,7 @@ class FeatherSpec:
     @classmethod
     def from_dict(cls, data: dict) -> 'FeatherSpec':
         """Create from dictionary"""
-        print(f"[FeatherSpec.from_dict] Input data keys: {list(data.keys())}")
+        logger.debug(f"[FeatherSpec.from_dict] Input data keys: {list(data.keys())}")
         
         # Handle old format with filters field
         if 'filters' in data:
@@ -82,7 +87,7 @@ class FeatherSpec:
         if 'detection_confidence' not in data:
             data['detection_confidence'] = "high"
         if 'manually_overridden' not in data:
-            data['manually_overridden'] = True  # Assume manually configured if from Wing JSON
+            data['manually_overridden'] = True # Assume manually configured if from Wing JSON
         if 'artifact_type' not in data:
             data['artifact_type'] = "Unknown"
         if 'database_filename' not in data:
@@ -95,11 +100,11 @@ class FeatherSpec:
             'feather_id', 'database_filename', 'artifact_type', 'detection_confidence',
             'manually_overridden', 'detection_method', 'required_fields', 
             'original_detection', 'feather_config_name',
-            'weight', 'tier', 'tier_name'  # Weighted scoring fields
+            'weight', 'tier', 'tier_name' # Weighted scoring fields
         }
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
         
-        print(f"[FeatherSpec.from_dict] Creating FeatherSpec with: {filtered_data}")
+        logger.debug(f"[FeatherSpec.from_dict] Creating FeatherSpec with: {filtered_data}")
         
         return cls(**filtered_data)
 
@@ -120,19 +125,22 @@ def _get_wing_anchor_priority_from_registry() -> List[str]:
 @dataclass
 class CorrelationRules:
     """Correlation rules for the wing"""
-    time_window_minutes: int = 180  # Default: 3 hours for better correlation accuracy
+    time_window_minutes: int = 180 # Default: 3 hours for better correlation accuracy
+    # Number of distinct feathers an identity/anchor must appear in to count
+    # as a correlation — NOT a total event count. See time_based_engine.py
+    # ~5413-5428 where this is compared against feather_count.
     minimum_matches: int = 1
     show_partial_matches: bool = True
-    max_time_range_years: int = 20  # Maximum time span to prevent false timestamps from expanding range
+    max_time_range_years: int = 20 # Maximum time span to prevent false timestamps from expanding range
     
     # Wing-level filters (apply to ALL feathers)
-    target_application: str = ""  # e.g., "chrome.exe", "notepad.exe", or "*" for all
-    target_file_path: str = ""  # Optional: specific path filter
-    target_event_id: str = ""  # For Logs artifacts: e.g., "4688", "4624,4625", or "" for all
-    apply_to: str = "all"  # "all" or "specific"
+    target_application: str = "" # e.g., "chrome.exe", "notepad.exe", or "*" for all
+    target_file_path: str = "" # Optional: specific path filter
+    target_event_id: str = "" # For Logs artifacts: e.g., "4688", "4624,4625", or "" for all
+    apply_to: str = "all" # "all" or "specific"
     
     # Anchor configuration
-    anchor_feather_override: str = ""  # Optional: manually specify anchor feather_id
+    anchor_feather_override: str = "" # Optional: manually specify anchor feather_id
     anchor_priority: List[str] = field(default_factory=lambda: _get_wing_anchor_priority_from_registry())
     timestamp_fields: Dict[str, str] = field(default_factory=lambda: {
         "Prefetch": "last_run_time",
@@ -206,12 +214,7 @@ class Wing:
     use_weighted_scoring: bool = True
     scoring: Dict[str, Any] = field(default_factory=lambda: {
         'enabled': True,
-        'score_interpretation': {
-            'confirmed': {'min': 0.70, 'label': 'Confirmed Evidence'},
-            'probable': {'min': 0.40, 'label': 'Probable Match'},
-            'weak': {'min': 0.20, 'label': 'Weak / Partial Evidence'},
-            'insufficient': {'min': 0.0, 'label': 'Insufficient Evidence'}
-        }
+        'score_interpretation': CentralizedScoreConfig.get_default().thresholds
     })
     
     def to_dict(self) -> dict:
@@ -245,21 +248,21 @@ class Wing:
     @classmethod
     def from_dict(cls, data: dict) -> 'Wing':
         """Create from dictionary"""
-        print(f"[Wing.from_dict] Loading wing: {data.get('wing_name', 'Unknown')}")
-        print(f"[Wing.from_dict] Keys in data: {list(data.keys())}")
-        print(f"[Wing.from_dict] Number of feathers in data: {len(data.get('feathers', []))}")
+        logger.info(f"[Wing.from_dict] Loading wing: {data.get('wing_name', 'Unknown')}")
+        logger.debug(f"[Wing.from_dict] Keys in data: {list(data.keys())}")
+        logger.info(f"[Wing.from_dict] Number of feathers in data: {len(data.get('feathers', []))}")
         
         # Handle WingConfig format (default wings) vs Wing format
         # WingConfig has correlation settings at top level, Wing has them nested
         
         # Check if this is WingConfig format (has time_window_minutes at top level)
         is_wing_config_format = 'time_window_minutes' in data and 'correlation_rules' not in data
-        print(f"[Wing.from_dict] Is WingConfig format: {is_wing_config_format}")
+        logger.debug(f"[Wing.from_dict] Is WingConfig format: {is_wing_config_format}")
         
         if is_wing_config_format:
             # Convert WingConfig format to Wing format
             correlation_rules_data = {
-                'time_window_minutes': data.get('time_window_minutes', 5),
+                'time_window_minutes': data.get('time_window_minutes', 180),
                 'minimum_matches': data.get('minimum_matches', 1),
                 'target_application': data.get('target_application', ''),
                 'target_file_path': data.get('target_file_path', ''),
@@ -272,38 +275,33 @@ class Wing:
             correlation_rules = CorrelationRules.from_dict(data.get('correlation_rules', {}))
         
         feathers_data = data.get('feathers', [])
-        print(f"[Wing.from_dict] Creating {len(feathers_data)} feathers...")
+        logger.debug(f"[Wing.from_dict] Creating {len(feathers_data)} feathers...")
         feathers = []
         for i, f in enumerate(feathers_data):
-            print(f"[Wing.from_dict]   Feather {i+1}: {f.get('feather_id', 'unknown')}")
+            logger.info(f"[Wing.from_dict] Feather {i+1}: {f.get('feather_id', 'unknown')}")
             feather_spec = FeatherSpec.from_dict(f)
             feathers.append(feather_spec)
-            print(f"[Wing.from_dict]   Created: {feather_spec.feather_id} - {feather_spec.database_filename}")
+            logger.debug(f"[Wing.from_dict] Created: {feather_spec.feather_id} - {feather_spec.database_filename}")
         
-        print(f"[Wing.from_dict] Total feathers created: {len(feathers)}")
+        logger.debug(f"[Wing.from_dict] Total feathers created: {len(feathers)}")
         
         metadata = WingMetadata.from_dict(data.get('metadata', {}))
         semantic_mappings = data.get('semantic_mappings', [])
         
         # Load advanced semantic rules
         semantic_rules = data.get('semantic_rules', [])
-        print(f"[Wing.from_dict] Semantic rules in data: {len(semantic_rules)}")
+        logger.debug(f"[Wing.from_dict] Semantic rules in data: {len(semantic_rules)}")
         if semantic_rules:
-            print(f"[Wing.from_dict] First rule: {semantic_rules[0].get('name', 'unknown')}")
+            logger.info(f"[Wing.from_dict] First rule: {semantic_rules[0].get('name', 'unknown')}")
         
         # Load weighted scoring configuration
         use_weighted_scoring = data.get('use_weighted_scoring', True)
-        print(f"[Wing.from_dict] use_weighted_scoring: {use_weighted_scoring}")
+        logger.debug(f"[Wing.from_dict] use_weighted_scoring: {use_weighted_scoring}")
         scoring = data.get('scoring', {
             'enabled': True,
-            'score_interpretation': {
-                'confirmed': {'min': 0.70, 'label': 'Confirmed Evidence'},
-                'probable': {'min': 0.40, 'label': 'Probable Match'},
-                'weak': {'min': 0.20, 'label': 'Weak / Partial Evidence'},
-                'insufficient': {'min': 0.0, 'label': 'Insufficient Evidence'}
-            }
+            'score_interpretation': CentralizedScoreConfig.get_default().thresholds
         })
-        print(f"[Wing.from_dict] scoring keys: {list(scoring.keys()) if scoring else 'None'}")
+        logger.info(f"[Wing.from_dict] scoring keys: {list(scoring.keys()) if scoring else 'None'}")
         
         wing = cls(
             wing_id=data.get('wing_id', str(uuid.uuid4())),
@@ -322,9 +320,9 @@ class Wing:
             scoring=scoring
         )
         
-        print(f"[Wing.from_dict] Created wing '{wing.wing_name}' with {len(wing.feathers)} feathers")
-        print(f"[Wing.from_dict] Loaded {len(semantic_rules)} semantic rules")
-        print(f"[Wing.from_dict] Weighted scoring: {use_weighted_scoring}")
+        logger.info(f"[Wing.from_dict] Created wing '{wing.wing_name}' with {len(wing.feathers)} feathers")
+        logger.debug(f"[Wing.from_dict] Loaded {len(semantic_rules)} semantic rules")
+        logger.debug(f"[Wing.from_dict] Weighted scoring: {use_weighted_scoring}")
         return wing
     
     @classmethod

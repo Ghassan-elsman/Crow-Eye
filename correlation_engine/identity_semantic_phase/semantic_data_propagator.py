@@ -128,7 +128,9 @@ class SemanticDataPropagator:
                     if match.semantic_data is None:
                         match.semantic_data = {}
                     
-                    # Merge semantic data (preserve existing data, add new data)
+                    # Merge semantic data. Identity-level semantic data is the
+                    # authoritative source, so overlapping keys are overwritten
+                    # with the propagated values (not preserved).
                     match.semantic_data.update(match_semantic_data)
                     
                     matches_updated += 1
@@ -239,9 +241,9 @@ class SemanticDataPropagator:
                 for key in sample_keys:
                     identities = record_to_identity_map[key]
                     logger.info(f"[Semantic Data Propagator] Sample lookup: {key} -> {len(identities)} identities")
-                    for identity in identities[:2]:  # Show first 2 identities
+                    for identity in identities[:2]: # Show first 2 identities
                         semantic_count = len(identity.semantic_data) if identity.semantic_data else 0
-                        logger.info(f"[Semantic Data Propagator]   - {identity.identity_type}:{identity.identity_value} ({semantic_count} semantic fields)")
+                        logger.info(f"[Semantic Data Propagator] - {identity.identity_type}:{identity.identity_value} ({semantic_count} semantic fields)")
             
             # Also log simplified map if available
             if hasattr(self, '_simplified_record_map'):
@@ -272,11 +274,11 @@ class SemanticDataPropagator:
             total_saved = 0
             
             # Add progress reporting for database updates
-            print(f"[Semantic Matching] Adding semantic data to {total_matches:,} matches in database...")
+            logger.info(f"[Semantic Matching] Adding semantic data to {total_matches:,} matches in database...")
             
             # Calculate commit interval (every 10% of total matches)
             # Commit to database every 10% to avoid memory exhaustion with large datasets
-            commit_batch_size = max(100, total_matches // 10)  # Minimum 100 matches per commit
+            commit_batch_size = max(100, total_matches // 10) # Minimum 100 matches per commit
             
             for row_idx, row in enumerate(rows):
                 match_id, semantic_data_json, feather_records_json = row
@@ -302,7 +304,7 @@ class SemanticDataPropagator:
                     # Debug logging for first few matches
                     if self.debug_mode and row_idx < 3:
                         logger.info(f"[Semantic Data Propagator] Processing match {row_idx+1}: {match_id}")
-                        logger.info(f"[Semantic Data Propagator]   Feather records: {list(feather_records.keys())}")
+                        logger.info(f"[Semantic Data Propagator] Feather records: {list(feather_records.keys())}")
                     
                     # Collect semantic data for this match
                     match_semantic_data = self._collect_semantic_data_for_match_dict(
@@ -312,9 +314,9 @@ class SemanticDataPropagator:
                     
                     # Debug logging for semantic data collection
                     if self.debug_mode and row_idx < 3:
-                        logger.info(f"[Semantic Data Propagator]   Collected semantic data: {len(match_semantic_data)} entries")
-                        for key, data in list(match_semantic_data.items())[:2]:  # Show first 2 entries
-                            logger.info(f"[Semantic Data Propagator]     - {key}: {len(data.get('semantic_mappings', {}))} mappings")
+                        logger.info(f"[Semantic Data Propagator] Collected semantic data: {len(match_semantic_data)} entries")
+                        for key, data in list(match_semantic_data.items())[:2]: # Show first 2 entries
+                            logger.info(f"[Semantic Data Propagator] - {key}: {len(data.get('semantic_mappings', {}))} mappings")
                     
                     if match_semantic_data:
                         # Merge semantic data
@@ -325,10 +327,10 @@ class SemanticDataPropagator:
                         records_updated += len(feather_records)
                         
                         if self.debug_mode and row_idx < 3:
-                            logger.info(f"[Semantic Data Propagator]   Match will be updated with {len(match_semantic_data)} semantic entries")
+                            logger.info(f"[Semantic Data Propagator] Match will be updated with {len(match_semantic_data)} semantic entries")
                     else:
                         if self.debug_mode and row_idx < 3:
-                            logger.info(f"[Semantic Data Propagator]   No semantic data found for match")
+                            logger.info(f"[Semantic Data Propagator] No semantic data found for match")
                     
                     # Commit to database every 10% to avoid memory exhaustion
                     if len(matches_to_update) >= commit_batch_size:
@@ -384,7 +386,7 @@ class SemanticDataPropagator:
                     self.statistics.processing_time_seconds = time.time() - start_time
                     return False
             
-            print(f"[Semantic Matching] ✓ Completed: {total_saved:,} matches updated with semantic data")
+            logger.info(f"[Semantic Matching] [OK] Completed: {total_saved:,} matches updated with semantic data")
             
             # Update statistics
             self.statistics.records_updated = records_updated
@@ -438,39 +440,25 @@ class SemanticDataPropagator:
             Dictionary mapping record reference tuples to IdentityRecord objects
         """
         record_map = {}
-        
+        simplified_map = {}
+
         for identity in identity_registry.get_processed_identities():
-            # Only include identities that have semantic data
             if not identity.semantic_data:
                 continue
-            
-            # Map each record reference to this identity
+
             for ref in identity.record_references:
-                # Create lookup key from record reference
-                # Use (match_id, feather_id, record_index) as key
+                # Exact key: (match_id, feather_id, record_index)
                 key = (ref.match_id, ref.feather_id, ref.record_index)
-                
-                # Store identity record for this reference
-                # If multiple identities reference the same record, we'll merge their data
                 if key not in record_map:
                     record_map[key] = []
                 record_map[key].append(identity)
-        
-        # Also create a simplified lookup map for cases where record_index is not available
-        # This handles the case where we only have match_id and feather_id
-        simplified_map = {}
-        for identity in identity_registry.get_processed_identities():
-            if not identity.semantic_data:
-                continue
-            
-            for ref in identity.record_references:
-                # Create simplified key (match_id, feather_id)
+
+                # Simplified key: (match_id, feather_id) — fallback when record_index is unavailable
                 simple_key = (ref.match_id, ref.feather_id)
                 if simple_key not in simplified_map:
                     simplified_map[simple_key] = []
                 simplified_map[simple_key].append(identity)
-        
-        # Store simplified map for fallback lookup
+
         self._simplified_record_map = simplified_map
         
         if self.debug_mode:
@@ -548,7 +536,7 @@ class SemanticDataPropagator:
         feather_records = match_data.get('feather_records', {})
         for feather_id in feather_records.keys():
             # Try to find identity for this record using exact lookup first
-            key = (match_id, feather_id, 0)  # Default record_index
+            key = (match_id, feather_id, 0) # Default record_index
             identities = record_to_identity_map.get(key, [])
             
             # If no exact match, try simplified lookup (match_id, feather_id)

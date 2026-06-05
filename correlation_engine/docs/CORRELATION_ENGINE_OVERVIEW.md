@@ -1,7 +1,13 @@
 # Correlation Engine Overview
 
+> **Version 0.11.0 — Reliability & Extensibility Release.** This document
+> reflects the current state of the engine as of the 0.11.0 release.
+> For the per-release changes that landed in this version, jump to the
+> [What's New in 0.11.0](#whats-new-in-0110) section.
+
 ## Table of Contents
 
+- [What's New in 0.11.0](#whats-new-in-0110)
 - [Introduction](#introduction)
 - [What is the Correlation Engine?](#what-is-the-correlation-engine)
 - [Core Architectural Principles](#core-architectural-principles)
@@ -31,6 +37,164 @@
 
 ---
 
+## What's New in 0.11.0
+
+The 0.11.0 release is a focused reliability + extensibility pass that
+closes the most common "where did my evidence go?" gaps and lays the
+groundwork for parallel correlation. Every change below ships behind a
+78-test regression suite that locks the new contract.
+
+### Evidence preservation
+
+| Change | Why it matters |
+|---|---|
+| **Multi-timestamp fan-out** for JSON timestamp-list columns | Prefetch `run_times` carries up to 8 historical executions per row. Previously only the most recent one was correlated — the other 7 were silently dropped. Now each timestamp produces its own correlation event. Real cases see a ~4× lift in correlatable execution events. |
+| **Tolerant timestamp parser** | Windows FILETIME, `YYYYMMDD` compact (registry InstalledSoftware), Unix s/ms/μs, ISO 8601 (with/without Z), US-slash dates, and trailing parser annotations like `"2026-05-19 10:48:21 (Registry Key LastWrite)"` all parse on the first try. FILETIME was previously mis-tagged as Unix microseconds and rejected by the year validator. |
+| **Duplicates preserved as evidence** | The dedup signature now keys on the **raw** identity (not the normalized form). Distinct artifacts like `Chrome.exe` and `Chrome.dll` no longer collapse into one record at insert time. |
+| **290+ identity-field synonyms** | New parser column names (`file_name` for MFT, `process_path` for BAM, `friendly_name` for USB, `title` for BrowserHistory, plus Shellbags, RecycleBin, Network_list, UserProfiles, etc.) are now recognized. Records that previously had "no identity" now form matches. |
+
+### Smarter sub-identity grouping
+
+The GUI viewers now bucket sub-identities case-and-extension-insensitive
+while preserving version and architectural qualifiers:
+
+- `Chrome.exe` / `chrome.exe` / `Chrome.EXE` / `chrome.dll` → **one** sub-identity (case + extension are noise)
+- `Chrome v1.0.exe` ≠ `Chrome v2.0.exe` (versions are signal)
+- `Chrome (x86)` ≠ `Chrome (x64)` (architectural qualifiers are signal)
+
+Each sub-identity exposes its full set of name variants so analysts see
+all original spellings in the tree view.
+
+### One source of truth — no more drift
+
+The historical pain point: a new parser column needed to be added in
+three or four places (engine `CORE_IDENTITY_FIELDS`, GUI `_RAW_NAME_FIELDS`,
+the identity aggregator's own list). They drifted out of sync and
+dropped evidence whenever one was missed.
+
+- **Field synonyms** now live in `config/standard_fields/*.json`.
+  Adding a parser column = one JSON edit.
+- **Per-table metadata** (primary timestamp column, multi-timestamp JSON
+  columns, identity priority) lives in `correlation_engine/config/feather_schemas.json`.
+- **Identity normalization** unified in `correlation_engine/engine/identity_grouping.py`
+  — engine, both result viewers, and the identity-semantic phase all
+  share one implementation.
+
+### Performance foundation
+
+- **Thread-safe feather query cache**: `OptimizedFeatherQuery` now wraps
+  its cache mutations in an `RLock`. The path to opt-in parallel
+  correlation is unblocked.
+- **Streaming reads**: new `query_time_range_iter()` generator yields
+  records in 1000-row batches. Constant memory across feathers of any
+  size, regardless of window size.
+- **`parallel_strategy` config field** on `TimeWindowScanningConfig` —
+  `'none' | 'threads' | 'processes'` — ready for opt-in process-pool
+  parallelism once profiling identifies the dominant phase.
+
+### Better feather generation
+
+`FeatherWriter` (`correlation_engine/feather/writer.py`, ~330 lines) is
+the new canonical write contract for parsers:
+
+```python
+from correlation_engine.feather.writer import FeatherWriter, ColumnSpec
+
+with FeatherWriter() as w:
+    w.open("prefetch.db", artifact_type="Prefetch")
+    w.declare_table("prefetch_data", columns=[
+        ColumnSpec("last_executed", "TEXT",
+                   is_timestamp=True, is_primary_timestamp=True),
+        ColumnSpec("executable_name", "TEXT", is_identity=True),
+        ColumnSpec("run_times", "TEXT", json_timestamp_list=True),
+        # ...
+    ])
+    w.declare_multi_timestamp_json("run_times")
+    w.write_batch(rows)   # executemany() in 5000-row transactions
+    w.add_lineage(source_path=raw_source, row_count=len(rows))
+```
+
+What you get for free:
+
+- WAL journal mode + explicit `BEGIN`/`COMMIT` transactions
+- `executemany()` batched inserts (5000 rows per batch by default) —
+  expected 50–200× speedup over per-row inserts on large imports
+- Indexes on declared timestamp + identity columns created at write time
+- Schema metadata stamped into `feather_metadata` so the engine doesn't
+  need to sniff sample values to learn column roles
+- Multi-timestamp JSON columns declarable with one call — engine reads
+  it from the feather metadata, no `MULTI_TIMESTAMP_FIELDS` hardcoded
+  config to edit
+
+### Honest diagnostics
+
+Every correlation window emits an INFO line summarizing what was
+seen, what was lost, and what was emitted:
+
+```
+[Time-Window Engine] window=W records_in=N no_identity=N
+    parse_cache_hits=N identities=N below_threshold=N
+    skipped=N low_confidence_emitted=N matches_emitted=N
+    min_feathers=N
+```
+
+The same data is exposed on `self._last_window_correlation_stats` for
+programmatic inspection. If matches drop, the diagnostics say exactly
+where.
+
+Two new config knobs let analysts tune correlation strictness per case:
+
+- `TimeWindowScanningConfig.min_feathers_override` — overrides the
+  wing's `correlation_rules.minimum_matches` for a single run.
+- `TimeWindowScanningConfig.low_confidence_review_mode` — emits
+  sub-threshold identity groups as `confidence_category="Low - below threshold"`
+  matches so analysts can review them instead of having them silently
+  dropped.
+
+### New layout (module-level)
+
+```
+correlation_engine/engine/
+├── identity_grouping.py          # canonical identity_key + sub_identity_key
+├── timestamp_format_codec.py     # detect_column_format + format_for_query
+├── feather_query.py              # OptimizedFeatherQuery (re-export shim today)
+├── window_query_manager.py       # WindowQueryManager (re-export shim today)
+├── time_window_engine.py         # TimeWindowScanningEngine (re-export shim today)
+├── timestamp_parser.py           # ResilientTimestampParser (survivor)
+└── time_based_engine.py          # historical megafile; class bodies stay here
+                                  # for back-compat. Physical move is staged.
+```
+
+External imports keep working — the new module files re-export from the
+legacy location. New code should use the new import paths.
+
+### Extension workflow
+
+Adding a new artifact to the engine is now a documented, repeatable
+workflow: see [ADDING_AN_ARTIFACT.md](./ADDING_AN_ARTIFACT.md). The
+short version: emit timestamps in `YYYY-MM-DD HH:MM:SS` via
+`utils.time_utils.format_forensic_timestamp`, drop the `.db` into the
+case directory, and the engine picks it up. Optional polish: add
+column synonyms to `config/standard_fields/*.json`, add a per-table
+entry to `feather_schemas.json`, switch the parser to `FeatherWriter`
+for the transactional-batching speedup.
+
+### Test coverage
+
+The 78-test regression suite under `correlation_engine/tests/` covers:
+
+- Every timestamp format the engine now handles correctly
+- Heavy identity normalization (engine-level) and mild sub-identity
+  bucketing (GUI-level)
+- Multi-timestamp fan-out (Prefetch `run_times` → N virtual records)
+- `feather_schemas.json` loader contract
+- Dynamic wing-file discovery
+- `FeatherWriter` round-trip + transactional batching + schema metadata
+
+`pytest correlation_engine/tests/` runs in under one second.
+
+---
+
 ## Introduction
 
 This document provides a comprehensive overview of the Crow-Eye Correlation Engine architecture. It serves as the main entry point for developers and contributors who want to understand, modify, or extend the correlation engine system.
@@ -57,14 +221,15 @@ The Crow-Eye Correlation Engine is a highly sophisticated, modular, and optimize
 
 ### Dual-Engine Architecture:
 1.  **Time-Window Scanning Engine (TWSE)**: A revolutionary `O(N log N)` systematic temporal analysis approach that scans through forensic timelines in fixed intervals. It's designed for any dataset size with exceptional memory efficiency, achieving significant speed improvements through optimizations like quick empty-window checks, caching, parallel processing, and a two-phase architecture. Semantic analysis is primarily handled in a post-correlation phase for performance.
-2.  **Identity-Based Correlation Engine (IBCE)**: A powerful `O(N log N)` strategy that groups records by identity first, then creates temporal anchors within each identity's timeline. Optimized for large datasets with streaming support, it excels at robust identity extraction, normalization, and applying semantic rules and scoring directly during the correlation process.
+2.  **Identity-Based Correlation Engine (IBCE)**: The **default engine type** for Crow-eye. A powerful `O(N log N)` strategy that groups records by identity first, then creates temporal anchors within each identity's timeline. Optimized for large datasets with streaming support, it excels at robust identity extraction, normalization, and applying semantic rules and scoring directly during the correlation process. It handles identity case-sensitivity intelligently based on the artifact type (e.g., case-sensitive for SIDs and Hashes).
 
 ### Core Architectural Principles:
 -   **Modularity and Extensibility**: Components are loosely coupled, allowing for independent development and easy integration of new features or strategies.
 -   **Performance and Scalability**: Extensive use of caching, parallel processing, query-based evaluation, and streaming mode efficiently handles massive forensic datasets.
--   **Resilience and Robustness**: Comprehensive error handling, retry mechanisms, graceful degradation, and cancellation support ensure stability and data integrity even under challenging conditions.
+-   **Resilience and Robustness**: Includes atomic configuration saving via `os.replace`, elimination of bare `except:` clauses, and safe resource management using `try...finally` for database connections. All engines utilize `ResilientTimestampParser` for robust temporal data handling.
+-   **Centralized Scoring**: `CentralizedScoreConfig` serves as the single authoritative source of truth for all scoring thresholds, weights, and interpretations, ensuring consistent behavior across engines, wings, and the UI.
 -   **Configurability**: Highly configurable parameters through various configuration classes and a centralized configuration manager.
--   **Transparency and User Feedback**: Detailed progress tracking, performance monitoring, and human-readable semantic enrichment enhance user experience and debugging capabilities.
+-   **Transparency and User Feedback**: Tiered communication using `logging` for internal logic and `print()` for real-time console progress updates (e.g., `[Progress]`). Detailed progress tracking, performance monitoring, and human-readable semantic enrichment enhance user experience.
 
 ---
 
@@ -82,11 +247,11 @@ The Crow-Eye Correlation Engine is a highly sophisticated, modular, and optimize
     -   **`base_engine.py`**: Defines the `BaseCorrelationEngine` abstract interface, ensuring consistent API for all engine implementations.
     -   **`engine_selector.py`**: Factory for dynamically creating and configuring engine instances (TWSE or IBCE).
     -   **`time_based_engine.py` (`TimeWindowScanningEngine`)**: Implements the Time-Window Scanning strategy with advanced optimizations and resilience features.
-    -   **`identity_based_engine_adapter.py` (`IdentityBasedCorrelationEngine`)**: Implements the Identity-Based Correlation strategy, adapting `identifier_correlation_engine.py` to the `BaseCorrelationEngine` interface and integrating shared services.
-4.  **Identifier Processing (`engine/identity_extractor.py`, `engine/identity_validator.py`, `engine/identifier_correlation_engine.py`)**:
+    -   **`identity_based_engine_adapter.py` (`IdentityBasedCorrelationEngine`)**: Implements the Identity-Based Correlation strategy, adapting `identity_state_builder.py` to the `BaseCorrelationEngine` interface and integrating shared services.
+4.  **Identifier Processing (`engine/identity_extractor.py`, `engine/identity_validator.py`, `engine/identity_state_builder.py`)**:
     -   **`identity_extractor.py`**: Extracts and normalizes identities from records.
     -   **`identity_validator.py`**: Filters out noisy or non-meaningful identity values for high-quality correlation.
-    -   **`identifier_correlation_engine.py`**: Manages the in-memory identity-centric state for IBCE.
+    -   **`identity_state_builder.py`**: Manages the in-memory identity-centric state for IBCE.
 5.  **Integrated Services (`integration/semantic_mapping_integration.py`, `integration/weighted_scoring_integration.py`)**:
     -   **`semantic_mapping_integration.py`**: Applies semantic rules to correlation results, enriching them with contextual meaning.
     -   **`weighted_scoring_integration.py`**: Calculates weighted confidence scores for matches based on configured rules.
@@ -274,7 +439,7 @@ The `correlation_engine` is organized into several key directories, each with a 
 **Key Files/Components**: (Only showing core interaction points with the engine)
 -   **`main_window.py`**: Main application window.
 -   **`pipeline_management_tab.py`**: Manages pipeline creation and execution.
--   **`correlation_results_view.py`, `hierarchical_results_view.py`, `results_viewer.py`**: Display correlation results.
+-   **`results_viewer.py`, `identity_results_view.py`, `timebased_results_viewer.py`**: Display correlation results. `results_viewer.py` is the `DynamicResultsTabWidget` orchestrator that hosts the identity-centric and time-window viewers. *(The earlier `correlation_results_view.py` and `hierarchical_results_view.py` were removed in the gui consolidation.)*
 -   **`execution_control.py`**: Controls engine execution from the GUI.
 -   **`semantic_mapping_viewer.py`**: Manages semantic mappings.
 

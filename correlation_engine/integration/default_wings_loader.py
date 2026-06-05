@@ -27,13 +27,20 @@ class DefaultWingsLoader:
     
     # Default Wings directory (relative to this file)
     DEFAULT_WINGS_DIR = Path(__file__).parent / "default_wings"
-    
-    # List of default Wing filenames
-    DEFAULT_WING_FILES = [
-        "Execution_Proof_Correlation.json",
-        "User_Activity_Correlation.json"
-    ]
-    
+
+    @classmethod
+    def get_default_wing_files(cls) -> List[str]:
+        """Discover all default Wing JSON filenames in DEFAULT_WINGS_DIR.
+
+        Dynamic discovery so that wings added to the directory show up
+        automatically — the previous hardcoded list silently ignored every
+        wing beyond the original two.
+        """
+        if not cls.DEFAULT_WINGS_DIR.exists():
+            logger.warning(f"Default Wings directory not found: {cls.DEFAULT_WINGS_DIR}")
+            return []
+        return sorted(p.name for p in cls.DEFAULT_WINGS_DIR.glob("*.json"))
+
     @classmethod
     def get_default_wings_directory(cls) -> Path:
         """
@@ -83,7 +90,7 @@ class DefaultWingsLoader:
         """
         wings = []
         
-        for wing_file in cls.DEFAULT_WING_FILES:
+        for wing_file in cls.get_default_wing_files():
             wing = cls.load_default_wing(wing_file)
             if wing:
                 wings.append(wing)
@@ -106,7 +113,7 @@ class DefaultWingsLoader:
         target_directory.mkdir(parents=True, exist_ok=True)
         copied_files = []
         
-        for wing_file in cls.DEFAULT_WING_FILES:
+        for wing_file in cls.get_default_wing_files():
             source_path = cls.DEFAULT_WINGS_DIR / wing_file
             target_path = target_directory / wing_file
             
@@ -184,7 +191,7 @@ class DefaultWingsLoader:
         """
         wing_info = []
         
-        for wing_file in cls.DEFAULT_WING_FILES:
+        for wing_file in cls.get_default_wing_files():
             wing_path = cls.DEFAULT_WINGS_DIR / wing_file
             
             if wing_path.exists():
@@ -217,13 +224,13 @@ class DefaultWingsLoader:
         """
         all_valid = True
         
-        for wing_file in cls.DEFAULT_WING_FILES:
+        for wing_file in cls.get_default_wing_files():
             wing = cls.load_default_wing(wing_file)
             if wing is None:
                 logger.error(f"Default Wing validation failed: {wing_file}")
                 all_valid = False
             else:
-                logger.info(f"✓ Default Wing validated: {wing.wing_name}")
+                logger.info(f"[OK] Default Wing validated: {wing.wing_name}")
         
         return all_valid
 
@@ -253,6 +260,88 @@ def initialize_default_wings_on_startup(user_config_dir: Path) -> List[WingConfi
     return wings
 
 
+def sync_and_augment_pipeline_wings(pipeline_config, case_correlation_dir: Path) -> int:
+    """Sync newly-shipped default Wings into the case folder and augment the
+    given pipeline_config.wing_configs with any Wings present on disk that
+    aren't already in the pipeline. Also pulls in FeatherConfigs that the
+    augmented Wings reference but the pipeline is missing — without that,
+    `_detect_circular_dependencies` rejects the wing as having unresolved
+    feather refs and the wing never executes. Returns the number of wings
+    appended (feathers loaded as a side effect are not counted in the return).
+
+    Does NOT rewrite the pipeline JSON on disk — callers can save it later if
+    they want the change persisted. Uses .append directly (not
+    PipelineConfig.add_wing_config / add_feather_config) to avoid bumping
+    last_modified.
+    """
+    DefaultWingsLoader.initialize_case_wings_directory(case_correlation_dir)
+    case_wings_dir = case_correlation_dir / "wings"
+    if not case_wings_dir.exists():
+        return 0
+
+    existing_keys = {
+        (getattr(w, 'config_name', '') or '', getattr(w, 'wing_id', '') or '')
+        for w in pipeline_config.wing_configs
+    }
+    appended = 0
+    appended_wings = []
+    for wing_path in sorted(case_wings_dir.glob("*.json")):
+        try:
+            wing = WingConfig.load_from_file(str(wing_path))
+        except Exception as e:
+            logger.warning(f"Skipping wing {wing_path.name}: {e}")
+            continue
+        key = (getattr(wing, 'config_name', '') or '', getattr(wing, 'wing_id', '') or '')
+        if key in existing_keys:
+            continue
+        pipeline_config.wing_configs.append(wing)
+        existing_keys.add(key)
+        appended += 1
+        appended_wings.append(wing)
+
+    if appended_wings:
+        _augment_feather_configs_for_wings(
+            pipeline_config, appended_wings, case_correlation_dir
+        )
+    return appended
+
+
+def _augment_feather_configs_for_wings(pipeline_config, wings, case_correlation_dir: Path):
+    """Load any FeatherConfigs referenced by the given wings that aren't already
+    in pipeline_config.feather_configs. Looks for `<case>/Correlation/feathers/
+    <feather_config_name>.json`. Silently skips refs we can't resolve — they
+    will surface as dependency-validation errors at execute time, which is the
+    right place to report them to the user."""
+    from ..config.feather_config import FeatherConfig
+
+    feathers_dir = case_correlation_dir / "feathers"
+    if not feathers_dir.exists():
+        return
+
+    existing_feather_names = {
+        getattr(fc, 'config_name', '') or '' for fc in pipeline_config.feather_configs
+    } | {
+        getattr(fc, 'feather_name', '') or '' for fc in pipeline_config.feather_configs
+    }
+
+    for wing in wings:
+        for feather_ref in getattr(wing, 'feathers', []) or []:
+            name = getattr(feather_ref, 'feather_config_name', '') or ''
+            if not name or name in existing_feather_names:
+                continue
+            feather_json = feathers_dir / f"{name}.json"
+            if not feather_json.exists():
+                continue
+            try:
+                fc = FeatherConfig.load_from_file(str(feather_json))
+            except Exception as e:
+                logger.warning(f"Could not load feather config {feather_json.name}: {e}")
+                continue
+            pipeline_config.feather_configs.append(fc)
+            existing_feather_names.add(getattr(fc, 'config_name', '') or '')
+            existing_feather_names.add(getattr(fc, 'feather_name', '') or '')
+
+
 def get_default_wings_for_case(case_correlation_dir: Path) -> List[WingConfig]:
     """
     Get default Wings for a case.
@@ -275,7 +364,7 @@ def get_default_wings_for_case(case_correlation_dir: Path) -> List[WingConfig]:
     wings_dir = case_correlation_dir / "wings"
     wings = []
     
-    for wing_file in DefaultWingsLoader.DEFAULT_WING_FILES:
+    for wing_file in DefaultWingsLoader.get_default_wing_files():
         wing_path = wings_dir / wing_file
         if wing_path.exists():
             try:

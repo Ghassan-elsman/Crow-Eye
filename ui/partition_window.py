@@ -545,8 +545,6 @@ class PartitionWindow(QDialog):
                 font-size: 28px;
                 font-weight: bold;
                 font-family: 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 2px;
                 padding: 5px 0;
             }
         """)
@@ -612,8 +610,6 @@ class PartitionWindow(QDialog):
                 border-bottom: 2px solid #38BDF8;
                 font-weight: bold;
                 font-size: 12px;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }
             QHeaderView::section:hover {
                 background-color: #334155;

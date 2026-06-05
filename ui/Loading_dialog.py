@@ -96,7 +96,7 @@ class LoadingDialog(QtWidgets.QDialog):
         except Exception:
             pass  # Fallback if icon resource is not available
         
-        self.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.FramelessWindowHint)
+        self.setWindowFlags(QtCore.Qt.Dialog | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setModal(True)
         
@@ -170,7 +170,6 @@ class LoadingDialog(QtWidgets.QDialog):
                 color: #ffffff;
                 font-weight: 900;
                 font-size: 14px;
-                letter-spacing: 1px;
                 text-align: center;
             }
             QProgressBar::chunk {
@@ -246,38 +245,93 @@ class LoadingDialog(QtWidgets.QDialog):
         """Setup logo with comprehensive fallback paths"""
         try:
             self.icon_label = QtWidgets.QLabel()
-            self.icon_label.setFixedSize(200, 200)  # Clean 200x200 size
             icon_pixmap = None
-            
-            # Enhanced icon loading with multiple fallback paths
-            icon_paths = [
-                ":/Icons/CrowEye.ico",  # Qt resource (if compiled)
-                "GUI Resources/CrowEye.ico",  # Relative path
-                "GUI Resources/CrowEye.jpg",  # Alternative format
-                "../GUI Resources/CrowEye.ico",  # Parent directory
-                "../GUI Resources/CrowEye.jpg",  # Parent directory alternative
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), "GUI Resources", "CrowEye.ico"),  # Absolute path
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), "GUI Resources", "CrowEye.jpg")   # Absolute path alternative
+
+            # Render at 2x for HiDPI sharpness, then downscale to display size.
+            device_ratio = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
+            target_size = 200  # icon edge length in logical pixels
+            border_px = 4      # must match LOADING_DIALOG_ICON border width (premium thicker border)
+            padding_px = 8     # must match LOADING_DIALOG_ICON padding (inset margin)
+            total_offset = border_px + padding_px
+            self.icon_label.setFixedSize(target_size + 2 * total_offset, target_size + 2 * total_offset)
+            self.icon_label.setContentsMargins(0, 0, 0, 0)
+            render_size = int(target_size * max(device_ratio, 2.0))
+
+            # Prefer high-res PNG sources; only use ICO as last resort and request
+            # its largest embedded variant via QIcon to avoid the 16x13 default.
+            base_dir = os.path.dirname(os.path.dirname(__file__))
+            png_candidates = [
+                os.path.join(base_dir, "GUI Resources", "Crow-Eye.png"),
+                os.path.join(base_dir, "GUI Resources", "CrowEye.png"),
+                ":/Icons/Crow-Eye.png",
+                "GUI Resources/Crow-Eye.png",
+                "GUI Resources/CrowEye.png",
+                "../GUI Resources/Crow-Eye.png",
+                "../GUI Resources/CrowEye.png",
+                os.path.join(base_dir, "GUI Resources", "CrowEye.jpg"),
+                "GUI Resources/CrowEye.jpg",
             ]
-            
-            for path in icon_paths:
+
+            for path in png_candidates:
                 try:
-                    icon_pixmap = QtGui.QPixmap(path)
-                    if icon_pixmap and not icon_pixmap.isNull():
+                    candidate = QtGui.QPixmap(path)
+                    if candidate and not candidate.isNull() and candidate.width() >= 128:
+                        icon_pixmap = candidate
                         break
-                    else:
-                        pass
-                except Exception as ex:
- 
+                except Exception:
                     continue
-            
+
+            # ICO fallback — pull the largest embedded size, not the default 16x13.
+            if icon_pixmap is None or icon_pixmap.isNull():
+                ico_candidates = [
+                    ":/Icons/CrowEye.ico",
+                    os.path.join(base_dir, "GUI Resources", "CrowEye.ico"),
+                    "GUI Resources/CrowEye.ico",
+                    "../GUI Resources/CrowEye.ico",
+                ]
+                for path in ico_candidates:
+                    try:
+                        ico = QtGui.QIcon(path)
+                        if not ico.isNull():
+                            sizes = ico.availableSizes()
+                            if sizes:
+                                largest = max(sizes, key=lambda s: s.width() * s.height())
+                                candidate = ico.pixmap(largest)
+                            else:
+                                candidate = ico.pixmap(QtCore.QSize(render_size, render_size))
+                            if candidate and not candidate.isNull():
+                                icon_pixmap = candidate
+                                break
+                    except Exception:
+                        continue
+
             if icon_pixmap and not icon_pixmap.isNull():
-                # Scale icon to 190x190 for clean appearance
-                scaled_pixmap = icon_pixmap.scaled(190, 190, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+                # Scale to render_size (HiDPI-aware) with smooth transform, then
+                # tag the pixmap's device pixel ratio so Qt draws it at target_size.
+                scaled_pixmap = icon_pixmap.scaled(
+                    render_size, render_size,
+                    QtCore.Qt.KeepAspectRatio,
+                    QtCore.Qt.SmoothTransformation,
+                )
+                dpr = render_size / target_size
+                scaled_pixmap.setDevicePixelRatio(dpr)
+                # Resize the label to the pixmap's actual logical size so the
+                # cyan border hugs the icon's true bounding box (no inner gaps).
+                logical_w = int(scaled_pixmap.width() / dpr)
+                logical_h = int(scaled_pixmap.height() / dpr)
+                self.icon_label.setFixedSize(logical_w + 2 * total_offset, logical_h + 2 * total_offset)
                 self.icon_label.setPixmap(scaled_pixmap)
                 self.icon_label.setStyleSheet(CrowEyeStyles.LOADING_DIALOG_ICON)
                 self.icon_label.setAlignment(QtCore.Qt.AlignCenter)
                 self.icon_label.setToolTip("Crow Eye Digital Forensics Tool")
+
+                # Soft cyan halo around the frame (drop shadow with no offset).
+                self.logo_halo = QtWidgets.QGraphicsDropShadowEffect(self.icon_label)
+                self.logo_halo.setColor(QtGui.QColor(0, 255, 255, 180))
+                self.logo_halo.setBlurRadius(35)
+                self.logo_halo.setOffset(0, 0)
+                self.icon_label.setGraphicsEffect(self.logo_halo)
+
                 layout.addWidget(self.icon_label)
             else:
                 print("No valid icon found, using fallback placeholder")  # Debug output
@@ -349,7 +403,7 @@ class LoadingDialog(QtWidgets.QDialog):
         self.dot_state = 0  # 0, 1, 2 for ".", "..", "..."
         
     def update_glow(self):
-        """Update the subtle glow effect on the title"""
+        """Update the subtle glow effect on the title and logo border"""
         self.glow_opacity += 0.03 * self.glow_direction  # Slower animation
         
         if self.glow_opacity >= 0.6:  # Lower maximum opacity
@@ -367,8 +421,6 @@ class LoadingDialog(QtWidgets.QDialog):
                 font-size: 32px;
                 font-weight: bold;
                 font-family: 'Consolas', 'Courier New', monospace;
-                text-transform: uppercase;
-                letter-spacing: 3px;
                 padding: 5px 20px 5px 20px;
                 background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
                                           stop: 0 rgba(0, 255, 255, 0.1),
@@ -378,6 +430,19 @@ class LoadingDialog(QtWidgets.QDialog):
                 border-radius: 10px;
             }}
         """)
+        
+        # Update logo halo (dynamic breathing glow effect)
+        if hasattr(self, 'logo_halo') and self.logo_halo:
+            try:
+                # Oscillate blur radius between 25 and 45
+                current_blur = int(25 + (self.glow_opacity - 0.2) * 50)
+                self.logo_halo.setBlurRadius(current_blur)
+                
+                # Oscillate drop shadow opacity between 120 and 220
+                alpha = int(120 + (self.glow_opacity - 0.2) * 250)
+                self.logo_halo.setColor(QtGui.QColor(0, 255, 255, alpha))
+            except Exception:
+                pass
         
 
         
@@ -501,30 +566,24 @@ class LoadingDialog(QtWidgets.QDialog):
             print(f"[LoadingDialog] Error updating progress: {e}")
                 
     def animate_progress_to(self, target_value):
-        """Smoothly animate progress bar to target value"""
-        current_value = self.progress_bar.value()
-        
+        """Set progress bar to target value without blocking animation"""
         # If we're in indeterminate mode, switch to determinate
         if self.progress_bar.minimum() == 0 and self.progress_bar.maximum() == 0:
             self.progress_bar.setRange(0, 100)
-            current_value = 0
-            
-        # Animate smoothly to target
-        if current_value < target_value:
-            for i in range(current_value, target_value + 1, max(1, (target_value - current_value) // 10)):
-                self.progress_bar.setValue(i)
-                QApplication.processEvents()
-                import time
-                time.sleep(0.02)  # Small delay for smooth animation
-        else:
-            self.progress_bar.setValue(target_value)
-        
 
+        self.progress_bar.setValue(target_value)
+        QApplication.processEvents()
         
+    def update_overall_progress(self, percentage, completed_steps, total_steps):
+        """Update the progress bar with overall percentage across all parallel steps"""
+        # If we're in indeterminate mode, switch to determinate
+        if self.progress_bar.minimum() == 0 and self.progress_bar.maximum() == 0:
+            self.progress_bar.setRange(0, 100)
 
-        
+        self.progress_bar.setValue(percentage)
+        self.progress_bar.setFormat(f"Progress: {completed_steps}/{total_steps} tasks ({percentage}%)")
+        QApplication.processEvents()
 
-        
     def add_log_message(self, message):
         """Add a message to the log (thread-safe via signal)"""
         self.log_signal.emit(message)

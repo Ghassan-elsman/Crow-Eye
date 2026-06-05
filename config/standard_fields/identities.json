@@ -1,0 +1,786 @@
+{
+  "_doc": "Crow-Eye consolidated identity-column registry. Single source of truth for every column name that the correlation engines AND the EYE Agent should check when extracting or tracking an identity from a forensic record. Mirrors the shape of timestamps.json: top-level keys are identity categories, values are ordered lists of column-name synonyms (most-specific first). Loaded by utils.standard_fields.StandardFields via the standard JSON loader. Categories deliberately overlap with the per-artifact files (process_identifiers.json / file_paths.json / user_identifiers.json / system_identifiers.json / event_identifiers.json / network_identifiers.json) so this file alone can answer 'what columns might carry this identity?' without consulting the others.",
+
+  "application_name": [
+    "application_name", "ApplicationName", "applicationname",
+    "app_name", "AppName", "appname",
+    "application", "Application",
+    "program_name", "ProgramName", "programname",
+    "program", "Program",
+    "product_name", "ProductName", "productname",
+    "display_name", "DisplayName", "displayname",
+    "friendly_name", "FriendlyName", "friendlyname",
+    "title", "Title"
+  ],
+
+  "executable_name": [
+    "executable_name", "ExecutableName", "executablename",
+    "exe_name", "ExeName", "exename",
+    "executable", "Executable",
+    "exe", "Exe", "EXE",
+    "image", "Image",
+    "image_name", "ImageName", "imagename",
+    "process_name", "ProcessName", "processname",
+    "process", "Process",
+    "binary", "Binary",
+    "binary_name", "BinaryName", "binaryname",
+    "new_process_name", "NewProcessName", "newprocessname",
+    "target_filename", "TargetFilename", "targetfilename",
+    "fn_filename"
+  ],
+
+  "process_id": [
+    "process_id", "ProcessID", "processid",
+    "pid", "PID", "Pid",
+    "process_identifier", "ProcessIdentifier",
+    "proc_id", "ProcID",
+    "new_process_id", "NewProcessID", "newprocessid"
+  ],
+
+  "parent_process_id": [
+    "parent_process_id", "ParentProcessID", "parentprocessid",
+    "ppid", "PPID",
+    "parent_pid", "ParentPID", "parentpid",
+    "creator_process_id", "CreatorProcessID"
+  ],
+
+  "command_line": [
+    "command_line", "CommandLine", "commandline",
+    "command", "Command",
+    "cmd_line", "CmdLine", "cmdline",
+    "cmd", "Cmd", "CMD",
+    "arguments", "Arguments",
+    "args", "Args",
+    "parameters", "Parameters",
+    "process_command_line", "ProcessCommandLine"
+  ],
+
+  "image_path": [
+    "image_path", "ImagePath", "imagepath",
+    "process_path", "ProcessPath", "processpath",
+    "app_path", "AppPath", "apppath",
+    "executable_path", "ExecutablePath", "executablepath",
+    "binary_path", "BinaryPath", "binarypath",
+    "program_path", "ProgramPath", "programpath",
+    "application_path", "ApplicationPath", "applicationpath",
+    "exe_path", "ExePath", "exepath",
+    "service_image_path"
+  ],
+
+  "file_name": [
+    "filename", "FileName", "file_name", "Filename",
+    "name", "Name",
+    "short_name", "ShortName", "shortname",
+    "long_name", "LongName", "longname",
+    "fn_filename",
+    "original_filename", "OriginalFilename", "original_file_name", "OriginalFileName"
+  ],
+
+  "file_path": [
+    "file_path", "FilePath", "filepath",
+    "path", "Path",
+    "full_path", "FullPath", "fullpath",
+    "absolute_path", "AbsolutePath",
+    "reconstructed_path", "ReconstructedPath",
+    "lower_case_long_path", "LowerCaseLongPath",
+    "folder_path", "FolderPath", "folderpath",
+    "directory", "Directory",
+    "dir", "Dir",
+    "folder", "Folder",
+    "location", "Location",
+    "file_location", "FileLocation", "filelocation",
+    "accessed_path", "AccessedPath",
+    "shell_path", "ShellPath", "shellpath"
+  ],
+
+  "target_path": [
+    "target_path", "TargetPath", "targetpath",
+    "target", "Target",
+    "target_file", "TargetFile", "targetfile",
+    "object_path", "ObjectPath",
+    "link_target", "LinkTarget", "linktarget",
+    "shortcut_target", "ShortcutTarget",
+    "destination", "Destination",
+    "dest_path", "DestPath", "destpath"
+  ],
+
+  "source_path": [
+    "source_path", "SourcePath", "sourcepath",
+    "source", "Source",
+    "src_path", "SrcPath", "srcpath",
+    "origin_path", "OriginPath",
+    "original_path", "OriginalPath",
+    "from_path", "FromPath"
+  ],
+
+  "parent_directory": [
+    "parent_path", "ParentPath", "parentpath",
+    "parent_directory", "ParentDirectory",
+    "parent_folder", "ParentFolder",
+    "containing_folder", "ContainingFolder",
+    "directory_path", "DirectoryPath"
+  ],
+
+  "file_extension": [
+    "file_extension", "FileExtension", "fileextension",
+    "extension", "Extension",
+    "ext", "Ext",
+    "type_extension"
+  ],
+
+  "file_size": [
+    "file_size", "FileSize", "filesize",
+    "size", "Size",
+    "bytes", "Bytes",
+    "byte_count", "ByteCount",
+    "length", "Length"
+  ],
+
+  "hash_md5": [
+    "md5", "MD5", "Md5",
+    "md5_hash", "MD5Hash", "md5hash",
+    "MD5_Hash"
+  ],
+
+  "hash_sha1": [
+    "sha1", "SHA1", "Sha1",
+    "sha1_hash", "SHA1Hash", "sha1hash",
+    "SHA1_Hash"
+  ],
+
+  "hash_sha256": [
+    "sha256", "SHA256", "Sha256",
+    "sha256_hash", "SHA256Hash", "sha256hash",
+    "SHA256_Hash"
+  ],
+
+  "hash_imphash": [
+    "imphash", "ImpHash", "imp_hash", "ImportHash"
+  ],
+
+  "hash_authenticode": [
+    "authenticode_hash", "AuthenticodeHash", "authenticode",
+    "code_signing_hash", "signing_hash"
+  ],
+
+  "hash_generic": [
+    "hash", "Hash",
+    "file_hash", "FileHash",
+    "executable_hash", "ExecutableHash",
+    "entry_hash", "EntryHash",
+    "prefetch_hash", "PrefetchHash",
+    "pe_hash", "PeHash",
+    "checksum", "Checksum",
+    "fuzzy_hash", "FuzzyHash",
+    "ssdeep", "SSDEEP"
+  ],
+
+  "user_name": [
+    "username", "UserName", "user_name", "Username",
+    "user", "User",
+    "account_name", "AccountName", "accountname",
+    "account", "Account",
+    "logon_name", "LogonName", "logonname",
+    "login_name", "LoginName", "loginname",
+    "owner", "Owner",
+    "owner_name", "OwnerName", "ownername",
+    "principal", "Principal",
+    "sid_name", "SIDName"
+  ],
+
+  "user_sid": [
+    "user_sid", "UserSID", "usersid",
+    "sid", "SID", "Sid",
+    "security_id", "SecurityID", "securityid",
+    "account_sid", "AccountSID", "accountsid",
+    "owner_sid", "OwnerSID", "ownersid"
+  ],
+
+  "user_domain": [
+    "user_domain", "UserDomain", "userdomain",
+    "domain", "Domain",
+    "account_domain", "AccountDomain", "accountdomain",
+    "logon_domain", "LogonDomain",
+    "workgroup", "Workgroup",
+    "realm", "Realm"
+  ],
+
+  "subject_user": [
+    "subject_user_name", "SubjectUserName", "subjectusername",
+    "subject_user_sid", "SubjectUserSID", "subjectusersid",
+    "subject_domain_name", "SubjectDomainName", "subjectdomainname",
+    "subject_logon_id", "SubjectLogonID"
+  ],
+
+  "target_user": [
+    "target_user_name", "TargetUserName", "targetusername",
+    "target_user_sid", "TargetUserSID", "targetusersid",
+    "target_domain_name", "TargetDomainName", "targetdomainname",
+    "target_logon_id", "TargetLogonID"
+  ],
+
+  "logon_id": [
+    "logon_id", "LogonID", "logonid",
+    "session_id", "SessionID", "sessionid",
+    "auth_id", "AuthID",
+    "authentication_id", "AuthenticationID"
+  ],
+
+  "logon_type": [
+    "logon_type", "LogonType", "logontype",
+    "login_type", "LoginType", "logintype",
+    "auth_type", "AuthType",
+    "authentication_type", "AuthenticationType"
+  ],
+
+  "host_name": [
+    "host_name", "HostName", "hostname",
+    "host", "Host",
+    "computer_name", "ComputerName", "computername",
+    "machine_name", "MachineName", "machinename",
+    "workstation_name", "WorkstationName",
+    "system_name", "SystemName",
+    "endpoint", "Endpoint",
+    "fqdn", "FQDN",
+    "node_name", "NodeName"
+  ],
+
+  "device_name": [
+    "device_name", "DeviceName", "devicename",
+    "device", "Device",
+    "hardware_name", "HardwareName", "hardwarename",
+    "drive", "Drive",
+    "drive_name", "DriveName", "drivename",
+    "volume", "Volume",
+    "volume_name", "VolumeName", "volumename",
+    "disk", "Disk",
+    "disk_name", "DiskName", "diskname",
+    "media", "Media"
+  ],
+
+  "device_serial": [
+    "device_serial", "DeviceSerial",
+    "serial", "Serial",
+    "serial_number", "SerialNumber", "serialnumber",
+    "device_serial_number", "DeviceSerialNumber",
+    "usb_serial", "UsbSerial",
+    "instance_id", "InstanceID",
+    "container_id", "ContainerID"
+  ],
+
+  "device_vendor": [
+    "vendor", "Vendor",
+    "vendor_id", "VendorID", "vendorid",
+    "manufacturer", "Manufacturer",
+    "vendor_name", "VendorName"
+  ],
+
+  "device_product": [
+    "product", "Product",
+    "product_id", "ProductID", "productid",
+    "product_name", "ProductName",
+    "model", "Model",
+    "model_name", "ModelName"
+  ],
+
+  "device_class": [
+    "device_class", "DeviceClass", "deviceclass",
+    "class", "Class",
+    "class_guid", "ClassGUID"
+  ],
+
+  "volume_id": [
+    "volume_id", "VolumeID", "volumeid",
+    "volume_serial", "VolumeSerial",
+    "volume_serial_number", "VolumeSerialNumber",
+    "volume_guid", "VolumeGUID",
+    "harddisk_volume", "HarddiskVolume"
+  ],
+
+  "mac_address": [
+    "mac_address", "MACAddress", "macaddress",
+    "mac", "MAC", "Mac",
+    "hw_address", "HwAddress",
+    "physical_address", "PhysicalAddress",
+    "ethernet_address", "EthernetAddress"
+  ],
+
+  "remote_address": [
+    "remote_address", "RemoteAddress", "remoteaddress",
+    "remote_ip", "RemoteIP", "remoteip",
+    "destination_ip", "DestinationIP", "destinationip",
+    "dest_ip", "DestIP", "destip",
+    "dst_ip", "DstIP", "dstip",
+    "dst_addr", "DstAddr", "dstaddr",
+    "target_ip", "TargetIP", "targetip",
+    "ip_address", "IPAddress", "ipaddress",
+    "ip", "IP",
+    "address", "Address",
+    "destination_address", "DestinationAddress",
+    "remote_host", "RemoteHost", "remotehost",
+    "server", "Server",
+    "server_ip", "ServerIP",
+    "external_ip", "ExternalIP"
+  ],
+
+  "source_address": [
+    "source_address", "SourceAddress", "sourceaddress",
+    "source_ip", "SourceIP", "sourceip",
+    "src_ip", "SrcIP", "srcip",
+    "src_addr", "SrcAddr", "srcaddr",
+    "local_ip", "LocalIP", "localip",
+    "local_address", "LocalAddress",
+    "client_ip", "ClientIP", "clientip",
+    "origin_ip", "OriginIP",
+    "internal_ip", "InternalIP"
+  ],
+
+  "remote_port": [
+    "remote_port", "RemotePort", "remoteport",
+    "destination_port", "DestinationPort",
+    "dest_port", "DestPort", "destport",
+    "dst_port", "DstPort", "dstport",
+    "target_port", "TargetPort",
+    "server_port", "ServerPort"
+  ],
+
+  "source_port": [
+    "source_port", "SourcePort", "sourceport",
+    "src_port", "SrcPort", "srcport",
+    "local_port", "LocalPort", "localport",
+    "client_port", "ClientPort"
+  ],
+
+  "protocol": [
+    "protocol", "Protocol",
+    "transport_protocol", "TransportProtocol",
+    "ip_protocol", "IPProtocol",
+    "proto", "Proto"
+  ],
+
+  "url": [
+    "url", "URL", "Url",
+    "uri", "URI",
+    "request_url", "RequestURL",
+    "address_url",
+    "full_url", "FullURL"
+  ],
+
+  "domain": [
+    "domain_name", "DomainName", "domainname",
+    "host_domain", "HostDomain",
+    "fqdn", "FQDN",
+    "dns_name", "DnsName"
+  ],
+
+  "dns_query": [
+    "dns_query", "DNSQuery", "dnsquery",
+    "query", "Query",
+    "query_name", "QueryName",
+    "queried_name", "QueriedName"
+  ],
+
+  "user_agent": [
+    "user_agent", "UserAgent", "useragent",
+    "ua", "UA",
+    "browser_user_agent"
+  ],
+
+  "referrer": [
+    "referrer", "Referrer",
+    "referer", "Referer",
+    "http_referer"
+  ],
+
+  "registry_key": [
+    "key_path", "KeyPath", "keypath",
+    "registry_key", "RegistryKey", "registrykey",
+    "key", "Key",
+    "reg_key", "RegKey", "regkey",
+    "hive_path", "HivePath", "hivepath",
+    "registry_path", "RegistryPath", "registrypath",
+    "reg_path", "RegPath", "regpath",
+    "target_object", "TargetObject", "targetobject",
+    "object", "Object"
+  ],
+
+  "registry_value_name": [
+    "value_name", "ValueName", "valuename",
+    "value", "Value",
+    "registry_value", "RegistryValue", "registryvalue",
+    "reg_value", "RegValue",
+    "data_name", "DataName",
+    "entry", "Entry"
+  ],
+
+  "registry_value_data": [
+    "value_data", "ValueData", "valuedata",
+    "data", "Data",
+    "registry_data", "RegistryData", "registrydata",
+    "content", "Content",
+    "details", "Details",
+    "new_value", "NewValue"
+  ],
+
+  "registry_hive": [
+    "hive", "Hive",
+    "registry_hive", "RegistryHive",
+    "hive_name", "HiveName",
+    "root_key", "RootKey"
+  ],
+
+  "service_name": [
+    "service_name", "ServiceName", "servicename",
+    "service", "Service",
+    "svc_name", "SvcName",
+    "service_id", "ServiceID"
+  ],
+
+  "service_display_name": [
+    "service_display_name", "ServiceDisplayName",
+    "display_name", "DisplayName",
+    "service_label", "ServiceLabel"
+  ],
+
+  "service_image_path": [
+    "service_image_path", "ServiceImagePath",
+    "image_path", "ImagePath",
+    "binary_path_name", "BinaryPathName",
+    "service_binary", "ServiceBinary"
+  ],
+
+  "service_account": [
+    "service_account", "ServiceAccount",
+    "start_name", "StartName",
+    "service_start_name", "ServiceStartName",
+    "run_as", "RunAs"
+  ],
+
+  "scheduled_task_name": [
+    "task_name", "TaskName", "taskname",
+    "scheduled_task", "ScheduledTask",
+    "task", "Task",
+    "task_id", "TaskID"
+  ],
+
+  "scheduled_task_path": [
+    "task_path", "TaskPath",
+    "task_action_path", "TaskActionPath",
+    "task_executable", "TaskExecutable"
+  ],
+
+  "event_id": [
+    "event_id", "EventID", "eventid", "Event_ID",
+    "id", "ID", "Id",
+    "event_code", "EventCode", "eventcode",
+    "code", "Code",
+    "log_id", "LogID", "logid",
+    "record_id", "RecordID", "recordid",
+    "message_id", "MessageID", "messageid",
+    "evt_id", "EvtID",
+    "event_number", "EventNumber", "eventnumber",
+    "evtx_id", "EvtxID"
+  ],
+
+  "event_type": [
+    "event_type", "EventType", "eventtype",
+    "type", "Type",
+    "log_type", "LogType",
+    "category", "Category",
+    "event_category", "EventCategory"
+  ],
+
+  "event_channel": [
+    "channel", "Channel",
+    "log_name", "LogName", "logname",
+    "source", "Source",
+    "provider", "Provider",
+    "log_source", "LogSource",
+    "event_source", "EventSource",
+    "provider_name", "ProviderName"
+  ],
+
+  "email_address": [
+    "email", "Email",
+    "email_address", "EmailAddress", "emailaddress",
+    "address", "Address",
+    "smtp_address", "SmtpAddress"
+  ],
+
+  "email_sender": [
+    "sender", "Sender",
+    "from", "From",
+    "from_address", "FromAddress",
+    "sender_email", "SenderEmail",
+    "mail_from", "MailFrom"
+  ],
+
+  "email_recipient": [
+    "recipient", "Recipient",
+    "to", "To",
+    "to_address", "ToAddress",
+    "recipient_email", "RecipientEmail",
+    "mail_to", "MailTo",
+    "cc", "CC", "bcc", "BCC"
+  ],
+
+  "email_subject": [
+    "subject", "Subject",
+    "email_subject", "EmailSubject",
+    "message_subject", "MessageSubject"
+  ],
+
+  "email_message_id": [
+    "message_id", "MessageID",
+    "email_message_id", "EmailMessageID",
+    "mail_id", "MailID"
+  ],
+
+  "browser_url": [
+    "url", "URL",
+    "visited_url", "VisitedURL",
+    "history_url", "HistoryURL",
+    "tab_url", "TabURL"
+  ],
+
+  "browser_title": [
+    "title", "Title",
+    "page_title", "PageTitle",
+    "tab_title", "TabTitle",
+    "window_title", "WindowTitle"
+  ],
+
+  "browser_cookie": [
+    "cookie", "Cookie",
+    "cookie_name", "CookieName",
+    "cookie_domain", "CookieDomain"
+  ],
+
+  "download_url": [
+    "download_url", "DownloadURL",
+    "download_source", "DownloadSource",
+    "source_url", "SourceURL"
+  ],
+
+  "browser_referrer": [
+    "referrer", "Referrer", "referer", "Referer",
+    "browser_referrer", "BrowserReferrer",
+    "from_url", "FromURL"
+  ],
+
+  "session_id": [
+    "session_id", "SessionID", "sessionid",
+    "session", "Session",
+    "session_guid", "SessionGUID"
+  ],
+
+  "thread_id": [
+    "thread_id", "ThreadID", "threadid",
+    "tid", "TID",
+    "thread", "Thread"
+  ],
+
+  "object_handle": [
+    "handle_id", "HandleID", "handleid",
+    "handle", "Handle",
+    "object_handle", "ObjectHandle"
+  ],
+
+  "container_id": [
+    "container_id", "ContainerID", "containerid",
+    "container", "Container",
+    "docker_id", "DockerID",
+    "pod_id", "PodID"
+  ],
+
+  "image_id": [
+    "image_id", "ImageID",
+    "container_image", "ContainerImage",
+    "docker_image", "DockerImage"
+  ],
+
+  "image_label": [
+    "image_name", "ImageName",
+    "image_tag", "ImageTag",
+    "tag", "Tag"
+  ],
+
+  "certificate_thumbprint": [
+    "certificate_thumbprint", "CertificateThumbprint",
+    "cert_thumbprint", "CertThumbprint",
+    "thumbprint", "Thumbprint",
+    "fingerprint", "Fingerprint"
+  ],
+
+  "certificate_subject": [
+    "certificate_subject", "CertificateSubject",
+    "cert_subject", "CertSubject",
+    "subject_cn", "SubjectCN"
+  ],
+
+  "certificate_issuer": [
+    "certificate_issuer", "CertificateIssuer",
+    "cert_issuer", "CertIssuer",
+    "issuer", "Issuer",
+    "issuer_cn", "IssuerCN"
+  ],
+
+  "public_key_hash": [
+    "public_key_hash", "PublicKeyHash",
+    "pubkey_hash", "PubkeyHash",
+    "key_id", "KeyID"
+  ],
+
+  "tag_label": [
+    "tag", "Tag",
+    "label", "Label",
+    "tags", "Tags",
+    "labels", "Labels",
+    "category", "Category"
+  ],
+
+  "generic_identity_last_resort": [
+    "identity", "Identity",
+    "name", "Name",
+    "id", "ID", "Id",
+    "guid", "GUID", "Guid",
+    "uuid", "UUID", "Uuid"
+  ],
+
+  "cloud_account_id": [
+    "cloud_account_id", "CloudAccountID",
+    "aws_account_id", "AwsAccountID",
+    "azure_subscription_id", "AzureSubscriptionID", "subscription_id", "SubscriptionID",
+    "gcp_project_id", "GcpProjectID", "project_id", "ProjectID",
+    "account_id", "AccountID"
+  ],
+
+  "cloud_tenant_id": [
+    "tenant_id", "TenantID",
+    "azure_tenant_id", "AzureTenantID",
+    "aad_tenant_id", "AadTenantID",
+    "directory_id", "DirectoryID",
+    "organization_id", "OrganizationID", "org_id", "OrgID"
+  ],
+
+  "cloud_resource_id": [
+    "resource_id", "ResourceID",
+    "arn", "ARN",
+    "resource_arn", "ResourceARN",
+    "resource_name", "ResourceName",
+    "resource_uri", "ResourceURI"
+  ],
+
+  "cloud_principal": [
+    "principal_arn", "PrincipalARN",
+    "iam_user", "IAMUser", "iam_username",
+    "iam_role", "IAMRole",
+    "service_principal", "ServicePrincipal", "service_principal_id", "ServicePrincipalID",
+    "app_id", "AppID",
+    "object_id", "ObjectID"
+  ],
+
+  "cloud_role_name": [
+    "role_name", "RoleName",
+    "iam_role_name", "IAMRoleName",
+    "azure_role", "AzureRole",
+    "gcp_role", "GcpRole",
+    "assumed_role", "AssumedRole",
+    "role_arn", "RoleARN"
+  ],
+
+  "cloud_region": [
+    "region", "Region",
+    "aws_region", "AwsRegion",
+    "azure_region", "AzureRegion", "azure_location", "AzureLocation",
+    "gcp_region", "GcpRegion", "gcp_zone", "GcpZone",
+    "datacenter", "Datacenter"
+  ],
+
+  "cloud_request_id": [
+    "request_id", "RequestID",
+    "aws_request_id", "AwsRequestID",
+    "azure_correlation_id", "AzureCorrelationID", "correlation_id", "CorrelationID",
+    "trace_id", "TraceID",
+    "operation_id", "OperationID"
+  ],
+
+  "cloud_event_name": [
+    "event_name", "EventName",
+    "operation_name", "OperationName",
+    "action_name", "ActionName",
+    "api_call", "ApiCall",
+    "azure_action", "AzureAction"
+  ],
+
+  "mutex_name": [
+    "mutex_name", "MutexName",
+    "mutex", "Mutex",
+    "mutant_name", "MutantName", "mutant", "Mutant"
+  ],
+
+  "named_pipe": [
+    "named_pipe", "NamedPipe",
+    "pipe_name", "PipeName",
+    "pipe", "Pipe"
+  ],
+
+  "com_clsid": [
+    "com_clsid", "ComCLSID",
+    "clsid", "CLSID", "ClsID",
+    "class_id", "ClassID"
+  ],
+
+  "com_progid": [
+    "com_progid", "ComProgID",
+    "progid", "ProgID", "ProgId",
+    "program_id", "ProgramID"
+  ],
+
+  "com_iid": [
+    "com_iid", "ComIID",
+    "iid", "IID", "IId",
+    "interface_id", "InterfaceID"
+  ],
+
+  "job_object": [
+    "job_object", "JobObject",
+    "job_object_name", "JobObjectName",
+    "job_name", "JobName"
+  ],
+
+  "dll_export": [
+    "dll_export", "DllExport",
+    "export_name", "ExportName",
+    "exported_function", "ExportedFunction",
+    "function_name", "FunctionName"
+  ],
+
+  "window_title": [
+    "window_title", "WindowTitle", "windowtitle",
+    "title_bar", "TitleBar",
+    "active_window", "ActiveWindow",
+    "foreground_window", "ForegroundWindow"
+  ],
+
+  "scheduled_task_trigger": [
+    "trigger", "Trigger",
+    "task_trigger", "TaskTrigger",
+    "trigger_type", "TriggerType"
+  ],
+
+  "wmi_consumer": [
+    "wmi_consumer", "WmiConsumer",
+    "consumer_name", "ConsumerName",
+    "wmi_filter", "WmiFilter",
+    "filter_name", "FilterName",
+    "wmi_binding", "WmiBinding"
+  ],
+
+  "etw_provider": [
+    "etw_provider", "EtwProvider",
+    "provider_guid", "ProviderGUID",
+    "provider_id", "ProviderID",
+    "trace_provider", "TraceProvider"
+  ]
+}

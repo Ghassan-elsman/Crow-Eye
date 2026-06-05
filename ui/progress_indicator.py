@@ -104,7 +104,6 @@ class ProgressIndicator(QtWidgets.QWidget):
                 font-family: 'Segoe UI', sans-serif;
                 background: transparent;
                 border: none;
-                letter-spacing: 0.5px;
                 padding: 5px;
             }
         """)
@@ -165,8 +164,6 @@ class ProgressIndicator(QtWidgets.QWidget):
                     font-weight: 600;
                     font-size: 13px;
                     font-family: 'Segoe UI', sans-serif;
-                    text-transform: uppercase;
-                    letter-spacing: 0.5px;
                 }
                 QPushButton:hover {
                     background-color: #F87171;

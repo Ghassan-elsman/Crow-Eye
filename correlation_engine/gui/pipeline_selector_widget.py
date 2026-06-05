@@ -71,8 +71,6 @@ class PipelineSelectionDialog(QDialog):
                 font-size: 18px;
                 font-weight: 700;
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }
         """)
         layout.addWidget(title)
@@ -108,7 +106,7 @@ class PipelineSelectionDialog(QDialog):
         # Apply table styles
         try:
             CrowEyeStyles.apply_table_styles(self.pipeline_table)
-        except:
+        except Exception as e:
             pass
         
         self.pipeline_table.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE + """
@@ -128,10 +126,10 @@ class PipelineSelectionDialog(QDialog):
         
         # Configure column widths
         header = self.pipeline_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Pipeline Name
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Wings
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Feathers
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Last Modified
+        header.setSectionResizeMode(0, QHeaderView.Stretch) # Pipeline Name
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents) # Wings
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents) # Feathers
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents) # Last Modified
         
         self.pipeline_table.setMinimumHeight(300)
         
@@ -221,7 +219,7 @@ class PipelineSelectionDialog(QDialog):
         
         # Pipeline Name
         name_item = QTableWidgetItem(pipeline_data.get('pipeline_name', 'Unknown'))
-        name_item.setData(Qt.UserRole, str(pipeline_file))  # Store file path
+        name_item.setData(Qt.UserRole, str(pipeline_file)) # Store file path
         self.pipeline_table.setItem(row, 0, name_item)
         
         # Wings count
@@ -242,7 +240,7 @@ class PipelineSelectionDialog(QDialog):
             try:
                 dt = datetime.fromisoformat(last_modified)
                 last_modified = dt.strftime("%Y-%m-%d %H:%M")
-            except:
+            except Exception as e:
                 pass
         modified_item = QTableWidgetItem(last_modified)
         self.pipeline_table.setItem(row, 3, modified_item)

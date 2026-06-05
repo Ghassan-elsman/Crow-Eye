@@ -217,9 +217,9 @@ class ErrorHandler:
             Formatted message string
         """
         severity_icon = {
-            "error": "✗",
-            "warning": "⚠",
-            "info": "ℹ"
+            "error": "[FAIL]",
+            "warning": "[WARN]",
+            "info": "[INFO]"
         }.get(error_response.severity, "•")
         
         return f"{severity_icon} {error_response.user_message}"

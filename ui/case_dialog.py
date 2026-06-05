@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 # Import styles
-from styles import CrowEyeStyles
+from styles import CrowEyeStyles, Colors
 
 
 class CaseDialog(QtWidgets.QDialog):
@@ -253,21 +253,19 @@ class CaseDialog(QtWidgets.QDialog):
                 font-size: 18px;
                 font-weight: 700;
                 font-family: 'Segoe UI', sans-serif;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }}
         """)
         
         desc_label = QtWidgets.QLabel(description)
         desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("""
-            QLabel {
-                color: #CBD5E1;
+        desc_label.setStyleSheet(f"""
+            QLabel {{
+                color: {Colors.TEXT_PRIMARY};
                 font-size: 14px;
                 font-weight: 400;
                 line-height: 1.4;
                 font-family: 'Segoe UI', sans-serif;
-            }
+            }}
         """)
         
         text_layout.addWidget(title_label)
@@ -311,8 +309,6 @@ class CaseDialog(QtWidgets.QDialog):
                 border-radius: 8px;
                 font-size: 14px;
                 font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 1px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 

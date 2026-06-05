@@ -42,8 +42,6 @@ def patch_file(file_path):
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
             print("Successfully patched with polyfill and layout fix.")
-        else:
-            print("File already appears to be patched with layout fix.")
         return True
     else:
         print("Could not find </head> tag.")

@@ -46,12 +46,19 @@ from .resources.icons import (
 )
 
 # Import case management components
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+# Task 11.2: Use PathUtils for robust root resolution in EXE mode
+try:
+    from utils.path_utils import PathUtils
+    app_root = PathUtils.get_app_root()
+    if str(app_root) not in sys.path:
+        sys.path.insert(0, str(app_root))
+except ImportError:
+    # Fallback if PathUtils is not accessible
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 try:
     from config.case_history_manager import CaseHistoryManager
     from config.data_models import CaseMetadata
-    from correlation_engine.config.case_configuration_manager import CaseConfigurationManager
+    from correlation_engine.config._case_coordinator_service import CaseConfigurationManager
     CASE_MANAGER_AVAILABLE = True
 except ImportError:
     print("Warning: Could not import CaseHistoryManager or CaseConfigurationManager. Case management features will be limited.")
@@ -580,7 +587,6 @@ class OfflineImporterGUI(QMainWindow):
                     padding: {4 if is_selection else 6}px;
                     border-bottom: {1 if is_selection else 2}px solid {Colors.BORDER_ACCENT};
                     font-weight: 700;
-                    letter-spacing: 0.5px;
                     background: transparent;
                 }}
             """)

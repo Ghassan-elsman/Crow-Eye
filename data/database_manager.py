@@ -410,6 +410,45 @@ class DatabaseManager:
                 self.logger.debug(f"Database {db_name} not found in case directory")
             
             discovered.append(db_info)
+
+        # --- RECURSIVE DISCOVERY PROTOCOL ---
+        # Ensure that every .db file in the case folder is indexed, 
+        # even if it's not in the hardcoded configuration.
+        known_paths = {str(d.path.absolute()).lower() for d in discovered}
+        
+        for cand in candidate_dbs:
+            cand_abs = str(cand.absolute()).lower()
+            if cand_abs not in known_paths:
+                try:
+                    # Create info for this custom/unconfigured database
+                    custom_info = DatabaseInfo(
+                        name=cand.name,
+                        path=cand,
+                        category="Custom/Other Artifacts",
+                        display_name=f"{cand.stem.replace('_', ' ').title()} (Custom)",
+                        exists=True
+                    )
+                    
+                    # Try to introspect it
+                    try:
+                        # Open read-only
+                        uri = f"file:{cand}?mode=ro"
+                        conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+                        conn.row_factory = sqlite3.Row
+                        cur = conn.cursor()
+                        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                        custom_info.tables = [r['name'] for r in cur.fetchall()]
+                        conn.close()
+                        custom_info.accessible = True
+                        self.logger.info(f"Discovered unconfigured database: {cand.name} ({len(custom_info.tables)} tables)")
+                    except Exception as e:
+                        custom_info.accessible = False
+                        custom_info.error = str(e)
+                    
+                    discovered.append(custom_info)
+                    known_paths.add(cand_abs)
+                except Exception:
+                    pass
         
         accessible_count = len([d for d in discovered if d.exists and d.accessible])
         exists_count = len([d for d in discovered if d.exists])

@@ -1,0 +1,178 @@
+{
+  "config_name": "lateral_movement_correlation",
+  "wing_name": "Lateral Movement Correlation",
+  "wing_id": "default_wing_lateral_001",
+  "description": "Detects evidence that activity on this host originated from or propagated to another machine. Uses a tiered approach with Security log network/RDP logons (4624 type 3/10) and remote-tool prefetch hits weighted highest, followed by UNC-target artefacts (LNK to \\\\server\\share, TypedPaths, mstsc jumplists), and admin-share file drops in MFT/USN as supporting context.",
+  "proves": "Activity originated from or propagated to a remote system",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-05-18T00:00:00Z",
+  "last_modified": "2026-05-18T00:00:00Z",
+  "version": "1.0",
+
+  "feathers": [
+    {
+      "feather_config_name": "SecurityLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SecurityLogs_CrowEyeFeather.db",
+      "artifact_type": "SecurityLogs",
+      "feather_id": "security_logs",
+      "weight": 0.35,
+      "tier": 1,
+      "tier_name": "Network / RDP logon evidence"
+    },
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.20,
+      "tier": 1,
+      "tier_name": "Remote-admin tool execution"
+    },
+    {
+      "feather_config_name": "LNK_CrowEyeFeather",
+      "feather_database_path": "feathers/LNK_CrowEyeFeather.db",
+      "artifact_type": "LNK",
+      "feather_id": "lnk",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "UNC-target shortcut evidence"
+    },
+    {
+      "feather_config_name": "TypedPaths_CrowEyeFeather",
+      "feather_database_path": "feathers/TypedPaths_CrowEyeFeather.db",
+      "artifact_type": "TypedPaths",
+      "feather_id": "typedpaths",
+      "weight": 0.10,
+      "tier": 2,
+      "tier_name": "User typed remote path"
+    },
+    {
+      "feather_config_name": "AutomaticJumplist_CrowEyeFeather",
+      "feather_database_path": "feathers/AutomaticJumplist_CrowEyeFeather.db",
+      "artifact_type": "AutomaticJumplist",
+      "feather_id": "jumplist_auto",
+      "weight": 0.10,
+      "tier": 2,
+      "tier_name": "Remote-session destination history"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.10,
+      "tier": 3,
+      "tier_name": "Admin-share file drop"
+    }
+  ],
+
+  "time_window_minutes": 180,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "4624,4625,4648,4672,4776",
+  "apply_to": "all",
+  "anchor_priority": [
+    "SecurityLogs",
+    "Prefetch",
+    "LNK",
+    "TypedPaths",
+    "AutomaticJumplist",
+    "MFT"
+  ],
+  "use_weighted_scoring": true,
+
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed":  { "min": 0.70, "label": "Confirmed Lateral Movement" },
+      "probable":   { "min": 0.40, "label": "Probable Lateral Movement" },
+      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
+      "not_proven": { "min": 0.00, "label": "Not Proven" }
+    }
+  },
+
+  "semantic_rules": [
+    {
+      "rule_id": "lat_network_logon",
+      "name": "Network or RDP Logon (4624 type 3/10)",
+      "semantic_value": "Remote Authentication",
+      "description": "Successful network or RDP logon recorded in Security log — the canonical lateral-movement indicator",
+      "conditions": [
+        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4624" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "lateral_movement",
+      "severity": "high"
+    },
+    {
+      "rule_id": "lat_remote_tool_run",
+      "name": "Remote-Admin Tool Executed",
+      "semantic_value": "Remote Tool Run",
+      "description": "Prefetch evidence of a lateral-movement utility (psexec.exe, mstsc.exe, wmic.exe, winrs.exe, winrm.exe, rdpclip.exe, smbexec.exe, paexec.exe, etc.)",
+      "conditions": [
+        { "feather_id": "prefetch", "field_name": "executable_name", "operator": "regex", "value": "\\b(?:psexec|paexec|smbexec|wmic|winrs|winrm|mstsc|rdpclip|net1?\\.exe|sc\\.exe|reg\\.exe|wmiexec|atexec|crackmapexec|impacket)\\b" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "lateral_movement",
+      "severity": "high"
+    },
+    {
+      "rule_id": "lat_unc_artifact",
+      "name": "UNC Path in Shell Artifact (OR)",
+      "semantic_value": "UNC Path Reference",
+      "description": "LNK file or TypedPaths or JumpList entry pointing at \\\\server\\share",
+      "conditions": [
+        { "feather_id": "lnk",          "field_name": "target_path", "operator": "contains", "value": "\\\\" },
+        { "feather_id": "typedpaths",   "field_name": "typed_path",  "operator": "contains", "value": "\\\\" },
+        { "feather_id": "jumplist_auto","field_name": "path",        "operator": "contains", "value": "\\\\" }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "lateral_movement",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "lat_confirmed_remote_session",
+      "name": "Confirmed Remote Session (AND)",
+      "semantic_value": "Confirmed Remote Session",
+      "description": "Security log shows network/RDP logon AND a UNC-target artefact appears within the time window",
+      "conditions": [
+        { "feather_id": "security_logs", "field_name": "EventID",   "operator": "equals",  "value": "4624" },
+        { "feather_id": "lnk",           "field_name": "target_path","operator": "contains","value": "\\\\" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "lateral_movement",
+      "severity": "critical"
+    },
+    {
+      "rule_id": "lat_admin_share_drop",
+      "name": "File Dropped on Admin Share",
+      "semantic_value": "Admin Share File Drop",
+      "description": "MFT/USN shows file creation under an admin share path (C$, ADMIN$, IPC$)",
+      "conditions": [
+        { "feather_id": "mft_usn", "field_name": "path", "operator": "contains", "value": "$" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "lateral_movement",
+      "severity": "high"
+    }
+  ],
+
+  "tags": [
+    "lateral_movement",
+    "default",
+    "weighted",
+    "ir",
+    "apt"
+  ],
+  "case_types": [
+    "intrusion",
+    "apt",
+    "ransomware"
+  ]
+}

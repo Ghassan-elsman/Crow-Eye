@@ -15,15 +15,15 @@ class CorrelationMatch:
     
     # Match identification
     match_id: str
-    timestamp: str  # Central timestamp of the match
+    timestamp: str # Central timestamp of the match
     
     # Matched records from each feather
-    feather_records: Dict[str, Dict[str, Any]]  # feather_id -> record data
+    feather_records: Dict[str, Dict[str, Any]] # feather_id -> record data
     
     # Match quality
-    match_score: float  # 0.0 to 1.0
-    feather_count: int  # Number of feathers that matched
-    time_spread_seconds: float  # Time difference between earliest and latest
+    match_score: float # 0.0 to 1.0
+    feather_count: int # Number of feathers that matched
+    time_spread_seconds: float # Time difference between earliest and latest
     
     # Anchor information
     anchor_feather_id: str
@@ -35,21 +35,21 @@ class CorrelationMatch:
     matched_event_id: Optional[str] = None
     
     # Enhanced scoring metadata
-    score_breakdown: Optional[Dict[str, float]] = None  # coverage, time_proximity, field_similarity
-    confidence_score: Optional[float] = None  # 0.0 to 1.0
-    confidence_category: Optional[str] = None  # "High", "Medium", "Low"
-    weighted_score: Optional[Dict[str, Any]] = None  # Weighted scoring data (score, interpretation, breakdown)
+    score_breakdown: Optional[Dict[str, float]] = None # coverage, time_proximity, field_similarity
+    confidence_score: Optional[float] = None # 0.0 to 1.0
+    confidence_category: Optional[str] = None # "High", "Medium", "Low"
+    weighted_score: Optional[Dict[str, Any]] = None # Weighted scoring data (score, interpretation, breakdown)
     
     # Enhanced match metadata
-    time_deltas: Optional[Dict[str, float]] = None  # feather_id -> seconds from anchor
-    field_similarity_scores: Optional[Dict[str, float]] = None  # field -> similarity score
-    candidate_counts: Optional[Dict[str, int]] = None  # feather_id -> number of candidates evaluated
-    algorithm_version: str = "2.0"  # Correlation algorithm version
-    wing_config_hash: Optional[str] = None  # Hash of wing configuration
+    time_deltas: Optional[Dict[str, float]] = None # feather_id -> seconds from anchor
+    field_similarity_scores: Optional[Dict[str, float]] = None # field -> similarity score
+    candidate_counts: Optional[Dict[str, int]] = None # feather_id -> number of candidates evaluated
+    algorithm_version: str = "2.0" # Correlation algorithm version
+    wing_config_hash: Optional[str] = None # Hash of wing configuration
     
     # NEW: Duplicate tracking
     is_duplicate: bool = False
-    duplicate_info: Optional[Any] = None  # DuplicateInfo object
+    duplicate_info: Optional[Any] = None # DuplicateInfo object
     
     # NEW: Semantic mapping data
     semantic_data: Optional[Dict[str, Any]] = None
@@ -130,27 +130,27 @@ class CorrelationResult:
     total_matches: int = 0
     
     # Identity information (for Identity Semantic Phase)
-    identities: List[Any] = field(default_factory=list)  # List of identity records for semantic processing
+    identities: List[Any] = field(default_factory=list) # List of identity records for semantic processing
     
     # Statistics
     feathers_processed: int = 0
     total_records_scanned: int = 0
-    duplicates_prevented: int = 0  # Number of duplicate matches prevented
-    duplicates_by_feather: Dict[str, int] = field(default_factory=dict)  # NEW: Track duplicates per feather
-    matches_failed_validation: int = 0  # Number of matches that failed time window validation
+    duplicates_prevented: int = 0 # Number of duplicate matches prevented
+    duplicates_by_feather: Dict[str, int] = field(default_factory=dict) # NEW: Track duplicates per feather
+    matches_failed_validation: int = 0 # Number of matches that failed time window validation
     
     # Anchor information
     anchor_feather_id: str = ""
     anchor_selection_reason: str = ""
     
     # Filter statistics
-    filter_statistics: Dict[str, Dict[str, int]] = field(default_factory=dict)  # feather_id -> {before: X, after: Y}
+    filter_statistics: Dict[str, Dict[str, int]] = field(default_factory=dict) # feather_id -> {before: X, after: Y}
     
     # Feather metadata
-    feather_metadata: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # feather_id -> metadata
+    feather_metadata: Dict[str, Dict[str, Any]] = field(default_factory=dict) # feather_id -> metadata
     
     # Performance metrics
-    performance_metrics: Dict[str, Any] = field(default_factory=dict)  # timing, queries, memory
+    performance_metrics: Dict[str, Any] = field(default_factory=dict) # timing, queries, memory
     
     # Filters applied
     filters_applied: Dict[str, Any] = field(default_factory=dict)
@@ -161,12 +161,12 @@ class CorrelationResult:
     
     # Streaming mode - when True, matches are written to database instead of memory
     streaming_mode: bool = False
-    _db_writer: Any = None  # StreamingMatchWriter instance
-    _result_id: int = 0  # Database result_id for streaming
+    _db_writer: Any = None # StreamingMatchWriter instance
+    _result_id: int = 0 # Database result_id for streaming
     
     # Database information for Identity Semantic Phase (streaming mode support)
-    database_path: Optional[str] = None  # Path to correlation_results.db
-    execution_id: Optional[int] = None  # Execution ID for database queries
+    database_path: Optional[str] = None # Path to correlation_results.db
+    execution_id: Optional[int] = None # Execution ID for database queries
     
     def add_match(self, match: CorrelationMatch):
         """Add a correlation match - streams to database if in streaming mode"""
@@ -223,7 +223,7 @@ class CorrelationResult:
         if not self.matches and self.total_matches > 0:
             return {
                 'total_matches': self.total_matches,
-                'avg_score': 1.0,  # Identity matches are high confidence
+                'avg_score': 1.0, # Identity matches are high confidence
                 'avg_feather_count': 0.0,
                 'applications': [],
                 'execution_duration': round(self.execution_duration_seconds, 2),
@@ -271,7 +271,7 @@ class CorrelationResult:
             matches_truncated = True
         
         return {
-            'format_version': '2.0',  # Include format version for future compatibility
+            'format_version': '2.0', # Include format version for future compatibility
             'wing_id': self.wing_id,
             'wing_name': self.wing_name,
             'execution_time': self.execution_time,
@@ -301,10 +301,10 @@ class CorrelationResult:
         try:
             return json.dumps(self.to_dict(), indent=indent, default=str)
         except MemoryError:
-            # print(f"[CorrelationResult] MemoryError: Result too large for JSON string ({self.total_matches} matches)")
+            # logger.info(f"[CorrelationResult] MemoryError: Result too large for JSON string ({self.total_matches} matches)")
             raise
         except Exception as e:
-            # print(f"[CorrelationResult] Error in to_json: {e}")
+            # logger.info(f"[CorrelationResult] Error in to_json: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -323,7 +323,7 @@ class CorrelationResult:
         try:
             # For large result sets, save summary only to avoid memory issues
             if self.total_matches > max_matches_for_json:
-                # print(f"[CorrelationResult] Large result set ({self.total_matches:,} matches) - saving summary only")
+                # logger.info(f"[CorrelationResult] Large result set ({self.total_matches:,} matches) - saving summary only")
                 
                 # Create summary-only dict
                 summary_dict = {
@@ -351,20 +351,20 @@ class CorrelationResult:
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(summary_dict, f, indent=2, default=str)
                 
-                # print(f"[CorrelationResult] Saved summary to {file_path}")
+                # logger.info(f"[CorrelationResult] Saved summary to {file_path}")
             else:
                 # Normal save for smaller result sets
                 json_content = self.to_json()
                 if not json_content:
-                    # print(f"[CorrelationResult] Warning: to_json returned empty content")
+                    # logger.info(f"[CorrelationResult] Warning: to_json returned empty content")
                     pass
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(json_content)
-                # print(f"[CorrelationResult] Saved {len(json_content)} bytes to {file_path}")
+                # logger.info(f"[CorrelationResult] Saved {len(json_content)} bytes to {file_path}")
                 
         except MemoryError:
             # Fallback: save summary only on memory error
-            # print(f"[CorrelationResult] MemoryError - falling back to summary-only save")
+            # logger.info(f"[CorrelationResult] MemoryError - falling back to summary-only save")
             summary_dict = {
                 'wing_id': self.wing_id,
                 'wing_name': self.wing_name,
@@ -377,10 +377,10 @@ class CorrelationResult:
             }
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(summary_dict, f, indent=2, default=str)
-            # print(f"[CorrelationResult] Saved fallback summary to {file_path}")
+            # logger.info(f"[CorrelationResult] Saved fallback summary to {file_path}")
             
         except Exception as e:
-            # print(f"[CorrelationResult] Error saving to file {file_path}: {e}")
+            # logger.info(f"[CorrelationResult] Error saving to file {file_path}: {e}")
             import traceback
             traceback.print_exc()
             raise

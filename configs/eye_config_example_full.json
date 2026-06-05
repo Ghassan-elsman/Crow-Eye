@@ -4,13 +4,16 @@
   "model_name": "gpt-4",
   "last_validated": "2025-01-15T10:30:45.123Z",
   "context_window": {
-    "max_total_tokens": 32000,
+    "max_total_tokens": 64000,
+    "lock_max_total_tokens": false,
+    "max_tool_output_chars": 100000,
+    "store_full_payload": true,
+    "sealed_payload_recent_uncompressed": 10,
     "token_budget": {
+      "conversation_history": 8000,
       "system_prompt": 4000,
       "rag_context": 2000,
-      "conversation_history": 8000,
-      "tool_definitions": 2000,
-      "response_buffer": 4000
+      "tool_results": 4000
     },
     "history_management": {
       "sliding_window_size": 5,
@@ -19,15 +22,7 @@
       "truncation_strategy": "sliding_window"
     },
     "evidence_preservation": {
-      "enabled": true,
-      "confidence_threshold": 0.7,
-      "max_pinned_messages": 10,
-      "auto_detect_evidence": true
-    },
-    "audit_trail": {
-      "enabled": true,
-      "buffer_size": 10,
-      "export_format": "text"
+      "confidence_threshold": 0.7
     }
   }
 }

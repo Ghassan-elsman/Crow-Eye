@@ -37,7 +37,7 @@ class IdentityCorrelationEngine:
             debug_mode: Enable debug logging
         """
         self.debug_mode = debug_mode
-        self.identity_index: Dict[str, Identity] = {}  # Hash index for O(1) lookup
+        self.identity_index: Dict[str, Identity] = {} # Hash index for O(1) lookup
         
         # Initialize identity validator for filtering invalid values
         # Requirements: 1.1, 1.2, 1.5, 1.6
@@ -52,19 +52,19 @@ class IdentityCorrelationEngine:
         # ENHANCED: More comprehensive field patterns for better identity extraction
         self.name_field_patterns = [
             # Primary application/executable names
-            'executable_name',      # Prefetch: AESM_SERVICE.EXE
-            'app_name',             # SRUM: System, chrome.exe
-            'application',          # LastSaveMRU: Sourcetrail.exe
-            'name',                 # InventoryApplication: Microsoft.Windows.PrintQueueActionCenter
-            'file_name',            # ShellBags, MFT: fn_filename
-            'fn_filename',          # MFT: $MFT, file.exe
-            'filename',             # Prefetch, ShimCache
-            'Source_Name',          # LNK/Jumplist: WinRAR.lnk
-            'original_filename',    # RecycleBin: MFT_Claw.py
-            'program_name',         # AutoStartPrograms: SecurityHealth
-            'display_name',         # InstalledSoftware: 7-Zip 23.01 (x64)
-            'product_name',         # InventoryApplicationFile: microsoft® windows® operating system
-            'Source',               # Event Logs: Microsoft-Windows-Security-Auditing
+            'executable_name', # Prefetch: AESM_SERVICE.EXE
+            'app_name', # SRUM: System, chrome.exe
+            'application', # LastSaveMRU: Sourcetrail.exe
+            'name', # InventoryApplication: Microsoft.Windows.PrintQueueActionCenter
+            'file_name', # ShellBags, MFT: fn_filename
+            'fn_filename', # MFT: $MFT, file.exe
+            'filename', # Prefetch, ShimCache
+            'Source_Name', # LNK/Jumplist: WinRAR.lnk
+            'original_filename', # RecycleBin: MFT_Claw.py
+            'program_name', # AutoStartPrograms: SecurityHealth
+            'display_name', # InstalledSoftware: 7-Zip 23.01 (x64)
+            'product_name', # InventoryApplicationFile: microsoft® windows® operating system
+            'Source', # Event Logs: Microsoft-Windows-Security-Auditing
             # AmCache specific
             'FileName', 'Name', 'ProductName', 'FileDescription',
             'OriginalFileName', 'InternalName', 'CompanyName',
@@ -85,19 +85,19 @@ class IdentityCorrelationEngine:
         
         self.path_field_patterns = [
             # Primary path fields
-            'app_path',             # SRUM: System, C:\Program Files\...
-            'Local_Path',           # LNK/Jumplist: C:\Program Files (x86)\WinRAR\WinRAR.exe
-            'path',                 # ShimCache, generic
-            'file_path',            # OpenSaveMRU: Cases\20 Dec\Correlation\wings\test 2 Dec 20.json
-            'original_path',        # RecycleBin: C:\Crow-Eye-Crow-Eye\...
-            'reconstructed_path',   # MFT: [Unknown], C:\Windows\...
+            'app_path', # SRUM: System, C:\Program Files\...
+            'Local_Path', # LNK/Jumplist: C:\Program Files (x86)\WinRAR\WinRAR.exe
+            'path', # ShimCache, generic
+            'file_path', # OpenSaveMRU: Cases\20 Dec\Correlation\wings\test 2 Dec 20.json
+            'original_path', # RecycleBin: C:\Crow-Eye-Crow-Eye\...
+            'reconstructed_path', # MFT: [Unknown], C:\Windows\...
             'lower_case_long_path', # InventoryApplicationFile: c:\program files (x86)\...
-            'install_location',     # InstalledSoftware: C:\Program Files\7-Zip\
-            'root_dir_path',        # InventoryApplication: C:\Windows\SystemApps\...
-            'ShortcutTargetPath',   # InventoryApplicationShortcut: C:\Program Files (x86)\7-Zip\7zFM.exe
-            'Source_Path',          # LNK/Jumplist: C:\Users\...\AppData\Roaming\...
-            'folder_path',          # LastSaveMRU: Crow-Eye-master2\Crow-Eye-master
-            'registry_path',        # ShellBags: Software\Classes\Local Settings\...
+            'install_location', # InstalledSoftware: C:\Program Files\7-Zip\
+            'root_dir_path', # InventoryApplication: C:\Windows\SystemApps\...
+            'ShortcutTargetPath', # InventoryApplicationShortcut: C:\Program Files (x86)\7-Zip\7zFM.exe
+            'Source_Path', # LNK/Jumplist: C:\Users\...\AppData\Roaming\...
+            'folder_path', # LastSaveMRU: Crow-Eye-master2\Crow-Eye-master
+            'registry_path', # ShellBags: Software\Classes\Local Settings\...
             # AmCache specific
             'FullPath', 'Path', 'FilePath', 'LowerCaseLongPath',
             'LinkDate', 'BinaryType',
@@ -119,8 +119,8 @@ class IdentityCorrelationEngine:
         ]
         
         self.hash_field_patterns = [
-            'hash',                 # Prefetch: D648B59E
-            'entry_hash',           # ShimCache: b376b1d9843f2a458ceb5fdbde1360e6
+            'hash', # Prefetch: D648B59E
+            'entry_hash', # ShimCache: b376b1d9843f2a458ceb5fdbde1360e6
             'md5', 'sha1', 'sha256', 'file_hash', 'executable_hash',
             'sha256_hash', 'md5_hash', 'sha1_hash',
             # AmCache specific
@@ -130,49 +130,41 @@ class IdentityCorrelationEngine:
             'pe_hash', 'imphash', 'ImpHash', 'authenticode_hash'
         ]
         
-        # Timestamp field patterns for evidence extraction
-        # ENHANCED: More timestamp fields for better temporal correlation
-        self.timestamp_field_patterns = [
-            'timestamp',            # SRUM: 2025-10-22T08:19:00
-            'last_executed',        # Prefetch: 2025-12-21 04:37:18
-            'EventTimestampUTC',    # Event Logs: 2025-12-21 07:35:53
-            'Time_Access',          # LNK/Jumplist: 2025-12-15 18:36:30
-            'Time_Creation',        # LNK/Jumplist: 2025-12-14 23:22:04
-            'Time_Modification',    # LNK/Jumplist: 2025-12-15 18:13:28
-            'deletion_time',        # RecycleBin: 2025-09-30T23:11:44.990000
-            'si_creation_time',     # MFT
-            'si_modification_time', # MFT
-            'usn_timestamp',        # MFT/USN
-            'created_date',         # ShellBags
-            'modified_date',        # ShellBags
-            'accessed_date',        # ShellBags
-            'access_date',          # OpenSaveMRU, LastSaveMRU
-            'install_date',         # InstalledSoftware, InventoryApplication
-            'last_modified',        # ShimCache
-            'parsed_at',            # InventoryApplication
-            'created_on',           # Prefetch
-            'modified_on',          # Prefetch
-            'accessed_on',          # Prefetch
-            # AmCache specific
-            'FileKeyLastWriteTimestamp', 'LinkDate', 'LastModified',
-            'LastModified2', 'CompileTime', 'Created', 'Modified',
-            # UserAssist specific
-            'last_run', 'LastRun', 'last_execution', 'LastExecution',
-            'focus_time', 'FocusTime', 'run_counter',
-            # BAM/DAM specific
-            'execution_time', 'ExecutionTime',
-            # Services specific
-            'start_time', 'StartTime', 'stop_time', 'StopTime',
-            # Tasks specific
-            'last_run_time', 'LastRunTime', 'next_run_time',
-            # Network specific
-            'connection_time', 'ConnectionTime',
-            # Generic
-            'datetime', 'DateTime', 'date', 'Date', 'time', 'Time',
-            'created', 'modified', 'accessed', 'executed',
-            'CreatedDate', 'ModifiedDate', 'AccessedDate',
-            'creation_time', 'modification_time', 'access_time'
-        ]
+        # Timestamp field patterns — sourced from the canonical
+        # timestamps.json registry. `priority='real_first'` puts real
+        # observation timestamps (event_time, last_executed, creation
+        # times) ahead of parser bookkeeping. We then filter
+        # bookkeeping fields out entirely: parsed_at / parsed_timestamp
+        # / inserted_at / created_at record WHEN THE FEATHER WAS
+        # GENERATED rather than when the artifact was observed.
+        # Including them as a fallback would assign a misleading
+        # observation moment to timeless-feather records (every row
+        # would land in the window containing the feather-gen date).
+        # Exact-match against the bookkeeping list — not a suffix
+        # match — so unrelated columns happening to end in "_at" stay.
+        _BOOKKEEPING_FIELDS = {
+            'parsed_at', 'parsed_timestamp',
+            'inserted_at', 'created_at',
+        }
+        try:
+            from utils.standard_fields import StandardFields as _SF
+            _all = list(_SF.all_timestamp_fields(priority='real_first'))
+            self.timestamp_field_patterns = [
+                f for f in _all if f.lower() not in _BOOKKEEPING_FIELDS
+            ]
+        except Exception:
+            # Defensive fallback for environments where the registry
+            # isn't importable (test harnesses, packaged tools without
+            # the config dir). Real per-row event-time fields only,
+            # no bookkeeping suffixes.
+            self.timestamp_field_patterns = [
+                'timestamp', 'event_time', 'last_executed', 'last_execution',
+                'EventTimestampUTC', 'usn_timestamp', 'deletion_time',
+                'install_date', 'link_date', 'last_modified',
+                'si_creation_time', 'si_modification_time',
+                'created_time', 'modified_time', 'accessed_time',
+                'created_on', 'modified_on', 'accessed_on',
+            ]
         
         # Artifact-specific field mappings (checked FIRST before generic patterns)
         # ENHANCED: More comprehensive mappings for each artifact type
@@ -187,15 +179,117 @@ class IdentityCorrelationEngine:
                 'path': ['app_path', 'ExePath', 'AppPath', 'ApplicationPath'],
                 'hash': []
             },
+            # EventLogs identity priority: prefer the actual entity
+            # being audited (user, process) over the event-channel
+            # metadata. With the previous order (Source / Provider /
+            # Channel first) every Security log record collapsed to
+            # "Microsoft-Windows-Security-Auditing" — useless for
+            # cross-feather correlation. Now the engine extracts:
+            # 1. NewProcessName / TargetFilename / Image — the process
+            # executed (4688) or file accessed (4663)
+            # 2. TargetUserName / SubjectUserName — the user
+            # authenticated or acted-upon (4624 / 4625 / 4672)
+            # 3. ProcessName — generic
+            # 4. Provider / Source / Channel — last-resort metadata
+            # The path list keeps process/file paths for impersonation
+            # detection downstream.
             'EventLogs': {
-                'name': ['Source', 'Provider', 'ProviderName', 'source_name', 'Channel', 'EventSource'],
+                'name': [
+                    # Real entity being audited (process for 4688/4663,
+                    # user for 4624/4625/4672, etc.)
+                    'NewProcessName', 'new_process_name',
+                    'TargetFilename', 'target_filename',
+                    'Image', 'image',
+                    'ProcessName', 'process_name',
+                    'TargetUserName', 'target_user_name',
+                    'SubjectUserName', 'subject_user_name',
+                    # Generic name fallbacks
+                    'executable_name', 'filename', 'file_name', 'name', 'Name',
+                    # Last-resort: channel / provider metadata
+                    'Source', 'Provider', 'ProviderName',
+                    'source_name', 'Channel', 'EventSource',
+                ],
                 'path': ['ProcessName', 'Image', 'CommandLine', 'TargetFilename', 'NewProcessName', 'ParentProcessName'],
                 'hash': ['Hashes', 'FileHash']
             },
             'Event Logs': {
-                'name': ['Source', 'Provider', 'ProviderName', 'source_name', 'Channel', 'EventSource'],
+                'name': [
+                    'NewProcessName', 'new_process_name',
+                    'TargetFilename', 'target_filename',
+                    'Image', 'image',
+                    'ProcessName', 'process_name',
+                    'TargetUserName', 'target_user_name',
+                    'SubjectUserName', 'subject_user_name',
+                    'executable_name', 'filename', 'file_name', 'name', 'Name',
+                    'Source', 'Provider', 'ProviderName',
+                    'source_name', 'Channel', 'EventSource',
+                ],
                 'path': ['ProcessName', 'Image', 'CommandLine', 'TargetFilename', 'NewProcessName', 'ParentProcessName'],
                 'hash': ['Hashes', 'FileHash']
+            },
+            # Three concrete log feathers — same priority as EventLogs.
+            # Without explicit entries the engine would fall through to
+            # the generic patterns and pick whatever field happened to
+            # come first; explicit mappings make the choice deterministic.
+            # Real per-row columns in the user's case feathers (verified
+            # via SELECT * FROM SecurityLogs LIMIT 1):
+            # EventID / Source / EventType / Category /
+            # EventTimestampUTC / ComputerName / User / Keywords /
+            # TaskCategory / EventDescription
+            # — note the flattened columns are 'User' and 'ComputerName',
+            # not the raw 'TargetUserName' / 'SubjectUserName' you'd see
+            # in unprocessed event XML. Priority puts the per-row entity
+            # (User) first; Computer second; raw event fields kept as
+            # fallback in case a different parser flavor lands here.
+            'SecurityLogs': {
+                'name': [
+                    # Per-row entity in the user's feather schema
+                    'User', 'user',
+                    'ComputerName', 'computername', 'computer_name',
+                    # Raw Windows-event-log column names (alternate parsers)
+                    'NewProcessName', 'new_process_name',
+                    'TargetFilename', 'target_filename',
+                    'Image', 'image',
+                    'ProcessName', 'process_name',
+                    'TargetUserName', 'target_user_name',
+                    'SubjectUserName', 'subject_user_name',
+                    # Generic name fallbacks
+                    'executable_name', 'filename', 'file_name', 'name', 'Name',
+                    # Last-resort: channel / provider metadata. By the
+                    # time we reach this, the record had no real entity
+                    # name available.
+                    'Source', 'Provider', 'ProviderName', 'Channel',
+                ],
+                'path': ['ProcessName', 'Image', 'CommandLine', 'TargetFilename', 'NewProcessName', 'ParentProcessName'],
+                'hash': ['Hashes', 'FileHash']
+            },
+            'SystemLogs': {
+                'name': [
+                    'User', 'user',
+                    'ComputerName', 'computername', 'computer_name',
+                    'NewProcessName', 'new_process_name',
+                    'Image', 'image',
+                    'ProcessName', 'process_name',
+                    'service_name', 'ServiceName',
+                    'driver_name', 'DriverName',
+                    'executable_name', 'filename', 'file_name', 'name', 'Name',
+                    'Source', 'Provider', 'ProviderName', 'Channel',
+                ],
+                'path': ['ProcessName', 'Image', 'CommandLine', 'TargetFilename', 'ImagePath'],
+                'hash': []
+            },
+            'ApplicationLogs': {
+                'name': [
+                    'User', 'user',
+                    'ComputerName', 'computername', 'computer_name',
+                    'ProcessName', 'process_name',
+                    'Image', 'image',
+                    'executable_name', 'filename', 'file_name', 'name', 'Name',
+                    'app_name', 'application_name',
+                    'Source', 'Provider', 'ProviderName', 'Channel',
+                ],
+                'path': ['ProcessName', 'Image', 'CommandLine', 'TargetFilename'],
+                'hash': []
             },
             'LNK': {
                 'name': ['Source_Name', 'name', 'filename', 'lnk_name', 'SourceName', 'LinkName'],
@@ -384,12 +478,12 @@ class IdentityCorrelationEngine:
                     }
                     
                     if self.debug_mode:
-                        print(f"[Identity Engine] Loaded metadata for {metadata.get('feather_id', 'unknown')}: "
+                        logger.info(f"[Identity Engine] Loaded metadata for {metadata.get('feather_id', 'unknown')}: "
                               f"app_col={metadata.get('application_column')}, "
                               f"path_col={metadata.get('path_column')}")
         except Exception as e:
             if self.debug_mode:
-                print(f"[Identity Engine] Could not load metadata from {json_path}: {e}")
+                logger.info(f"[Identity Engine] Could not load metadata from {json_path}: {e}")
         
         # Cache the result (even if empty)
         self.feather_metadata_cache[cache_key] = metadata
@@ -424,30 +518,30 @@ class IdentityCorrelationEngine:
         
         # Pattern 1: Date suffix (DD.MM.YYYY, YYYY-MM-DD, YYYYMMDD, DD-MM-YYYY)
         date_patterns = [
-            r'[-_]?\d{2}\.\d{2}\.\d{4}$',  # 23.09.2024, _23.09.2024
-            r'[-_]?\d{4}-\d{2}-\d{2}$',    # 2024-09-23, _2024-09-23
-            r'[-_]?\d{2}-\d{2}-\d{4}$',    # 23-09-2024, _23-09-2024
-            r'[-_]?\d{8}$',                 # 20240923, _20240923
+            r'[-_]?\d{2}\.\d{2}\.\d{4}$', # 23.09.2024, _23.09.2024
+            r'[-_]?\d{4}-\d{2}-\d{2}$', # 2024-09-23, _2024-09-23
+            r'[-_]?\d{2}-\d{2}-\d{4}$', # 23-09-2024, _23-09-2024
+            r'[-_]?\d{8}$', # 20240923, _20240923
         ]
         
         # Pattern 2: Version suffix (v1.0, v2.3.1, _v1, Build 20240613)
         version_patterns = [
-            r'[-_]?v?\d+\.\d+(\.\d+)?$',   # v1.0, v2.3.1, 1.0, _1.0
-            r'[-_]v\d+$',                   # _v1, -v2
-            r'\s+Build\s+\d+$',             # Build 20240613
+            r'[-_]?v?\d+\.\d+(\.\d+)?$', # v1.0, v2.3.1, 1.0, _1.0
+            r'[-_]v\d+$', # _v1, -v2
+            r'\s+Build\s+\d+$', # Build 20240613
         ]
         
         # Pattern 3: Number suffix (_1, _2, (1), (2), - Copy, - Copy (2))
         number_patterns = [
-            r'[-_]\d+$',                    # _1, -2
-            r'\s*\(\d+\)$',                 # (1), (2), " (1)"
-            r'\s*-\s*Copy(\s*\(\d+\))?$',  # - Copy, - Copy (2)
+            r'[-_]\d+$', # _1, -2
+            r'\s*\(\d+\)$', # (1), (2), " (1)"
+            r'\s*-\s*Copy(\s*\(\d+\))?$', # - Copy, - Copy (2)
         ]
         
         # Pattern 4: x64, x86 suffixes
         arch_patterns = [
-            r'\s+x64$',                     # x64
-            r'\s+x86$',                     # x86
+            r'\s+x64$', # x64
+            r'\s+x86$', # x86
         ]
         
         # Try each pattern in order
@@ -474,66 +568,62 @@ class IdentityCorrelationEngine:
         base_name_cleaned = re.sub(r'\s+', ' ', base_name_cleaned).strip()
         
         if self.debug_mode and (suffix or base_name != base_name_cleaned):
-            print(f"[Identity Normalization] '{name}' -> base='{base_name_cleaned}', suffix='{suffix}'")
+            logger.info(f"[Identity Normalization] '{name}' -> base='{base_name_cleaned}', suffix='{suffix}'")
         
         return base_name_cleaned, suffix
     
     def normalize_identity_key(self, name: str = "", path: str = "", hash_value: str = "") -> str:
         """
         Normalize identity information into a composite key for grouping.
-        
-        ENHANCED NORMALIZATION for better grouping:
-        - Removes ALL spaces, hyphens, underscores, dots
-        - Converts to lowercase
-        - Removes version/date suffixes
-        - Groups similar identities: "Chrome.exe", "chrome.exe", "CHROME_EXE", "chrome-exe" -> same group
-        
-        The original name is preserved separately for display purposes.
-        
+
+        Name-only grouping via the canonical ``identity_grouping.identity_key``
+        helper. Path and hash are deliberately NOT part of the primary key
+        because different feathers normalize paths differently (Prefetch
+        omits path, BAM uses ``/device/harddiskvolume3/...``, LNK uses
+        ``c:/users/...``, MFT uses 8.3 short paths, etc.) — including
+        path in the key splits the same application across feathers and
+        kills cross-feather correlation.
+
+        Path-based impersonation detection (chrome.exe in C:\\Temp vs
+        the real one in C:\\Program Files) is handled separately, after
+        matches are formed, by walking each match's feather_records and
+        flagging mixed trusted-vs-suspicious paths in semantic_data.
+
+        The composite return value keeps three pipe-separated slots for
+        downstream code that splits on ``|`` but path/hash are blank:
+        ``"normalized_name||"``.
+
         Args:
-            name: Application or file name
-            path: File path
-            hash_value: File hash (MD5, SHA1, SHA256)
-        
+            name: Application or file name (used)
+            path: File path (kept for API back-compat; not in the key)
+            hash_value: File hash (kept for API back-compat; not in the key)
+
         Returns:
-            Normalized composite key in format: "normalized_name|path|hash"
-        
-        Requirements: 1.2, 5.1
+            Normalized composite key.
         """
-        import re
-        
-        # ENHANCEMENT: Aggressive normalization for grouping
-        if name:
-            # Step 1: Remove version/date suffixes using existing logic
-            base_name, suffix = self.normalize_identity_name(name)
-            
-            # Step 2: Aggressive normalization for comparison
-            # Remove ALL spaces, hyphens, underscores, dots, and special characters
-            normalized_name = base_name.lower()
-            normalized_name = re.sub(r'[\s\-_\.\(\)\[\]]+', '', normalized_name)
-            # Remove any remaining special characters except alphanumeric
-            normalized_name = re.sub(r'[^a-z0-9]', '', normalized_name)
-            normalized_name = normalized_name.strip()
-        else:
-            normalized_name = ""
+        from .identity_grouping import identity_key as _identity_key
+
+        # Canonical heavy normalization for the name component. Returns
+        # an empty string for empty/whitespace input; preserves version
+        # qualifiers ("chrome v1" / "chrome v2" stay distinct) while
+        # collapsing pure case / extension / spacing variation.
+        normalized_name = _identity_key(name) if name else ""
         
         # Normalize path: forward slashes, lowercase, strip whitespace
         normalized_path = ""
-        if path:
-            normalized_path = path.replace("\\", "/").lower().strip()
-            # Remove trailing slashes
-            normalized_path = normalized_path.rstrip("/")
-        
-        # Normalize hash: lowercase, strip whitespace
-        normalized_hash = hash_value.lower().strip() if hash_value else ""
-        
+        # Path / hash slots intentionally blank — they're not in the
+        # primary grouping key (see docstring). Kept in the composite
+        # shape for back-compat with code that splits on "|".
+        normalized_path = ""
+        normalized_hash = ""
+
         # Create composite key
         # Use pipe separator to avoid conflicts with path separators
         composite_key = f"{normalized_name}|{normalized_path}|{normalized_hash}"
-        
+
         if self.debug_mode:
-            print(f"[DEBUG] Normalized identity: name='{normalized_name}' (from '{name}'), path='{normalized_path}', hash='{normalized_hash}'")
-        
+            logger.info(f"[DEBUG] Normalized identity: name='{normalized_name}' (from '{name}'), path-not-in-key='{path}', hash-not-in-key='{hash_value}'")
+
         return composite_key
     
     def extract_identity_info(self, record: Dict[str, Any], feather_metadata: Dict[str, str] = None) -> Tuple[str, str, str, str]:
@@ -562,7 +652,7 @@ class IdentityCorrelationEngine:
         Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8
         """
         # Track extraction attempts for validation logging
-        extraction_attempts = []  # List of (field_name, value, is_valid, reason)
+        extraction_attempts = [] # List of (field_name, value, is_valid, reason)
         
         name = ""
         path = ""
@@ -583,9 +673,9 @@ class IdentityCorrelationEngine:
                 if is_valid:
                     name = extracted_value
                     if self.debug_mode:
-                        print(f"[Identity Engine] [OK] Used feather metadata: app_col='{app_col}' -> '{name[:50]}'")
+                        logger.info(f"[Identity Engine] [OK] Used feather metadata: app_col='{app_col}' -> '{name[:50]}'")
                 elif self.debug_mode:
-                    print(f"[Identity Engine] [WARN] Feather metadata field '{app_col}' rejected: '{extracted_value}' (reason: {reason})")
+                    logger.info(f"[Identity Engine] [WARN] Feather metadata field '{app_col}' rejected: '{extracted_value}' (reason: {reason})")
             
             # Extract from path_column if specified
             if path_col and path_col in record and record[path_col]:
@@ -596,13 +686,22 @@ class IdentityCorrelationEngine:
                 if is_valid:
                     path = extracted_value
                     if self.debug_mode:
-                        print(f"[Identity Engine] [OK] Used feather metadata: path_col='{path_col}' -> '{path[:50]}'")
+                        logger.info(f"[Identity Engine] [OK] Used feather metadata: path_col='{path_col}' -> '{path[:50]}'")
                 elif self.debug_mode:
-                    print(f"[Identity Engine] [WARN] Feather metadata field '{path_col}' rejected: '{extracted_value}' (reason: {reason})")
+                    logger.info(f"[Identity Engine] [WARN] Feather metadata field '{path_col}' rejected: '{extracted_value}' (reason: {reason})")
         
-        # Get artifact type from record (normalize spaces and case variations)
+        # Get artifact type. Records rarely carry an 'artifact' column
+        # directly (parsers don't stamp it), so we fall back to the
+        # feather_metadata's artifact_type — the metadata that the
+        # feather generator wrote at build time. Without this fallback
+        # the artifact-specific mappings never fire and every log
+        # record falls through to the generic walker, which picks
+        # 'Source' / 'Provider' (channel-level metadata) instead of
+        # the actual entity being audited.
         artifact_type = record.get('artifact', '')
-        artifact_type_normalized = artifact_type.replace(' ', '')
+        if not artifact_type and feather_metadata:
+            artifact_type = feather_metadata.get('artifact_type', '') or ''
+        artifact_type_normalized = str(artifact_type).replace(' ', '')
         
         # Build lowercase key map for case-insensitive lookup
         record_keys_lower = {k.lower(): k for k in record.keys()}
@@ -624,7 +723,7 @@ class IdentityCorrelationEngine:
                         name = extracted_value
                         break
                     elif self.debug_mode:
-                        print(f"[Identity Engine] ⚠️ Rejected field '{field}': '{extracted_value}' (reason: {reason})")
+                        logger.info(f"[Identity Engine] [WARN] Rejected field '{field}': '{extracted_value}' (reason: {reason})")
                     continue
                     
                 # Try case-insensitive match
@@ -639,7 +738,7 @@ class IdentityCorrelationEngine:
                             name = extracted_value
                             break
                         elif self.debug_mode:
-                            print(f"[Identity Engine] ⚠️ Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
+                            logger.info(f"[Identity Engine] [WARN] Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
             
             # Extract path using artifact-specific fields
             for field in mapping.get('path', []):
@@ -652,7 +751,7 @@ class IdentityCorrelationEngine:
                         path = extracted_value
                         break
                     elif self.debug_mode:
-                        print(f"[Identity Engine] ⚠️ Rejected field '{field}': '{extracted_value}' (reason: {reason})")
+                        logger.info(f"[Identity Engine] [WARN] Rejected field '{field}': '{extracted_value}' (reason: {reason})")
                     continue
                     
                 if field.lower() in record_keys_lower:
@@ -666,7 +765,7 @@ class IdentityCorrelationEngine:
                             path = extracted_value
                             break
                         elif self.debug_mode:
-                            print(f"[Identity Engine] ⚠️ Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
+                            logger.info(f"[Identity Engine] [WARN] Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
             
             # Extract hash using artifact-specific fields
             for field in mapping.get('hash', []):
@@ -679,7 +778,7 @@ class IdentityCorrelationEngine:
                         hash_value = extracted_value
                         break
                     elif self.debug_mode:
-                        print(f"[Identity Engine] ⚠️ Rejected field '{field}': '{extracted_value}' (reason: {reason})")
+                        logger.info(f"[Identity Engine] [WARN] Rejected field '{field}': '{extracted_value}' (reason: {reason})")
                     continue
                     
                 if field.lower() in record_keys_lower:
@@ -693,7 +792,7 @@ class IdentityCorrelationEngine:
                             hash_value = extracted_value
                             break
                         elif self.debug_mode:
-                            print(f"[Identity Engine] ⚠️ Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
+                            logger.info(f"[Identity Engine] [WARN] Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
         
         # STEP 2: Fall back to generic patterns with prioritization
         # Requirements: 8.5 - Prioritize fields in order
@@ -736,7 +835,7 @@ class IdentityCorrelationEngine:
                 log_filtered=self.debug_mode
             )
             if validated_name is None:
-                name = ""  # Clear invalid name
+                name = "" # Clear invalid name
         
         if path:
             validated_path = self.identity_validator.validate_and_filter(
@@ -744,7 +843,7 @@ class IdentityCorrelationEngine:
                 log_filtered=self.debug_mode
             )
             if validated_path is None:
-                path = ""  # Clear invalid path
+                path = "" # Clear invalid path
         
         if hash_value:
             validated_hash = self.identity_validator.validate_and_filter(
@@ -752,7 +851,7 @@ class IdentityCorrelationEngine:
                 log_filtered=self.debug_mode
             )
             if validated_hash is None:
-                hash_value = ""  # Clear invalid hash
+                hash_value = "" # Clear invalid hash
         
         # STEP 7: Check if all fields are invalid - skip record
         # Requirements: 8.6 - Skip records with all-invalid fields
@@ -760,12 +859,12 @@ class IdentityCorrelationEngine:
             # Log validation failure with field details
             # Requirements: 8.8 - Validation logging with field names and reasons
             if self.debug_mode:
-                print(f"[Identity Engine] ⚠️ Skipped record: No valid identity fields")
-                print(f"    Artifact: {artifact_type}")
-                print(f"    Extraction attempts:")
-                for field_name, value, is_valid, reason in extraction_attempts[:5]:  # Show first 5
-                    status = "✓" if is_valid else "✗"
-                    print(f"      {status} {field_name}: '{value[:50]}...' {f'({reason})' if not is_valid else ''}")
+                logger.info(f"[Identity Engine] [WARN] Skipped record: No valid identity fields")
+                logger.info(f" Artifact: {artifact_type}")
+                logger.info(f" Extraction attempts:")
+                for field_name, value, is_valid, reason in extraction_attempts[:5]: # Show first 5
+                    status = "[OK]" if is_valid else "[FAIL]"
+                    logger.info(f" {status} {field_name}: '{value[:50]}...' {f'({reason})' if not is_valid else ''}")
             
             # Return empty values to signal skip
             return "", "", "", "name"
@@ -774,7 +873,7 @@ class IdentityCorrelationEngine:
         identity_type = self._determine_identity_type(name, path, hash_value)
         
         if self.debug_mode:
-            print(f"[DEBUG] Extracted identity: name='{name}', path='{path}', hash='{hash_value}', type='{identity_type}' (artifact={artifact_type})")
+            logger.info(f"[DEBUG] Extracted identity: name='{name}', path='{path}', hash='{hash_value}', type='{identity_type}' (artifact={artifact_type})")
         
         return name, path, hash_value, identity_type
     
@@ -887,7 +986,7 @@ class IdentityCorrelationEngine:
                 if is_valid:
                     return extracted_value
                 elif self.debug_mode:
-                    print(f"[Identity Engine] ⚠️ Rejected field '{field_pattern}': '{extracted_value}' (reason: {reason})")
+                    logger.info(f"[Identity Engine] [WARN] Rejected field '{field_pattern}': '{extracted_value}' (reason: {reason})")
                 continue
                 
             # Try case-insensitive match
@@ -901,7 +1000,7 @@ class IdentityCorrelationEngine:
                     if is_valid:
                         return extracted_value
                     elif self.debug_mode:
-                        print(f"[Identity Engine] ⚠️ Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
+                        logger.info(f"[Identity Engine] [WARN] Rejected field '{actual_key}': '{extracted_value}' (reason: {reason})")
         
         return ""
     
@@ -968,14 +1067,14 @@ class IdentityCorrelationEngine:
         # - Common argument patterns
         
         indicators = [
-            ' -',      # Unix-style flags
-            ' /',      # Windows-style flags
-            ' --',     # Long flags
-            '" "',     # Multiple quoted sections
-            '.exe ',   # Executable with arguments
-            '.bat ',   # Batch file with arguments
-            '.cmd ',   # Command file with arguments
-            '.ps1 ',   # PowerShell script with arguments
+            ' -', # Unix-style flags
+            ' /', # Windows-style flags
+            ' --', # Long flags
+            '" "', # Multiple quoted sections
+            '.exe ', # Executable with arguments
+            '.bat ', # Batch file with arguments
+            '.cmd ', # Command file with arguments
+            '.ps1 ', # PowerShell script with arguments
         ]
         
         return any(indicator in path for indicator in indicators)
@@ -1043,7 +1142,7 @@ class IdentityCorrelationEngine:
         elif has_name or has_path:
             return "composite"
         else:
-            return "name"  # Default fallback
+            return "name" # Default fallback
     
     def get_or_create_identity(self, record: Dict[str, Any]) -> Identity:
         """
@@ -1072,7 +1171,7 @@ class IdentityCorrelationEngine:
         # Create new identity
         identity = Identity(
             identity_type=identity_type,
-            identity_value=path if path else name,  # Prefer path over name
+            identity_value=path if path else name, # Prefer path over name
             primary_name=name,
             normalized_name=self.normalize_identity_key(name, "", ""),
             confidence=1.0,
@@ -1083,7 +1182,7 @@ class IdentityCorrelationEngine:
         self.identity_index[identity_key] = identity
         
         if self.debug_mode:
-            print(f"[DEBUG] Created new identity: {identity.identity_id} (key={identity_key})")
+            logger.info(f"[DEBUG] Created new identity: {identity.identity_id} (key={identity_key})")
         
         return identity
     
@@ -1171,12 +1270,12 @@ class IdentityCorrelationEngine:
         # Extract just the APPNAME.EXE part before the hash
         # Pattern: ends with space + 8 hex chars + .pf
         # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
-        #           "chrome.exe AF43252D.pf" → "chrome.exe"
+        # "chrome.exe AF43252D.pf" → "chrome.exe"
         if result.lower().endswith('.pf'):
             # Check if there's a space followed by hex hash before .pf
             match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
             if match:
-                result = match.group(1)  # Extract just the app name part
+                result = match.group(1) # Extract just the app name part
         
         # Step 0: Remove ~ and everything after it (FIRST - before any other processing)
         # This handles cases like "CHROME~1.EXE", "file~123.txt"
@@ -1194,7 +1293,7 @@ class IdentityCorrelationEngine:
         for ext in extensions:
             if lower_result.endswith(ext):
                 result = result[:-len(ext)]
-                lower_result = result.lower()  # Update for next checks
+                lower_result = result.lower() # Update for next checks
                 break
         
         # Step 2: Remove copy indicators like (1), (2), (3), etc.
@@ -1205,14 +1304,14 @@ class IdentityCorrelationEngine:
         # Do this BEFORE aggressive normalization
         # Handle both "Copy" and "Copy N" patterns
         result = re.sub(r'[\s_]*[-_]?\s*[Cc]opy\s*\d*\s*$', '', result)
-        result = re.sub(r'[\s_]*\([Cc]opy\s*\d*\)\s*$', '', result)  # Handle (Copy) and (Copy 2)
+        result = re.sub(r'[\s_]*\([Cc]opy\s*\d*\)\s*$', '', result) # Handle (Copy) and (Copy 2)
         
         # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
         # Do this BEFORE aggressive normalization
         # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
         # This prevents removing numbers that are part of the name (e.g., "chrome1")
-        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result)  # Requires space/underscore
-        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result)  # OR explicit v prefix without space
+        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result) # Requires space/underscore
+        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result) # OR explicit v prefix without space
         
         # Step 5: AGGRESSIVE NORMALIZATION for grouping
         # Convert to lowercase first
@@ -1280,12 +1379,12 @@ class IdentityCorrelationEngine:
         # Extract just the APPNAME.EXE part before the hash
         # Pattern: ends with space + 8 hex chars + .pf
         # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
-        #           "chrome.exe AF43252D.pf" → "chrome.exe"
+        # "chrome.exe AF43252D.pf" → "chrome.exe"
         if result.lower().endswith('.pf'):
             # Check if there's a space followed by hex hash before .pf
             match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
             if match:
-                result = match.group(1)  # Extract just the app name part
+                result = match.group(1) # Extract just the app name part
         
         # Step 0: Remove ~ and everything after it (FIRST)
         if '~' in result:
@@ -1312,8 +1411,8 @@ class IdentityCorrelationEngine:
         # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
         # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
         # This prevents removing numbers that are part of the name (e.g., "chrome1")
-        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result)  # Requires space/underscore
-        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result)  # OR explicit v prefix without space
+        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result) # Requires space/underscore
+        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result) # OR explicit v prefix without space
         
         # Step 5: Clean up trailing special characters
         result = result.rstrip(' _-.')
@@ -1327,7 +1426,7 @@ class IdentityCorrelationEngine:
         """Clear the identity index for new correlation run."""
         self.identity_index.clear()
         if self.debug_mode:
-            print("[DEBUG] Identity index cleared")
+            logger.info("[DEBUG] Identity index cleared")
 
 
 class IdentityMatcher:
@@ -1423,9 +1522,9 @@ class IdentityMatcher:
                     dp[i][j] = dp[i-1][j-1]
                 else:
                     dp[i][j] = 1 + min(
-                        dp[i-1][j],    # deletion
-                        dp[i][j-1],    # insertion
-                        dp[i-1][j-1]   # substitution
+                        dp[i-1][j], # deletion
+                        dp[i][j-1], # insertion
+                        dp[i-1][j-1] # substitution
                     )
         
         return dp[m][n]
@@ -1480,10 +1579,10 @@ class IdentityBasedCorrelationEngine:
         
         # Cancellation support
         self.cancellation_manager = EnhancedCancellationManager(debug_mode=debug_mode)
-        self._cancelled = False  # Legacy flag for backward compatibility
+        self._cancelled = False # Legacy flag for backward compatibility
         
         # Correlation state
-        self.identities: Dict[str, Identity] = {}  # identity_key -> Identity
+        self.identities: Dict[str, Identity] = {} # identity_key -> Identity
         self.correlation_results: Optional[CorrelationResults] = None
         
         # Statistics tracking
@@ -1498,7 +1597,7 @@ class IdentityBasedCorrelationEngine:
             reason: Reason for cancellation
         """
         self.cancellation_manager.request_cancellation(reason=reason, requested_by="User")
-        self._cancelled = True  # Set legacy flag
+        self._cancelled = True # Set legacy flag
     
     def is_cancelled(self) -> bool:
         """Check if cancellation has been requested"""
@@ -1530,16 +1629,16 @@ class IdentityBasedCorrelationEngine:
         """
         self.start_time = datetime.now()
         
-        print(f"[Identity Engine] Starting correlation with time_window={self.time_window_minutes} minutes")
+        logger.info(f"[Identity Engine] Starting correlation with time_window={self.time_window_minutes} minutes")
         
         # Count records per feather
         feather_counts = {}
         for record in records:
             fid = record.get('feather_id', 'unknown')
             feather_counts[fid] = feather_counts.get(fid, 0) + 1
-        print(f"[Identity Engine] Records per feather:")
+        logger.info(f"[Identity Engine] Records per feather:")
         for fid, count in sorted(feather_counts.items(), key=lambda x: x[1], reverse=True):
-            print(f"  • {fid}: {count:,}")
+            logger.info(f" • {fid}: {count:,}")
         
         # Initialize results
         self.correlation_results = CorrelationResults(
@@ -1554,21 +1653,21 @@ class IdentityBasedCorrelationEngine:
             
             # Step 1: Identity Extraction and Clustering
             self._extract_and_cluster_identities(records)
-            print(f"[Identity Engine] Step 1: Extracted {len(self.identities)} unique identities")
+            logger.info(f"[Identity Engine] Step 1: Extracted {len(self.identities)} unique identities")
             
             # Check for cancellation after identity extraction
             self.check_cancellation()
             
             # Step 2: Temporal Anchor Clustering
             self._create_temporal_anchors()
-            print(f"[Identity Engine] Step 2: Created {self.stats.total_anchors} anchors")
+            logger.info(f"[Identity Engine] Step 2: Created {self.stats.total_anchors} anchors")
             
             # Check for cancellation after anchor creation
             self.check_cancellation()
             
             # Step 3: Primary Anchor Selection
             self._select_primary_anchors()
-            print(f"[Identity Engine] Step 3: Selected primary evidence")
+            logger.info(f"[Identity Engine] Step 3: Selected primary evidence")
             
             # Check for cancellation after primary selection
             self.check_cancellation()
@@ -1576,7 +1675,7 @@ class IdentityBasedCorrelationEngine:
             # Step 4: Semantic Enrichment (if available)
             self._enrich_semantic_data()
             if self.semantic_mapper:
-                print(f"[Identity Engine] Step 4: Applied semantic enrichment")
+                logger.info(f"[Identity Engine] Step 4: Applied semantic enrichment")
             
             # Check for cancellation after semantic enrichment
             self.check_cancellation()
@@ -1584,14 +1683,14 @@ class IdentityBasedCorrelationEngine:
             # Step 5: Apply Weighted Scoring (if available)
             self._apply_scoring_weights()
             if self.scoring_engine:
-                print(f"[Identity Engine] Step 5: Applied weighted scoring")
+                logger.info(f"[Identity Engine] Step 5: Applied weighted scoring")
             
             # Check for cancellation after scoring
             self.check_cancellation()
             
             # Step 6: Generate Final Results
             self._generate_results()
-            print(f"[Identity Engine] Step 6: Generated results")
+            logger.info(f"[Identity Engine] Step 6: Generated results")
             
             # Calculate final statistics
             self._calculate_final_statistics()
@@ -1606,12 +1705,12 @@ class IdentityBasedCorrelationEngine:
                 if len(feathers) > 1:
                     multi_feather_identities += 1
             
-            print(f"[Identity Engine] Identities with evidence from multiple feathers: {multi_feather_identities}")
+            logger.info(f"[Identity Engine] Identities with evidence from multiple feathers: {multi_feather_identities}")
             
         except Exception as e:
             # Check if this was a cancellation
             if self.is_cancelled():
-                print(f"[Identity Engine] ⚠️ Correlation cancelled - saving partial results...")
+                logger.info(f"[Identity Engine] [WARN] Correlation cancelled - saving partial results...")
                 
                 # Generate partial results
                 self._generate_results()
@@ -1624,7 +1723,7 @@ class IdentityBasedCorrelationEngine:
                     self.correlation_results.warnings.append("Execution was cancelled by user")
                     self.correlation_results.warnings.append(f"Partial results saved: {len(self.identities)} identities, {self.stats.total_anchors} anchors")
                 
-                print(f"[Identity Engine] ✓ Partial results saved: {len(self.identities)} identities")
+                logger.info(f"[Identity Engine] [OK] Partial results saved: {len(self.identities)} identities")
             else:
                 # Re-raise if not a cancellation
                 raise
@@ -1649,7 +1748,7 @@ class IdentityBasedCorrelationEngine:
         identity_feathers = {}
         
         # IMPROVED: Track extraction success per feather (lightweight)
-        feather_extraction_stats = {}  # feather_id -> {total, extracted, failed, filtered, artifact_type}
+        feather_extraction_stats = {} # feather_id -> {total, extracted, failed, filtered, artifact_type}
         
         for record in records:
             try:
@@ -1716,8 +1815,8 @@ class IdentityBasedCorrelationEngine:
                     identity = Identity(
                         identity_type=identity_type,
                         identity_value=path if path else name,
-                        primary_name=display_name,  # Clean, readable display name
-                        normalized_name=identity_key,  # Aggressively normalized for grouping
+                        primary_name=display_name, # Clean, readable display name
+                        normalized_name=identity_key, # Aggressively normalized for grouping
                         confidence=1.0,
                         match_method="exact"
                     )
@@ -1738,20 +1837,20 @@ class IdentityBasedCorrelationEngine:
                 processed_count += 1
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[ERROR] Failed to process record: {e}")
+                    logger.info(f"[ERROR] Failed to process record: {e}")
         
         # Log extraction stats per feather with success rate and sample fields for failures
-        print(f"\n[Identity Engine] 📊 Identity Extraction Summary:")
-        print(f"  Total Records Processed: {processed_count:,}")
-        print(f"  Records Skipped (no identity): {skipped_no_identity:,}")
-        print(f"  Unique Identities Found: {len(self.identities):,}")
+        logger.info(f"\n[Identity Engine] Identity Extraction Summary:")
+        logger.info(f" Total Records Processed: {processed_count:,}")
+        logger.info(f" Records Skipped (no identity): {skipped_no_identity:,}")
+        logger.info(f" Unique Identities Found: {len(self.identities):,}")
         
         # Report filtering statistics with validation details
         # Requirements: 8.7 - Validation logging with counts
         filter_stats = self.identity_engine.identity_validator.get_statistics()
         if filter_stats['total_filtered'] > 0:
-            print(f"\n[Identity Engine] Validation: {filter_stats['total_filtered']} invalid identities filtered")
-            print(f"  Breakdown by reason:")
+            logger.info(f"\n[Identity Engine] Validation: {filter_stats['total_filtered']} invalid identities filtered")
+            logger.info(f" Breakdown by reason:")
             for reason, count in sorted(filter_stats['reasons'].items(), key=lambda x: x[1], reverse=True):
                 reason_display = {
                     'boolean_string': 'Boolean strings (true/false)',
@@ -1761,7 +1860,7 @@ class IdentityBasedCorrelationEngine:
                     'too_short': 'Too short (< 2 chars)',
                     'no_alphanumeric': 'No alphanumeric characters'
                 }.get(reason, reason)
-                print(f"    • {reason_display}: {count}")
+                logger.info(f" • {reason_display}: {count}")
         
         # Calculate validation rate
         # Requirements: 8.7 - Show validation statistics
@@ -1770,8 +1869,8 @@ class IdentityBasedCorrelationEngine:
         invalid_count = skipped_no_identity
         validation_rate = (valid_count / total_attempts * 100) if total_attempts > 0 else 0
         
-        print(f"\n[Identity Engine] Validation: {valid_count:,} valid, {invalid_count:,} invalid, {skipped_no_identity:,} skipped")
-        print(f"  Validation rate: {validation_rate:.1f}%")
+        logger.info(f"\n[Identity Engine] Validation: {valid_count:,} valid, {invalid_count:,} invalid, {skipped_no_identity:,} skipped")
+        logger.info(f" Validation rate: {validation_rate:.1f}%")
         
         # Store feather extraction stats in correlation_results for later use
         # Requirements: 7.1, 7.2
@@ -1779,11 +1878,11 @@ class IdentityBasedCorrelationEngine:
             self.correlation_results.feather_extraction_stats = {}
         self.correlation_results.feather_extraction_stats = feather_extraction_stats
         
-        print(f"\n[Identity Engine] 📁 Extraction Statistics by Feather:")
+        logger.info(f"\n[Identity Engine] Extraction Statistics by Feather:")
         feathers_with_issues = []
         
         # Track identities per feather
-        identities_per_feather = {}  # feather_id -> set of identity_keys
+        identities_per_feather = {} # feather_id -> set of identity_keys
         for identity_key, feather_set in identity_feathers.items():
             for fid in feather_set:
                 if fid not in identities_per_feather:
@@ -1792,14 +1891,14 @@ class IdentityBasedCorrelationEngine:
         
         for fid, stats in sorted(feather_extraction_stats.items(), key=lambda x: x[1]['total'], reverse=True):
             success_rate = (stats['extracted'] / stats['total'] * 100) if stats['total'] > 0 else 0
-            status_icon = "✓" if success_rate >= 90 else "+" if success_rate >= 50 else "!" if success_rate > 0 else "✗"
+            status_icon = "[OK]" if success_rate >= 90 else "+" if success_rate >= 50 else "!" if success_rate > 0 else "[FAIL]"
             
             # Get unique identities from this feather
             unique_identities = len(identities_per_feather.get(fid, set()))
             
-            print(f"  {status_icon} {fid} ({stats['artifact_type']})")
-            print(f"      Records: {stats['extracted']}/{stats['total']} extracted ({success_rate:.1f}%)")
-            print(f"      Identities: {unique_identities} unique")
+            logger.info(f" {status_icon} {fid} ({stats['artifact_type']})")
+            logger.info(f" Records: {stats['extracted']}/{stats['total']} extracted ({success_rate:.1f}%)")
+            logger.info(f" Identities: {unique_identities} unique")
             
             # Show top identities from this feather
             if unique_identities > 0:
@@ -1816,36 +1915,36 @@ class IdentityBasedCorrelationEngine:
                 top_identities = sorted(identity_counts.items(), key=lambda x: x[1], reverse=True)[:3]
                 if top_identities:
                     top_str = ", ".join([f"{self.identities[k].primary_name} ({v})" for k, v in top_identities])
-                    print(f"      Top: {top_str}")
+                    logger.info(f" Top: {top_str}")
             
             # Track feathers with low extraction rates for detailed logging
             if success_rate < 50 and stats['total'] > 0:
                 feathers_with_issues.append((fid, stats, success_rate))
         
         # Show cross-feather correlation summary
-        print(f"\n[Identity Engine] 🔗 Cross-Feather Correlations:")
+        logger.info(f"\n[Identity Engine] Cross-Feather Correlations:")
         multi_feather_identities = [(k, v) for k, v in identity_feathers.items() if len(v) > 1]
         multi_feather_identities.sort(key=lambda x: len(x[1]), reverse=True)
         
         if multi_feather_identities:
-            for identity_key, feather_set in multi_feather_identities[:10]:  # Top 10
+            for identity_key, feather_set in multi_feather_identities[:10]: # Top 10
                 identity = self.identities[identity_key]
-                feather_names = [f.split('_')[0] for f in sorted(feather_set)]  # Shorten names
-                print(f"  {identity.primary_name}: Found in {len(feather_set)} feathers ({', '.join(feather_names)})")
+                feather_names = [f.split('_')[0] for f in sorted(feather_set)] # Shorten names
+                logger.info(f" {identity.primary_name}: Found in {len(feather_set)} feathers ({', '.join(feather_names)})")
         else:
-            print(f"  No identities found across multiple feathers")
+            logger.info(f" No identities found across multiple feathers")
         
         # Show sample fields for feathers with low extraction rates
         if feathers_with_issues:
-            print(f"\n[Identity Engine] ⚠️  Feathers with Low Extraction Rates:")
+            logger.info(f"\n[Identity Engine] [WARN] Feathers with Low Extraction Rates:")
             sample_records_by_feather = {}
-            for record in records[:1000]:  # Check first 1000 records for samples
+            for record in records[:1000]: # Check first 1000 records for samples
                 fid = record.get('feather_id', 'unknown')
                 if fid not in sample_records_by_feather:
                     sample_records_by_feather[fid] = record
             
             for fid, stats, rate in feathers_with_issues:
-                print(f"  ! {fid} ({stats['artifact_type']}): {rate:.1f}% extraction rate")
+                logger.info(f" ! {fid} ({stats['artifact_type']}): {rate:.1f}% extraction rate")
                 if fid in sample_records_by_feather:
                     sample = sample_records_by_feather[fid]
                     # Show field names and sample values
@@ -1854,28 +1953,28 @@ class IdentityBasedCorrelationEngine:
                         if key not in ('feather_id', 'artifact', 'table', 'row_id'):
                             val_str = str(value)[:25] if value else 'None'
                             fields_preview.append(f"{key}={val_str}")
-                    print(f"      Available fields: {', '.join(fields_preview)}")
-                    print(f"      Suggestion: Add artifact-specific field mapping or check field names")
+                    logger.info(f" Available fields: {', '.join(fields_preview)}")
+                    logger.info(f" Suggestion: Add artifact-specific field mapping or check field names")
         
         # Log identity-feather mapping for debugging
         multi_feather_count = sum(1 for feathers in identity_feathers.values() if len(feathers) > 1)
-        print(f"\n[Identity Engine] Identities with multiple feathers: {multi_feather_count}/{len(self.identities)}")
+        logger.info(f"\n[Identity Engine] Identities with multiple feathers: {multi_feather_count}/{len(self.identities)}")
         
         # Show top identities with multiple feathers (limit to 5)
         if multi_feather_count > 0:
-            print(f"[Identity Engine] Top multi-feather identities:")
+            logger.info(f"[Identity Engine] Top multi-feather identities:")
             count = 0
             for identity_key, feathers in sorted(identity_feathers.items(), 
                                                   key=lambda x: len(x[1]), 
                                                   reverse=True):
                 if len(feathers) > 1:
-                    print(f"  - {identity_key}: {', '.join(sorted(feathers))}")
+                    logger.info(f" - {identity_key}: {', '.join(sorted(feathers))}")
                     count += 1
                     if count >= 5:
                         break
         
         if skipped_no_identity > 0:
-            print(f"[Identity Engine] Skipped {skipped_no_identity} records with no identity info")
+            logger.info(f"[Identity Engine] Skipped {skipped_no_identity} records with no identity info")
         
         self.stats.total_identities = len(self.identities)
         self.stats.total_evidence = processed_count
@@ -1896,25 +1995,29 @@ class IdentityBasedCorrelationEngine:
         table = record.get('table', 'unknown_table')
         row_id = record.get('row_id', 0)
         
-        # Extract timestamp using multiple field patterns
+        # Extract timestamp using multiple field patterns. Read the
+        # record's source_timezone tag (set at load time by the engine
+        # adapter); falls back to "UTC" for records loaded by paths that
+        # don't tag (preserves legacy behavior).
+        source_tz = record.get('_source_timezone', 'UTC')
         timestamp = None
-        
+
         # First try the 'timestamp' field directly
         timestamp_field = record.get('timestamp')
         if timestamp_field:
-            timestamp = self._parse_timestamp_value(timestamp_field)
-        
+            timestamp = self._parse_timestamp_value(timestamp_field, source_tz)
+
         # If no timestamp found, try artifact-specific timestamp fields
         if timestamp is None:
             for field_pattern in self.identity_engine.timestamp_field_patterns:
                 if field_pattern in record and record[field_pattern]:
-                    timestamp = self._parse_timestamp_value(record[field_pattern])
+                    timestamp = self._parse_timestamp_value(record[field_pattern], source_tz)
                     if timestamp:
                         break
                 # Also try case-insensitive match
                 for key in record.keys():
                     if key.lower() == field_pattern.lower() and record[key]:
-                        timestamp = self._parse_timestamp_value(record[key])
+                        timestamp = self._parse_timestamp_value(record[key], source_tz)
                         if timestamp:
                             break
                 if timestamp:
@@ -1929,18 +2032,18 @@ class IdentityBasedCorrelationEngine:
             table=table,
             row_id=row_id,
             timestamp=timestamp,
-            semantic=record.copy(),  # Store original semantic data
+            semantic=record.copy(), # Store original semantic data
             feather_id=record.get('feather_id', f"{artifact}_{row_id}"),
-            anchor_id=None,  # Will be set during anchor clustering
-            is_primary=False,  # Will be determined during anchor selection
+            anchor_id=None, # Will be set during anchor clustering
+            is_primary=False, # Will be determined during anchor selection
             has_anchor=has_anchor,
-            role="secondary",  # Default role, will be updated
+            role="secondary", # Default role, will be updated
             match_reason="identity_extraction",
             match_method="exact",
             similarity_score=1.0,
             confidence=1.0,
             original_data=record.copy(),
-            semantic_data={}  # Will be populated during semantic enrichment
+            semantic_data={} # Will be populated during semantic enrichment
         )
         
         # Apply semantic mapping if available
@@ -1950,42 +2053,57 @@ class IdentityBasedCorrelationEngine:
                 if semantic_data:
                     evidence.semantic_data = semantic_data
                     if self.debug_mode:
-                        print(f"[DEBUG] Applied semantic mapping: {semantic_data.get('category', 'unknown')}")
+                        logger.info(f"[DEBUG] Applied semantic mapping: {semantic_data.get('category', 'unknown')}")
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[DEBUG] Semantic mapping failed: {e}")
+                    logger.info(f"[DEBUG] Semantic mapping failed: {e}")
         
         return evidence
     
-    def _parse_timestamp_value(self, value: Any) -> Optional[datetime]:
+    def _to_naive_utc(self, dt: datetime, source_timezone: str = "UTC") -> datetime:
+        """Convert a possibly-naive datetime to naive UTC.
+
+        If dt is naive and source_timezone != "UTC", attach the source tz
+        before converting; otherwise treat naive as UTC (legacy behavior).
+        If dt is aware, convert to UTC and strip tzinfo. Result is always
+        naive-UTC so downstream comparison stays consistent."""
+        if dt.tzinfo is None:
+            if not source_timezone or source_timezone == "UTC":
+                return dt
+            try:
+                from zoneinfo import ZoneInfo
+                dt = dt.replace(tzinfo=ZoneInfo(source_timezone))
+            except Exception:
+                # Unknown tz — fall back to legacy "assume UTC" behavior
+                return dt
+        from datetime import timezone as _tz
+        return dt.astimezone(_tz.utc).replace(tzinfo=None)
+
+    def _parse_timestamp_value(self, value: Any, source_timezone: str = "UTC") -> Optional[datetime]:
         """
         Parse a timestamp value from various formats.
-        
-        Always returns timezone-naive datetime to avoid comparison issues.
+
+        Always returns timezone-naive UTC datetime so downstream comparison
+        works regardless of how the source encoded the time. Naive strings
+        are localized using `source_timezone` (default "UTC" — legacy behavior).
         """
         if value is None:
             return None
-        
+
         if isinstance(value, datetime):
-            # Remove timezone info if present to ensure consistent comparison
-            if value.tzinfo is not None:
-                return value.replace(tzinfo=None)
-            return value
-        
+            return self._to_naive_utc(value, source_timezone)
+
         timestamp_str = str(value).strip()
         if not timestamp_str or timestamp_str.lower() in ('none', 'null', 'n/a', ''):
             return None
-        
+
         # Try ISO format first
         try:
             parsed = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-            # Remove timezone info to make it naive
-            if parsed.tzinfo is not None:
-                parsed = parsed.replace(tzinfo=None)
-            return parsed
-        except:
+            return self._to_naive_utc(parsed, source_timezone)
+        except Exception:
             pass
-        
+
         # Try common formats
         formats = [
             "%Y-%m-%d %H:%M:%S",
@@ -1997,39 +2115,37 @@ class IdentityBasedCorrelationEngine:
             "%Y-%m-%dT%H:%M:%S.%f",
             "%Y-%m-%d",
         ]
-        
+
         for fmt in formats:
             try:
                 parsed = datetime.strptime(timestamp_str, fmt)
                 if 1970 <= parsed.year <= 2100:
-                    # Ensure timezone-naive
-                    if parsed.tzinfo is not None:
-                        parsed = parsed.replace(tzinfo=None)
-                    return parsed
-            except:
+                    return self._to_naive_utc(parsed, source_timezone)
+            except Exception:
                 continue
-        
-        # Try numeric timestamps
+
+        # Try numeric timestamps. Unix epoch is tz-agnostic so we anchor at
+        # UTC explicitly — `datetime.fromtimestamp(x)` without `tz=` returns
+        # the *machine's local* time, which was a bug for analysts running
+        # the engine in non-UTC environments.
         try:
+            from datetime import timezone as _tz
             numeric_value = float(timestamp_str)
-            if numeric_value > 10000000000000:  # Windows FILETIME
+            if numeric_value > 10000000000000: # Windows FILETIME
                 unix_timestamp = (numeric_value - 116444736000000000) / 10000000
-                parsed = datetime.fromtimestamp(unix_timestamp)
-            elif numeric_value > 10000000000:  # Milliseconds
-                parsed = datetime.fromtimestamp(numeric_value / 1000)
-            elif numeric_value > 0:  # Seconds
-                parsed = datetime.fromtimestamp(numeric_value)
+                parsed = datetime.fromtimestamp(unix_timestamp, tz=_tz.utc)
+            elif numeric_value > 10000000000: # Milliseconds
+                parsed = datetime.fromtimestamp(numeric_value / 1000, tz=_tz.utc)
+            elif numeric_value > 0: # Seconds
+                parsed = datetime.fromtimestamp(numeric_value, tz=_tz.utc)
             else:
                 return None
-            
+
             if 1970 <= parsed.year <= 2100:
-                # Ensure timezone-naive
-                if parsed.tzinfo is not None:
-                    parsed = parsed.replace(tzinfo=None)
-                return parsed
-        except:
+                return parsed.replace(tzinfo=None)
+        except Exception:
             pass
-        
+
         return None
     
     def _create_temporal_anchors(self):
@@ -2040,12 +2156,12 @@ class IdentityBasedCorrelationEngine:
         This ensures anchors contain evidence from multiple feathers when they occur
         within the same time window.
         """
-        print(f"[Identity Engine] Creating temporal anchors with {self.time_window_minutes} minute window")
+        logger.info(f"[Identity Engine] Creating temporal anchors with {self.time_window_minutes} minute window")
         
         try:
             # Step 1: Collect ALL timestamped evidence across ALL identities
             all_timestamped_evidence = []
-            identity_map = {}  # evidence_id -> identity
+            identity_map = {} # evidence_id -> identity
             
             for identity in self.identities.values():
                 for evidence in identity.all_evidence:
@@ -2057,12 +2173,12 @@ class IdentityBasedCorrelationEngine:
                                 evidence.timestamp = evidence.timestamp.replace(tzinfo=None)
                             # Verify it's a valid datetime object
                             if not isinstance(evidence.timestamp, datetime):
-                                print(f"[Identity Engine] Warning: Invalid timestamp type {type(evidence.timestamp)}, skipping")
+                                logger.info(f"[Identity Engine] Warning: Invalid timestamp type {type(evidence.timestamp)}, skipping")
                                 evidence.role = "supporting"
                                 evidence.has_anchor = False
                                 continue
                         except Exception as e:
-                            print(f"[Identity Engine] Warning: Failed to normalize timestamp ({e}), skipping")
+                            logger.info(f"[Identity Engine] Warning: Failed to normalize timestamp ({e}), skipping")
                             evidence.role = "supporting"
                             evidence.has_anchor = False
                             continue
@@ -2077,7 +2193,7 @@ class IdentityBasedCorrelationEngine:
                         evidence.has_anchor = False
             
             if not all_timestamped_evidence:
-                print(f"[Identity Engine] No timestamped evidence found")
+                logger.info(f"[Identity Engine] No timestamped evidence found")
                 self.stats.total_anchors = 0
                 return
             
@@ -2085,7 +2201,7 @@ class IdentityBasedCorrelationEngine:
             try:
                 all_timestamped_evidence.sort(key=lambda e: e.timestamp)
             except TypeError as sort_error:
-                print(f"[Identity Engine] Warning: Sort failed ({sort_error}), filtering invalid timestamps")
+                logger.info(f"[Identity Engine] Warning: Sort failed ({sort_error}), filtering invalid timestamps")
                 # Filter out any problematic timestamps
                 valid_evidence = []
                 for evidence in all_timestamped_evidence:
@@ -2093,14 +2209,14 @@ class IdentityBasedCorrelationEngine:
                         # Test if timestamp is comparable
                         _ = evidence.timestamp < datetime.now()
                         valid_evidence.append(evidence)
-                    except:
-                        print(f"[Identity Engine] Removing evidence with incomparable timestamp: {type(evidence.timestamp)}")
+                    except Exception as e:
+                        logger.info(f"[Identity Engine] Removing evidence with incomparable timestamp: {type(evidence.timestamp)}")
                         evidence.role = "supporting"
                         evidence.has_anchor = False
                 
                 all_timestamped_evidence = valid_evidence
                 if not all_timestamped_evidence:
-                    print(f"[Identity Engine] No valid timestamped evidence after filtering")
+                    logger.info(f"[Identity Engine] No valid timestamped evidence after filtering")
                     self.stats.total_anchors = 0
                     return
                 
@@ -2111,7 +2227,7 @@ class IdentityBasedCorrelationEngine:
                                            if e.timestamp is not None and isinstance(e.timestamp, datetime)]
                 all_timestamped_evidence.sort(key=lambda e: e.timestamp)
             
-            print(f"[Identity Engine] Clustering {len(all_timestamped_evidence)} timestamped records")
+            logger.info(f"[Identity Engine] Clustering {len(all_timestamped_evidence)} timestamped records")
             
             # Step 3: Create time-based clusters (global time windows)
             time_clusters = []
@@ -2145,10 +2261,10 @@ class IdentityBasedCorrelationEngine:
             if current_cluster:
                 time_clusters.append(current_cluster)
             
-            print(f"[Identity Engine] Created {len(time_clusters)} time clusters")
+            logger.info(f"[Identity Engine] Created {len(time_clusters)} time clusters")
             
         except Exception as e:
-            print(f"[Identity Engine] ERROR in temporal anchor creation: {type(e).__name__}: {str(e)}")
+            logger.info(f"[Identity Engine] ERROR in temporal anchor creation: {type(e).__name__}: {str(e)}")
             import traceback
             traceback.print_exc()
             self.stats.total_anchors = 0
@@ -2210,7 +2326,7 @@ class IdentityBasedCorrelationEngine:
         
         self.stats.total_anchors = total_anchors
         
-        print(f"[Identity Engine] Created {total_anchors} anchors, {multi_feather_anchors} with multiple feathers ({multi_feather_anchors * 100 // max(total_anchors, 1)}%)")
+        logger.info(f"[Identity Engine] Created {total_anchors} anchors, {multi_feather_anchors} with multiple feathers ({multi_feather_anchors * 100 // max(total_anchors, 1)}%)")
     
     def _cluster_evidence_by_time(self, evidence_list: List[EvidenceRow], identity_id: str) -> List[Anchor]:
         """
@@ -2387,7 +2503,7 @@ class IdentityBasedCorrelationEngine:
         """
         if not self.scoring_engine:
             if self.debug_mode:
-                print("[DEBUG] No scoring engine available, skipping weighted scoring")
+                logger.info("[DEBUG] No scoring engine available, skipping weighted scoring")
             return
         
         scored_anchors = 0
@@ -2420,14 +2536,14 @@ class IdentityBasedCorrelationEngine:
                         scored_anchors += 1
                         
                         if self.debug_mode:
-                            print(f"[DEBUG] Scored anchor {anchor.anchor_id}: {score_result.get('score', 0.0):.2f}")
+                            logger.info(f"[DEBUG] Scored anchor {anchor.anchor_id}: {score_result.get('score', 0.0):.2f}")
                 
                 except Exception as e:
                     if self.debug_mode:
-                        print(f"[DEBUG] Failed to score anchor {anchor.anchor_id}: {e}")
+                        logger.info(f"[DEBUG] Failed to score anchor {anchor.anchor_id}: {e}")
         
         if scored_anchors > 0:
-            print(f"[Identity Engine] Applied weighted scoring to {scored_anchors} anchors")
+            logger.info(f"[Identity Engine] Applied weighted scoring to {scored_anchors} anchors")
     
     def _enrich_semantic_data(self):
         """
@@ -2439,7 +2555,7 @@ class IdentityBasedCorrelationEngine:
         """
         if not self.semantic_mapper:
             if self.debug_mode:
-                print("[DEBUG] No semantic mapper available, skipping semantic enrichment")
+                logger.info("[DEBUG] No semantic mapper available, skipping semantic enrichment")
         
         enriched_count = 0
         
@@ -2458,7 +2574,7 @@ class IdentityBasedCorrelationEngine:
                             enriched_count += 1
                     except Exception as e:
                         if self.debug_mode:
-                            print(f"[DEBUG] Failed to enrich evidence: {e}")
+                            logger.info(f"[DEBUG] Failed to enrich evidence: {e}")
             
             # Create semantic summaries for anchors
             for anchor in identity.anchors:
@@ -2487,10 +2603,10 @@ class IdentityBasedCorrelationEngine:
                     
                 except Exception as e:
                     if self.debug_mode:
-                        print(f"[DEBUG] Failed to create semantic summary for anchor: {e}")
+                        logger.info(f"[DEBUG] Failed to create semantic summary for anchor: {e}")
         
         if enriched_count > 0:
-            print(f"[Identity Engine] Enriched {enriched_count} evidence records with semantic data")
+            logger.info(f"[Identity Engine] Enriched {enriched_count} evidence records with semantic data")
         
         # Apply semantic rules for identity-level results
         self._apply_semantic_rules()
@@ -2504,7 +2620,7 @@ class IdentityBasedCorrelationEngine:
         """
         if not self.semantic_rule_evaluator:
             if self.debug_mode:
-                print("[DEBUG] No semantic rule evaluator available, skipping rule evaluation")
+                logger.info("[DEBUG] No semantic rule evaluator available, skipping rule evaluation")
             return
         
         # Reset evaluator statistics
@@ -2549,18 +2665,18 @@ class IdentityBasedCorrelationEngine:
                             anchor.semantic_data['rule_name'] = results[0].rule_name
                     
                     if self.debug_mode:
-                        print(f"[DEBUG] Identity '{identity_key}' matched {len(results)} semantic rules")
+                        logger.info(f"[DEBUG] Identity '{identity_key}' matched {len(results)} semantic rules")
                         
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[DEBUG] Failed to evaluate semantic rules for identity '{identity_key}': {e}")
+                    logger.info(f"[DEBUG] Failed to evaluate semantic rules for identity '{identity_key}': {e}")
         
         # Log summary
         stats = self.semantic_rule_evaluator.get_statistics()
         if stats.rules_matched > 0:
-            print(f"[Identity Engine] Applied semantic rules: {identities_with_results} identities matched {total_matches} rules")
+            logger.info(f"[Identity Engine] Applied semantic rules: {identities_with_results} identities matched {total_matches} rules")
             if self.debug_mode:
-                print(f"[DEBUG] Semantic rule stats: {stats.to_dict()}")
+                logger.info(f"[DEBUG] Semantic rule stats: {stats.to_dict()}")
     
     def _build_identity_data_for_evaluation(self, identity: Identity) -> Dict[str, Any]:
         """
@@ -2659,17 +2775,17 @@ class IdentityBasedCorrelationEngine:
                         try:
                             evidence_json = json.dumps(evidence.original_data)
                             total_feather_data_size += len(evidence_json.encode('utf-8'))
-                        except:
-                            pass  # Skip if data can't be serialized
+                        except Exception as e:
+                            pass # Skip if data can't be serialized
             
             # Log feather data size
             size_mb = total_feather_data_size / (1024 * 1024)
             if size_mb > 100:
-                print(f"[Identity Engine] ⚠️ Large feather data size: {size_mb:.2f} MB")
+                logger.info(f"[Identity Engine] [WARN] Large feather data size: {size_mb:.2f} MB")
                 if self.correlation_results:
                     self.correlation_results.warnings.append(f"Large feather data size: {size_mb:.2f} MB")
             elif self.debug_mode:
-                print(f"[Identity Engine] 📊 Total feather data size: {size_mb:.2f} MB")
+                logger.info(f"[Identity Engine] Total feather data size: {size_mb:.2f} MB")
         
         # Update correlation results with final statistics
         self.correlation_results.statistics = self.stats
@@ -2785,11 +2901,18 @@ class IdentityBasedEngineAdapter:
         """
         # Import here to avoid circular dependency
         from .base_engine import BaseCorrelationEngine, EngineMetadata, FilterConfig
-        
+
         # Store configuration
         self.config = config
         self.filters = filters or FilterConfig()
         self.debug_mode = debug_mode
+
+        # Per-feather source_timezone lookup, used at record-load time to
+        # tag rows so _parse_timestamp_value can localize naive strings
+        # correctly. Same shape as TimeWindowScanningEngine's lookup.
+        self._feather_tz_map = self._build_feather_tz_map(
+            getattr(config, 'feather_configs', None)
+        )
         
         # Get or create integrations
         if scoring_integration is None:
@@ -2817,7 +2940,27 @@ class IdentityBasedEngineAdapter:
         # Streaming support - output directory and execution ID for database streaming
         self._output_dir = None
         self._execution_id = None
-    
+
+    @staticmethod
+    def _build_feather_tz_map(feather_configs) -> Dict[str, str]:
+        """Build a feather-identifier -> source_timezone map from a list of
+        FeatherConfigs. Mirrors TimeWindowScanningEngine._build_feather_tz_map
+        so both engines look up source_timezone the same way (config_name +
+        feather_name + lowercase variants). Returns {} when no configs are
+        available (e.g., engine constructed with a non-PipelineConfig)."""
+        tz_map: Dict[str, str] = {}
+        for fc in feather_configs or []:
+            tz = getattr(fc, 'source_timezone', 'UTC') or 'UTC'
+            for key in (
+                getattr(fc, 'config_name', '') or '',
+                getattr(fc, 'feather_name', '') or '',
+            ):
+                if not key:
+                    continue
+                tz_map[key] = tz
+                tz_map[key.lower()] = tz
+        return tz_map
+
     def set_output_directory(self, output_dir: str, execution_id: int = None):
         """
         Set output directory for streaming results to database.
@@ -2876,7 +3019,7 @@ class IdentityBasedEngineAdapter:
                 raise ValueError("No wing configurations provided")
             
             wing = wing_configs[0]
-            print(f"[Identity Engine] Starting execution for wing: {wing.wing_name}")
+            logger.info(f"[Identity Engine] Starting execution for wing: {wing.wing_name}")
             
             # Set execution context for semantic rule evaluation
             wing_semantic_rules = getattr(wing, 'semantic_rules', [])
@@ -2886,43 +3029,43 @@ class IdentityBasedEngineAdapter:
                 wing_semantic_rules=wing_semantic_rules
             )
             if self.debug_mode:
-                print(f"[Identity Engine] Semantic context: wing={wing.wing_id}, rules={len(wing_semantic_rules)}")
+                logger.info(f"[Identity Engine] Semantic context: wing={wing.wing_id}, rules={len(wing_semantic_rules)}")
             
             # Load records from wing
-            print(f"[Identity Engine] Loading records from wing...")
+            logger.info(f"[Identity Engine] Loading records from wing...")
             records = self._load_records_from_wing(wing)
-            print(f"[Identity Engine] Loaded {len(records)} records")
+            logger.info(f"[Identity Engine] Loaded {len(records)} records")
             
             # Apply time period filter
             if self.filters.time_period_start or self.filters.time_period_end:
                 if self.debug_mode:
-                    print(f"[Identity Engine] Applying time period filter:")
+                    logger.info(f"[Identity Engine] Applying time period filter:")
                     if self.filters.time_period_start:
-                        print(f"  Start: {self.filters.time_period_start}")
+                        logger.info(f" Start: {self.filters.time_period_start}")
                     if self.filters.time_period_end:
-                        print(f"  End: {self.filters.time_period_end}")
+                        logger.info(f" End: {self.filters.time_period_end}")
                 
                 records = self._apply_time_period_filter(records)
-                print(f"[Identity Engine] After time filter: {len(records)} records")
+                logger.info(f"[Identity Engine] After time filter: {len(records)} records")
             
             # Apply identity filter (IDENTITY ENGINE ONLY)
             if self.filters.identity_filters:
                 if self.debug_mode:
-                    print(f"[Identity Engine] Applying identity filters:")
+                    logger.info(f"[Identity Engine] Applying identity filters:")
                     for pattern in self.filters.identity_filters:
-                        print(f"  • {pattern}")
+                        logger.info(f" • {pattern}")
                 
                 records = self._apply_identity_filter(records)
-                print(f"[Identity Engine] After identity filter: {len(records)} records")
+                logger.info(f"[Identity Engine] After identity filter: {len(records)} records")
             
             # Execute correlation
-            print(f"[Identity Engine] Starting correlation...")
+            logger.info(f"[Identity Engine] Starting correlation...")
             result = self.engine.correlate_records(
                 records,
                 wing_name=wing.wing_name,
                 wing_id=wing.wing_id
             )
-            print(f"[Identity Engine] Correlation complete")
+            logger.info(f"[Identity Engine] Correlation complete")
             
             # Store result
             self.last_result = result
@@ -2938,7 +3081,7 @@ class IdentityBasedEngineAdapter:
                 }
             }
         except Exception as e:
-            print(f"[Identity Engine] ERROR: {type(e).__name__}: {str(e)}")
+            logger.info(f"[Identity Engine] ERROR: {type(e).__name__}: {str(e)}")
             import traceback
             traceback.print_exc()
             raise
@@ -2957,7 +3100,7 @@ class IdentityBasedEngineAdapter:
             'execution_time': stats.execution_duration_seconds,
             'record_count': stats.total_evidence,
             'match_count': stats.total_identities,
-            'duplicate_rate': 0,  # Identity engine has very low duplicate rate
+            'duplicate_rate': 0, # Identity engine has very low duplicate rate
             'identities_found': stats.total_identities,
             'anchors_created': stats.total_anchors,
             'evidence_with_anchors': stats.evidence_with_anchors,
@@ -2994,19 +3137,33 @@ class IdentityBasedEngineAdapter:
                 loader = FeatherLoader(db_path)
                 loader.connect()
                 records = loader.get_all_records()
-                
-                # Add feather metadata to each record
+
+                # Add feather metadata to each record.
+                # The _source_timezone tag is read by _parse_timestamp_value
+                # so naive timestamp strings from local-time exports get
+                # localized correctly. Falls back to "UTC" (legacy behavior).
+                # Wing's feather_id is often a short alias ("prefetch") while
+                # the FeatherConfig is keyed by config_name/feather_name; also
+                # try feather_config_name which the wing JSON carries.
+                feather_config_name = getattr(feather_spec, 'feather_config_name', '') or ''
+                source_tz = (
+                    self._feather_tz_map.get(feather_spec.feather_id)
+                    or self._feather_tz_map.get(feather_config_name)
+                    or self._feather_tz_map.get(feather_config_name.lower())
+                    or "UTC"
+                )
                 for record in records:
                     record['feather_id'] = feather_spec.feather_id
                     record['artifact'] = feather_spec.artifact_type
-                
+                    record['_source_timezone'] = source_tz
+
                 all_records.extend(records)
                 loader.disconnect()
-                
+
             except Exception as e:
                 if self.debug_mode:
-                    print(f"[ERROR] Failed to load feather {feather_spec.feather_id}: {e}")
-        
+                    logger.info(f"[ERROR] Failed to load feather {feather_spec.feather_id}: {e}")
+
         return all_records
     
     def _apply_time_period_filter(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -3045,13 +3202,13 @@ class IdentityBasedEngineAdapter:
         
         # Log filter statistics
         if len(filtered) < len(records):
-            print(f"[Time Period Filter] {len(records)} → {len(filtered)} records")
+            logger.info(f"[Time Period Filter] {len(records)} → {len(filtered)} records")
             if skipped_invalid > 0:
-                print(f"  • Skipped {skipped_invalid} records with invalid timestamps")
+                logger.info(f" • Skipped {skipped_invalid} records with invalid timestamps")
             if skipped_before_start > 0:
-                print(f"  • Skipped {skipped_before_start} records before start time")
+                logger.info(f" • Skipped {skipped_before_start} records before start time")
             if skipped_after_end > 0:
-                print(f"  • Skipped {skipped_after_end} records after end time")
+                logger.info(f" • Skipped {skipped_after_end} records after end time")
         
         return filtered
     
@@ -3107,10 +3264,10 @@ class IdentityBasedEngineAdapter:
                 filtered.append(record)
         
         # Log filter statistics
-        print(f"[Identity Filter] {len(records)} → {len(filtered)} records")
-        print(f"  • Matched {len(matched_identities)} unique identities")
+        logger.info(f"[Identity Filter] {len(records)} → {len(filtered)} records")
+        logger.info(f" • Matched {len(matched_identities)} unique identities")
         if self.debug_mode and matched_identities:
-            print(f"  • Identities: {', '.join(list(matched_identities)[:10])}")
+            logger.info(f" • Identities: {', '.join(list(matched_identities)[:10])}")
         
         return filtered
     
@@ -3131,14 +3288,14 @@ class IdentityBasedEngineAdapter:
         from .correlation_result import CorrelationResult, CorrelationMatch
         import uuid
         
-        print(f"[Identity Engine] execute_wing called for: {wing.wing_name}")
-        print(f"[Identity Engine] Available feather_paths keys: {list(feather_paths.keys())[:10]}...")
+        logger.info(f"[Identity Engine] execute_wing called for: {wing.wing_name}")
+        logger.info(f"[Identity Engine] Available feather_paths keys: {list(feather_paths.keys())[:10]}...")
         
         # Get time window from wing's correlation rules (default 180 minutes)
-        time_window = 180  # Default: 3 hours for better correlation accuracy
+        time_window = 180 # Default: 3 hours for better correlation accuracy
         if hasattr(wing, 'correlation_rules') and hasattr(wing.correlation_rules, 'time_window_minutes'):
             time_window = wing.correlation_rules.time_window_minutes
-        print(f"[Identity Engine] Using time window from wing: {time_window} minutes")
+        logger.info(f"[Identity Engine] Using time window from wing: {time_window} minutes")
         
         # Update the engine's time window
         self.engine.time_window_minutes = time_window
@@ -3185,9 +3342,9 @@ class IdentityBasedEngineAdapter:
                         resolution_method = "direct_path"
                 
                 if not db_path:
-                    print(f"[Identity Engine] ✗ No path for feather: {feather_id}")
+                    logger.info(f"[Identity Engine] [FAIL] No path for feather: {feather_id}")
                     if hasattr(feather_spec, 'feather_config_name'):
-                        print(f"                   config_name: {feather_spec.feather_config_name}")
+                        logger.info(f" config_name: {feather_spec.feather_config_name}")
                     feathers_failed.append(feather_id)
                     continue
                 
@@ -3197,24 +3354,36 @@ class IdentityBasedEngineAdapter:
                     loader = FeatherLoader(db_path)
                     loader.connect()
                     records = loader.get_all_records()
-                    
-                    # Add feather metadata to each record
+
+                    # Add feather metadata to each record; the
+                    # _source_timezone tag is read by _parse_timestamp_value
+                    # so naive timestamps get localized per-feather.
+                    # Wing's feather_id is often a short alias; also try
+                    # feather_config_name which the wing JSON carries.
                     artifact_type = feather_spec.artifact_type if hasattr(feather_spec, 'artifact_type') else 'Unknown'
+                    feather_config_name = getattr(feather_spec, 'feather_config_name', '') or ''
+                    source_tz = (
+                        self._feather_tz_map.get(feather_id)
+                        or self._feather_tz_map.get(feather_config_name)
+                        or self._feather_tz_map.get(feather_config_name.lower())
+                        or "UTC"
+                    )
                     for record in records:
                         record['feather_id'] = feather_id
                         record['artifact'] = artifact_type
-                    
+                        record['_source_timezone'] = source_tz
+
                     all_records.extend(records)
                     loader.disconnect()
                     feathers_loaded.append((feather_id, len(records), artifact_type))
-                    print(f"[Identity Engine] ✓ Loaded {len(records):,} records from {feather_id} ({artifact_type}) via {resolution_method}")
+                    logger.info(f"[Identity Engine] [OK] Loaded {len(records):,} records from {feather_id} ({artifact_type}) via {resolution_method}")
                     
                 except Exception as e:
-                    print(f"[Identity Engine] ✗ Error loading {feather_id}: {e}")
+                    logger.info(f"[Identity Engine] [FAIL] Error loading {feather_id}: {e}")
                     feathers_failed.append(feather_id)
             
-            print(f"[Identity Engine] Summary: {len(feathers_loaded)} feathers loaded, {len(feathers_failed)} failed")
-            print(f"[Identity Engine] Total records loaded: {len(all_records):,}")
+            logger.info(f"[Identity Engine] Summary: {len(feathers_loaded)} feathers loaded, {len(feathers_failed)} failed")
+            logger.info(f"[Identity Engine] Total records loaded: {len(all_records):,}")
             
             # Build feather metadata from loaded records and extraction stats
             # Requirements: 7.1, 7.2
@@ -3223,7 +3392,7 @@ class IdentityBasedEngineAdapter:
             
             # Calculate unique identities per feather
             # This is needed because extraction_stats['extracted'] counts records, not unique identities
-            identities_per_feather = {}  # feather_id -> set of identity_keys
+            identities_per_feather = {} # feather_id -> set of identity_keys
             for identity_key, identity in self.identities.items():
                 for evidence in identity.all_evidence:
                     feather_id = evidence.feather_id
@@ -3241,17 +3410,17 @@ class IdentityBasedEngineAdapter:
                 feather_metadata[fid] = {
                     'feather_name': fid,
                     'records_processed': count,
-                    'total_records': count,  # Add for backward compatibility with database_persistence.py
+                    'total_records': count, # Add for backward compatibility with database_persistence.py
                     'artifact_type': artifact,
-                    'identities_extracted': unique_identities,  # FIXED: Use unique identity count, not record count
+                    'identities_extracted': unique_identities, # FIXED: Use unique identity count, not record count
                     'identities_filtered': fid_stats.get('filtered', 0),
-                    'identities_final': unique_identities,  # Final = unique identities (after filtering)
-                    'matches_created': 0,  # Will be updated after match creation
+                    'identities_final': unique_identities, # Final = unique identities (after filtering)
+                    'matches_created': 0, # Will be updated after match creation
                     'extraction_success_rate': (fid_stats.get('extracted', 0) / count * 100) if count > 0 else 0
                 }
             
             if not all_records:
-                print(f"[Identity Engine] ERROR: No records loaded from any feather!")
+                logger.info(f"[Identity Engine] ERROR: No records loaded from any feather!")
                 result = CorrelationResult(wing_id=wing.wing_id, wing_name=wing.wing_name)
                 result.errors.append("No records loaded from any feather")
                 return result
@@ -3259,12 +3428,12 @@ class IdentityBasedEngineAdapter:
             # Apply time period filter if configured
             if self.filters.time_period_start or self.filters.time_period_end:
                 all_records = self._apply_time_period_filter(all_records)
-                print(f"[Identity Engine] After time filter: {len(all_records)} records")
+                logger.info(f"[Identity Engine] After time filter: {len(all_records)} records")
             
             # Apply identity filter if configured
             if self.filters.identity_filters:
                 all_records = self._apply_identity_filter(all_records)
-                print(f"[Identity Engine] After identity filter: {len(all_records)} records")
+                logger.info(f"[Identity Engine] After identity filter: {len(all_records)} records")
             
             # Execute correlation
             correlation_results = self.engine.correlate_records(
@@ -3277,9 +3446,9 @@ class IdentityBasedEngineAdapter:
             self.last_result = correlation_results
             
             # Print feather contribution summary (will be updated after match creation)
-            print(f"[Identity Engine] Feather records loaded:")
+            logger.info(f"[Identity Engine] Feather records loaded:")
             for fid, meta in sorted(feather_metadata.items(), key=lambda x: x[1]['records_processed'], reverse=True):
-                print(f"  • {fid}: {meta['records_processed']:,} records, {meta['identities_extracted']} identities extracted")
+                logger.info(f" • {fid}: {meta['records_processed']:,} records, {meta['identities_extracted']} identities extracted")
             
             # Convert to CorrelationResult format for compatibility
             result = CorrelationResult(
@@ -3289,7 +3458,7 @@ class IdentityBasedEngineAdapter:
             
             # Set feathers processed info with full metadata
             result.feathers_processed = len(feathers_loaded)
-            result.feather_metadata = feather_metadata  # Use the detailed metadata
+            result.feather_metadata = feather_metadata # Use the detailed metadata
             
             # Copy statistics
             if correlation_results.statistics:
@@ -3300,15 +3469,15 @@ class IdentityBasedEngineAdapter:
             min_feathers_required = 1
             if hasattr(wing, 'correlation_rules') and hasattr(wing.correlation_rules, 'minimum_matches'):
                 min_feathers_required = wing.correlation_rules.minimum_matches
-            print(f"[Identity Engine] Minimum feathers required per match: {min_feathers_required}")
+            logger.info(f"[Identity Engine] Minimum feathers required per match: {min_feathers_required}")
             
             # Count total anchors that meet criteria (for statistics)
             total_anchors = sum(len(identity.anchors) for identity in correlation_results.identities)
-            print(f"[Identity Engine] Total anchors to process: {total_anchors:,}")
+            logger.info(f"[Identity Engine] Total anchors to process: {total_anchors:,}")
             
             # Check if we should use streaming mode (for large result sets)
             # Streaming writes matches directly to database instead of holding in memory
-            use_streaming = total_anchors > 5000  # Stream if more than 5000 anchors
+            use_streaming = total_anchors > 5000 # Stream if more than 5000 anchors
             db_writer = None
             result_id = None
             
@@ -3323,24 +3492,24 @@ class IdentityBasedEngineAdapter:
                     # The actual execution_id will be set when save_result() is called
                     # by the pipeline executor's _generate_report() method
                     result_id = db_writer.create_result(
-                        0,  # Placeholder execution_id - will be updated by save_result()
+                        0, # Placeholder execution_id - will be updated by save_result()
                         wing.wing_id, 
                         wing.wing_name,
                         feathers_processed=len(feathers_loaded),
                         total_records_scanned=correlation_results.statistics.total_evidence if correlation_results.statistics else 0
                     )
                     result.enable_streaming(db_writer, result_id)
-                    print(f"[Identity Engine] Streaming mode enabled - writing directly to database (result_id={result_id})")
+                    logger.info(f"[Identity Engine] Streaming mode enabled - writing directly to database (result_id={result_id})")
                 except Exception as e:
-                    print(f"[Identity Engine] Could not enable streaming: {e}")
+                    logger.info(f"[Identity Engine] Could not enable streaming: {e}")
                     use_streaming = False
                     db_writer = None
             
             # Convert identities to CorrelationMatch objects
             # In streaming mode, matches are written directly to database
-            feather_contribution = {}  # Track which feathers contributed
-            feather_matches_created = {}  # Track matches created per feather (Requirements: 7.2)
-            feather_identities_in_matches = {}  # Track unique identities that participated in matches per feather
+            feather_contribution = {} # Track which feathers contributed
+            feather_matches_created = {} # Track matches created per feather (Requirements: 7.2)
+            feather_identities_in_matches = {} # Track unique identities that participated in matches per feather
             matches_created = 0
             matches_skipped = 0
             
@@ -3348,9 +3517,9 @@ class IdentityBasedEngineAdapter:
             total_identities = len(correlation_results.identities)
             identities_processed = 0
             last_progress_log = 0
-            progress_interval = max(1, total_identities // 20)  # Log every 5%
+            progress_interval = max(1, total_identities // 20) # Log every 5%
             
-            print(f"[Identity Engine] Processing {total_identities:,} identities into matches...")
+            logger.info(f"[Identity Engine] Processing {total_identities:,} identities into matches...")
             
             for identity in correlation_results.identities:
                 # Track if this identity created any matches
@@ -3359,7 +3528,7 @@ class IdentityBasedEngineAdapter:
                 for anchor in identity.anchors:
                     # Build feather_records from anchor rows
                     feather_records = {}
-                    feather_rows = {}  # feather_id -> list of rows
+                    feather_rows = {} # feather_id -> list of rows
                     
                     for row in anchor.rows:
                         feather_id = row.feather_id if hasattr(row, 'feather_id') else 'unknown'
@@ -3417,7 +3586,7 @@ class IdentityBasedEngineAdapter:
                         match_id=str(uuid.uuid4()),
                         timestamp=anchor.start_time.isoformat() if anchor.start_time else "",
                         feather_records=feather_records,
-                        match_score=1.0,  # Identity matches are high confidence
+                        match_score=1.0, # Identity matches are high confidence
                         feather_count=len(feather_records),
                         time_spread_seconds=time_spread,
                         anchor_feather_id=anchor.rows[0].feather_id if anchor.rows and hasattr(anchor.rows[0], 'feather_id') else 'unknown',
@@ -3434,7 +3603,7 @@ class IdentityBasedEngineAdapter:
                             'feathers_in_anchor': list(feather_records.keys())
                         }
                     )
-                    result.add_match(match)  # This streams to DB if streaming mode is enabled
+                    result.add_match(match) # This streams to DB if streaming mode is enabled
                 
                 # Track which identities participated in matches (for identities_found calculation)
                 if identity_created_match:
@@ -3449,19 +3618,19 @@ class IdentityBasedEngineAdapter:
                 identities_processed += 1
                 if identities_processed - last_progress_log >= progress_interval:
                     progress_pct = (identities_processed / total_identities) * 100
-                    print(f"[Identity Engine] ⏳ Progress: {progress_pct:.0f}% ({identities_processed:,}/{total_identities:,} identities, {matches_created:,} matches)")
+                    print(f"[Identity Engine] Progress: {progress_pct:.0f}% ({identities_processed:,}/{total_identities:,} identities, {matches_created:,} matches)")
                     
                     # Force GUI update to prevent freezing
                     try:
                         from PyQt5.QtWidgets import QApplication
                         QApplication.processEvents()
-                    except:
-                        pass  # Ignore if not in GUI context
+                    except Exception as e:
+                        pass # Ignore if not in GUI context
                     
                     last_progress_log = identities_processed
             
             # Final progress log
-            print(f"[Identity Engine] ✓ Processing complete: {identities_processed:,} identities → {matches_created:,} matches")
+            logger.info(f"[Identity Engine] [OK] Processing complete: {identities_processed:,} identities → {matches_created:,} matches")
             
             # Update feather_metadata with matches_created counts (Requirements: 7.2)
             # Also update identities_found to reflect only identities that participated in matches
@@ -3472,7 +3641,7 @@ class IdentityBasedEngineAdapter:
             
             # Finalize streaming if enabled
             if use_streaming and db_writer:
-                print(f"[Identity Engine] ⏳ Finalizing database write...")
+                logger.info(f"[Identity Engine] Finalizing database write...")
                 result.finalize_streaming()
                 db_writer.update_result_count(
                     result_id, 
@@ -3481,26 +3650,26 @@ class IdentityBasedEngineAdapter:
                     feather_metadata=feather_metadata
                 )
                 db_writer.close()
-                print(f"[Identity Engine] ✓ Streaming complete - {matches_created:,} matches written to database")
+                logger.info(f"[Identity Engine] [OK] Streaming complete - {matches_created:,} matches written to database")
             
             # Log feather contribution
-            print(f"[Identity Engine] Feather contribution in results:")
+            logger.info(f"[Identity Engine] Feather contribution in results:")
             for fid, count in sorted(feather_contribution.items(), key=lambda x: x[1], reverse=True):
-                print(f"  • {fid}: {count:,} evidence rows")
+                logger.info(f" • {fid}: {count:,} evidence rows")
             
-            print(f"[Identity Engine] Correlation complete:")
-            print(f"  • Matches created: {matches_created:,}")
-            print(f"  • Matches skipped (< {min_feathers_required} feathers): {matches_skipped:,}")
-            print(f"  • Total matches stored: {result.total_matches:,}")
+            logger.info(f"[Identity Engine] Correlation complete:")
+            logger.info(f" • Matches created: {matches_created:,}")
+            logger.info(f" • Matches skipped (< {min_feathers_required} feathers): {matches_skipped:,}")
+            logger.info(f" • Total matches stored: {result.total_matches:,}")
             if use_streaming:
-                print(f"  • Storage mode: Database streaming (memory-efficient)")
+                logger.info(f" • Storage mode: Database streaming (memory-efficient)")
             else:
-                print(f"  • Storage mode: In-memory")
+                logger.info(f" • Storage mode: In-memory")
             
             return result
             
         except Exception as e:
-            print(f"[Identity Engine] ERROR in execute_wing: {type(e).__name__}: {str(e)}")
+            logger.info(f"[Identity Engine] ERROR in execute_wing: {type(e).__name__}: {str(e)}")
             import traceback
             traceback.print_exc()
             
@@ -3536,12 +3705,12 @@ class IdentityBasedEngineAdapter:
         try:
             numeric_value = float(timestamp_str)
             
-            if numeric_value > 10000000000000:  # Windows FILETIME
+            if numeric_value > 10000000000000: # Windows FILETIME
                 unix_timestamp = (numeric_value - 116444736000000000) / 10000000
                 parsed_time = datetime.fromtimestamp(unix_timestamp)
-            elif numeric_value > 10000000000:  # Milliseconds
+            elif numeric_value > 10000000000: # Milliseconds
                 parsed_time = datetime.fromtimestamp(numeric_value / 1000)
-            elif numeric_value > 0:  # Seconds
+            elif numeric_value > 0: # Seconds
                 parsed_time = datetime.fromtimestamp(numeric_value)
             else:
                 return None
@@ -3560,7 +3729,7 @@ class IdentityBasedEngineAdapter:
             if parsed.tzinfo is not None:
                 parsed = parsed.replace(tzinfo=None)
             return parsed
-        except:
+        except Exception as e:
             pass
         
         return None

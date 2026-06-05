@@ -84,11 +84,15 @@ class ScoreConfigurationManager:
                 self._config_path = None
             
             # Validate loaded configuration
-            if not self._config.validate():
-                logger.warning("Loaded configuration failed validation, using default")
+            is_valid, validation_errors = self._config.validate()
+            if not is_valid:
+                logger.warning(
+                    f"Loaded configuration failed validation, using default. "
+                    f"Errors: {validation_errors}"
+                )
                 self._config = CentralizedScoreConfig.get_default()
                 self._config_path = None
-            
+
             return self._config
     
     def get_configuration(self) -> CentralizedScoreConfig:
@@ -121,29 +125,39 @@ class ScoreConfigurationManager:
         """
         with self._lock:
             # Validate new configuration
-            if not new_config.validate():
-                error_msg = "New configuration failed validation, update rejected"
+            is_valid, validation_errors = new_config.validate()
+            if not is_valid:
+                error_msg = (
+                    "New configuration failed validation, update rejected: "
+                    f"{validation_errors}"
+                )
                 logger.error(error_msg)
                 raise ValueError(error_msg)
-            
+
+            # Capture pre-mutation state for clean rollback.
+            previous_last_updated = new_config.last_updated
+            old_config = self._config
+
             # Update timestamp
             from datetime import datetime
             new_config.last_updated = datetime.now().isoformat()
-            
+
             # Apply new configuration
-            old_config = self._config
             self._config = new_config
-            
+
             logger.info("Score configuration updated successfully")
-            
+
             # Save to file if requested and path is known
             if save and self._config_path:
                 try:
                     self._config.save_to_file(self._config_path)
                 except Exception as e:
                     logger.error(f"Failed to save updated configuration: {e}")
-                    # Rollback on save failure
+                    # Rollback both the active config AND the timestamp we
+                    # mutated on new_config, so the caller's object is
+                    # restored to its pre-call state.
                     self._config = old_config
+                    new_config.last_updated = previous_last_updated
                     raise
             
             # Notify all registered components
@@ -211,8 +225,11 @@ class ScoreConfigurationManager:
             return warnings
         
         # Validate current configuration
-        if not self._config.validate():
-            warnings.append("Current configuration failed validation")
+        is_valid, validation_errors = self._config.validate()
+        if not is_valid:
+            warnings.append(
+                f"Current configuration failed validation: {validation_errors}"
+            )
         
         # Check for duplicate definitions in wing configurations
         # This would require scanning wing config files
@@ -229,7 +246,7 @@ class ScoreConfigurationManager:
         else:
             logger.warning(f"Found {len(warnings)} score configuration inconsistencies")
             for warning in warnings:
-                logger.warning(f"  - {warning}")
+                logger.warning(f" - {warning}")
         
         return warnings
     

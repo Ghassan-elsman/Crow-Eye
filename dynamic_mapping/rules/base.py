@@ -14,7 +14,7 @@ class DefaultRule(ABC):
     the required methods for SQL query generation and mapping extraction.
     """
     
-    def __init__(self, name: str, category: str, description: str, target_db_name: str):
+    def __init__(self, name: str, category: str, description: str, target_db_name: Optional[str]):
         """
         Initialize a default rule.
         
@@ -135,22 +135,64 @@ class CustomRule:
         """
         return f"""
         SELECT 
-            {self.value_column} AS value,
-            {self.key_column} AS key,
+            "{self.value_column}" AS value,
+            "{self.key_column}" AS key,
             '{self.table_name}' AS source
-        FROM {self.table_name}
+        FROM "{self.table_name}"
         """
     
     def execute(self, artifacts_dir: str) -> List[Tuple[str, str, str]]:
         """
         Execute custom rule and extract mappings.
-        
+
+        Opens the rule's source DB at <artifacts_dir>/<self.db_name>, runs the
+        auto-generated SELECT, and emits (value, key, source) tuples filtered the
+        same way default rules filter (drop NULL / empty either side).
+
         Args:
             artifacts_dir: Path to artifacts directory
-        
+
         Returns:
-            List of tuples (value, key, source)
+            List of tuples (value, key, source). Empty list on any failure
+            (missing DB / bad table / column mismatch) so the caller can simply
+            continue with the next rule.
         """
-        # This will be implemented in the full custom rules module
-        # For now, return empty list as placeholder
-        return []
+        import os
+        import sqlite3
+
+        if not artifacts_dir or not self.db_name:
+            return []
+
+        db_path = os.path.join(artifacts_dir, self.db_name)
+        if not os.path.exists(db_path):
+            return []
+
+        mappings: List[Tuple[str, str, str]] = []
+        conn = None
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(self.generate_query())
+            rows = cursor.fetchall()
+            for row in rows:
+                if len(row) < 2:
+                    continue
+                value, key = row[0], row[1]
+                if value is None or key is None:
+                    continue
+                v_str = str(value).strip()
+                k_str = str(key).strip()
+                if not v_str or not k_str:
+                    continue
+                mappings.append((v_str, k_str, self.table_name))
+        except Exception as e:
+            # Surfaced by the caller via _log_gather_history; degrade quietly here.
+            print(f"[Warning] Custom rule '{self.name}' execution failed: {e}")
+            return []
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return mappings

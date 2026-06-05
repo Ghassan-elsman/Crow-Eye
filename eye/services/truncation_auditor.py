@@ -8,6 +8,7 @@ import hashlib
 import re
 import time
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -60,7 +61,37 @@ class TruncationAuditor:
         # Retry configuration
         self.max_retries = 3
         self.retry_base_delay = 0.1  # 100ms base delay for exponential backoff
-    
+
+        # Tamper-evidence: every record folds in the previous record's hash so
+        # the log is a verifiable chain (like EvidenceSeal), not append-only by
+        # convention only. Reentrant so log_event can flush while holding it.
+        self._chain_lock = threading.RLock()
+        self._prev_chain_hash = ""
+        self._recover_chain()
+
+    def _recover_chain(self) -> None:
+        """Resume the audit hash chain from the last line's ``chain=`` field so
+        the chain stays continuous across sessions (mirrors
+        ``EvidenceSeal._recover_chain``). Legacy un-chained logs resume at ""."""
+        try:
+            if self.log_path.exists():
+                last = None
+                with open(self.log_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            last = line.rstrip("\n")
+                if last:
+                    m = re.search(r" chain=([0-9a-f]{64})$", last)
+                    if m:
+                        self._prev_chain_hash = m.group(1)
+        except Exception as e:
+            self.logger.warning(f"Could not recover audit chain: {e}")
+
+    def _redact(self, text: str) -> str:
+        if not isinstance(text, str):
+            return text
+        return re.sub(r'\bAIzaSy[A-Za-z0-9_\-]{33}\b', '[REDACTED_API_KEY]', text)
+
     def log_event(
         self,
         action: str,
@@ -81,21 +112,26 @@ class TruncationAuditor:
             message_hash: SHA-256 hash of message content for verification
             metadata: Additional context (e.g., patterns_found, original_tokens)
         """
-        # Format log entry
+        # Format the base log entry (no trailing newline yet).
         timestamp = datetime.now().isoformat()
         metadata_json = json.dumps(metadata or {})
-        
-        log_entry = (
+
+        base_line = (
             f"[{timestamp}] {action} {message_id} "
             f"tokens={token_count} reason={reason} "
-            f"hash={message_hash} metadata={metadata_json}\n"
+            f"hash={message_hash} metadata={metadata_json}"
         )
-        
-        # Add to buffer
-        self.buffer.append(log_entry)
-        
-        # Flush if buffer is full
-        if len(self.buffer) >= self.buffer_max_size:
+        base_line = self._redact(base_line)
+
+        with self._chain_lock:
+            # Fold the previous record's hash in so the log is tamper-evident.
+            chain_hash = hashlib.sha256(
+                (self._prev_chain_hash + base_line).encode("utf-8", errors="replace")
+            ).hexdigest()
+            self._prev_chain_hash = chain_hash
+            self.buffer.append(f"{base_line} chain={chain_hash}\n")
+            # Write-through: a chain-of-custody event must never live only in
+            # memory (where a crash/SIGKILL would lose it).
             self._flush_buffer()
     
     def _flush_buffer(self):
@@ -110,11 +146,18 @@ class TruncationAuditor:
         """
         if not self.buffer:
             return
-        
+
+        with self._chain_lock:
+            self._flush_buffer_locked()
+
+    def _flush_buffer_locked(self):
+        if not self.buffer:
+            return
+
         # Try to flush any previously failed writes first
         if self.failed_writes_buffer:
             self._attempt_flush_failed_writes()
-        
+
         # Attempt to write current buffer with retry logic
         for attempt in range(self.max_retries):
             try:
@@ -210,27 +253,8 @@ class TruncationAuditor:
         """
         try:
             self._flush_buffer()
-            events = []
-            
-            if self.log_path.exists():
-                with open(self.log_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        # Parse the log format:
-                        # [timestamp] ACTION ID tokens=X reason=Y hash=Z metadata={...}
-                        match = re.match(
-                            r'\[(?P<timestamp>[^\]]+)\] (?P<action>\w+) (?P<id>\S+) '
-                            r'tokens=(?P<tokens>\d+) reason=(?P<reason>\S+) '
-                            r'hash=(?P<hash>\S+) metadata=(?P<metadata>.*)',
-                            line.strip()
-                        )
-                        if match:
-                            event = match.groupdict()
-                            try:
-                                event['metadata'] = json.loads(event['metadata'])
-                            except json.JSONDecodeError:
-                                pass
-                            events.append(event)
-            
+            events = self.get_events()
+
             out_path = Path(output_path)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             
@@ -243,6 +267,74 @@ class TruncationAuditor:
             self.logger.error(f"Failed to export JSON audit trail: {e}")
             return False
             
+    def get_events(self) -> List[Dict[str, Any]]:
+        """
+        Parse the append-only audit log into structured event dicts. This is the
+        single parser reused by the JSON export and the Compliance UI bridge.
+
+        Each event: {timestamp, action, id, tokens, reason, hash, metadata}.
+        """
+        self._flush_buffer()
+        events: List[Dict[str, Any]] = []
+        if self.log_path.exists():
+            with open(self.log_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # [timestamp] ACTION ID tokens=X reason=Y hash=Z metadata={...}
+                    match = re.match(
+                        r'\[(?P<timestamp>[^\]]+)\] (?P<action>\w+) (?P<id>\S+) '
+                        r'tokens=(?P<tokens>\d+) reason=(?P<reason>\S+) '
+                        r'hash=(?P<hash>\S+) metadata=(?P<metadata>.*?)'
+                        r'(?: chain=(?P<chain>[0-9a-f]{64}))?$',
+                        line.strip()
+                    )
+                    if match:
+                        event = match.groupdict()
+                        try:
+                            event['metadata'] = json.loads(event['metadata'])
+                        except json.JSONDecodeError:
+                            pass
+                        try:
+                            event['tokens'] = int(event['tokens'])
+                        except (TypeError, ValueError):
+                            pass
+                        events.append(event)
+        return events
+
+    def verify_chain(self) -> bool:
+        """Verify the audit log's tamper-evident hash chain end-to-end.
+
+        Each chained line records ``chain = sha256(prev_chain + base_line)``.
+        We recompute sequentially and compare; any edit, reorder, or deletion
+        breaks the recomputation. Legacy un-chained lines (pre-upgrade) are
+        skipped — the chain is verified over the records that carry one.
+        Returns True if every chained record matches (or there are none).
+        """
+        self._flush_buffer()
+        if not self.log_path.exists():
+            return True
+        running = ""
+        ok = True
+        try:
+            with open(self.log_path, "r", encoding="utf-8") as f:
+                for raw in f:
+                    line = raw.rstrip("\n")
+                    if not line.strip():
+                        continue
+                    m = re.search(r" chain=([0-9a-f]{64})$", line)
+                    if not m:
+                        continue  # legacy line, not part of the chain
+                    base = line[:m.start()]
+                    expected = hashlib.sha256(
+                        (running + base).encode("utf-8", errors="replace")
+                    ).hexdigest()
+                    if expected != m.group(1):
+                        ok = False
+                    running = expected
+        except Exception as e:
+            self.logger.error(f"Error verifying audit chain: {e}")
+            return False
+        return ok
+
     def auto_export_json(self) -> bool:
         """
         """

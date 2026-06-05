@@ -120,7 +120,7 @@ class EnhancedFeatherLoader:
         # Get all column names
         cursor = self.connection.cursor()
         cursor.execute("PRAGMA table_info(feather_data)")
-        all_columns = [row[1].lower() for row in cursor.fetchall()]  # row[1] is column name
+        all_columns = [row[1].lower() for row in cursor.fetchall()] # row[1] is column name
         
         detected = DetectedColumns()
         
@@ -229,18 +229,19 @@ class EnhancedFeatherLoader:
         if not Path(table_path).exists():
             raise FileNotFoundError(f"Feather table not found: {table_path}")
         
+        conn = None
         try:
             conn = sqlite3.connect(f"file:{table_path}?mode=ro", uri=True)
             cursor = conn.cursor()
-            
+
             # Get column names
             cursor.execute("PRAGMA table_info(feather_data)")
             columns = [row[1] for row in cursor.fetchall()]
-            
+
             # Get row count
             cursor.execute("SELECT COUNT(*) FROM feather_data")
             row_count = cursor.fetchone()[0]
-            
+
             # Get metadata if available
             metadata = {}
             try:
@@ -252,19 +253,23 @@ class EnhancedFeatherLoader:
                     metadata = dict(zip(meta_columns, row))
             except sqlite3.Error:
                 pass
-            
-            conn.close()
-            
+
             return {
                 'path': table_path,
                 'columns': columns,
                 'row_count': row_count,
                 'metadata': metadata
             }
-            
+
         except sqlite3.Error as e:
             logger.error(f"Error getting table info for {table_path}: {e}")
             raise
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
     
     @staticmethod
     def validate_feather_table(table_path: str) -> tuple[bool, List[str]]:
@@ -282,22 +287,27 @@ class EnhancedFeatherLoader:
         if not Path(table_path).exists():
             return False, [f"Table file not found: {table_path}"]
         
+        conn = None
         try:
             conn = sqlite3.connect(f"file:{table_path}?mode=ro", uri=True)
             cursor = conn.cursor()
-            
+
             # Check if feather_data table exists
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='feather_data'"
             )
             if not cursor.fetchone():
                 errors.append("'feather_data' table not found")
-            
-            conn.close()
-            
+
         except sqlite3.Error as e:
             errors.append(f"Database error: {str(e)}")
-        
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
+
         return len(errors) == 0, errors
 
 

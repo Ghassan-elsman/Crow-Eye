@@ -22,6 +22,7 @@ SUB-SERVICES:
 import logging
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Callable
 
@@ -32,12 +33,14 @@ from eye.services.search_service import ForensicSearchService
 from eye.services.rag_service import RAGService
 from eye.services.report_engine import ReportEngine
 from eye.services.token_counter import TokenCounter
+from eye.services.context_window_registry import resolve_context_window
 from eye.services.correlation_service import CorrelationService
 from eye.services.case_context_manager import CaseContextManager
 
 # Specialized Logic Modules
 from eye.services.forensic_handlers import ForensicHandlers
 from eye.services.report_handlers import ReportHandlers
+from eye.services.correlation_config_handlers import CorrelationConfigHandlers
 from eye.services.history_manager import HistoryManager
 from eye.services.intent_engine import IntentEngine
 from eye.services.query_processor import QueryProcessor
@@ -47,6 +50,7 @@ from eye.services.threat_intel_service import ThreatIntelService
 # Evidence Preservation Services
 from eye.services.evidence_detector import EvidenceDetector
 from eye.services.truncation_auditor import TruncationAuditor
+from eye.services.evidence_seal import EvidenceSeal
 
 class ContextManager:
     """
@@ -81,6 +85,11 @@ class ContextManager:
         """
         self.model_router = model_router
         self.database_service = database_service
+        # Cache for the always-injected database manifest (built lazily in
+        # _build_database_manifest; the case's DB set is fixed for our lifetime).
+        self._db_manifest_cache = None
+        # TTL cache for the pre-flight connectivity ping (see _validate_connectivity_cached).
+        self._connectivity_cache = None
         self.search_service = search_service
         self.rag_service = rag_service
         self.report_engine = report_engine
@@ -114,7 +123,18 @@ class ContextManager:
             self.logger.info(
                 "No case directory provided. Audit trail and pinning features disabled."
             )
-        
+
+        # Single persistent evidence-seal writer for this case. Constructing one
+        # per turn (the old behavior) re-read the hash chain from disk every turn
+        # and, worse, let two writers (query loop + map-reduce) on the same case
+        # dir fork the chain. One writer per ContextManager/case fixes both. It
+        # no-ops safely when there is no case_directory.
+        try:
+            self.evidence_seal = EvidenceSeal(case_directory)
+        except Exception as e:
+            self.logger.error(f"Failed to initialize evidence seal: {e}")
+            self.evidence_seal = EvidenceSeal(None)
+
         # Token counting for prompt optimization
         backend = self.model_router.config.get("backend", "gemini")
         self.token_counter = TokenCounter(backend)
@@ -122,29 +142,46 @@ class ContextManager:
         # Load configuration settings 
         config = self._load_evidence_preservation_config()
         
-        # Token budget configuration
-        self.token_budget = config.get("token_budget", {
-            "conversation_history": 8000,
-            "system_prompt": 4000,
-            "rag_context": 2000,
-            "tool_results": 4000
-        })
-        self.max_total_tokens = config.get("max_total_tokens", 32000)
+        # Adaptive context window: size max_total_tokens to the active backend
+        # model's real context window (cloud models via the registry; local
+        # servers stay on their runtime n_ctx probe). The configured value is
+        # the fallback for unknown models, and `lock_max_total_tokens` forces
+        # the configured value verbatim when an investigator wants a fixed cap.
+        self.lock_max_total_tokens = config.get("lock_max_total_tokens", False)
+        # The configured value is the fallback for unknown models; kept so model
+        # switches fall back to it (not to the previous model's larger window).
+        self.default_max_total_tokens = config.get("max_total_tokens", 64000)
+        self.max_total_tokens = self._resolve_context_window(self.default_max_total_tokens)
+
+        # Token budget: per-component sub-allocations used during prompt
+        # assembly. These scale with the resolved window so history / tool
+        # results / RAG grow on a larger backend instead of staying pinned at
+        # the old fixed caps — UNLESS the investigator pinned an explicit
+        # token_budget in eye_config.json, which is then honored verbatim.
+        self._token_budget_explicit = config.get("token_budget_explicit", False)
+        if self._token_budget_explicit:
+            self.token_budget = config.get("token_budget")
+        else:
+            self.token_budget = self._scale_token_budget(self.max_total_tokens)
+
+        self.max_tool_output_chars = config.get("max_tool_output_chars", 100000)
         self.truncation_count = 0
+
+        # Apply sealed-payload persistence config to the seal writer (built above,
+        # before config was loaded). Re-seed the recency window if N changed.
+        try:
+            self.evidence_seal.store_full_payload = config.get("store_full_payload", True)
+            n = int(config.get("sealed_payload_recent_uncompressed", 10))
+            if n != self.evidence_seal._recent_uncompressed:
+                self.evidence_seal._recent_uncompressed = n
+                self.evidence_seal._seed_recent_payloads()
+        except Exception as e:
+            self.logger.warning(f"Could not apply sealed-payload config: {e}")
         
-        # Evidence preservation configuration
+        # Evidence preservation configuration. Only confidence_threshold is
+        # consumed (history_manager evidence auto-preservation gate).
         self.evidence_preservation_config = config.get("evidence_preservation", {
-            "enabled": True,
-            "confidence_threshold": 0.7,
-            "max_pinned_messages": 10,
-            "auto_detect_evidence": True
-        })
-        
-        # Audit trail configuration
-        self.audit_trail_config = config.get("audit_trail", {
-            "enabled": True,
-            "buffer_size": 10,
-            "export_format": "text"
+            "confidence_threshold": 0.7
         })
 
         # --- Modular Components ---
@@ -153,6 +190,9 @@ class ContextManager:
         self.intent_engine = IntentEngine()
         self.forensic_handlers = ForensicHandlers(self)
         self.report_handlers = ReportHandlers(self)
+        # Correlation Engine authoring handlers — GEP-compliant write
+        # actions for Wings and Semantic Mappings.
+        self.correlation_config_handlers = CorrelationConfigHandlers(self)
         self.query_processor = QueryProcessor(self)
         
         # Dispatch table for AI Tool Calls
@@ -213,23 +253,24 @@ class ContextManager:
         
         # Default configuration
         default_config = {
-            "max_total_tokens": 32000,
+            "max_total_tokens": 64000,
+            "lock_max_total_tokens": False,
+            "max_tool_output_chars": 100000,
             "token_budget": {
                 "conversation_history": 8000,
                 "system_prompt": 4000,
                 "rag_context": 2000,
                 "tool_results": 4000
             },
+            # Whether the user pinned a token_budget; when False the budget is
+            # scaled to the resolved context window instead of held fixed.
+            "token_budget_explicit": False,
+            # Persist the full sent payload per seal (independently reproducible
+            # Compliance log); keep the most recent N uncompressed, compress older.
+            "store_full_payload": True,
+            "sealed_payload_recent_uncompressed": 10,
             "evidence_preservation": {
-                "enabled": True,
-                "confidence_threshold": 0.7,
-                "max_pinned_messages": 10,
-                "auto_detect_evidence": True
-            },
-            "audit_trail": {
-                "enabled": True,
-                "buffer_size": 10,
-                "export_format": "text"
+                "confidence_threshold": 0.7
             }
         }
         
@@ -244,9 +285,13 @@ class ContextManager:
                     # Merge with defaults
                     result = {
                         "max_total_tokens": context_window.get("max_total_tokens", default_config["max_total_tokens"]),
+                        "lock_max_total_tokens": context_window.get("lock_max_total_tokens", default_config["lock_max_total_tokens"]),
+                        "max_tool_output_chars": context_window.get("max_tool_output_chars", default_config["max_tool_output_chars"]),
                         "token_budget": context_window.get("token_budget", default_config["token_budget"]),
-                        "evidence_preservation": context_window.get("evidence_preservation", default_config["evidence_preservation"]),
-                        "audit_trail": context_window.get("audit_trail", default_config["audit_trail"])
+                        "token_budget_explicit": "token_budget" in context_window,
+                        "store_full_payload": context_window.get("store_full_payload", default_config["store_full_payload"]),
+                        "sealed_payload_recent_uncompressed": context_window.get("sealed_payload_recent_uncompressed", default_config["sealed_payload_recent_uncompressed"]),
+                        "evidence_preservation": context_window.get("evidence_preservation", default_config["evidence_preservation"])
                     }
                     
                     self.logger.info("Loaded evidence preservation configuration from eye_config.json")
@@ -330,18 +375,21 @@ class ContextManager:
         """
         f = self.forensic_handlers
         r = self.report_handlers
+        c = self.correlation_config_handlers
         return {
             # Investigative Tools
             "query_database": f.handle_query_database,
+            "analyze_large_dataset": f.handle_analyze_large_dataset,
             "get_schema": f.handle_get_schema,
             "search_artifacts": f.handle_search_artifacts,
             "query_correlation_results": f.handle_query_correlation_results,
             "list_case_files": f.handle_list_case_files,
             "internet_search": f.handle_internet_search,
+            "fetch_web_content": f.handle_fetch_web_content,
             "switch_model": f.handle_switch_model,
             "query_living_off_the_land_intel": f.handle_query_living_off_the_land_intel,
             "query_threat_intel": f.handle_query_threat_intel,
-            
+
             # Evidence Reporting Tools
             "report_add_chat_transcript": r.handle_report_add_chat_transcript,
             "report_add_chart": r.handle_report_add_chart,
@@ -353,15 +401,273 @@ class ContextManager:
             "report_add_image": r.handle_report_add_image,
             "report_edit_section": r.handle_report_edit_section,
             "report_delete_section": r.handle_report_delete_section,
-            "export_report": r.handle_export_report
-            }
-    def process_query(self, query: str, status_callback=None, hitl_callback=None, report_callback=None):
+            "export_report": r.handle_export_report,
+
+            # Correlation Engine Authoring Tools (GEP-compliant write
+            # actions). EYE has create+edit scope on items it authored
+            # itself (eye_authorship.created_by starts with "eye");
+            # built-in and human-authored items remain read-only.
+            "correlation_create_wing":             c.handle_correlation_create_wing,
+            "correlation_edit_wing":               c.handle_correlation_edit_wing,
+            "correlation_create_semantic_mapping": c.handle_correlation_create_semantic_mapping,
+            "correlation_edit_semantic_mapping":   c.handle_correlation_edit_semantic_mapping,
+        }
+    # Connectivity is re-checked at most once per this many seconds, so a burst
+    # of queries doesn't trigger a network round-trip (and, for local CLI
+    # backends, a list_models call) on every single turn.
+    _CONNECTIVITY_TTL_SECONDS = 60
+
+    def _validate_connectivity_cached(self) -> bool:
+        """Pre-flight connectivity check with a short TTL cache.
+
+        Only a *positive* result is cached (keyed by backend+model), so a healthy
+        backend isn't re-pinged on every query, while a failure is always
+        re-checked next turn. A model/backend switch changes the key and forces a
+        fresh check. Stale-but-down backends still surface: the actual model call
+        fails and is handled downstream.
         """
-        Entry point for investigative queries. 
+        now = time.time()
+        cfg = getattr(self.model_router, "config", {}) or {}
+        key = (cfg.get("backend"), cfg.get("model_name"))
+        cache = getattr(self, "_connectivity_cache", None)
+        if (cache and cache.get("ok") and cache.get("key") == key
+                and (now - cache.get("ts", 0)) < self._CONNECTIVITY_TTL_SECONDS):
+            return True
+        ok = self.model_router.validate_connectivity()
+        self._connectivity_cache = {"key": key, "ok": bool(ok), "ts": now}
+        return ok
+
+    def process_query(self, query: str, status_callback=None, hitl_callback=None, report_callback=None, dialogue_callback=None):
+        """
+        Entry point for investigative queries.
         Ensures thread safety and delegates to the QueryProcessor.
+
+        GEP Rule 1 (Pre-Flight Integrity): every query is gated by a
+        validate_connectivity() call on the active LLM backend.  If the backend
+        is unreachable we return a structured error envelope so the chat
+        renders a "Backend unreachable" bubble instead of hanging silently.
+        The check is TTL-cached so a burst of queries doesn't re-ping every turn.
         """
+        # ---- GEP Rule 1: Pre-Flight Ping (TTL-cached) -------------------
+        try:
+            ok = self._validate_connectivity_cached()
+            ping_err = None
+        except Exception as e:
+            ok = False
+            ping_err = str(e)
+        if not ok:
+            if status_callback:
+                try:
+                    status_callback(json.dumps({
+                        "step_id": f"ping-{int(time.time() * 1000)}",
+                        "type": "thinking",
+                        "status": "error",
+                        "label": "Pre-flight ping failed",
+                        "detail": ping_err or "Backend unreachable"
+                    }))
+                except Exception:
+                    pass  # status_callback is best-effort; never block the error return
+            return {
+                "success": False,
+                "error": "Backend unreachable",
+                "data": {
+                    "response": f"Backend unreachable: {ping_err or 'no response from LLM backend'}"
+                }
+            }
+        # -----------------------------------------------------------------
+
         with self._lock:
-            return self.query_processor.process_query(query, status_callback, hitl_callback, report_callback)
+            return self.query_processor.process_query(
+                query, status_callback, hitl_callback, report_callback, dialogue_callback
+            )
+
+    def _resolve_context_window(self, fallback: int = 64000) -> int:
+        """Resolve the effective ``max_total_tokens`` for the active backend model.
+
+        Precedence (the limit's *source* is the backend wherever possible):
+        1. **Live backend introspection** — the model's real window reported by
+           the backend itself (Gemini ``input_token_limit``; Ollama/LM Studio
+           model info). This is the authoritative source when available.
+        2. **Static registry** — known windows for cloud APIs that do NOT expose
+           it (Anthropic 200K, OpenAI 128K, ...).
+        3. **Fallback** — the configured default (64K) for unknown models.
+
+        Local servers also keep their runtime ``n_ctx`` probe, which still
+        overrides downward at call time if a model was loaded with a smaller
+        window than it was trained for. Set
+        ``context_window.lock_max_total_tokens: true`` to pin the configured
+        value verbatim and disable all auto-resolution.
+        """
+        if getattr(self, "lock_max_total_tokens", False):
+            return fallback
+        try:
+            backend = self.model_router.config.get("backend")
+            model_name = self.model_router.config.get("model_name")
+
+            # 1. Ask the backend for its real window (None if unsupported/failed).
+            window = None
+            try:
+                window = self.model_router.get_context_window()
+            except Exception as probe_exc:
+                self.logger.debug(f"Backend context-window introspection failed: {probe_exc}")
+            source = "backend"
+
+            # 2. Fall back to the static registry for non-reporting cloud APIs.
+            if not window:
+                window = resolve_context_window(backend, model_name)
+                source = "registry"
+
+            if window:
+                if window != fallback:
+                    self.logger.info(
+                        f"Adaptive context window: using {window:,} tokens for model "
+                        f"'{model_name}' (backend '{backend}', source={source}); "
+                        f"configured fallback was {fallback:,}."
+                    )
+                return window
+        except Exception as e:
+            self.logger.warning(
+                f"Context window resolution failed ({e}); using fallback {fallback:,}."
+            )
+        return fallback
+
+    def usable_context_tokens(self) -> int:
+        """The token budget actually usable for an outgoing payload / persistent
+        history: the resolved context window minus a ~10% output reserve (min
+        512, capped at half the window so a tiny window can't drive this <= 0).
+
+        Single source of truth shared by ``guarded_generate`` (the per-call
+        outgoing gate) and ``HistoryManager.manage_history`` (persistent
+        compaction), so both layers agree on the same window.
+        """
+        max_ctx = int(getattr(self, "max_total_tokens", 8192) or 8192)
+        reserve = min(max(512, int(max_ctx * 0.1)), max(1, max_ctx // 2))
+        return max_ctx - reserve
+
+    # Historical default proportions (8k/4k/4k/2k of an 18k budget),
+    # normalized to 1.0 — history-heaviest because conversation history and
+    # tool results carry the evidence; RAG is the most compressible.
+    _TOKEN_BUDGET_WEIGHTS = {
+        "conversation_history": 0.45,
+        "system_prompt": 0.22,
+        "tool_results": 0.22,
+        "rag_context": 0.11,
+    }
+
+    def _scale_token_budget(self, max_total_tokens: int) -> Dict[str, int]:
+        """Scale the per-component token sub-budgets to a context window.
+
+        Keeps the historical relative proportions (see ``_TOKEN_BUDGET_WEIGHTS``)
+        but grows every component with the window, so a large backend actually
+        uses its capacity instead of being pinned at the old fixed caps. A ~10%
+        response reserve is held back first (mirroring ``guarded_generate``)
+        before the remainder is split.
+        """
+        try:
+            mt = int(max_total_tokens)
+        except (TypeError, ValueError):
+            mt = self.default_max_total_tokens
+        mt = max(mt, 1000)
+        reserve = min(max(512, int(mt * 0.1)), max(1, mt // 2))
+        available = max(mt - reserve, len(self._TOKEN_BUDGET_WEIGHTS))
+        return {
+            component: max(1, int(available * weight))
+            for component, weight in self._TOKEN_BUDGET_WEIGHTS.items()
+        }
+
+    def _resolve_token_budget(self) -> Dict[str, int]:
+        """Budget for the current window: explicit config wins, else scaled.
+
+        Used on model switch to re-size the budget to the newly resolved
+        ``max_total_tokens`` without clobbering an investigator's pinned budget.
+        """
+        if getattr(self, "_token_budget_explicit", False):
+            return dict(self.token_budget)
+        return self._scale_token_budget(self.max_total_tokens)
+
+    def _build_database_manifest(self, max_tables_per_db: int = 12, max_cols_per_table: int = 24) -> str:
+        """Compact, always-present schema map of the case's forensic databases —
+        their real tables AND columns.
+
+        Sourced from ``database_service.discover_databases()`` (the DB + table
+        set) and ``database_service.get_schema()`` (the real column names, thread-
+        safe + cached). Injected into every system prompt so the model writes SQL
+        grounded in the actual schema instead of inventing identifiers (the root
+        cause of repeated ``no such column`` / ``no such table`` errors, e.g.
+        ``last_run_time`` instead of ``last_executed``, or the DB name
+        ``registry_data`` used as a table). Per-table columns are capped (with a
+        ``+N more`` hint) to stay within the system-prompt budget.
+
+        Cached for the ContextManager's lifetime (the case's database set does
+        not change mid-session — the Eye queries databases but does not create
+        them; a new ContextManager is built when the case changes).
+        """
+        if getattr(self, "_db_manifest_cache", None) is not None:
+            return self._db_manifest_cache
+
+        manifest = ""
+        try:
+            if self.database_service:
+                dbs = self.database_service.discover_databases()
+                accessible = [d for d in dbs if d.get("accessible") and d.get("exists")]
+                if accessible:
+                    lines = [
+                        "## Available Case Databases (real schema)",
+                        "These are the forensic databases present in THIS case, with their "
+                        "REAL tables and columns. Write SQL using ONLY these exact table and "
+                        "column names — do NOT invent identifiers (no guessing column names, "
+                        "and never use a database's filename as a table name). If you need a "
+                        "column that is not listed, call get_schema for that database first. "
+                        "Query every database relevant to the question (Amcache, Registry, "
+                        "Prefetch, ShimCache, SRUM, MFT) — do NOT assume only the MFT.",
+                    ]
+                    for d in sorted(accessible, key=lambda x: ((x.get("category") or ""), (x.get("name") or ""))):
+                        name = d.get("name")
+                        category = d.get("category") or "Artifact"
+                        tables = d.get("tables") or []
+
+                        # Pull the real column schema (cached). Fall back to
+                        # table-names-only for this DB if the fetch fails.
+                        schema = {}
+                        try:
+                            res = self.database_service.get_schema(name)
+                            if res and res.get("success"):
+                                schema = res.get("schema") or {}
+                        except Exception:
+                            schema = {}
+
+                        lines.append(f"- **{name}** ({category})")
+                        for tbl in tables[:max_tables_per_db]:
+                            cols = schema.get(tbl) or []
+                            if cols:
+                                shown_cols = ", ".join(cols[:max_cols_per_table])
+                                if len(cols) > max_cols_per_table:
+                                    shown_cols += f", +{len(cols) - max_cols_per_table} more"
+                                lines.append(f"    - {tbl}({shown_cols})")
+                            else:
+                                lines.append(f"    - {tbl}")
+                        if len(tables) > max_tables_per_db:
+                            lines.append(f"    - ... (+{len(tables) - max_tables_per_db} more tables)")
+                    manifest = "\n".join(lines)
+        except Exception as e:
+            self.logger.warning(f"Failed to build database manifest: {e}")
+            manifest = ""
+
+        self._db_manifest_cache = manifest
+        return manifest
+
+    def update_context_config(self, new_config: Dict[str, Any]) -> None:
+        """
+        Applies a new context window configuration to the context manager at runtime.
+        """
+        self.max_total_tokens = new_config.get("max_total_tokens", self.max_total_tokens)
+        self.max_tool_output_chars = new_config.get("max_tool_output_chars", self.max_tool_output_chars)
+        self.token_budget = new_config.get("token_budget", self.token_budget)
+        
+        if "evidence_preservation" in new_config:
+            self.evidence_preservation_config = new_config["evidence_preservation"]
+
+        self.logger.info("Context configuration updated successfully at runtime.")
 
     def _execute_tool(self, call: Dict, hitl_callback=None) -> Dict:
         """
@@ -407,10 +713,23 @@ class ContextManager:
             if is_constrained and len(case_info) > 1000:
                  case_info = case_info[:1000] + "... [TRUNCATED]"
             core_str += f"\n\n## Case Context\n{case_info}"
-        
+
+        # 2b. AVAILABLE CASE DATABASES (Priority 1: MUST KEEP)
+        # Always list the databases that actually exist in THIS case so the model
+        # never has to guess which to query — the root cause of it hitting only
+        # the MFT for questions like "does the computer have games" when the
+        # answer lives in Amcache / Prefetch / ShimCache / SRUM / Registry.
+        # Sourced from discover_databases(), independent of RAG semantic retrieval.
+        db_manifest = self._build_database_manifest(
+            max_tables_per_db=6 if is_constrained else 12,
+            max_cols_per_table=12 if is_constrained else 24,
+        )
+        if db_manifest:
+            core_str += "\n\n" + db_manifest
+
         # 3. TOOLS (Priority 1: MUST KEEP)
         tool_defs = self._get_tool_definitions()
-        # For small context models, we skip the text summary of tools because 
+        # For small context models, we skip the text summary of tools because
         # they are already provided in the JSON 'tools' field of the API call.
         if not is_constrained:
             tools_list = ["\n## Available Tools", "You have access to the following forensic tools:"]
@@ -419,7 +738,22 @@ class ContextManager:
             core_str += "\n" + "\n".join(tools_list)
         else:
             core_str += "\n\n## Tools\n(Forensic tools are available via function calling)"
-        
+
+        # 3b. REPORT TOOLS QUICK REFERENCE — concrete invocation examples for the
+        # report_* tools. The AI was falling back to inline markdown tables in chat
+        # because the one-line descriptions did not show the shape it needed to call.
+        # Always include this block (compact); it pays for itself by preventing
+        # wasted-tokens chat tables that then have to be re-extracted by the user.
+        core_str += "\n" + self._build_report_tools_quick_reference(tool_defs)
+
+        # 3c. LARGE-RESULT (TOON) COMPRESSION DOCS — teach the model that
+        # query_database results over the threshold arrive as a SAMPLE and how to
+        # get the full set. Compact; always included so the model never treats a
+        # compressed sample as the complete answer.
+        toon_docs = self.llm_config.get("toon_compression_docs", [])
+        if toon_docs:
+            core_str += "\n\n" + "\n".join(toon_docs)
+
         core_tokens = self.token_counter.count_tokens(core_str)
         
         # Safety margin for separators and model overhead
@@ -461,14 +795,149 @@ class ContextManager:
         optional_str = "\n\n".join(optional_parts)
         
         if remaining_budget > 0:
-            if self.token_counter.count_tokens(optional_str) > remaining_budget:
+            optional_tokens = self.token_counter.count_tokens(optional_str)
+            if optional_tokens > remaining_budget:
                 self.logger.warning(f"Optional context exceeds budget. Truncating RAG/Situation Awareness.")
+                # Chain of custody: record the (non-evidence) trim so it is
+                # visible in the Compliance "Chain-of-Custody Events" section
+                # rather than being silently dropped.
+                auditor = getattr(self, "truncation_auditor", None)
+                if auditor:
+                    try:
+                        import hashlib as _hl
+                        dropped_tail = optional_str[remaining_budget * 4:]
+                        auditor.log_event(
+                            action="TRUNCATED",
+                            message_id="system_prompt_optional",
+                            token_count=optional_tokens,
+                            reason="system_prompt_optional_context_budget",
+                            message_hash=_hl.sha256(dropped_tail.encode("utf-8", errors="replace")).hexdigest()[:16],
+                            metadata={"budget": remaining_budget, "kind": "rag_and_situation_awareness", "cut_content": dropped_tail},
+                        )
+                    except Exception:
+                        pass
                 optional_str = self.token_counter.truncate_text(optional_str, remaining_budget)
             return core_str + "\n\n" + optional_str
         else:
-            # Extreme case: Core is already too big (unlikely with 4k budget)
+            # Extreme case: Core is already too big (unlikely with 4k budget).
+            # (Fixes a latent NameError — this branch referenced an undefined
+            # `max_tokens`; the correct cap is the system-prompt budget.)
             self.logger.error("Core identity and tools exceed system prompt budget! Emergency truncation active.")
-            return self.token_counter.truncate_text(core_str, max_tokens)
+            auditor = getattr(self, "truncation_auditor", None)
+            if auditor:
+                try:
+                    import hashlib as _hl
+                    dropped_tail = core_str[budget_config * 4:]
+                    auditor.log_event(
+                        action="TRUNCATED",
+                        message_id="system_prompt_core",
+                        token_count=core_tokens,
+                        reason="system_prompt_core_over_budget",
+                        message_hash=_hl.sha256(dropped_tail.encode("utf-8", errors="replace")).hexdigest()[:16] if dropped_tail else "",
+                        metadata={"budget": budget_config, "cut_content": dropped_tail},
+                    )
+                except Exception:
+                    pass
+            return self.token_counter.truncate_text(core_str, budget_config)
+
+    def _build_report_tools_quick_reference(self, tool_defs: List[Dict]) -> str:
+        """Concrete invocation examples for every `report_*` tool the model has
+        access to. Injected into the system prompt so the LLM stops defaulting
+        to inline markdown tables in chat when it should be calling a tool.
+
+        Examples are derived from the actual schema in llm_config.json so they
+        stay in sync if a schema changes — required parameters are listed
+        explicitly and a minimal JSON example is included for each tool.
+        """
+        report_tool_names = {t.get("name") for t in tool_defs if (t.get("name") or "").startswith("report_")}
+        if not report_tool_names:
+            return ""
+
+        # Hand-crafted minimal examples per tool. Each example only contains the
+        # REQUIRED fields so the model copies the smallest valid shape; optional
+        # fields are mentioned in prose so it knows they exist.
+        examples = {
+            "report_append_section": (
+                "When to use: narrative findings, conclusions, interpretation. NEVER for raw rows.\n"
+                'Call: {"title": "Anomalous RDP Activity 2024-03-12", '
+                '"markdown_content": "Three failed RDP logons preceded the successful logon at 14:02 UTC. ..."}'
+            ),
+            "report_add_data_table": (
+                "When to use: ANY tabular forensic evidence — query results, file listings, event rows, "
+                "user enumerations. THIS IS THE TOOL TO USE INSTEAD OF PASTING A MARKDOWN TABLE IN CHAT.\n"
+                'Call: {"sql_query": "SELECT EventTime, UserName, SourceIP FROM SecurityEvents WHERE EventID=4624", '
+                '"columns": ["EventTime", "UserName", "SourceIP"], "database_name": "SecurityLogs.db"}\n'
+                "The table is rendered interactively in the Report pane. database_name must be the actual DB filename you queried."
+            ),
+            "report_add_chart": (
+                "When to use: distributions, comparisons, temporal patterns over discrete buckets.\n"
+                'Call: {"title": "Failed Logons by Hour", "chart_type": "bar", '
+                '"labels": ["00", "01", "02", "03"], '
+                '"datasets": [{"label": "Failed", "data": [3, 1, 0, 7]}]}'
+            ),
+            "report_add_timeline": (
+                "When to use: ordered chronology of events (executions, logons, file ops, network).\n"
+                'Call: {"title": "Attacker Activity Timeline", '
+                '"events": [{"timestamp": "2024-03-12T14:02:11Z", "label": "RDP Logon", '
+                '"description": "Account: alice, IP: 10.0.0.5", "category": "Auth"}]}'
+            ),
+            "report_add_heatmap": (
+                "When to use: 2D activity intensity (e.g., hour-of-day × day-of-week).\n"
+                'Call: {"title": "Logon Activity Heatmap", "x_labels": ["Mon", "Tue"], '
+                '"y_labels": ["09:00", "10:00"], "intensity_values": [[3, 5], [1, 2]]}'
+            ),
+            "report_add_image": (
+                "When to use: screenshots, diagrams, exhibit images already on disk.\n"
+                'Call: {"image_path": "C:/Cases/123/screenshots/desktop.png", "caption": "Desktop at time of acquisition"}'
+            ),
+            "report_add_chain_of_custody": (
+                "When to use: documenting evidence handling for legal review.\n"
+                'Call: {"entries": [{"evidence_id": "MFT-001", "handler_name": "Investigator", '
+                '"action": "Analyzed", "timestamp": "2024-03-12T15:00:00Z"}]}'
+            ),
+            "report_add_chat_transcript": (
+                "When to use: preserving important investigator↔AI dialogue verbatim in the report.\n"
+                'Call: {"messages": [{"role": "user", "content": "What did this binary do?"}, '
+                '{"role": "ai", "content": "It established persistence via Run key ..."}]}'
+            ),
+            "report_edit_section": (
+                "When to use: amending a section you wrote earlier in this case. block_id comes from the Living Report State listing.\n"
+                'Call: {"block_id": "blk_abc123", "new_content": "Updated narrative with new evidence."}'
+            ),
+            "report_delete_section": (
+                "When to use: removing a stale/duplicate block. block_id from Living Report State.\n"
+                'Call: {"block_id": "blk_abc123"}'
+            ),
+        }
+
+        lines = [
+            "## Report Tools — Quick Reference (USE THESE; DO NOT PASTE TABLES OR CHARTS IN CHAT)",
+            "Per Rule 17 every evidence-bearing turn MUST produce BOTH a chat answer AND a `report_*` tool call.",
+            "If you are about to format a markdown table in chat, STOP and call `report_add_data_table` instead.",
+            "If you are about to describe a chart in chat, STOP and call `report_add_chart` instead.",
+            "",
+        ]
+        for name in [
+            "report_append_section",
+            "report_add_data_table",
+            "report_add_chart",
+            "report_add_timeline",
+            "report_add_heatmap",
+            "report_add_image",
+            "report_add_chain_of_custody",
+            "report_add_chat_transcript",
+            "report_edit_section",
+            "report_delete_section",
+        ]:
+            if name not in report_tool_names:
+                continue
+            example = examples.get(name)
+            if not example:
+                continue
+            lines.append(f"### `{name}`")
+            lines.append(example)
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
     def _get_tool_definitions(self) -> List[Dict]:
         """
@@ -481,9 +950,12 @@ class ContextManager:
         if self.max_total_tokens > 8192:
             return all_tools
             
-        # Constrained Model: Keep only the "Essential 8" forensic tools
+        # Constrained Model: Keep only the essential forensic tools.
+        # analyze_large_dataset is included BECAUSE this is the tight-context
+        # case — it's the map-reduce path the guardrail hands off to when a
+        # payload won't fit, so it must be offered exactly here.
         essential_names = [
-            "query_database", "search_artifacts", "get_schema", 
+            "query_database", "analyze_large_dataset", "search_artifacts", "get_schema",
             "report_append_section", "report_add_data_table", "report_add_chart",
             "query_correlation_results", "list_case_files"
         ]
@@ -508,6 +980,13 @@ class ContextManager:
                         except:
                             args = {}
                     calls.append({"name": tc["function"]["name"], "parameters": args})
+                    
+        # Support for Anthropic format
+        if "content" in response and isinstance(response["content"], list):
+            for block in response["content"]:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    calls.append({"name": block.get("name"), "parameters": block.get("input", {})})
+                    
         return calls
 
     def get_context_stats(self):
@@ -540,212 +1019,6 @@ class ContextManager:
                 self.logger.error(f"Failed to get audit trail status: {e}")
         
         return stats
-
-    def _calculate_token_usage_per_component(self) -> Dict[str, int]:
-        """
-        Calculate token usage per component.
-        
-        Components:
-        - system_prompt: Tokens used by system prompt
-        - rag_context: Tokens used by RAG context
-        - conversation_history: Tokens used by conversation history
-        - tool_results: Tokens used by tool results in history
-        
-        Returns:
-            Dictionary mapping component names to token counts
-            
-        """
-        usage = {
-            "system_prompt": 0,
-            "rag_context": 0,
-            "conversation_history": 0,
-            "tool_results": 0
-        }
-        
-        # Calculate conversation history tokens
-        for msg in self.history_manager.history:
-            # Check if token_count is explicitly stored
-            if "token_count" in msg:
-                token_count = msg["token_count"]
-            elif "content" in msg:
-                # Calculate if not stored
-                token_count = self.token_counter.count_tokens(msg["content"])
-            else:
-                token_count = 0
-            
-            # Classify message type
-            role = msg.get("role", "")
-            if role == "tool":
-                usage["tool_results"] += token_count
-            else:
-                usage["conversation_history"] += token_count
-        
-        # Note: system_prompt and rag_context would be calculated when building prompts
-        # For now, we use the budgeted amounts as estimates
-        # This will be refined when we actually build the prompt
-        
-        return usage
-
-    def _reallocate_token_budget(self, required_tokens: int, component: str) -> Dict[str, int]:
-        """
-        Dynamically reallocate token budget to preserve forensic evidence.
-        
-        Priority Order:
-        1. tool_results (forensic evidence) - minimum 4000 tokens
-        2. conversation_history (context) - minimum 2000 tokens
-        3. system_prompt (instructions) - minimum 1000 tokens
-        4. rag_context (knowledge base) - flexible, can reduce to 500 tokens
-        
-        Args:
-            required_tokens: Additional tokens needed
-            component: Component requesting more tokens
-            
-        Returns:
-            Updated token budget dictionary
-            
-        """
-        budget = self.token_budget.copy()
-        
-        # Ensure all components exist in budget
-        if "rag_context" not in budget:
-            budget["rag_context"] = 2000
-        if "tool_results" not in budget:
-            budget["tool_results"] = 4000
-        
-        # Calculate current allocation
-        total_allocated = sum(budget.values())
-        available = self.max_total_tokens - total_allocated
-        
-        if available >= required_tokens:
-            budget[component] = budget.get(component, 0) + required_tokens
-            self.logger.info(f"Allocated {required_tokens} tokens to {component} from available budget")
-            return budget
-        
-        # Need to reallocate - reduce from lowest priority components
-        deficit = required_tokens - available
-        self.logger.info(f"Token budget reallocation needed. Deficit: {deficit} tokens")
-        
-        # Try reducing RAG context first (lowest priority)
-        if budget.get("rag_context", 0) > 500:
-            reduction = min(deficit, budget["rag_context"] - 500)
-            budget["rag_context"] -= reduction
-            deficit -= reduction
-            self.logger.info(f"Reduced rag_context by {reduction} tokens (now {budget['rag_context']})")
-            
-            # Log to audit trail if available
-            if self.truncation_auditor:
-                self.truncation_auditor.log_event(
-                    action="BUDGET_REDUCED",
-                    message_id="rag_context",
-                    token_count=reduction,
-                    reason="token_reallocation",
-                    message_hash="",
-                    metadata={"component": "rag_context", "new_budget": budget["rag_context"]}
-                )
-        
-        # If still need more, reduce system prompt
-        if deficit > 0 and budget.get("system_prompt", 0) > 1000:
-            reduction = min(deficit, budget["system_prompt"] - 1000)
-            budget["system_prompt"] -= reduction
-            deficit -= reduction
-            self.logger.info(f"Reduced system_prompt by {reduction} tokens (now {budget['system_prompt']})")
-            
-            # Log to audit trail if available
-            if self.truncation_auditor:
-                self.truncation_auditor.log_event(
-                    action="BUDGET_REDUCED",
-                    message_id="system_prompt",
-                    token_count=reduction,
-                    reason="token_reallocation",
-                    message_hash="",
-                    metadata={"component": "system_prompt", "new_budget": budget["system_prompt"]}
-                )
-        
-        # If still need more, reduce conversation_history (but not below 2000)
-        if deficit > 0 and budget.get("conversation_history", 0) > 2000:
-            reduction = min(deficit, budget["conversation_history"] - 2000)
-            budget["conversation_history"] -= reduction
-            deficit -= reduction
-            self.logger.info(f"Reduced conversation_history by {reduction} tokens (now {budget['conversation_history']})")
-            
-            # Log to audit trail if available
-            if self.truncation_auditor:
-                self.truncation_auditor.log_event(
-                    action="BUDGET_REDUCED",
-                    message_id="conversation_history",
-                    token_count=reduction,
-                    reason="token_reallocation",
-                    message_hash="",
-                    metadata={"component": "conversation_history", "new_budget": budget["conversation_history"]}
-                )
-        
-        # Never reduce tool_results below 4000 tokens 
-        # This is enforced by not including tool_results in the reduction order
-        
-        # Allocate to requesting component
-        budget[component] = budget.get(component, 0) + (required_tokens - deficit)
-        
-        # Log if we couldn't fully satisfy the request
-        if deficit > 0:
-            self.logger.warning(
-                f"Could not fully satisfy token request for {component}. "
-                f"Deficit: {deficit} tokens. Allocated: {required_tokens - deficit} tokens"
-            )
-        
-        return budget
-
-    def _emit_truncation_warning(self, count: int, total_tokens: int):
-        """
-        Emit truncation warning to UI via bridge.
-        
-        Args:
-            count: Number of messages summarized
-            total_tokens: Current total token usage
-            
-        """
-        from datetime import datetime
-        
-        budget = self.token_budget.get("conversation_history", 8000)
-        
-        warning_data = {
-            "type": "truncation_warning",
-            "count": count,
-            "total_tokens": total_tokens,
-            "budget": budget,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Check for token budget exhaustion 
-        if total_tokens > budget:
-            deficit = total_tokens - budget
-            warning_data["type"] = "budget_exhausted"
-            warning_data["deficit"] = deficit
-            warning_data["message"] = (
-                f"Token budget exhausted. {deficit} tokens over limit. "
-                f"Consider increasing budget or clearing history."
-            )
-            warning_data["actions"] = [
-                {"id": "increase_budget", "label": "Increase Budget"},
-                {"id": "clear_non_preserved", "label": "Clear Non-Preserved History"},
-                {"id": "export_and_reset", "label": "Export and Reset"}
-            ]
-            
-            self.logger.error(
-                f"CRITICAL: Token budget exhausted! "
-                f"Total: {total_tokens}, Budget: {budget}, Deficit: {deficit}"
-            )
-        else:
-            self.logger.warning(
-                f"Truncation warning: {count} messages summarized. "
-                f"Total tokens: {total_tokens}/{budget}"
-            )
-        
-        # Emit via bridge if available
-        # Note: The bridge integration will be implemented in Task 9.1
-        # For now, we just log the warning
-        # In production, this would call: self.bridge.emit_truncation_warning(warning_data)
-        
-        return warning_data
 
     def _generate_action_chips(
         self,

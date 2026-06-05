@@ -30,9 +30,10 @@ class TimestampFormat(Enum):
     ISO8601 = "iso8601"
     ISO8601_ZULU = "iso8601_zulu"
     DATETIME_STRING = "datetime_string"
-    DATE_SLASH_US = "date_slash_us"  # MM/DD/YYYY
-    DATE_SLASH_EU = "date_slash_eu"  # DD/MM/YYYY
-    DATE_DASH = "date_dash"  # YYYY-MM-DD
+    DATE_SLASH_US = "date_slash_us" # MM/DD/YYYY
+    DATE_SLASH_EU = "date_slash_eu" # DD/MM/YYYY
+    DATE_DASH = "date_dash" # YYYY-MM-DD
+    DATE_COMPACT = "date_compact" # YYYYMMDD (no separators)
     WINDOWS_FILETIME = "windows_filetime"
     EPOCH_DAYS = "epoch_days"
     CUSTOM = "custom"
@@ -47,7 +48,7 @@ class TimestampParseResult:
     original_value: Any
     detected_format: TimestampFormat
     error_message: Optional[str] = None
-    confidence: float = 1.0  # 0.0 to 1.0
+    confidence: float = 1.0 # 0.0 to 1.0
     timezone_info: Optional[str] = None
 
 
@@ -69,35 +70,80 @@ class ResilientTimestampParser:
     and provides fallback strategies when parsing fails.
     """
     
-    def __init__(self, 
+    def __init__(self,
                  validation_rules: Optional[TimestampValidationRule] = None,
-                 debug_mode: bool = False):
+                 debug_mode: bool = False,
+                 source_timezone: str = "UTC"):
         """
         Initialize timestamp parser.
-        
+
         Args:
             validation_rules: Rules for validating parsed timestamps
             debug_mode: Enable debug logging
+            source_timezone: IANA timezone name used when localizing naive
+                timestamp strings. Defaults to "UTC" — the historical
+                assumption. Set to the source artifact's actual timezone
+                (e.g., "America/New_York" for local-time Autopsy exports)
+                so naive strings get correctly converted to UTC instead of
+                being mis-stamped as already-UTC.
         """
         self.validation_rules = validation_rules or TimestampValidationRule()
         self.debug_mode = debug_mode
-        
+        self.source_timezone = source_timezone
+
         # Statistics
         self.parse_attempts = 0
         self.successful_parses = 0
         self.failed_parses = 0
         self.format_detection_cache: Dict[str, TimestampFormat] = {}
-        
+
         # Setup logging
         self.logger = logging.getLogger(__name__)
         if debug_mode:
             self.logger.setLevel(logging.DEBUG)
-        
+
         # Compile regex patterns for performance
         self._compile_patterns()
-        
+
         if self.debug_mode:
-            print("[TimestampParser] Initialized with validation rules:", self.validation_rules)
+            self.logger.info(f"[TimestampParser] Initialized with validation rules: {self.validation_rules}")
+
+    def set_source_timezone(self, source_timezone: str):
+        """Update the timezone assumed for naive strings. Engines that
+        process one feather at a time should call this between feathers so
+        each feather's data is localized correctly."""
+        self.source_timezone = source_timezone
+
+    def _normalize_to_utc(self, dt: datetime) -> datetime:
+        """Return a **naive UTC** datetime.
+
+        Engine consumers (time-window scan, range cache, SQL query builder)
+        compare parsed timestamps against naive window boundaries. Returning
+        a tz-aware datetime here triggers `TypeError: can't compare offset-
+        naive and offset-aware datetimes` deep in query_time_range. Naive
+        UTC keeps the contract.
+
+        Logic:
+          - Naive dt + source UTC: return dt unchanged (legacy: naive=UTC).
+          - Naive dt + source non-UTC: localize using source tz, convert to
+            UTC, strip tzinfo. Correct absolute time, comparable with the
+            engine's naive boundaries.
+          - Aware dt (any tz): convert to UTC, strip tzinfo.
+          - Unknown source_timezone: log a warning and fall back to legacy
+            "assume UTC" so the parse doesn't crash."""
+        if dt.tzinfo is None:
+            if not self.source_timezone or self.source_timezone == "UTC":
+                return dt # naive, assumed UTC — legacy behavior
+            try:
+                from zoneinfo import ZoneInfo
+                dt = dt.replace(tzinfo=ZoneInfo(self.source_timezone))
+            except Exception:
+                self.logger.warning(
+                    f"[TimestampParser] Unknown source_timezone "
+                    f"'{self.source_timezone}'; falling back to UTC"
+                )
+                return dt
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
     
     def _compile_patterns(self):
         """Compile regex patterns for timestamp format detection"""
@@ -108,25 +154,27 @@ class ResilientTimestampParser:
             TimestampFormat.DATE_SLASH_US: re.compile(r'^\d{1,2}/\d{1,2}/\d{4}'),
             TimestampFormat.DATE_SLASH_EU: re.compile(r'^\d{1,2}/\d{1,2}/\d{4}'),
             TimestampFormat.DATE_DASH: re.compile(r'^\d{4}-\d{2}-\d{2}$'),
+            # YYYYMMDD compact form, e.g. registry InstalledSoftware.install_date "20260503"
+            TimestampFormat.DATE_COMPACT: re.compile(r'^\d{8}$'),
         }
     
-    def parse_timestamp(self, 
-                       value: Any, 
+    def parse_timestamp(self,
+                       value: Any,
                        hint_format: Optional[TimestampFormat] = None,
                        column_name: Optional[str] = None) -> TimestampParseResult:
         """
         Parse a timestamp value with resilient error handling.
-        
+
         Args:
             value: Timestamp value to parse
             hint_format: Optional format hint to try first
             column_name: Optional column name for context
-            
+
         Returns:
             TimestampParseResult with parsing outcome
         """
         self.parse_attempts += 1
-        
+
         # Handle None/null values
         if value is None or (isinstance(value, str) and value.strip() == ''):
             return TimestampParseResult(
@@ -136,6 +184,17 @@ class ResilientTimestampParser:
                 detected_format=TimestampFormat.UNKNOWN,
                 error_message="Null or empty timestamp value"
             )
+
+        # Strip trailing parenthetical annotations like
+        # "2026-05-19 10:48:21 (Registry Key LastWrite)" emitted by the
+        # registry parser. The parens carry source context, not part of
+        # the timestamp, and would otherwise break strptime.
+        if isinstance(value, str):
+            s = value.strip()
+            if '(' in s and s.endswith(')'):
+                head = s.rsplit('(', 1)[0].strip()
+                if head:
+                    value = head
         
         # Try hint format first if provided
         if hint_format and hint_format != TimestampFormat.UNKNOWN:
@@ -159,11 +218,11 @@ class ResilientTimestampParser:
                 continue
             
             if format_type == hint_format or format_type == detected_format:
-                continue  # Already tried
+                continue # Already tried
             
             result = self._try_parse_format(value, format_type, column_name)
             if result.success:
-                result.confidence = 0.7  # Lower confidence for fallback parsing
+                result.confidence = 0.7 # Lower confidence for fallback parsing
                 self.successful_parses += 1
                 return result
         
@@ -196,16 +255,28 @@ class ResilientTimestampParser:
         detected_format = TimestampFormat.UNKNOWN
         
         if isinstance(value, (int, float)):
-            # Numeric timestamp
-            if value > 1e15:  # Microseconds
-                detected_format = TimestampFormat.UNIX_MICROSECONDS
-            elif value > 1e12:  # Milliseconds
-                detected_format = TimestampFormat.UNIX_MILLISECONDS
-            elif value > 1e9:  # Seconds
-                detected_format = TimestampFormat.UNIX_SECONDS
-            elif value > 1e8:  # Windows FILETIME (approximate)
+            # Numeric timestamp magnitudes within the validated year range
+            # (1970-2100):
+            # Unix seconds: ~0 .. 4.1e9
+            # Unix milliseconds: ~0 .. 4.1e12
+            # Unix microseconds: ~0 .. 4.1e15
+            # Windows FILETIME: 1.16e17 .. 1.62e17
+            # Epoch days: ~0 .. ~47k
+            # FILETIME values sit well above unix microseconds, so probe for
+            # FILETIME first when the magnitude is in the 17-digit range.
+            # The previous ordering caught FILETIME with the >1e15 branch and
+            # mis-tagged it as UNIX_MICROSECONDS, which then failed the
+            # year-range validator and burned cycles trying every other
+            # format as a fallback.
+            if value > 1e16:
                 detected_format = TimestampFormat.WINDOWS_FILETIME
-            elif 1 <= value <= 100000:  # Days since epoch
+            elif value > 1e15: # Unix microseconds (1970-2100)
+                detected_format = TimestampFormat.UNIX_MICROSECONDS
+            elif value > 1e12: # Unix milliseconds
+                detected_format = TimestampFormat.UNIX_MILLISECONDS
+            elif value > 1e8: # Unix seconds (covers 1973+ through 2200+)
+                detected_format = TimestampFormat.UNIX_SECONDS
+            elif 1 <= value <= 100000: # Days since epoch (~1970..2100)
                 detected_format = TimestampFormat.EPOCH_DAYS
         
         elif isinstance(value, str):
@@ -263,7 +334,10 @@ class ResilientTimestampParser:
             
             elif format_type == TimestampFormat.DATE_DASH:
                 return self._parse_date_dash(value)
-            
+
+            elif format_type == TimestampFormat.DATE_COMPACT:
+                return self._parse_date_compact(value)
+
             elif format_type == TimestampFormat.WINDOWS_FILETIME:
                 return self._parse_windows_filetime(value)
             
@@ -292,7 +366,7 @@ class ResilientTimestampParser:
         """Parse Unix timestamp in seconds"""
         try:
             timestamp = float(value)
-            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
             
             if self._validate_datetime(dt):
                 return TimestampParseResult(
@@ -324,7 +398,7 @@ class ResilientTimestampParser:
         """Parse Unix timestamp in milliseconds"""
         try:
             timestamp = float(value) / 1000.0
-            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
             
             if self._validate_datetime(dt):
                 return TimestampParseResult(
@@ -356,7 +430,7 @@ class ResilientTimestampParser:
         """Parse Unix timestamp in microseconds"""
         try:
             timestamp = float(value) / 1000000.0
-            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
             
             if self._validate_datetime(dt):
                 return TimestampParseResult(
@@ -403,10 +477,10 @@ class ResilientTimestampParser:
                 try:
                     dt = datetime.strptime(value_str, fmt)
                     
-                    # Add UTC timezone if none specified
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    
+                    # Localize naive datetimes using the configured
+                    # source timezone, then return as UTC-aware.
+                    dt = self._normalize_to_utc(dt)
+
                     if self._validate_datetime(dt):
                         return TimestampParseResult(
                             success=True,
@@ -427,8 +501,7 @@ class ResilientTimestampParser:
                 
                 dt = datetime.fromisoformat(value_str)
                 
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                dt = self._normalize_to_utc(dt)
                 
                 if self._validate_datetime(dt):
                     return TimestampParseResult(
@@ -519,7 +592,7 @@ class ResilientTimestampParser:
             for fmt in formats:
                 try:
                     dt = datetime.strptime(value_str, fmt)
-                    dt = dt.replace(tzinfo=timezone.utc)  # Assume UTC
+                    dt = self._normalize_to_utc(dt) # Localize via source_timezone
                     
                     if self._validate_datetime(dt):
                         return TimestampParseResult(
@@ -564,7 +637,7 @@ class ResilientTimestampParser:
             for fmt in formats:
                 try:
                     dt = datetime.strptime(value_str, fmt)
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = self._normalize_to_utc(dt)
                     
                     if self._validate_datetime(dt):
                         return TimestampParseResult(
@@ -609,7 +682,7 @@ class ResilientTimestampParser:
             for fmt in formats:
                 try:
                     dt = datetime.strptime(value_str, fmt)
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = self._normalize_to_utc(dt)
                     
                     if self._validate_datetime(dt):
                         return TimestampParseResult(
@@ -639,6 +712,35 @@ class ResilientTimestampParser:
                 error_message=f"European date parse error: {str(e)}"
             )
     
+    def _parse_date_compact(self, value: Any) -> TimestampParseResult:
+        """Parse compact date format YYYYMMDD (e.g. registry install_date '20260503')."""
+        try:
+            value_str = str(value).strip()
+            dt = self._normalize_to_utc(datetime.strptime(value_str, '%Y%m%d'))
+            if self._validate_datetime(dt):
+                return TimestampParseResult(
+                    success=True,
+                    datetime_value=dt,
+                    original_value=value,
+                    detected_format=TimestampFormat.DATE_COMPACT,
+                    confidence=0.8,
+                )
+            return TimestampParseResult(
+                success=False,
+                datetime_value=None,
+                original_value=value,
+                detected_format=TimestampFormat.DATE_COMPACT,
+                error_message="Compact date out of validation range",
+            )
+        except (ValueError, TypeError) as e:
+            return TimestampParseResult(
+                success=False,
+                datetime_value=None,
+                original_value=value,
+                detected_format=TimestampFormat.DATE_COMPACT,
+                error_message=f"Compact date parse error: {e}",
+            )
+
     def _parse_date_dash(self, value: Any) -> TimestampParseResult:
         """Parse dash-separated date format (YYYY-MM-DD)"""
         try:
@@ -653,7 +755,7 @@ class ResilientTimestampParser:
             for fmt in formats:
                 try:
                     dt = datetime.strptime(value_str, fmt)
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = self._normalize_to_utc(dt)
                     
                     if self._validate_datetime(dt):
                         return TimestampParseResult(
@@ -695,7 +797,7 @@ class ResilientTimestampParser:
             # Difference is 11644473600 seconds
             unix_timestamp = (filetime / 10000000.0) - 11644473600
             
-            dt = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc)
+            dt = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).replace(tzinfo=None)
             
             if self._validate_datetime(dt):
                 return TimestampParseResult(
@@ -729,8 +831,8 @@ class ResilientTimestampParser:
             days = float(value)
             
             # Convert days to seconds and create datetime
-            seconds = days * 86400  # 24 * 60 * 60
-            dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+            seconds = days * 86400 # 24 * 60 * 60
+            dt = datetime.fromtimestamp(seconds, tz=timezone.utc).replace(tzinfo=None)
             
             if self._validate_datetime(dt):
                 return TimestampParseResult(
@@ -772,26 +874,33 @@ class ResilientTimestampParser:
             # Check year range
             if dt.year < self.validation_rules.min_year or dt.year > self.validation_rules.max_year:
                 return False
-            
+
+            # _normalize_to_utc returns naive UTC by design (engine consumers
+            # compare against naive window boundaries), but `now` below is
+            # aware UTC. Comparing the two raises TypeError, which previously
+            # masqueraded as a "validation failed" and pushed the parser onto
+            # a wrong fallback format. Anchor both sides at UTC before comparing.
+            dt_for_compare = dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
             # Check future dates if not allowed
             if not self.validation_rules.allow_future_dates:
                 now = datetime.now(tz=timezone.utc)
-                if dt > now:
+                if dt_for_compare > now:
                     return False
-            
+
             # Check maximum future days
             if self.validation_rules.max_future_days > 0:
                 now = datetime.now(tz=timezone.utc)
                 max_future = now + timedelta(days=self.validation_rules.max_future_days)
-                if dt > max_future:
+                if dt_for_compare > max_future:
                     return False
-            
+
             # Check timezone requirement
             if self.validation_rules.require_timezone and dt.tzinfo is None:
                 return False
-            
+
             return True
-        
+
         except Exception:
             return False
     

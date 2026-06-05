@@ -75,6 +75,7 @@ class GlobalConfig:
     last_updated: datetime
     identity_semantic_phase_enabled: bool = True  # Enable identity-level semantic mapping by default
     wings_semantic_mapping_enabled: bool = True  # Enable semantic mapping for Wings by default
+    cascade_tree_expansion_enabled: bool = True  # Enable cascade expansion in tree views by default
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -86,7 +87,8 @@ class GlobalConfig:
             'theme': self.theme,
             'last_updated': self.last_updated.isoformat() if isinstance(self.last_updated, datetime) else self.last_updated,
             'identity_semantic_phase_enabled': self.identity_semantic_phase_enabled,
-            'wings_semantic_mapping_enabled': self.wings_semantic_mapping_enabled
+            'wings_semantic_mapping_enabled': self.wings_semantic_mapping_enabled,
+            'cascade_tree_expansion_enabled': self.cascade_tree_expansion_enabled
         }
     
     @classmethod
@@ -104,7 +106,8 @@ class GlobalConfig:
             theme=data.get('theme', 'cyberpunk_dark'),
             last_updated=last_updated,
             identity_semantic_phase_enabled=data.get('identity_semantic_phase_enabled', True),
-            wings_semantic_mapping_enabled=data.get('wings_semantic_mapping_enabled', True)
+            wings_semantic_mapping_enabled=data.get('wings_semantic_mapping_enabled', True),
+            cascade_tree_expansion_enabled=data.get('cascade_tree_expansion_enabled', True)
         )
     
     @classmethod
@@ -118,7 +121,8 @@ class GlobalConfig:
             theme='cyberpunk_dark',
             last_updated=datetime.now(),
             identity_semantic_phase_enabled=True,
-            wings_semantic_mapping_enabled=True
+            wings_semantic_mapping_enabled=True,
+            cascade_tree_expansion_enabled=True
         )
 
 

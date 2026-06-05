@@ -14,6 +14,19 @@ try:
 except ImportError:
     BeautifulSoup = None
 
+
+def _require_http_url(url: str) -> None:
+    """Raise ValueError unless ``url`` is an http(s) URL with a hostname.
+
+    Defense in depth before any ``urlopen`` call: blocks ``file://``, ``ftp://``,
+    ``data:`` and other schemes so the fetcher can never read local files or
+    reach non-web resources, regardless of how the caller validated the URL.
+    """
+    parsed = urllib.parse.urlparse(url or "")
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"Refusing non-HTTP(S) URL: {url!r}")
+
+
 class InternetSearchService:
     """
     Service for performing forensic research on the internet.
@@ -39,7 +52,8 @@ class InternetSearchService:
             # Use the Lite version of DuckDuckGo for better stability in scripts
             encoded_query = urllib.parse.quote(query)
             url = f"https://lite.duckduckgo.com/lite/?q={encoded_query}"
-            
+            _require_http_url(url)  # defense in depth (fixed https endpoint)
+
             headers = {
                 'User-Agent': self.user_agent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -85,4 +99,72 @@ class InternetSearchService:
             return {
                 "success": False,
                 "error": f"Network Error: Unable to reach search engine. Details: {str(e)}"
+            }
+
+    def fetch_page_content(self, url: str) -> Dict[str, Any]:
+        """
+        Downloads a web page and extracts its main text content.
+        
+        Args:
+            url: The URL of the page to fetch.
+            
+        Returns:
+            Dictionary containing success status, title, and cleaned content.
+        """
+        if not BeautifulSoup:
+            return {
+                "success": False, 
+                "error": "BeautifulSoup4 is not installed. Technical extraction requires this library."
+            }
+
+        try:
+            # Hard scheme guard: never let urlopen handle file://, ftp://, etc.
+            _require_http_url(url)
+
+            self.logger.info(f"Fetching technical content from: {url}")
+
+            headers = {
+                'User-Agent': self.user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as response:
+                html = response.read()
+                
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Remove noise
+            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+                element.decompose()
+                
+            title = soup.title.string.strip() if soup.title else "Technical Page"
+            
+            # Extract content from main body or article
+            content_body = soup.find('main') or soup.find('article') or soup.find('body')
+            
+            if not content_body:
+                return {"success": False, "error": "No readable content found on the page."}
+                
+            text_content = content_body.get_text(separator='\n', strip=True)
+            
+            # Clean up consecutive newlines
+            import re
+            text_content = re.sub(r'\n{3,}', '\n\n', text_content)
+            
+            if len(text_content) > 15000:
+                text_content = text_content[:15000] + "\n\n... [CONTENT TRUNCATED FOR CONTEXT EFFICIENCY] ..."
+            
+            return {
+                "success": True,
+                "title": title,
+                "content": text_content,
+                "url": url
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to fetch page content: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Technical Retrieval Error: {str(e)}"
             }

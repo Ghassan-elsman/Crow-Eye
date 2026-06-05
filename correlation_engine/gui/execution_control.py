@@ -33,6 +33,7 @@ from ..pipeline import PipelineExecutor
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from styles import CrowEyeStyles
+from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
 
 
 class OutputRedirector(QObject):
@@ -69,7 +70,7 @@ class OutputRedirector(QObject):
             if text and text.strip():
                 # Remove both leading and trailing newlines
                 cleaned_text = text.strip('\n')
-                if cleaned_text:  # Make sure there's still content after stripping
+                if cleaned_text: # Make sure there's still content after stripping
                     self.output_written.emit(cleaned_text)
             # DON'T write to original stream - causes double printing
         except RuntimeError:
@@ -81,32 +82,34 @@ class OutputRedirector(QObject):
         if self.original_stream:
             try:
                 self.original_stream.flush()
-            except:
+            except Exception as e:
                 pass
 
 
 class CorrelationEngineWrapper(QObject):
     """Wrapper for running correlation engine in background thread"""
     
-    progress_updated = pyqtSignal(int, int, str)  # wing_index, total, status
-    anchor_progress_updated = pyqtSignal(int, int)  # NEW: anchor_index, total_anchors
-    execution_completed = pyqtSignal(dict)  # results summary
-    wing_completed = pyqtSignal(dict)  # NEW: Signal for individual wing completion
-    execution_failed = pyqtSignal(str)  # error message
-    log_message = pyqtSignal(str)  # NEW: Signal for log messages from worker thread
-    
+    progress_updated = pyqtSignal(int, int, str) # wing_index, total, status
+    anchor_progress_updated = pyqtSignal(int, int) # NEW: anchor_index, total_anchors
+    execution_completed = pyqtSignal(dict) # results summary
+    wing_completed = pyqtSignal(dict) # NEW: Signal for individual wing completion
+    execution_failed = pyqtSignal(str) # error message
+    log_message = pyqtSignal(str) # NEW: Signal for log messages from worker thread
+    # Carries a ProgressEvent object across the thread boundary so GUI updates
+    # happen on the main thread (via QueuedConnection in set_progress_handler).
+    engine_progress_event = pyqtSignal(object)
+
     def __init__(self):
         super().__init__()
         self.executor: Optional[PipelineExecutor] = None
         self.pipeline_config: Optional[PipelineConfig] = None
         self.output_dir: str = ""
-        self.progress_handler = None  # Reference to progress handler method
         self._original_stdout = None
         self._log_widget = None
-        self.selected_wings = []  # NEW: List of wings to execute sequentially
-        self.current_wing_index = 0  # NEW: Track current wing being executed
-        self._cancelled = False  # NEW: Cancellation flag
-        self._wing_summaries = []  # NEW: Track all wing summaries for aggregate statistics
+        self.selected_wings = [] # NEW: List of wings to execute sequentially
+        self.current_wing_index = 0 # NEW: Track current wing being executed
+        self._cancelled = False # NEW: Cancellation flag
+        self._wing_summaries = [] # NEW: Track all wing summaries for aggregate statistics
     
     def set_pipeline(self, pipeline_config: PipelineConfig, output_dir: str, selected_wings=None, resume_execution_id: int = None):
         """Set pipeline configuration and output directory"""
@@ -115,26 +118,34 @@ class CorrelationEngineWrapper(QObject):
         self.selected_wings = selected_wings or pipeline_config.wing_configs
         self.current_wing_index = 0
         self._cancelled = False
-        self.resume_execution_id = resume_execution_id  # NEW: Resume functionality
+        self.resume_execution_id = resume_execution_id # NEW: Resume functionality
     
     def set_log_widget(self, widget):
         """Set the log widget for output redirection"""
         self._log_widget = widget
     
     def set_progress_handler(self, handler):
-        """Set progress handler method for detailed progress display"""
-        self.progress_handler = handler
-    
+        """Register a callable to receive engine progress events.
+
+        The handler is invoked on the main thread via Qt.QueuedConnection so
+        it is safe to mutate widgets inside it. Calling the handler directly
+        from the worker thread (previous behavior) caused the progress bar
+        freeze/lag and intermittent UI deadlocks during long correlations.
+        """
+        self.engine_progress_event.connect(handler, Qt.QueuedConnection)
+
     def handle_engine_progress(self, event):
         """
         Handle progress events from correlation engine.
-        
-        This method receives ProgressEvent objects and emits Qt signals
-        for the GUI to update the progress bar.
+
+        Called by the engine on the WORKER thread. Forwards the event to the
+        main thread via the engine_progress_event signal (QueuedConnection)
+        and also emits the legacy primitive-typed signals that are already
+        wired through the queued event batcher.
         """
-        # Forward to progress handler if set (for detailed logging)
-        if self.progress_handler:
-            self.progress_handler(event)
+        # Forward the full event to any registered handler — safely, via
+        # the queued signal so the slot runs on the main thread.
+        self.engine_progress_event.emit(event)
         
         # Handle new ProgressEvent objects with ProgressEventType
         if hasattr(event, 'event_type') and hasattr(event, 'overall_progress'):
@@ -194,7 +205,7 @@ class CorrelationEngineWrapper(QObject):
                     if text and text.strip():
                         # Remove both leading and trailing newlines
                         cleaned_text = text.strip('\n')
-                        if cleaned_text:  # Make sure there's still content after stripping
+                        if cleaned_text: # Make sure there's still content after stripping
                             self.signal.emit(cleaned_text)
                     # DON'T write to original - causes double printing
                 
@@ -202,7 +213,7 @@ class CorrelationEngineWrapper(QObject):
                     if self.original:
                         try:
                             self.original.flush()
-                        except:
+                        except Exception as e:
                             pass
             
             # Save original stdout and redirect
@@ -223,7 +234,7 @@ class CorrelationEngineWrapper(QObject):
             for wing_index, wing_config in enumerate(self.selected_wings, start=1):
                 # Check for cancellation
                 if self._cancelled:
-                    self.log_message.emit(f"\n❌ Execution cancelled after {wing_index - 1} of {total_wings} wings")
+                    self.log_message.emit(f"\n[ERROR] Execution cancelled after {wing_index - 1} of {total_wings} wings")
                     break
                 
                 wing_name = getattr(wing_config, 'wing_name', f'Wing {wing_index}')
@@ -274,7 +285,21 @@ class CorrelationEngineWrapper(QObject):
                 # Emit wing completion signal (for creating separate tab)
                 self.wing_completed.emit(summary)
                 
-                self.log_message.emit(f"\n✓ Wing {wing_index} completed: {summary.get('total_matches', 0)} matches found")
+                self.log_message.emit(f"\n[OK] Wing {wing_index} completed: {summary.get('total_matches', 0)} matches found")
+
+                # Surface pre-flight rule diagnostics so the analyst sees why a
+                # rule may have matched nothing, instead of digging through logs.
+                rule_diagnostics = summary.get('rule_diagnostics') or []
+                if rule_diagnostics:
+                    from ..pipeline.rule_preflight import format_issues_for_log
+                    self.log_message.emit(format_issues_for_log(rule_diagnostics))
+
+                # Surface evidence_accounting — silent DB fallbacks, schema-
+                # detection failures, parse-failure rates. The data is
+                # collected by PipelineExecutor._collect_evidence_accounting
+                # from existing engine counters; rendering it here is what
+                # finally makes silent drops visible to the analyst.
+                self._emit_evidence_accounting(summary.get('evidence_accounting') or {})
             
             # All wings complete
             if not self._cancelled:
@@ -330,15 +355,27 @@ class CorrelationEngineWrapper(QObject):
             if hasattr(self.executor, 'request_cancellation'):
                 self.executor.request_cancellation("User requested cancellation")
 
+    def _emit_evidence_accounting(self, ea: dict):
+        """Render the executor's evidence_accounting block to the log panel.
+
+        Delegates to `format_evidence_accounting_for_log` so the log panel
+        and the Issues tab share one formatter — single source of truth for
+        what a finding looks like."""
+        from ..pipeline.rule_preflight import format_evidence_accounting_for_log
+
+        rendered = format_evidence_accounting_for_log(ea or {})
+        if rendered:
+            self.log_message.emit(rendered)
+
 
 class ExecutionControlWidget(QWidget):
     """Widget for controlling correlation execution"""
     
     execution_started = pyqtSignal()
     execution_completed = pyqtSignal(dict)
-    wing_completed = pyqtSignal(dict)  # NEW: Signal for individual wing completion
-    load_results_requested = pyqtSignal(dict)  # Signal to request loading results
-    progress_message = pyqtSignal(str)  # Signal for thread-safe progress messages
+    wing_completed = pyqtSignal(dict) # NEW: Signal for individual wing completion
+    load_results_requested = pyqtSignal(dict) # Signal to request loading results
+    progress_message = pyqtSignal(str) # Signal for thread-safe progress messages
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -355,16 +392,16 @@ class ExecutionControlWidget(QWidget):
         
         # Progress throttling state
         self._last_progress_time: Optional[datetime] = None
-        self._min_progress_interval: float = 0.5  # Minimum 0.5 seconds between progress updates
+        self._min_progress_interval: float = 0.5 # Minimum 0.5 seconds between progress updates
         self._last_progress_message: str = ""
         
         # NEW: Performance optimization components (Task 5)
         from .performance_utils import ProgressThrottler, ProgressEventQueue, BatchedTextWidget, OptimizedHeartbeat, ProgressMessageBuffer
         
-        self._progress_throttler = None  # Will be initialized after UI
+        self._progress_throttler = None # Will be initialized after UI
         self._event_queue = ProgressEventQueue(max_size=1000)
-        self._batched_log = None  # Will be initialized after UI
-        self._heartbeat = None  # Will be initialized after UI
+        self._batched_log = None # Will be initialized after UI
+        self._heartbeat = None # Will be initialized after UI
         self._processing_timer = QTimer()
         self._processing_timer.timeout.connect(self._process_event_queue)
         
@@ -374,14 +411,24 @@ class ExecutionControlWidget(QWidget):
         # NEW: Periodic trimming timer (Task 7)
         self._trimming_timer = QTimer()
         self._trimming_timer.timeout.connect(self._periodic_trim_check)
-        self._trimming_timer.setInterval(30000)  # Check every 30 seconds
+        self._trimming_timer.setInterval(30000) # Check every 30 seconds
         
         self._init_ui()
-        
+
         # Initialize performance components that depend on UI widgets
-        self._progress_throttler = ProgressThrottler(min_interval_ms=50)  # Reduced to 50ms for smoother updates
-        self._batched_log = BatchedTextWidget(self.log_output, batch_window_ms=300)  # Keep log batching at 300ms
-        self._heartbeat = OptimizedHeartbeat(self.progress_bar, interval_ms=100)  # Reduced to 100ms for more frequent visual updates
+        self._progress_throttler = ProgressThrottler(min_interval_ms=50) # Reduced to 50ms for smoother updates
+        self._batched_log = BatchedTextWidget(self.log_output, batch_window_ms=300) # Keep log batching at 300ms
+        self._heartbeat = OptimizedHeartbeat(self.progress_bar, interval_ms=100) # Reduced to 100ms for more frequent visual updates
+
+        # Value-interpolation animation: the time engine throttles its
+        # progress events (every 100 windows), so without interpolation
+        # the bar fill jumps in chunks even though work is steady.
+        # We animate the QProgressBar.value property between events so the
+        # fill smoothly walks from the previous value to the new target.
+        from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
+        self._progress_anim = QPropertyAnimation(self.progress_bar, b"value", self)
+        self._progress_anim.setDuration(300)
+        self._progress_anim.setEasingCurve(QEasingCurve.OutCubic)
         
         # Setup output redirection after UI is initialized
         self._setup_output_redirection()
@@ -410,7 +457,7 @@ class ExecutionControlWidget(QWidget):
         """Initialize the user interface"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 10)
-        layout.setSpacing(4)  # Even more compact spacing
+        layout.setSpacing(4) # Even more compact spacing
         
         # Row 1: Pipeline Overview + Engine Selection (side by side)
         top_layout = QHBoxLayout()
@@ -454,7 +501,7 @@ class ExecutionControlWidget(QWidget):
         
         # Row 5: Execution Terminal (large space)
         progress_group = self._create_progress_section()
-        layout.addWidget(progress_group, stretch=4)  # Even more space for terminal
+        layout.addWidget(progress_group, stretch=4) # Even more space for terminal
         
         layout.addSpacing(4)
     
@@ -492,6 +539,7 @@ class ExecutionControlWidget(QWidget):
         # Wing list with checkboxes
         self.wing_list = QListWidget()
         self.wing_list.setMaximumHeight(120)
+        self.wing_list.itemChanged.connect(self._update_selected_count)
         self.wing_list.setStyleSheet("""
             QListWidget {
                 background-color: #1e293b;
@@ -517,13 +565,15 @@ class ExecutionControlWidget(QWidget):
         button_layout = QHBoxLayout()
         
         select_all_btn = QPushButton("Select All")
+        select_all_btn.setIcon(CrowEyeIcons.add())
         select_all_btn.clicked.connect(self._select_all_wings)
-        select_all_btn.setMaximumWidth(100)
+        select_all_btn.setMaximumWidth(110)
         button_layout.addWidget(select_all_btn)
-        
+
         deselect_all_btn = QPushButton("Deselect All")
+        deselect_all_btn.setIcon(CrowEyeIcons.delete())
         deselect_all_btn.clicked.connect(self._deselect_all_wings)
-        deselect_all_btn.setMaximumWidth(100)
+        deselect_all_btn.setMaximumWidth(120)
         button_layout.addWidget(deselect_all_btn)
         
         button_layout.addStretch()
@@ -551,6 +601,7 @@ class ExecutionControlWidget(QWidget):
         layout.addWidget(self.output_dir_input)
         
         browse_btn = QPushButton("Browse...")
+        browse_btn.setIcon(CrowEyeIcons.folder())
         browse_btn.clicked.connect(self._browse_output_dir)
         layout.addWidget(browse_btn)
         
@@ -564,8 +615,11 @@ class ExecutionControlWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         
-        # Execute button (compact)
-        self.execute_btn = QPushButton("▶️ RUN")
+        # Execute button (compact). Play-triangle icon from the Crow-Eye
+        # set for visual affordance — same icon swapped onto Resume later.
+        from .crow_eye_icons import CrowEyeIcons
+        self.execute_btn = QPushButton("RUN")
+        self.execute_btn.setIcon(CrowEyeIcons.play())
         self.execute_btn.setEnabled(False)
         self.execute_btn.setMinimumHeight(35)
         self.execute_btn.setStyleSheet("""
@@ -593,7 +647,7 @@ class ExecutionControlWidget(QWidget):
         layout.addWidget(self.execute_btn)
         
         # Cancel button (compact)
-        self.cancel_btn = QPushButton("⏹ Cancel")
+        self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setMinimumHeight(30)
         self.cancel_btn.setStyleSheet("""
@@ -621,7 +675,8 @@ class ExecutionControlWidget(QWidget):
         layout.addWidget(self.cancel_btn)
         
         # Load Last Results button
-        self.load_results_btn = QPushButton("📂 Load Last Results")
+        self.load_results_btn = QPushButton("Load Last Results")
+        self.load_results_btn.setIcon(CrowEyeIcons.download())
         self.load_results_btn.setMinimumHeight(30)
         self.load_results_btn.setStyleSheet("""
             QPushButton {
@@ -653,17 +708,17 @@ class ExecutionControlWidget(QWidget):
         """Create progress display section (no group box for maximum space)"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)  # No margins for maximum space
+        layout.setContentsMargins(0, 0, 0, 0) # No margins for maximum space
         layout.setSpacing(4)
         
         # Progress bar with enhanced styling
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
-        self.progress_bar.setMaximum(100)  # Start in determinate mode (not animated)
-        self.progress_bar.setValue(0)  # Empty bar
+        self.progress_bar.setMaximum(100) # Start in determinate mode (not animated)
+        self.progress_bar.setValue(0) # Empty bar
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("Ready")
-        self.progress_bar.setMinimumHeight(24)  # Slightly taller for better visibility
+        self.progress_bar.setMinimumHeight(24) # Slightly taller for better visibility
         self.progress_bar.setMaximumHeight(24)
         
         # Apply enhanced progress bar styling
@@ -692,36 +747,128 @@ class ExecutionControlWidget(QWidget):
         # Status label
         self.status_label = QLabel("Ready to execute")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setMaximumHeight(20)  # Compact status
+        self.status_label.setMaximumHeight(20) # Compact status
         self.status_label.setStyleSheet("font-weight: bold; color: #00d9ff;")
         layout.addWidget(self.status_label)
         
-        # Terminal output (takes all remaining space)
+        # Terminal output (takes all remaining space). Styling pulls from
+        # the canonical Crow-Eye palette via the Colors tokens so the log
+        # matches every other dark-canvas widget in the app.
+        try:
+            from styles import Colors as _Colors
+            _bg = _Colors.BG_TABLES
+            _fg = _Colors.ACCENT_CYAN
+            _border = _Colors.BORDER_SUBTLE
+        except ImportError:
+            _bg, _fg, _border = "#0B1220", "#00FFFF", "#334155"
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMinimumHeight(300)  # Reduced for better layout balance
-        self.log_output.setFont(QFont("Courier", 9))
-        self.log_output.setStyleSheet("""
-            QTextEdit {
+        self.log_output.setMinimumHeight(300)
+        self.log_output.setFont(QFont("Consolas", 9))
+        self.log_output.setStyleSheet(f"""
+            QTextEdit {{
                 font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 9pt;
-                background-color: #0B1220;
-                color: #00d9ff;
-                border: 1px solid #1e3a5f;
+                background-color: {_bg};
+                color: {_fg};
+                border: 1px solid {_border};
+                border-radius: 6px;
                 padding: 5px 5px 30px 5px;
-            }
+            }}
         """)
         # Set document margins for extra bottom space
         self.log_output.document().setDocumentMargin(8)
-        layout.addWidget(self.log_output, stretch=1)  # Terminal gets all stretch
-        
+        layout.addWidget(self.log_output, stretch=1) # Terminal gets all stretch
+
+        # Dedicated diagnostics panel below the log. The log stream above
+        # scrolls fast under wing-by-wing progress; this fixed-height
+        # QListWidget captures only diagnostic lines (lines starting with
+        # bracketed tags like [WARN], [ERROR], [Rule pre-flight],
+        # [Evidence accounting]) so the analyst doesn't lose them when
+        # the log scrolls away. Same source, separate sink.
+        try:
+            from styles import CrowEyeStyles as _CrowEyeStyles
+            _group_style = _CrowEyeStyles.GROUP_BOX
+            _list_bg = _Colors.BG_PANELS
+            _list_text = _Colors.TEXT_PRIMARY
+        except Exception:
+            _group_style = ""
+            _list_bg = "#1E293B"
+            _list_text = "#E2E8F0"
+
+        self.diagnostics_group = QGroupBox("Diagnostics (filtered from log)")
+        self.diagnostics_group.setStyleSheet(_group_style)
+        diag_layout = QVBoxLayout(self.diagnostics_group)
+        diag_layout.setContentsMargins(8, 14, 8, 8)
+        diag_layout.setSpacing(4)
+
+        self.diagnostics_list = QListWidget()
+        self.diagnostics_list.setStyleSheet(
+            f"QListWidget {{ background-color: {_list_bg}; color: {_list_text}; "
+            f"border: 1px solid {_border}; border-radius: 4px; padding: 4px; "
+            f"font-family: 'Consolas', 'Courier New', monospace; font-size: 9pt; }}"
+        )
+        self.diagnostics_list.setMaximumHeight(140)
+        self.diagnostics_list.setAlternatingRowColors(True)
+        diag_layout.addWidget(self.diagnostics_list)
+
+        # Hide the whole group until at least one diagnostic line arrives;
+        # keeps the Execution tab clean on healthy runs.
+        self.diagnostics_group.setVisible(False)
+        layout.addWidget(self.diagnostics_group, stretch=0)
+
         return widget
+
+    # Diagnostic markers — any log line starting with one of these is
+    # mirrored into the diagnostics panel for persistent visibility.
+    # Bracketed text tags rather than unicode glyphs so log lines are
+    # grep-friendly and copy-paste cleanly into reports.
+    _DIAGNOSTIC_MARKERS = (
+        "[WARN]",
+        "[ERROR]",
+        "[INFO]",
+        "[Rule pre-flight]",
+        "[Evidence accounting]",
+    )
+
+    def _on_log_message_for_diagnostics(self, message: str):
+        """Sibling slot to the batched-log append. Filters log lines by
+        the diagnostic-marker set and mirrors matches into the dedicated
+        diagnostics panel. The first matching line also reveals the
+        (initially hidden) Diagnostics group."""
+        diag_list = getattr(self, 'diagnostics_list', None)
+        if diag_list is None or not message:
+            return
+        added_any = False
+        for line in str(message).splitlines():
+            stripped = line.strip()
+            if any(stripped.startswith(marker) for marker in self._DIAGNOSTIC_MARKERS):
+                diag_list.addItem(stripped)
+                added_any = True
+        if added_any:
+            diag_group = getattr(self, 'diagnostics_group', None)
+            if diag_group is not None and not diag_group.isVisible():
+                diag_group.setVisible(True)
+            # Auto-scroll to latest so the newest diagnostic is visible
+            # without the analyst having to scroll.
+            diag_list.scrollToBottom()
+
+    def clear_diagnostics_panel(self):
+        """Reset the diagnostics list — called when a new pipeline run begins.
+        Also re-hides the group so it stays out of the way until the next
+        diagnostic arrives."""
+        diag_list = getattr(self, 'diagnostics_list', None)
+        if diag_list is not None:
+            diag_list.clear()
+        diag_group = getattr(self, 'diagnostics_group', None)
+        if diag_group is not None:
+            diag_group.setVisible(False)
     
     def _create_engine_selection_section(self) -> QGroupBox:
         """Create engine selection section with integration features display"""
         from ..engine.engine_selector import EngineSelector
         
-        group = QGroupBox("🔧 Correlation Engine")
+        group = QGroupBox("Correlation Engine")
         layout = QVBoxLayout()
         layout.setSpacing(4)
         
@@ -734,15 +881,15 @@ class ExecutionControlWidget(QWidget):
         
         for engine_data in engines:
             # Handle both old and new format for backward compatibility
-            if len(engine_data) >= 7:  # New format with integration features
+            if len(engine_data) >= 7: # New format with integration features
                 engine_type, name, desc, complexity, use_cases, supports_id_filter, integration_features = engine_data
-            else:  # Old format
+            else: # Old format
                 engine_type, name, desc, complexity, use_cases, supports_id_filter = engine_data
                 integration_features = {}
             
             # Skip the legacy time_based engine - only show the modern engines
             if engine_type == "time_based":
-                continue  # Skip legacy engine
+                continue # Skip legacy engine
             
             # Map engine types to proper display names
             if engine_type == "time_window_scanning":
@@ -750,7 +897,7 @@ class ExecutionControlWidget(QWidget):
             elif engine_type == "identity_based":
                 display_name = "Identity-Based"
             else:
-                display_name = name  # Fallback to full name for unknown types
+                display_name = name # Fallback to full name for unknown types
             
             # Add integration feature count to display
             feature_count = len(integration_features)
@@ -763,14 +910,16 @@ class ExecutionControlWidget(QWidget):
         engine_layout.addWidget(self.engine_combo, stretch=1)
         
         # Compare button (smaller)
-        compare_btn = QPushButton("📊")
+        compare_btn = QPushButton("")
+        compare_btn.setIcon(CrowEyeIcons.chart())
         compare_btn.setToolTip("Compare correlation engines and integration features")
         compare_btn.setMaximumWidth(40)
         compare_btn.clicked.connect(self._show_engine_comparison)
         engine_layout.addWidget(compare_btn)
-        
+
         # Integration features button
-        features_btn = QPushButton("🔧")
+        features_btn = QPushButton("")
+        features_btn.setIcon(CrowEyeIcons.star())
         features_btn.setToolTip("View integration features for selected engine")
         features_btn.setMaximumWidth(40)
         features_btn.clicked.connect(self._show_integration_features)
@@ -801,12 +950,12 @@ class ExecutionControlWidget(QWidget):
     
     def _create_time_period_filter_section(self) -> QGroupBox:
         """Create time period filter section (compact for side-by-side layout)"""
-        group = QGroupBox("📅 Time Period Filter (Optional)")
+        group = QGroupBox("Time Period Filter (Optional)")
         layout = QVBoxLayout()
         layout.setSpacing(4)
         
         # Info label at top
-        info_label = QLabel("💡 Filter correlation to specific time period")
+        info_label = QLabel("Tip: Filter correlation to specific time period")
         info_label.setStyleSheet("color: #888; font-size: 8pt;")
         layout.addWidget(info_label)
         
@@ -817,7 +966,7 @@ class ExecutionControlWidget(QWidget):
         self.start_datetime = QDateTimeEdit()
         self.start_datetime.setCalendarPopup(True)
         self.start_datetime.setDisplayFormat("yyyy-MM-dd HH:mm")
-        self.start_datetime.setDateTime(QDateTime.currentDateTime().addDays(-30))
+        self.start_datetime.setDateTime(QDateTime.currentDateTime().addYears(-1))
         # Apply dark theme to calendar popup
         if self.start_datetime.calendarWidget():
             self.start_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
@@ -825,8 +974,9 @@ class ExecutionControlWidget(QWidget):
         start_layout.addWidget(self.start_datetime, stretch=1)
         
         self.start_enabled = QCheckBox("Enable")
+        self.start_enabled.setChecked(True)
         self.start_enabled.stateChanged.connect(lambda: self.start_datetime.setEnabled(self.start_enabled.isChecked()))
-        self.start_datetime.setEnabled(False)
+        self.start_datetime.setEnabled(True)
         start_layout.addWidget(self.start_enabled)
         
         layout.addLayout(start_layout)
@@ -846,8 +996,9 @@ class ExecutionControlWidget(QWidget):
         end_layout.addWidget(self.end_datetime, stretch=1)
         
         self.end_enabled = QCheckBox("Enable")
+        self.end_enabled.setChecked(True)
         self.end_enabled.stateChanged.connect(lambda: self.end_datetime.setEnabled(self.end_enabled.isChecked()))
-        self.end_datetime.setEnabled(False)
+        self.end_datetime.setEnabled(True)
         end_layout.addWidget(self.end_enabled)
         
         layout.addLayout(end_layout)
@@ -873,7 +1024,7 @@ class ExecutionControlWidget(QWidget):
             "chrome.exe\n"
             "C:\\Windows\\System32\\*.exe\n"
             "*malware*\n"
-            "abc123def456..."  # Hash example
+            "abc123def456..." # Hash example
         )
         self.identity_filter_input.setMaximumHeight(100)
         layout.addWidget(self.identity_filter_input)
@@ -883,7 +1034,7 @@ class ExecutionControlWidget(QWidget):
         layout.addWidget(self.case_sensitive_checkbox)
         
         group.setLayout(layout)
-        group.setVisible(False)  # Hidden by default
+        group.setVisible(False) # Hidden by default
         return group
     
     def display_pipeline_overview(self, pipeline_config: PipelineConfig):
@@ -918,15 +1069,15 @@ class ExecutionControlWidget(QWidget):
         
         if not pipeline_config.wing_configs:
             # No wings in pipeline - show message
-            info_item = QListWidgetItem("⚠ No Wings configured in this pipeline")
-            info_item.setFlags(Qt.ItemIsEnabled)  # Not selectable
+            info_item = QListWidgetItem("[WARN] No Wings configured in this pipeline")
+            info_item.setFlags(Qt.ItemIsEnabled) # Not selectable
             info_item.setForeground(Qt.yellow)
             self.wing_list.addItem(info_item)
             
             # Disable execute button
             self.execute_btn.setEnabled(False)
             
-            self._batched_log.append_text("\n⚠ Warning: No Wings configured in pipeline")
+            self._batched_log.append_text("\n[WARN] Warning: No Wings configured in pipeline")
             self._batched_log.append_text("Please add Wings to the pipeline before executing.")
         else:
             # Populate wings
@@ -936,16 +1087,16 @@ class ExecutionControlWidget(QWidget):
                 
                 item = QListWidgetItem(f"{wing_name} ({feather_count} feathers)")
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Checked)  # Default to checked
+                item.setCheckState(Qt.Checked) # Default to checked
                 item.setData(Qt.UserRole, wing_config)
                 self.wing_list.addItem(item)
             
             # Enable execute button
             self.execute_btn.setEnabled(True)
         
-        # Connect item changed signal to update count (only if we have wings)
+        # Update count once now that the list is populated (signal already
+        # wired in _create_wing_selection_section, connected once at construction).
         if pipeline_config.wing_configs:
-            self.wing_list.itemChanged.connect(self._update_selected_count)
             self._update_selected_count()
         
         # Clear log
@@ -955,7 +1106,7 @@ class ExecutionControlWidget(QWidget):
         self._batched_log.append_text(f"Wings: {len(pipeline_config.wing_configs)}")
         self._batched_log.append_text(f"Output Directory: {pipeline_config.output_directory or 'output'}")
         self._batched_log.append_text("\nReady to execute.")
-        self._batched_log.flush()  # Flush immediately for user feedback
+        self._batched_log.flush() # Flush immediately for user feedback
     
     def _browse_output_dir(self):
         """Browse for output directory"""
@@ -971,7 +1122,7 @@ class ExecutionControlWidget(QWidget):
     def _start_execution(self, resume_execution_id: int = None):
         """Start correlation execution"""
         try:
-            # print("[ExecutionControl] _start_execution called")
+            # logger.info("[ExecutionControl] _start_execution called")
             
             if not self.current_pipeline:
                 QMessageBox.warning(
@@ -981,11 +1132,11 @@ class ExecutionControlWidget(QWidget):
                 )
                 return
             
-            # print(f"[ExecutionControl] Current pipeline: {self.current_pipeline.pipeline_name}")
+            # logger.info(f"[ExecutionControl] Current pipeline: {self.current_pipeline.pipeline_name}")
             
             # Get selected wings
             selected_wings = self._get_selected_wings()
-            # print(f"[ExecutionControl] Selected wings: {len(selected_wings)}")
+            # logger.info(f"[ExecutionControl] Selected wings: {len(selected_wings)}")
             
             if not selected_wings:
                 QMessageBox.warning(
@@ -997,7 +1148,7 @@ class ExecutionControlWidget(QWidget):
             
             # Get output directory
             output_dir = self.output_dir_input.text().strip()
-            # print(f"[ExecutionControl] Output directory: {output_dir}")
+            # logger.info(f"[ExecutionControl] Output directory: {output_dir}")
             
             if not output_dir:
                 QMessageBox.warning(
@@ -1010,7 +1161,7 @@ class ExecutionControlWidget(QWidget):
             # Create output directory
             try:
                 Path(output_dir).mkdir(parents=True, exist_ok=True)
-                # print(f"[ExecutionControl] Output directory created/verified")
+                # logger.info(f"[ExecutionControl] Output directory created/verified")
             except Exception as e:
                 QMessageBox.critical(
                     self,
@@ -1021,25 +1172,25 @@ class ExecutionControlWidget(QWidget):
             
             # Disable execute button and change appearance
             self.execute_btn.setEnabled(False)
-            self.execute_btn.setText("⏳  Executing...")
+            self.execute_btn.setText(" Executing...")
             
             # Switch cancel button to executing mode
             self._switch_to_executing_mode()
             
             # Create a copy of pipeline config with only selected wings
             from copy import deepcopy
-            # print("[ExecutionControl] Creating execution pipeline copy...")
+            # logger.info("[ExecutionControl] Creating execution pipeline copy...")
             execution_pipeline = deepcopy(self.current_pipeline)
             execution_pipeline.wing_configs = selected_wings
-            # print(f"[ExecutionControl] Execution pipeline created with {len(selected_wings)} wings")
+            # logger.info(f"[ExecutionControl] Execution pipeline created with {len(selected_wings)} wings")
             
             # NEW: Apply engine selection and filters
             if hasattr(self, 'engine_combo'):
                 engine_type = self.engine_combo.currentData()
                 execution_pipeline.engine_type = engine_type
-                print(f"[ExecutionControl] Engine type selected: {engine_type}")
+                logger.info(f"[ExecutionControl] Engine type selected: {engine_type}")
             else:
-                print(f"[ExecutionControl] WARNING: No engine_combo found!")
+                logger.info(f"[ExecutionControl] WARNING: No engine_combo found!")
             
             # NEW: Apply time period filter
             if hasattr(self, 'start_enabled') and self.start_enabled.isChecked():
@@ -1056,7 +1207,7 @@ class ExecutionControlWidget(QWidget):
             
             # Log if time filter is applied
             if execution_pipeline.time_period_start or execution_pipeline.time_period_end:
-                self._batched_log.append_text(f"✓ Time period filter enabled")
+                self._batched_log.append_text(f"[OK] Time period filter enabled")
             
             # NEW: Apply identity filter
             if hasattr(self, 'identity_filter_input') and self.identity_filter_section.isVisible():
@@ -1064,7 +1215,7 @@ class ExecutionControlWidget(QWidget):
                 if identity_text:
                     execution_pipeline.identity_filters = [line.strip() for line in identity_text.split('\n') if line.strip()]
                     execution_pipeline.identity_filter_case_sensitive = self.case_sensitive_checkbox.isChecked()
-                    # print(f"[ExecutionControl] Identity filters: {len(execution_pipeline.identity_filters)} patterns")
+                    # logger.info(f"[ExecutionControl] Identity filters: {len(execution_pipeline.identity_filters)} patterns")
                 else:
                     execution_pipeline.identity_filters = None
             else:
@@ -1079,33 +1230,36 @@ class ExecutionControlWidget(QWidget):
             # List selected wings
             for wing in selected_wings:
                 wing_name = getattr(wing, 'wing_name', 'Unknown Wing')
-                self._batched_log.append_text(f"  - {wing_name}")
+                self._batched_log.append_text(f" - {wing_name}")
             self._batched_log.append_text("")
-            self._batched_log.flush()  # Flush immediately for user feedback
+            self._batched_log.flush() # Flush immediately for user feedback
             
             # Reset progress bar to indeterminate mode
-            self.progress_bar.setMaximum(0)  # Indeterminate - shows activity
+            self.progress_bar.setMaximum(0) # Indeterminate - shows activity
             self.progress_bar.setFormat("Correlation Engine Working...")
-            self._last_progress_time = None  # Reset throttling for new execution
+            self._last_progress_time = None # Reset throttling for new execution
             self.status_label.setText("Initializing...")
             
-            # Start optimized heartbeat (Task 5)
+            # Start optimized heartbeat (Task 5). Clear any base format left
+            # from a previous run so the idle "Working..." frames show
+            # until the first real progress event arrives.
+            self._heartbeat.clear_base_format()
             self._heartbeat.start()
             
             # Start event processing timer (Task 5) - increased to 150ms to further reduce UI blocking
-            self._processing_timer.start(150)  # Process queue every 150ms (increased from 100ms)
+            self._processing_timer.start(150) # Process queue every 150ms (increased from 100ms)
             
             # Start periodic trimming timer (Task 7)
-            self._trimming_timer.start()  # Check every 30 seconds
+            self._trimming_timer.start() # Check every 30 seconds
             
-            # print("[ExecutionControl] Creating worker thread...")
+            # logger.info("[ExecutionControl] Creating worker thread...")
             
             # Create worker thread
             self.worker_thread = QThread()
             self.engine_wrapper = CorrelationEngineWrapper()
             self.engine_wrapper.moveToThread(self.worker_thread)
             
-            # print("[ExecutionControl] Setting pipeline on engine wrapper...")
+            # logger.info("[ExecutionControl] Setting pipeline on engine wrapper...")
             
             # Set pipeline (use filtered pipeline with only selected wings)
             self.engine_wrapper.set_pipeline(execution_pipeline, output_dir, selected_wings, resume_execution_id)
@@ -1113,7 +1267,7 @@ class ExecutionControlWidget(QWidget):
             # Set progress handler for detailed progress display in log_output
             self.engine_wrapper.set_progress_handler(self._handle_progress_event)
             
-            # print("[ExecutionControl] Connecting signals...")
+            # logger.info("[ExecutionControl] Connecting signals...")
             
             # Connect signals with explicit Qt.QueuedConnection for async handling (Task 5)
             self.worker_thread.started.connect(self.engine_wrapper.run)
@@ -1133,6 +1287,12 @@ class ExecutionControlWidget(QWidget):
                 self._batched_log.append_text,
                 Qt.QueuedConnection
             )
+            # Sibling sink for the dedicated diagnostics panel; receives
+            # the same stream and self-filters to diagnostic lines.
+            self.engine_wrapper.log_message.connect(
+                self._on_log_message_for_diagnostics,
+                Qt.QueuedConnection
+            )
             self.engine_wrapper.execution_completed.connect(
                 self._on_execution_completed,
                 Qt.QueuedConnection
@@ -1145,12 +1305,12 @@ class ExecutionControlWidget(QWidget):
             self.engine_wrapper.execution_failed.connect(self.worker_thread.quit)
             self.worker_thread.finished.connect(self._cleanup_thread)
             
-            # print("[ExecutionControl] Starting worker thread...")
+            # logger.info("[ExecutionControl] Starting worker thread...")
             
             # Start thread
             self.worker_thread.start()
             
-            # print("[ExecutionControl] Worker thread started successfully")
+            # logger.info("[ExecutionControl] Worker thread started successfully")
             
             # Emit signal
             self.execution_started.emit()
@@ -1158,7 +1318,7 @@ class ExecutionControlWidget(QWidget):
         except Exception as e:
             import traceback
             error_msg = f"Failed to start execution:\n{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            # print(f"[ExecutionControl] EXCEPTION in _start_execution: {error_msg}")
+            # logger.info(f"[ExecutionControl] EXCEPTION in _start_execution: {error_msg}")
             QMessageBox.critical(
                 self,
                 "Execution Error",
@@ -1166,12 +1326,12 @@ class ExecutionControlWidget(QWidget):
             )
             # Re-enable button
             self.execute_btn.setEnabled(True)
-            self.execute_btn.setText("▶️ RUN")
+            self.execute_btn.setText("RUN")
             self.cancel_btn.setEnabled(False)
     
     def _cancel_execution(self):
         """Handle pause/resume functionality."""
-        if self.cancel_btn.text().startswith("⏹"):
+        if self.cancel_btn.text().startswith(""):
             # Currently showing "Cancel" - user wants to pause
             self._pause_execution()
         else:
@@ -1186,17 +1346,17 @@ class ExecutionControlWidget(QWidget):
             
             # Request graceful shutdown
             if self.engine_wrapper:
-                self._batched_log.append_text("\n⏹ Cancelling execution - saving partial results...")
-                self._batched_log.flush()  # Flush immediately for user feedback
-                self.status_label.setText("Cancelling...")  # Requirement 8.3
+                self._batched_log.append_text("\nCancelling execution - saving partial results...")
+                self._batched_log.flush() # Flush immediately for user feedback
+                self.status_label.setText("Cancelling...") # Requirement 8.3
                 
                 # Set cancellation flag on wrapper immediately (Requirement 8.1)
                 self.engine_wrapper.cancel()
                 
                 # Give it time to save partial results (Requirement 8.4 - within 2 seconds)
                 self.worker_thread.quit()
-                if not self.worker_thread.wait(2000):  # Wait up to 2 seconds (Requirement 8.4)
-                    self._batched_log.append_text("⚠️ Force terminating execution...")
+                if not self.worker_thread.wait(2000): # Wait up to 2 seconds (Requirement 8.4)
+                    self._batched_log.append_text("[WARN] Force terminating execution...")
                     self._batched_log.flush()
                     self.worker_thread.terminate()
                     self.worker_thread.wait()
@@ -1204,8 +1364,8 @@ class ExecutionControlWidget(QWidget):
                 self.worker_thread.quit()
                 self.worker_thread.wait()
             
-            self._batched_log.append_text("⏹ Execution cancelled by user")
-            self._batched_log.flush()  # Flush immediately for user feedback
+            self._batched_log.append_text("Execution cancelled by user")
+            self._batched_log.flush() # Flush immediately for user feedback
             
             # Clean up resources (Requirement 8.5)
             self._cleanup_after_cancellation()
@@ -1227,13 +1387,13 @@ class ExecutionControlWidget(QWidget):
                     f"Partial results have been saved to the database.\n"
                     f"Click 'Resume' to continue from where you left off."
                 )
-                self._batched_log.append_text(f"✓ Partial results saved: {partial_results_count} identities")
+                self._batched_log.append_text(f"[OK] Partial results saved: {partial_results_count} identities")
                 self._batched_log.flush()
             else:
-                self._batched_log.append_text("✓ Partial results have been saved to database")
+                self._batched_log.append_text("[OK] Partial results have been saved to database")
                 self._batched_log.flush()
             
-            self.status_label.setText("⏸️ Paused - Click Resume to continue")
+            self.status_label.setText("Paused - Click Resume to continue")
             
             # Change button to Resume
             self._switch_to_resume_mode()
@@ -1295,10 +1455,10 @@ class ExecutionControlWidget(QWidget):
             execution_id = selected_execution['execution_id']
             progress = selected_execution.get('progress_details', {})
             
-            self._batched_log.append_text(f"\n▶️ Resuming execution ID: {execution_id}")
-            self._batched_log.append_text(f"   Progress: {progress.get('percentage_complete', 0):.1f}% complete")
-            self._batched_log.append_text(f"   Existing matches: {selected_execution['total_matches']:,}")
-            self._batched_log.flush()  # Flush immediately for user feedback
+            self._batched_log.append_text(f"\n[INFO] Resuming execution ID: {execution_id}")
+            self._batched_log.append_text(f" Progress: {progress.get('percentage_complete', 0):.1f}% complete")
+            self._batched_log.append_text(f" Existing matches: {selected_execution['total_matches']:,}")
+            self._batched_log.flush() # Flush immediately for user feedback
             
             # Switch back to cancel mode and start execution with resume parameter
             self._switch_to_cancel_mode()
@@ -1310,7 +1470,9 @@ class ExecutionControlWidget(QWidget):
     
     def _switch_to_resume_mode(self):
         """Switch cancel button to resume mode with enhanced styling."""
-        self.cancel_btn.setText("▶️ Resume")
+        from .crow_eye_icons import CrowEyeIcons
+        self.cancel_btn.setText("Resume")
+        self.cancel_btn.setIcon(CrowEyeIcons.play())
         self.cancel_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1343,7 +1505,7 @@ class ExecutionControlWidget(QWidget):
     
     def _switch_to_cancel_mode(self):
         """Switch resume button back to cancel mode with enhanced styling."""
-        self.cancel_btn.setText("⏹ Cancel")
+        self.cancel_btn.setText("Cancel")
         self.cancel_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1371,12 +1533,12 @@ class ExecutionControlWidget(QWidget):
                 border: 2px solid #374151;
             }
         """)
-        self.cancel_btn.setEnabled(False)  # Will be enabled when execution starts
+        self.cancel_btn.setEnabled(False) # Will be enabled when execution starts
         self.cancel_btn.setToolTip("Cancel execution and save partial results")
     
     def _switch_to_pausing_mode(self):
         """Switch button to pausing mode with animated styling."""
-        self.cancel_btn.setText("⏸️ Pausing...")
+        self.cancel_btn.setText("Pausing...")
         self.cancel_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1405,7 +1567,7 @@ class ExecutionControlWidget(QWidget):
     
     def _switch_to_cancelling_mode(self):
         """Switch button to cancelling mode with animated styling (Requirement 8.3)."""
-        self.cancel_btn.setText("⏹ Cancelling...")
+        self.cancel_btn.setText("Cancelling...")
         self.cancel_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1434,7 +1596,7 @@ class ExecutionControlWidget(QWidget):
     
     def _switch_to_executing_mode(self):
         """Switch button to executing mode with enhanced styling."""
-        self.cancel_btn.setText("⏹ Cancel")
+        self.cancel_btn.setText("Cancel")
         self.cancel_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1475,7 +1637,7 @@ class ExecutionControlWidget(QWidget):
             
             if not isinstance(status, str):
                 logger.error(f"Invalid status type: {type(status)}")
-                status = str(status)  # Try to convert
+                status = str(status) # Try to convert
             
             # Just update status, progress bar stays in indeterminate mode
             self.status_label.setText(status)
@@ -1488,28 +1650,51 @@ class ExecutionControlWidget(QWidget):
     def _update_anchor_progress(self, anchor_index: int, total_anchors: int):
         """
         Update progress bar based on anchor processing.
-        Shows actual progress with percentage.
+        Shows actual progress with percentage and lets the heartbeat animate
+        a spinner suffix between events so the bar never appears frozen.
         """
         try:
             # Validate inputs
             if not isinstance(anchor_index, (int, float)) or not isinstance(total_anchors, (int, float)):
                 logger.error(f"Invalid anchor progress values: anchor_index={anchor_index}, total_anchors={total_anchors}")
                 return
-            
+
             if total_anchors > 0:
-                # Set to determinate mode with actual progress
-                self.progress_bar.setMaximum(total_anchors)
-                self.progress_bar.setValue(anchor_index)
+                # Switch to determinate mode if not already
+                if self.progress_bar.maximum() != total_anchors:
+                    # Capture current fill position relative to the OLD max
+                    # so the animation has a sensible "from" value after the
+                    # rescale. Otherwise the bar would snap to 0 first.
+                    old_max = self.progress_bar.maximum() or 1
+                    old_val = self.progress_bar.value()
+                    rescaled = int(old_val / old_max * total_anchors) if old_max > 0 else 0
+                    self.progress_bar.setMaximum(total_anchors)
+                    self.progress_bar.setValue(rescaled)
+
+                # Smoothly interpolate the bar fill to the new target.
+                # Without this the engine's ~every-100-windows throttle
+                # causes visible chunked jumps.
+                target = int(anchor_index)
+                if self._progress_anim.state() == self._progress_anim.Running:
+                    self._progress_anim.stop()
+                self._progress_anim.setStartValue(self.progress_bar.value())
+                self._progress_anim.setEndValue(target)
+                self._progress_anim.start()
+
                 percentage = (anchor_index / total_anchors * 100)
-                self.progress_bar.setFormat(f"{anchor_index:,}/{total_anchors:,} ({percentage:.1f}%)")
+                base = f"{anchor_index:,}/{total_anchors:,} ({percentage:.1f}%)"
+                # Heartbeat owns the format string so the spinner suffix
+                # keeps animating between progress events; setting the
+                # base here updates immediately without overwriting the
+                # animation on the next heartbeat tick.
+                if self._heartbeat is not None:
+                    self._heartbeat.set_base_format(base)
+                else:
+                    self.progress_bar.setFormat(base)
                 self.status_label.setText(f"Processing... {anchor_index:,} items processed")
-                
-                # Force GUI update to prevent lagging
-                try:
-                    from PyQt5.QtWidgets import QApplication
-                    QApplication.processEvents()
-                except:
-                    pass  # Ignore if not in GUI context
+                # NOTE: Do NOT call QApplication.processEvents() here.
+                # This handler is invoked via QueuedConnection on the main thread.
+                # The Qt event loop will repaint naturally without manual forcing.
         except Exception as e:
             logger.error(f"Error updating anchor progress: {e}", exc_info=True)
             # Continue processing - don't crash the UI
@@ -1528,9 +1713,9 @@ class ExecutionControlWidget(QWidget):
             total_matches = summary.get('total_matches', 0)
             
             # Log wing completion
-            self._batched_log.append_text(f"\n✓ Wing {wing_index}/{total_wings} completed: {wing_name}")
-            self._batched_log.append_text(f"  Matches found: {total_matches}")
-            self._batched_log.flush()  # Flush immediately for user feedback
+            self._batched_log.append_text(f"\n[OK] Wing {wing_index}/{total_wings} completed: {wing_name}")
+            self._batched_log.append_text(f" Matches found: {total_matches}")
+            self._batched_log.flush() # Flush immediately for user feedback
             
             # Emit signal for parent widget to create separate result tab
             self.wing_completed.emit(summary)
@@ -1541,6 +1726,11 @@ class ExecutionControlWidget(QWidget):
     def _on_execution_completed(self, summary: dict):
         """Handle execution completion - all wings finished"""
         try:
+            # Stop the value-interpolation animation before we slam to 100;
+            # otherwise the in-flight animation can fight the final setValue.
+            if self._progress_anim.state() == self._progress_anim.Running:
+                self._progress_anim.stop()
+
             # Stop processing timer and heartbeat (Task 6)
             if self._processing_timer.isActive():
                 self._processing_timer.stop()
@@ -1551,13 +1741,13 @@ class ExecutionControlWidget(QWidget):
             # Validate summary structure
             if not isinstance(summary, dict):
                 logger.error(f"Invalid summary type: {type(summary)}")
-                summary = {}  # Use empty dict as fallback
+                summary = {} # Use empty dict as fallback
             
             # Set to determinate mode and show complete
             self.progress_bar.setMaximum(100)
             self.progress_bar.setValue(100)
             self.progress_bar.setFormat("Complete")
-            self.status_label.setText("✓ All wings executed successfully")
+            apply_status_to_label(self.status_label, "OK", "All wings executed successfully")
             
             # Reset button to default state
             self._switch_to_cancel_mode()
@@ -1569,7 +1759,7 @@ class ExecutionControlWidget(QWidget):
                 self._batched_log.append_text("=" * 60)
                 self._batched_log.append_text(f"Pipeline: {summary.get('pipeline_name', 'Unknown')}")
                 self._batched_log.append_text(f"Total Wings Executed: {summary.get('total_wings_executed', 0)}")
-                self._batched_log.flush()  # Force immediate display
+                self._batched_log.flush() # Force immediate display
             
             # Show completion message
             QMessageBox.information(
@@ -1590,19 +1780,23 @@ class ExecutionControlWidget(QWidget):
                     self._processing_timer.stop()
                 if self._heartbeat:
                     self._heartbeat.stop()
-            except:
+                if self._progress_anim.state() == self._progress_anim.Running:
+                    self._progress_anim.stop()
+            except Exception as e:
                 pass
-    
+
     def _on_execution_failed(self, error_message: str):
         """Handle execution failure"""
         # Stop processing timer and heartbeat (Task 6)
         if self._processing_timer.isActive():
             self._processing_timer.stop()
-        
+
         if self._heartbeat:
             self._heartbeat.stop()
+        if self._progress_anim.state() == self._progress_anim.Running:
+            self._progress_anim.stop()
         
-        self.status_label.setText("❌ Execution failed")
+        apply_status_to_label(self.status_label, "ERROR", "Execution failed")
         
         # Reset button to default state
         self._switch_to_cancel_mode()
@@ -1613,7 +1807,7 @@ class ExecutionControlWidget(QWidget):
             self._batched_log.append_text("EXECUTION FAILED")
             self._batched_log.append_text("=" * 60)
             self._batched_log.append_text(f"Error: {error_message}")
-            self._batched_log.flush()  # Force immediate display
+            self._batched_log.flush() # Force immediate display
         
         QMessageBox.critical(
             self,
@@ -1626,9 +1820,11 @@ class ExecutionControlWidget(QWidget):
         # Stop processing timer and heartbeat (Task 5)
         if self._processing_timer.isActive():
             self._processing_timer.stop()
-        
+
         if self._heartbeat:
             self._heartbeat.stop()
+        if self._progress_anim.state() == self._progress_anim.Running:
+            self._progress_anim.stop()
         
         # Stop trimming timer (Task 7)
         if self._trimming_timer.isActive():
@@ -1648,10 +1844,10 @@ class ExecutionControlWidget(QWidget):
             self._batched_log.force_scroll_to_bottom()
         
         self.execute_btn.setEnabled(True)
-        self.execute_btn.setText("▶️ RUN")
+        self.execute_btn.setText("RUN")
         
         # Reset cancel button to default state if not already in resume mode
-        if not self.cancel_btn.text().startswith("▶️"):
+        if not self.cancel_btn.text().startswith("Resume"):
             self._switch_to_cancel_mode()
         
         if self.worker_thread:
@@ -1670,9 +1866,11 @@ class ExecutionControlWidget(QWidget):
         # Stop all timers
         if self._processing_timer.isActive():
             self._processing_timer.stop()
-        
+
         if self._heartbeat:
             self._heartbeat.stop()
+        if self._progress_anim.state() == self._progress_anim.Running:
+            self._progress_anim.stop()
         
         if self._trimming_timer.isActive():
             self._trimming_timer.stop()
@@ -1689,10 +1887,10 @@ class ExecutionControlWidget(QWidget):
         
         # Re-enable controls (Requirement 8.5)
         self.execute_btn.setEnabled(True)
-        self.execute_btn.setText("▶️ RUN")
+        self.execute_btn.setText("RUN")
         
         # Update status
-        self.status_label.setText("⏹ Execution cancelled")
+        self.status_label.setText("Execution cancelled")
         
         # Switch to resume mode to allow resuming from where we left off
         self._switch_to_resume_mode()
@@ -1782,112 +1980,6 @@ class ExecutionControlWidget(QWidget):
         except Exception as e:
             logger.error(f"Error during periodic trim check: {e}", exc_info=True)
             # Continue processing - don't crash the UI
-    
-    def _handle_progress_event(self, event):
-        """
-        Handle progress events from the correlation engine.
-        Updates the progress bar and log output with detailed progress information.
-        
-        Args:
-            event: Progress event from the engine (ProgressEvent or legacy format)
-        """
-        try:
-            # Throttle progress updates to avoid UI lag
-            current_time = datetime.now()
-            if self._last_progress_time:
-                time_diff = (current_time - self._last_progress_time).total_seconds()
-                if time_diff < self._min_progress_interval:
-                    return  # Skip this update
-            self._last_progress_time = current_time
-            
-            # Handle new ProgressEvent format
-            if hasattr(event, 'event_type') and hasattr(event, 'overall_progress'):
-                from ..engine.progress_tracking import ProgressEventType
-                
-                progress = event.overall_progress
-                
-                # Update progress bar based on event type
-                if event.event_type == ProgressEventType.SCANNING_START:
-                    # Set progress bar to determinate mode with total
-                    total = progress.total_windows if progress.total_windows > 0 else 100
-                    self.progress_bar.setMaximum(total)
-                    self.progress_bar.setValue(0)
-                    self.progress_bar.setFormat(f"0/{total} (0%)")
-                    self.status_label.setText("Starting correlation...")
-                    
-                elif event.event_type == ProgressEventType.WINDOW_PROGRESS:
-                    # Update progress bar
-                    processed = progress.windows_processed
-                    total = progress.total_windows if progress.total_windows > 0 else 100
-                    percentage = progress.completion_percentage
-                    
-                    self.progress_bar.setMaximum(total)
-                    self.progress_bar.setValue(processed)
-                    self.progress_bar.setFormat(f"{processed}/{total} ({percentage:.1f}%)")
-                    self.status_label.setText(f"Processing... {progress.matches_found:,} matches found")
-                    
-                elif event.event_type == ProgressEventType.WINDOW_COMPLETE:
-                    # Update on window completion
-                    processed = progress.windows_processed
-                    total = progress.total_windows if progress.total_windows > 0 else 100
-                    percentage = progress.completion_percentage
-                    
-                    self.progress_bar.setMaximum(total)
-                    self.progress_bar.setValue(processed)
-                    self.progress_bar.setFormat(f"{processed}/{total} ({percentage:.1f}%)")
-                    
-                elif event.event_type == ProgressEventType.SCANNING_COMPLETE:
-                    # Complete the progress bar
-                    self.progress_bar.setMaximum(100)
-                    self.progress_bar.setValue(100)
-                    self.progress_bar.setFormat("Complete (100%)")
-                    self.status_label.setText(f"✓ Completed - {progress.matches_found:,} matches found")
-                
-                # Force GUI update to prevent lagging
-                try:
-                    from PyQt5.QtWidgets import QApplication
-                    QApplication.processEvents()
-                except:
-                    pass  # Ignore if not in GUI context
-                
-                # Log message if provided
-                if event.message and event.message != self._last_progress_message:
-                    self._last_progress_message = event.message
-                    # Use signal for thread-safe logging
-                    self.progress_message.emit(event.message)
-            
-            # Handle legacy event format
-            elif hasattr(event, 'event_type') and hasattr(event, 'data'):
-                data = event.data
-                
-                if event.event_type == "anchor_progress":
-                    anchor_index = data.get('anchor_index', 0)
-                    total_anchors = data.get('total_anchors', 1)
-                    percentage = (anchor_index / total_anchors * 100) if total_anchors > 0 else 0
-                    
-                    self.progress_bar.setMaximum(total_anchors)
-                    self.progress_bar.setValue(anchor_index)
-                    self.progress_bar.setFormat(f"{anchor_index}/{total_anchors} ({percentage:.1f}%)")
-                    
-                elif event.event_type == "summary_progress":
-                    anchors_processed = data.get('anchors_processed', 0)
-                    total_anchors = data.get('total_anchors', 1)
-                    percentage = (anchors_processed / total_anchors * 100) if total_anchors > 0 else 0
-                    
-                    self.progress_bar.setMaximum(total_anchors)
-                    self.progress_bar.setValue(anchors_processed)
-                    self.progress_bar.setFormat(f"{anchors_processed}/{total_anchors} ({percentage:.1f}%)")
-                
-                # Force GUI update to prevent lagging
-                try:
-                    from PyQt5.QtWidgets import QApplication
-                    QApplication.processEvents()
-                except:
-                    pass  # Ignore if not in GUI context
-                    
-        except Exception as e:
-            # Don't let progress handling errors crash the execution
-            print(f"[ExecutionControl] Progress event handling error: {e}")
     
     def _append_to_log(self, message: str):
         """
@@ -2010,12 +2102,12 @@ class ExecutionControlWidget(QWidget):
                 selected_executions = dialog.get_selected_executions()
                 
                 if selected_executions:
-                    self._batched_log.append_text(f"\n📂 Loading {len(selected_executions)} execution(s)...")
+                    self._batched_log.append_text(f"\nLoading {len(selected_executions)} execution(s)...")
                     
                     for db_path, execution_id, engine_type in selected_executions:
-                        self._batched_log.append_text(f"   • Execution {execution_id} ({engine_type})")
+                        self._batched_log.append_text(f" • Execution {execution_id} ({engine_type})")
                     
-                    self._batched_log.flush()  # Flush immediately for user feedback
+                    self._batched_log.flush() # Flush immediately for user feedback
                     
                     # Emit signal to load results in main window
                     self.load_results_requested.emit({
@@ -2023,7 +2115,7 @@ class ExecutionControlWidget(QWidget):
                         'output_dir': output_dir
                     })
                 else:
-                    self._batched_log.append_text("\n⚠️ No executions selected")
+                    self._batched_log.append_text("\n[WARN] No executions selected")
                     self._batched_log.flush()
             
         except ImportError as e:
@@ -2080,9 +2172,9 @@ class ExecutionControlWidget(QWidget):
         
         for engine_data in engines:
             # Handle both old and new format for backward compatibility
-            if len(engine_data) >= 7:  # New format with integration features
+            if len(engine_data) >= 7: # New format with integration features
                 et, name, desc, complexity, use_cases, supports_id_filter, integration_features = engine_data
-            else:  # Old format
+            else: # Old format
                 et, name, desc, complexity, use_cases, supports_id_filter = engine_data
                 integration_features = {}
             
@@ -2150,7 +2242,7 @@ class ExecutionControlWidget(QWidget):
             description = feature_info.get('description', 'No description available')
             feature_list = feature_info.get('features', [])
             
-            status_icon = "✅" if supported else "❌"
+            status_icon = "[OK]" if supported else "[ERROR]"
             features_content += f"<h5>{status_icon} {feature_name.replace('_', ' ').title()}</h5>\n"
             features_content += f"<p><i>{description}</i></p>\n"
             
@@ -2170,6 +2262,7 @@ class ExecutionControlWidget(QWidget):
         
         # Close button
         close_btn = QPushButton("Close")
+        close_btn.setIcon(CrowEyeIcons.close())
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
         
@@ -2226,7 +2319,7 @@ class ExecutionControlWidget(QWidget):
             for feature_name, feature_info in integration_features.items():
                 supported = feature_info.get('supported', False)
                 description = feature_info.get('description', '')
-                status_icon = "✅" if supported else "❌"
+                status_icon = "[OK]" if supported else "[ERROR]"
                 content += f"<li>{status_icon} <b>{feature_name.replace('_', ' ').title()}:</b> {description}</li>\n"
             content += "</ul>\n"
             
@@ -2250,9 +2343,9 @@ class ExecutionControlWidget(QWidget):
                 engine_type = engine_info['type']
                 if engine_type in feature_data:
                     supported = feature_data[engine_type]['supported']
-                    status = "✅ Yes" if supported else "❌ No"
+                    status = "[OK] Yes" if supported else "[ERROR] No"
                 else:
-                    status = "❓ Unknown"
+                    status = "Unknown"
                 content += f"<td>{status}</td>"
             
             content += "</tr>\n"
@@ -2284,6 +2377,7 @@ class ExecutionControlWidget(QWidget):
         
         # Close button
         close_btn = QPushButton("Close")
+        close_btn.setIcon(CrowEyeIcons.close())
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
         
@@ -2436,7 +2530,7 @@ class ExecutionControlWidget(QWidget):
             
             elif event_type == "anchor_collection":
                 self.progress_message.emit(
-                    f"[Correlation]   • {data['feather_id']} "
+                    f"[Correlation] • {data['feather_id']} "
                     f"({data['artifact_type']}): {data['anchor_count']} anchors"
                 )
             
@@ -2453,7 +2547,7 @@ class ExecutionControlWidget(QWidget):
                 
                 # Show progress updates
                 self.progress_message.emit(
-                    f"    [Analyzing] Anchor {data['anchor_index']}/{data['total_anchors']} "
+                    f" [Analyzing] Anchor {data['anchor_index']}/{data['total_anchors']} "
                     f"from {data['feather_id']} ({data['artifact_type']}) "
                     f"at {data['timestamp']}"
                 )
@@ -2465,7 +2559,7 @@ class ExecutionControlWidget(QWidget):
                 
                 # Show summary progress
                 self.progress_message.emit(
-                    f"    Progress: {data['anchors_processed']}/{data['total_anchors']} "
+                    f" Progress: {data['anchors_processed']}/{data['total_anchors']} "
                     f"anchors processed, {data['matches_found']} matches found"
                 )
     

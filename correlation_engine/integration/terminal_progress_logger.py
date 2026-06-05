@@ -27,11 +27,11 @@ class TerminalDisplayConfig:
     show_timing_info: bool = True
     show_semantic_stats: bool = True
     show_scoring_stats: bool = True
-    progress_update_interval: int = 10  # Show progress every N%
+    progress_update_interval: int = 10 # Show progress every N%
     verbose_window_logging: bool = False
     output_stream: TextIO = sys.stdout
-    use_dynamic_line: bool = True  # Use carriage return for dynamic updates
-    min_update_interval_seconds: float = 1.0  # Minimum time between updates (throttling)
+    use_dynamic_line: bool = True # Use carriage return for dynamic updates
+    min_update_interval_seconds: float = 1.0 # Minimum time between updates (throttling)
 
 
 class TerminalProgressLogger(ProgressListener):
@@ -162,26 +162,26 @@ class TerminalProgressLogger(ProgressListener):
         self._log_separator()
         
         self._log_with_timestamp(f"Configuration:")
-        self._log_with_timestamp(f"  Engine Type: {engine_name}")
-        self._log_with_timestamp(f"  Total {item_type}: {progress.total_windows}")
-        self._log_with_timestamp(f"  Processing Mode: {progress.processing_mode}")
+        self._log_with_timestamp(f" Engine Type: {engine_name}")
+        self._log_with_timestamp(f" Total {item_type}: {progress.total_windows}")
+        self._log_with_timestamp(f" Processing Mode: {progress.processing_mode}")
         
         if progress.processing_mode == "parallel":
             # Extract parallel info from additional data
             additional_data = event.additional_data
             max_workers = additional_data.get('max_workers', 1)
-            self._log_with_timestamp(f"  Parallel Workers: {max_workers}")
+            self._log_with_timestamp(f" Parallel Workers: {max_workers}")
         
         # Log time range if available
         additional_data = event.additional_data
         if 'time_range_start' in additional_data and 'time_range_end' in additional_data:
             start_time = additional_data['time_range_start']
             end_time = additional_data['time_range_end']
-            self._log_with_timestamp(f"  Time Range: {start_time} to {end_time}")
+            self._log_with_timestamp(f" Time Range: {start_time} to {end_time}")
         
         if 'window_size_minutes' in additional_data:
             window_size = additional_data['window_size_minutes']
-            self._log_with_timestamp(f"  Window Size: {window_size} minutes")
+            self._log_with_timestamp(f" Window Size: {window_size} minutes")
         
         self._log_with_timestamp("Starting correlation processing...")
     
@@ -283,11 +283,11 @@ class TerminalProgressLogger(ProgressListener):
         additional_data = event.additional_data
         if 'database_path' in additional_data:
             db_path = additional_data['database_path']
-            self._log_with_timestamp(f"  Streaming database: {db_path}")
+            self._log_with_timestamp(f" Streaming database: {db_path}")
         
         if 'reason' in additional_data:
             reason = additional_data['reason']
-            self._log_with_timestamp(f"  Reason: {reason}")
+            self._log_with_timestamp(f" Reason: {reason}")
     
     def _handle_memory_warning(self, event: ProgressEvent):
         """Handle memory warning event"""
@@ -299,7 +299,7 @@ class TerminalProgressLogger(ProgressListener):
         usage_percent = additional_data.get('usage_percentage', 0)
         
         self._log_with_timestamp(f"MEMORY WARNING: {event.message}")
-        self._log_with_timestamp(f"  Current usage: {current_mb:.1f}MB / {limit_mb:.1f}MB ({usage_percent:.1f}%)")
+        self._log_with_timestamp(f" Current usage: {current_mb:.1f}MB / {limit_mb:.1f}MB ({usage_percent:.1f}%)")
     
     def _handle_scanning_complete(self, event: ProgressEvent):
         """Handle scanning complete event with comprehensive final statistics"""
@@ -325,18 +325,18 @@ class TerminalProgressLogger(ProgressListener):
         engine_name = "Identity-Based" if self.engine_type == "identity_based" else "Time Engine"
         
         self._log_with_timestamp(f"Final Results:")
-        self._log_with_timestamp(f"  Engine: {engine_name}")
-        self._log_with_timestamp(f"  Total {item_type} processed: {progress.windows_processed}")
-        self._log_with_timestamp(f"  Total matches found: {progress.matches_found}")
-        self._log_with_timestamp(f"  Total execution time: {total_time}")
+        self._log_with_timestamp(f" Engine: {engine_name}")
+        self._log_with_timestamp(f" Total {item_type} processed: {progress.windows_processed}")
+        self._log_with_timestamp(f" Total matches found: {progress.matches_found}")
+        self._log_with_timestamp(f" Total execution time: {total_time}")
         
         # Empty window statistics (Requirements 3.3)
         if progress.empty_windows_skipped > 0:
             self._log_with_timestamp(f"Empty Window Optimization:")
-            self._log_with_timestamp(f"  Windows with data: {progress.windows_with_data}")
-            self._log_with_timestamp(f"  Empty windows skipped: {progress.empty_windows_skipped}")
-            self._log_with_timestamp(f"  Skip rate: {progress.skip_rate_percentage:.1f}%")
-            self._log_with_timestamp(f"  Time saved by skipping: {progress.time_saved_by_skipping_seconds:.2f}s")
+            self._log_with_timestamp(f" Windows with data: {progress.windows_with_data}")
+            self._log_with_timestamp(f" Empty windows skipped: {progress.empty_windows_skipped}")
+            self._log_with_timestamp(f" Skip rate: {progress.skip_rate_percentage:.1f}%")
+            self._log_with_timestamp(f" Time saved by skipping: {progress.time_saved_by_skipping_seconds:.2f}s")
         
         # Processing performance statistics
         if self.processing_times:
@@ -345,12 +345,12 @@ class TerminalProgressLogger(ProgressListener):
             max_time = max(self.processing_times)
             
             self._log_with_timestamp(f"Performance Statistics:")
-            self._log_with_timestamp(f"  Average processing time per {item_type[:-1]}: {avg_time:.3f}s")
-            self._log_with_timestamp(f"  Fastest {item_type[:-1]}: {min_time:.3f}s")
-            self._log_with_timestamp(f"  Slowest {item_type[:-1]}: {max_time:.3f}s")
+            self._log_with_timestamp(f" Average processing time per {item_type[:-1]}: {avg_time:.3f}s")
+            self._log_with_timestamp(f" Fastest {item_type[:-1]}: {min_time:.3f}s")
+            self._log_with_timestamp(f" Slowest {item_type[:-1]}: {max_time:.3f}s")
             
             if progress.processing_rate_windows_per_second:
-                self._log_with_timestamp(f"  Overall processing rate: {progress.processing_rate_windows_per_second:.2f} {item_type}/sec")
+                self._log_with_timestamp(f" Overall processing rate: {progress.processing_rate_windows_per_second:.2f} {item_type}/sec")
         
         # Memory usage statistics
         if self.memory_usage_history and self.config.show_memory_info:
@@ -358,11 +358,11 @@ class TerminalProgressLogger(ProgressListener):
             peak_memory = max(self.memory_usage_history)
             
             self._log_with_timestamp(f"Memory Usage Statistics:")
-            self._log_with_timestamp(f"  Average memory usage: {avg_memory:.1f}MB")
-            self._log_with_timestamp(f"  Peak memory usage: {peak_memory:.1f}MB")
+            self._log_with_timestamp(f" Average memory usage: {avg_memory:.1f}MB")
+            self._log_with_timestamp(f" Peak memory usage: {peak_memory:.1f}MB")
             
             if progress.streaming_mode:
-                self._log_with_timestamp(f"  Streaming mode was activated during processing")
+                self._log_with_timestamp(f" Streaming mode was activated during processing")
         
         # Integration statistics (semantic mapping and scoring)
         self._log_final_integration_stats()
@@ -371,9 +371,9 @@ class TerminalProgressLogger(ProgressListener):
         if self.error_count > 0 or self.warning_count > 0:
             self._log_with_timestamp(f"Issues Summary:")
             if self.error_count > 0:
-                self._log_with_timestamp(f"  Errors encountered: {self.error_count}")
+                self._log_with_timestamp(f" Errors encountered: {self.error_count}")
             if self.warning_count > 0:
-                self._log_with_timestamp(f"  Warnings issued: {self.warning_count}")
+                self._log_with_timestamp(f" Warnings issued: {self.warning_count}")
         else:
             self._log_with_timestamp("No errors or warnings encountered during processing")
         
@@ -390,7 +390,7 @@ class TerminalProgressLogger(ProgressListener):
             error_lines = event.error_details.split('\n')
             for line in error_lines:
                 if line.strip():
-                    self._log_with_timestamp(f"  {line}")
+                    self._log_with_timestamp(f" {line}")
         
         # Log current progress context
         progress = event.overall_progress
@@ -434,7 +434,7 @@ class TerminalProgressLogger(ProgressListener):
             
             for key, value in self.semantic_stats.items():
                 if isinstance(value, (int, float)):
-                    self._log_with_timestamp(f"  {key.replace('_', ' ').title()}: {value}")
+                    self._log_with_timestamp(f" {key.replace('_', ' ').title()}: {value}")
         
         if self.scoring_stats and self.config.show_scoring_stats:
             self._log_with_timestamp("Weighted Scoring Statistics:")
@@ -442,9 +442,9 @@ class TerminalProgressLogger(ProgressListener):
             for key, value in self.scoring_stats.items():
                 if isinstance(value, (int, float)):
                     if isinstance(value, float):
-                        self._log_with_timestamp(f"  {key.replace('_', ' ').title()}: {value:.2f}")
+                        self._log_with_timestamp(f" {key.replace('_', ' ').title()}: {value:.2f}")
                     else:
-                        self._log_with_timestamp(f"  {key.replace('_', ' ').title()}: {value}")
+                        self._log_with_timestamp(f" {key.replace('_', ' ').title()}: {value}")
     
     def _log_with_timestamp(self, message: str, dynamic: bool = False):
         """

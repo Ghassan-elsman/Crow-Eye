@@ -32,9 +32,15 @@ class FeatherDatabase:
         self.cursor = self.connection.cursor()
     
     def close(self):
-        """Close database connection."""
+        """Close database connection. Commits pending writes; safe to call twice."""
         if self.connection:
+            try:
+                self.connection.commit()
+            except Exception:
+                pass
             self.connection.close()
+            self.connection = None
+            self.cursor = None
     
     def create_base_schema(self):
         """Create base feather schema with common fields."""
@@ -121,7 +127,7 @@ class FeatherDatabase:
         custom_fields = []
         for col in columns:
             if col['original'] == '[ROW_COUNT]':
-                continue  # Skip, handled by artifact_id
+                continue # Skip, handled by artifact_id
             
             feather_name = self.sanitize_identifier(col['feather'])
             

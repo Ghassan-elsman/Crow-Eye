@@ -75,6 +75,13 @@ class ForensicDepsInstaller:
             'install_method': 'pip',
             'required': True,
             'fallback': None
+        },
+        'zstandard': {
+            'description': 'Compression for archived EYE evidence-seal payloads',
+            'platforms': ['Windows', 'Linux', 'Darwin'],
+            'install_method': 'pip',
+            'required': False,
+            'fallback': 'gzip (Python stdlib)'
         }
     }
     

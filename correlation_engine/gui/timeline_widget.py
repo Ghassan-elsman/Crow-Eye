@@ -81,7 +81,7 @@ class TimelineCanvas(QGraphicsView):
         duration = (end_time - start_time).total_seconds()
         
         if duration == 0:
-            duration = 1  # Avoid division by zero
+            duration = 1 # Avoid division by zero
         
         # Calculate canvas dimensions
         canvas_width = 800
@@ -95,7 +95,7 @@ class TimelineCanvas(QGraphicsView):
             # Calculate position
             time_offset = (evidence.timestamp - start_time).total_seconds()
             x_pos = self.margin + (time_offset / duration) * timeline_width
-            y_pos = self.margin + 50 + (i % 10) * 40  # Stagger vertically
+            y_pos = self.margin + 50 + (i % 10) * 40 # Stagger vertically
             
             # Draw event marker
             self._draw_event(evidence, x_pos, y_pos)
@@ -219,15 +219,15 @@ class TimelineWidget(QWidget):
         legend_layout = QHBoxLayout()
         legend_layout.addWidget(QLabel("Legend:"))
         
-        primary_label = QLabel("● Primary")
+        primary_label = QLabel("Primary")
         primary_label.setStyleSheet("color: #ff6464;")
         legend_layout.addWidget(primary_label)
         
-        secondary_label = QLabel("● Secondary")
+        secondary_label = QLabel("Secondary")
         secondary_label.setStyleSheet("color: #ffff64;")
         legend_layout.addWidget(secondary_label)
         
-        supporting_label = QLabel("● Supporting")
+        supporting_label = QLabel("Supporting")
         supporting_label.setStyleSheet("color: #64ff64;")
         legend_layout.addWidget(supporting_label)
         

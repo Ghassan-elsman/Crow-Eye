@@ -52,7 +52,7 @@ def format_time_duration(seconds: float) -> str:
                 return f"{hours}h {minutes}m {secs}s"
             else:
                 return f"{hours}h {minutes}m"
-    except:
+    except Exception as e:
         return f"{seconds:.1f}s"
 
 
@@ -64,23 +64,23 @@ class PyQt5BarChart(QWidget):
     
     # Color palette for bars
     COLORS = [
-        QColor("#2196F3"),  # Blue
-        QColor("#4CAF50"),  # Green
-        QColor("#FF9800"),  # Orange
-        QColor("#9C27B0"),  # Purple
-        QColor("#F44336"),  # Red
-        QColor("#00BCD4"),  # Cyan
-        QColor("#FFEB3B"),  # Yellow
-        QColor("#795548"),  # Brown
-        QColor("#607D8B"),  # Blue Grey
-        QColor("#E91E63"),  # Pink
-        QColor("#3F51B5"),  # Indigo
-        QColor("#009688"),  # Teal
+        QColor("#2196F3"), # Blue
+        QColor("#4CAF50"), # Green
+        QColor("#FF9800"), # Orange
+        QColor("#9C27B0"), # Purple
+        QColor("#F44336"), # Red
+        QColor("#00BCD4"), # Cyan
+        QColor("#FFEB3B"), # Yellow
+        QColor("#795548"), # Brown
+        QColor("#607D8B"), # Blue Grey
+        QColor("#E91E63"), # Pink
+        QColor("#3F51B5"), # Indigo
+        QColor("#009688"), # Teal
     ]
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.data = {}  # {label: value}
+        self.data = {} # {label: value}
         self.title = "Bar Chart"
         self.ylabel = "Count"
         self.setMinimumHeight(250)
@@ -265,30 +265,30 @@ class PyQt5PieChart(QWidget):
     
     # Color palette for slices
     COLORS = [
-        QColor("#2196F3"),  # Blue
-        QColor("#4CAF50"),  # Green
-        QColor("#FF9800"),  # Orange
-        QColor("#9C27B0"),  # Purple
-        QColor("#F44336"),  # Red
-        QColor("#00BCD4"),  # Cyan
-        QColor("#FFEB3B"),  # Yellow
-        QColor("#795548"),  # Brown
-        QColor("#607D8B"),  # Blue Grey
-        QColor("#E91E63"),  # Pink
-        QColor("#3F51B5"),  # Indigo
-        QColor("#009688"),  # Teal
+        QColor("#2196F3"), # Blue
+        QColor("#4CAF50"), # Green
+        QColor("#FF9800"), # Orange
+        QColor("#9C27B0"), # Purple
+        QColor("#F44336"), # Red
+        QColor("#00BCD4"), # Cyan
+        QColor("#FFEB3B"), # Yellow
+        QColor("#795548"), # Brown
+        QColor("#607D8B"), # Blue Grey
+        QColor("#E91E63"), # Pink
+        QColor("#3F51B5"), # Indigo
+        QColor("#009688"), # Teal
     ]
     
     def __init__(self, parent=None, show_legend=True):
         super().__init__(parent)
-        self.data = {}  # {label: value}
+        self.data = {} # {label: value}
         self.title = "Pie Chart"
         self.setMinimumHeight(200)
         self.setMinimumWidth(200)
         self.hovered_slice = -1
         self.setMouseTracking(True)
-        self.slice_angles = []  # Store slice info for hover detection
-        self.show_legend = show_legend  # Control whether to show built-in legend
+        self.slice_angles = [] # Store slice info for hover detection
+        self.show_legend = show_legend # Control whether to show built-in legend
         
     def set_data(self, data: Dict[str, float], title: str = "Pie Chart"):
         """Set chart data and labels."""
@@ -325,7 +325,7 @@ class PyQt5PieChart(QWidget):
         # Reserve space for legend on the right - more space if we have many items
         legend_items_count = len(self.data)
         use_two_columns = legend_items_count > 8
-        legend_width = 400 if use_two_columns else 200  # Double width for two columns
+        legend_width = 400 if use_two_columns else 200 # Double width for two columns
         pie_size = min(width - legend_width - 30, height - top_margin - 10)
         pie_x = 10
         pie_y = top_margin + (height - top_margin - pie_size) // 2
@@ -339,7 +339,7 @@ class PyQt5PieChart(QWidget):
         self.slice_angles = []
         
         # Draw pie slices
-        start_angle = 90 * 16  # Start from top (in 1/16th degrees)
+        start_angle = 90 * 16 # Start from top (in 1/16th degrees)
         pie_rect = QRect(pie_x, pie_y, pie_size, pie_size)
         
         for i, (label, value) in enumerate(self.data.items()):
@@ -383,7 +383,7 @@ class PyQt5PieChart(QWidget):
             # Determine if we need two columns (more than 8 items)
             use_two_columns = len(legend_items) > 8
             items_per_column = (len(legend_items) + 1) // 2 if use_two_columns else len(legend_items)
-            column_width = 200  # Width of each column
+            column_width = 200 # Width of each column
             
             for i, (label, value) in enumerate(legend_items):
                 color = self.COLORS[i % len(self.COLORS)]
@@ -440,10 +440,10 @@ class PyQt5PieChart(QWidget):
         if distance <= radius:
             # Calculate angle from center
             import math
-            angle = math.degrees(math.atan2(-dy, dx))  # Negative dy because y increases downward
+            angle = math.degrees(math.atan2(-dy, dx)) # Negative dy because y increases downward
             if angle < 0:
                 angle += 360
-            angle = (90 - angle) % 360  # Convert to start from top
+            angle = (90 - angle) % 360 # Convert to start from top
             angle_16 = angle * 16
             
             # Find which slice
@@ -520,7 +520,7 @@ class PieChartWithBreakdown(QWidget):
         self.legend_scroll.setFrameShape(QFrame.NoFrame)
         self.legend_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.legend_scroll.setMinimumWidth(180)
-        self.legend_scroll.setMaximumWidth(400)  # Wider to accommodate multiple columns
+        self.legend_scroll.setMaximumWidth(400) # Wider to accommodate multiple columns
         self.legend_scroll.setStyleSheet("""
             QScrollArea {
                 background-color: #1a1a2e;
@@ -543,7 +543,7 @@ class PieChartWithBreakdown(QWidget):
         """)
         
         self.legend_content = QWidget()
-        self.legend_items_layout = QGridLayout(self.legend_content)  # Changed to QGridLayout
+        self.legend_items_layout = QGridLayout(self.legend_content) # Changed to QGridLayout
         self.legend_items_layout.setContentsMargins(5, 5, 5, 5)
         self.legend_items_layout.setSpacing(4)
         self.legend_items_layout.setColumnStretch(0, 1)
@@ -599,7 +599,7 @@ class PieChartWithBreakdown(QWidget):
         # If more than 8 items, use 2 columns; otherwise use 1 column
         num_items = len(sorted_items)
         num_columns = 2 if num_items > 8 else 1
-        items_per_column = (num_items + num_columns - 1) // num_columns  # Ceiling division
+        items_per_column = (num_items + num_columns - 1) // num_columns # Ceiling division
         
         # Create legend items in grid layout
         for idx, (feather_name, count) in enumerate(sorted_items):
@@ -666,6 +666,7 @@ class PieChartWithBreakdown(QWidget):
 
 
 from .ui_styling import CorrelationEngineStyles
+from .crow_eye_icons import apply_status_to_label
 
 
 from ..engine.correlation_result import CorrelationResult, CorrelationMatch
@@ -680,7 +681,7 @@ class LoadingProgressDialog(QProgressDialog):
     def __init__(self, title: str, parent=None):
         super().__init__(title, "Cancel", 0, 100, parent)
         self.setWindowModality(Qt.WindowModal)
-        self.setMinimumDuration(0)  # Show immediately
+        self.setMinimumDuration(0) # Show immediately
         self.setAutoClose(True)
         self.setAutoReset(True)
         self.setWindowTitle("Loading Results")
@@ -819,11 +820,11 @@ class ResultsTableWidget(QTableWidget):
                 # Color code based on interpretation
                 interpretation = match.weighted_score.get('interpretation', '')
                 if 'Confirmed' in interpretation:
-                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_CONFIRMED))  # Green
+                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_CONFIRMED)) # Green
                 elif 'Probable' in interpretation or 'Likely' in interpretation:
-                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_PROBABLE))  # Orange
+                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_PROBABLE)) # Orange
                 elif 'Weak' in interpretation or 'Insufficient' in interpretation:
-                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_WEAK))  # Red
+                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_WEAK)) # Red
             else:
                 score_item = QTableWidgetItem(f"{match.match_score:.2f}")
                 score_item.setData(Qt.UserRole, match.match_score)
@@ -957,7 +958,7 @@ class MatchDetailViewer(QWidget):
         feather_layout.setContentsMargins(0, 0, 0, 0)
         feather_layout.setSpacing(5)
         
-        feather_label = QLabel("📄 Feather Records")
+        feather_label = QLabel("Feather Records")
         feather_label_font = QFont()
         feather_label_font.setBold(True)
         feather_label_font.setPointSize(10)
@@ -975,8 +976,8 @@ class MatchDetailViewer(QWidget):
         
         # Configure feather table
         header = self.feather_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Field column
-        header.setSectionResizeMode(1, QHeaderView.Stretch)  # Value column stretches
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents) # Field column
+        header.setSectionResizeMode(1, QHeaderView.Stretch) # Value column stretches
         
         self.feather_table.setAlternatingRowColors(True)
         self.feather_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -993,12 +994,22 @@ class MatchDetailViewer(QWidget):
         semantic_layout.setContentsMargins(0, 0, 0, 0)
         semantic_layout.setSpacing(5)
         
-        semantic_label = QLabel("🔮 Semantic Mappings")
+        # Semantic Mappings header — Crow-Eye settings icon + bold label.
+        from .crow_eye_icons import CrowEyeIcons
+        semantic_header = QHBoxLayout()
+        semantic_header.setSpacing(6)
+        semantic_header.setContentsMargins(0, 0, 0, 0)
+        semantic_icon = QLabel()
+        semantic_icon.setPixmap(CrowEyeIcons.settings().pixmap(14, 14))
+        semantic_label = QLabel("Semantic Mappings")
         semantic_label_font = QFont()
         semantic_label_font.setBold(True)
         semantic_label_font.setPointSize(10)
         semantic_label.setFont(semantic_label_font)
-        semantic_layout.addWidget(semantic_label)
+        semantic_header.addWidget(semantic_icon)
+        semantic_header.addWidget(semantic_label)
+        semantic_header.addStretch()
+        semantic_layout.addLayout(semantic_header)
         
         self.semantic_table = QTableWidget()
         self.semantic_table.setColumnCount(6)
@@ -1009,12 +1020,12 @@ class MatchDetailViewer(QWidget):
         
         # Configure semantic table
         header = self.semantic_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Semantic Value
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Identity Type
-        header.setSectionResizeMode(2, QHeaderView.Stretch)  # Rule Name
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Category
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Confidence
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Severity
+        header.setSectionResizeMode(0, QHeaderView.Stretch) # Semantic Value
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents) # Identity Type
+        header.setSectionResizeMode(2, QHeaderView.Stretch) # Rule Name
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents) # Category
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents) # Confidence
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents) # Severity
         
         self.semantic_table.setAlternatingRowColors(True)
         self.semantic_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -1027,8 +1038,8 @@ class MatchDetailViewer(QWidget):
         # Set splitter sizes: 80% feather (index 0), 20% semantic (index 1)
         # Total height = 1000, so 800 for feather, 200 for semantic
         self.splitter.setSizes([800, 200])
-        self.splitter.setStretchFactor(0, 4)  # Feather gets 4x more space (index 0 now)
-        self.splitter.setStretchFactor(1, 1)  # Semantic can shrink (index 1 now)
+        self.splitter.setStretchFactor(0, 4) # Feather gets 4x more space (index 0 now)
+        self.splitter.setStretchFactor(1, 1) # Semantic can shrink (index 1 now)
         
         # Add splitter with stretch factor 1 to fill all remaining vertical space
         layout.addWidget(self.splitter, 1)
@@ -1159,7 +1170,7 @@ class MatchDetailViewer(QWidget):
                 
                 # Add semantic value indicator if available
                 if semantic_match and isinstance(value, str) and identity_value.upper() in value_str.upper():
-                    value_str += f" ✨ ({semantic_match})"
+                    value_str += f" ({semantic_match})"
                 
                 value_item = QTableWidgetItem(value_str)
                 self.feather_table.setItem(row, 1, value_item)
@@ -1249,7 +1260,7 @@ class DynamicResultsTabWidget(QWidget):
         super().__init__(parent)
         
         self.results_data: Dict[str, CorrelationResult] = {}
-        self.engine_type = "time_based"  # Default engine type
+        self.engine_type = "time_based" # Default engine type
         
         # Use results tab widget
         self.enhanced_tab_widget = ResultsTabWidget()
@@ -1257,9 +1268,15 @@ class DynamicResultsTabWidget(QWidget):
         self.enhanced_tab_widget.export_requested.connect(self._on_export_requested)
         
         self._init_ui()
-        
+
         # Create Summary tab (index 0) - will be populated when execution completes
         self._create_summary_tab()
+
+        # Create Issues tab (index 1) - displays structured diagnostics from
+        # summary['errors'], summary['warnings'], rule_diagnostics, and
+        # evidence_accounting. Populated by update_summary_tab() so it's
+        # in sync with whatever the Summary tab is showing.
+        self._create_issues_tab()
     
     def _init_ui(self):
         """Initialize UI"""
@@ -1299,8 +1316,47 @@ class DynamicResultsTabWidget(QWidget):
         
         # Add Summary tab at index 0
         self.enhanced_tab_widget.tab_widget.insertTab(0, summary_widget, "Summary")
-        
-        print("[DynamicResultsTabWidget] ✓ Summary tab created at index 0")
+
+        print("[DynamicResultsTabWidget] [OK] Summary tab created at index 0")
+
+    def _create_issues_tab(self):
+        """Construct the Issues tab widget but do NOT insert it into the
+        tab bar. The tab is shown only when `_refresh_issues_tab` finds at
+        least one entry; keeps the tab bar clean on healthy runs."""
+        from .issues_tab import IssuesTab
+
+        self._issues_tab = IssuesTab()
+        self._issues_tab_inserted = False
+        print("[DynamicResultsTabWidget] Issues tab widget prepared (hidden until populated)")
+
+    def _refresh_issues_tab(self, summary: dict):
+        """Re-render the Issues tab from a summary dict, inserting or
+        removing it from the tab bar based on whether the summary has any
+        entries. Safe to call repeatedly; IssuesTab.populate is idempotent."""
+        if not hasattr(self, '_issues_tab') or self._issues_tab is None:
+            return
+        try:
+            total = self._issues_tab.populate(summary or {})
+            tab_widget = self.enhanced_tab_widget.tab_widget
+            if total > 0:
+                from .crow_eye_icons import CrowEyeIcons
+                title = f"Issues ({total})"
+                if not self._issues_tab_inserted:
+                    idx = tab_widget.insertTab(1, self._issues_tab, title)
+                    self._issues_tab_inserted = True
+                else:
+                    idx = tab_widget.indexOf(self._issues_tab)
+                    if idx >= 0:
+                        tab_widget.setTabText(idx, title)
+                if idx >= 0:
+                    tab_widget.setTabIcon(idx, CrowEyeIcons.warning())
+            elif self._issues_tab_inserted:
+                idx = tab_widget.indexOf(self._issues_tab)
+                if idx >= 0:
+                    tab_widget.removeTab(idx)
+                self._issues_tab_inserted = False
+        except Exception as e:
+            print(f"[DynamicResultsTabWidget] Issues tab refresh failed: {e}")
     
     def set_engine_type(self, engine_type: str):
         """Set the engine type for results display and reconfigure layout."""
@@ -1428,7 +1484,7 @@ class DynamicResultsTabWidget(QWidget):
             layout.setContentsMargins(10, 10, 10, 10)
             
             # Title
-            title_label = QLabel(f"📊 {engine_name} - Feather Statistics")
+            title_label = QLabel(f"{engine_name} - Feather Statistics")
             title_label.setStyleSheet("""
                 QLabel {
                     font-size: 14pt;
@@ -1440,7 +1496,8 @@ class DynamicResultsTabWidget(QWidget):
             layout.addWidget(title_label)
             
             # Note about charts
-            note_label = QLabel("ℹ️ Charts unavailable (matplotlib Qt5Agg backend not loaded)")
+            note_label = QLabel()
+            apply_status_to_label(note_label, "INFO", "Charts unavailable (matplotlib Qt5Agg backend not loaded)")
             note_label.setStyleSheet("color: #ff9800; font-style: italic; padding: 5px;")
             layout.addWidget(note_label)
             
@@ -1472,7 +1529,7 @@ class DynamicResultsTabWidget(QWidget):
             total_count = 0
             
             for feather_id, data in feather_data.items():
-                if feather_id.startswith('_'):  # Skip metadata entries
+                if feather_id.startswith('_'): # Skip metadata entries
                     continue
                 if isinstance(data, dict):
                     count = data.get('identities_found', data.get('matches_created', 0))
@@ -1579,7 +1636,8 @@ class DynamicResultsTabWidget(QWidget):
         error_layout.setContentsMargins(20, 20, 20, 20)
         
         # Error message
-        error_label = QLabel(f"⚠️ {message}")
+        error_label = QLabel()
+        apply_status_to_label(error_label, "WARN", message)
         error_label.setStyleSheet("""
             QLabel {
                 color: #ff9800;
@@ -1596,7 +1654,7 @@ class DynamicResultsTabWidget(QWidget):
         error_layout.addWidget(error_label)
         
         # Retry button
-        retry_btn = QPushButton("🔄 Retry Loading")
+        retry_btn = QPushButton("Retry Loading")
         retry_btn.clicked.connect(self._retry_load_results)
         retry_btn.setStyleSheet("""
             QPushButton {
@@ -1629,7 +1687,7 @@ class DynamicResultsTabWidget(QWidget):
                 widget = self.layout().itemAt(i).widget()
                 if widget and isinstance(widget, QWidget):
                     # Check if it's an error widget (has the warning style)
-                    if "⚠️" in widget.findChild(QLabel).text() if widget.findChild(QLabel) else False:
+                    if "[WARN]" in widget.findChild(QLabel).text() if widget.findChild(QLabel) else False:
                         widget.setParent(None)
                         widget.deleteLater()
             
@@ -1676,10 +1734,10 @@ class DynamicResultsTabWidget(QWidget):
             # Render charts based on engine type and available data
             self._render_charts_for_results()
                 
-            print(f"✓ Results loaded successfully from {output_dir}")
+            print(f"[OK] Results loaded successfully from {output_dir}")
             
         except Exception as e:
-            print(f"❌ Failed to load results from {output_dir}: {e}")
+            print(f"[ERROR] Failed to load results from {output_dir}: {e}")
             import traceback
             traceback.print_exc()
     
@@ -1779,7 +1837,7 @@ class DynamicResultsTabWidget(QWidget):
                 
                 # Add engine type label
                 engine_display = self.engine_type.replace('_', ' ').title()
-                engine_label = QLabel(f"📊 {engine_display} - Feather Statistics")
+                engine_label = QLabel(f"{engine_display} - Feather Statistics")
                 engine_label.setStyleSheet("font-weight: bold; font-size: 12pt; color: #2196F3; padding: 5px;")
                 chart_layout.addWidget(engine_label)
                 
@@ -1798,13 +1856,13 @@ class DynamicResultsTabWidget(QWidget):
                     if summary_layout:
                         # Insert chart at the beginning of the summary tab
                         summary_layout.insertWidget(0, self.chart_container)
-                        print("[DynamicResultsTabWidget] ✓ Chart added to Summary tab (Requirements 1.1, 1.2)")
+                        print("[DynamicResultsTabWidget] [OK] Chart added to Summary tab (Requirements 1.1, 1.2)")
                     else:
                         print("[DynamicResultsTabWidget] ERROR: Summary tab has no layout!")
                 else:
                     print("[DynamicResultsTabWidget] ERROR: Summary tab not found!")
                 
-                print("[DynamicResultsTabWidget] ✓ Charts rendered successfully")
+                print("[DynamicResultsTabWidget] [OK] Charts rendered successfully")
             else:
                 # Requirement 4.8: Display error message if no data available
                 print("[DynamicResultsTabWidget] WARNING: No chart widget was created")
@@ -1914,11 +1972,11 @@ class DynamicResultsTabWidget(QWidget):
             if rows:
                 for row in rows:
                     feather_id, artifact_type, total_records, identities_extracted, identities_found, matches_count = row
-                    if feather_id:  # Skip None feather_ids
+                    if feather_id: # Skip None feather_ids
                         feather_metadata[feather_id] = {
                             'feather_name': feather_id,
                             'artifact_type': artifact_type or 'Unknown',
-                            'identities_found': identities_found or 0,  # FIXED: Read from database
+                            'identities_found': identities_found or 0, # FIXED: Read from database
                             'identities_final': identities_found or 0,
                             'matches_created': matches_count,
                             'records_processed': total_records or 0,
@@ -1941,7 +1999,7 @@ class DynamicResultsTabWidget(QWidget):
                         # Filter out engine metadata
                         feather_metadata = {k: v for k, v in feather_metadata.items() if not k.startswith('_')}
                         print(f"[DynamicResultsTabWidget] Loaded {len(feather_metadata)} feathers from results.feather_metadata JSON")
-                    except:
+                    except Exception as e:
                         pass
             
             # Final fallback: query matches table directly
@@ -1964,11 +2022,11 @@ class DynamicResultsTabWidget(QWidget):
                         feather_metadata[feather_id] = {
                             'feather_name': feather_id,
                             'artifact_type': artifact_type or 'Unknown',
-                            'identities_found': 0,  # FIXED: Can't determine from matches table alone
+                            'identities_found': 0, # FIXED: Can't determine from matches table alone
                             'identities_final': 0,
                             'matches_created': matches_count,
                             'records_processed': 0,
-                            'identities_extracted': 0,  # FIXED: Can't determine from matches table alone
+                            'identities_extracted': 0, # FIXED: Can't determine from matches table alone
                             'identities_filtered': 0
                         }
             
@@ -2042,7 +2100,7 @@ class DynamicResultsTabWidget(QWidget):
             from PyQt5.QtCore import QPoint
             
             def show_context_menu(event):
-                if event.button == 3:  # Right click
+                if event.button == 3: # Right click
                     menu = QMenu(self)
                     
                     export_png_action = menu.addAction("Export as PNG")
@@ -2205,7 +2263,7 @@ class DynamicResultsTabWidget(QWidget):
             # Add tab to ResultsTabWidget with wing name
             self.enhanced_tab_widget.tab_widget.addTab(tab_container, wing_name)
             
-            print(f"[DynamicResultsTabWidget] ✓ Wing tab created: {wing_name}")
+            print(f"[DynamicResultsTabWidget] [OK] Wing tab created: {wing_name}")
             
         except Exception as e:
             print(f"[Error] Failed to create wing result tab: {e}")
@@ -2264,7 +2322,7 @@ class DynamicResultsTabWidget(QWidget):
             engine_type = wing_summary.get('engine_type', 'unknown')
             engine_display = engine_type.replace('_', ' ').title()
             
-            title_label = QLabel(f"📊 {wing_name}")
+            title_label = QLabel(f"{wing_name}")
             title_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #00FFFF;")
             header_layout.addWidget(title_label)
             
@@ -2308,10 +2366,10 @@ class DynamicResultsTabWidget(QWidget):
                 elif engine_type in ['time_window_scanning', 'time_based']:
                     # For time-based, we might not have time_windows in summary
                     # Use feather_metadata to create a chart
-                    chart_widget = self._render_identity_charts(feather_metadata)  # Reuse identity chart for feather stats
+                    chart_widget = self._render_identity_charts(feather_metadata) # Reuse identity chart for feather stats
                 
                 if chart_widget:
-                    chart_widget.setMaximumHeight(200)  # Compact chart for wing summary
+                    chart_widget.setMaximumHeight(200) # Compact chart for wing summary
                     summary_layout.addWidget(chart_widget)
             
             return summary_widget
@@ -2393,7 +2451,7 @@ class DynamicResultsTabWidget(QWidget):
                 if semantic_data_json:
                     try:
                         semantic_data = json.loads(semantic_data_json)
-                    except:
+                    except Exception as e:
                         pass
                 
                 # Reconstruct weighted_score dict if values exist
@@ -2433,7 +2491,7 @@ class DynamicResultsTabWidget(QWidget):
             if row and row[0]:
                 try:
                     feather_metadata = json.loads(row[0])
-                except:
+                except Exception as e:
                     pass
             
             # Load statistics from results table
@@ -2575,7 +2633,7 @@ class DynamicResultsTabWidget(QWidget):
                 if semantic_data_json:
                     try:
                         semantic_data = json.loads(semantic_data_json)
-                    except:
+                    except Exception as e:
                         pass
                 
                 # Reconstruct weighted_score dict if values exist
@@ -2615,7 +2673,7 @@ class DynamicResultsTabWidget(QWidget):
             if row and row[0]:
                 try:
                     feather_metadata = json.loads(row[0])
-                except:
+                except Exception as e:
                     pass
             
             # Load statistics from results table
@@ -2814,7 +2872,7 @@ class DynamicResultsTabWidget(QWidget):
             for wing_summary in wing_summaries:
                 wing_feather_metadata = wing_summary.get('feather_metadata', {})
                 wing_name = wing_summary.get('wing_name', 'Unknown')
-                print(f"[DynamicResultsTabWidget]   Wing '{wing_name}': {len(wing_feather_metadata)} feathers in metadata")
+                print(f"[DynamicResultsTabWidget] Wing '{wing_name}': {len(wing_feather_metadata)} feathers in metadata")
                 
                 for feather_id, metadata in wing_feather_metadata.items():
                     if feather_id.startswith('_'):
@@ -2823,14 +2881,14 @@ class DynamicResultsTabWidget(QWidget):
                     if feather_id not in aggregate_stats['feather_statistics']:
                         aggregate_stats['feather_statistics'][feather_id] = {
                             'identities_found': 0,
-                            'identities_extracted': 0,  # Add this for extraction rate
+                            'identities_extracted': 0, # Add this for extraction rate
                             'records_processed': 0,
                             'matches_created': 0
                         }
                     
                     if isinstance(metadata, dict):
                         identities = metadata.get('identities_found', metadata.get('identities_final', 0))
-                        extracted = metadata.get('identities_extracted', identities)  # Get extracted count
+                        extracted = metadata.get('identities_extracted', identities) # Get extracted count
                         records = metadata.get('records_processed', 0)
                         matches = metadata.get('matches_created', 0)
                         
@@ -2839,11 +2897,11 @@ class DynamicResultsTabWidget(QWidget):
                         aggregate_stats['feather_statistics'][feather_id]['records_processed'] += records
                         aggregate_stats['feather_statistics'][feather_id]['matches_created'] += matches
                         
-                        print(f"[DynamicResultsTabWidget]     - {feather_id}: identities={identities}, extracted={extracted}, records={records}, matches={matches}")
+                        print(f"[DynamicResultsTabWidget] - {feather_id}: identities={identities}, extracted={extracted}, records={records}, matches={matches}")
                     else:
-                        print(f"[DynamicResultsTabWidget]     - {feather_id}: metadata is not a dict (type={type(metadata)})")
+                        print(f"[DynamicResultsTabWidget] - {feather_id}: metadata is not a dict (type={type(metadata)})")
             
-            print(f"[DynamicResultsTabWidget] ✓ Aggregated statistics for {len(aggregate_stats['feather_statistics'])} feathers")
+            print(f"[DynamicResultsTabWidget] [OK] Aggregated statistics for {len(aggregate_stats['feather_statistics'])} feathers")
             
             # Don't clear existing tabs - add new tabs for this execution (Requirements 5.1, 5.2)
             update_progress("Creating new tabs...", 70)
@@ -2972,7 +3030,7 @@ class DynamicResultsTabWidget(QWidget):
                     chart1 = PyQt5BarChart()
                     chart1.set_data(sorted_data, "Matches by Feather", "Matches")
                     chart1.setMinimumHeight(180)
-                    chart1.show()  # Ensure chart is visible
+                    chart1.show() # Ensure chart is visible
                     charts_row.addWidget(chart1, stretch=1)
                 
                 # Chart 2: Records by Feather (Pie Chart with Breakdown)
@@ -2990,8 +3048,8 @@ class DynamicResultsTabWidget(QWidget):
                     chart2 = PyQt5PieChart(show_legend=True)
                     chart2.set_data(sorted_data, "Records by Feather")
                     chart2.setMinimumHeight(200)
-                    chart2.setMinimumWidth(700)  # Ensure enough width for pie + two-column legend
-                    chart2.show()  # Ensure chart is visible
+                    chart2.setMinimumWidth(700) # Ensure enough width for pie + two-column legend
+                    chart2.show() # Ensure chart is visible
                     charts_row.addWidget(chart2, stretch=1)
                 
                 charts_layout.addLayout(charts_row)
@@ -2999,7 +3057,7 @@ class DynamicResultsTabWidget(QWidget):
                 
                 # Force update of charts to ensure they render
                 QApplication.processEvents()
-                print(f"[DynamicResultsTabWidget] ✓ Charts created and added to layout")
+                print(f"[DynamicResultsTabWidget] [OK] Charts created and added to layout")
             
             # Add wing breakdown table
             wing_frame = QFrame()
@@ -3100,20 +3158,20 @@ class DynamicResultsTabWidget(QWidget):
                             item.widget().deleteLater()
                     # Add new summary content
                     existing_layout.addWidget(scroll_area)
-                    print(f"[DynamicResultsTabWidget] ✓ Updated existing Summary tab (index 0)")
+                    print(f"[DynamicResultsTabWidget] [OK] Updated existing Summary tab (index 0)")
                 else:
                     # No layout, create one and add content
                     new_layout = QVBoxLayout(existing_summary_tab)
                     new_layout.setContentsMargins(0, 0, 0, 0)
                     new_layout.addWidget(scroll_area)
-                    print(f"[DynamicResultsTabWidget] ✓ Created layout and updated Summary tab (index 0)")
+                    print(f"[DynamicResultsTabWidget] [OK] Created layout and updated Summary tab (index 0)")
                 
                 # Update tab title
                 tab_widget.setTabText(0, f"Summary - Exec {exec_id_display}")
             else:
                 # No existing Summary tab, add a new one (shouldn't happen)
                 summary_tab_index = tab_widget.addTab(summary_widget, f"Summary - Exec {exec_id_display}")
-                print(f"[DynamicResultsTabWidget] ✓ Summary tab created at index {summary_tab_index}")
+                print(f"[DynamicResultsTabWidget] [OK] Summary tab created at index {summary_tab_index}")
             
             # Create single combined Results tab for all wings from this execution (Requirements 5.1, 5.3, 5.4)
             # All wings from the same execution are grouped together in one tab
@@ -3167,17 +3225,17 @@ class DynamicResultsTabWidget(QWidget):
                 
                 if viewer:
                     combined_viewer.addTab(viewer, wing_name)
-                    print(f"[DynamicResultsTabWidget]   ✓ Added {wing_name} to combined viewer")
+                    print(f"[DynamicResultsTabWidget] [OK] Added {wing_name} to combined viewer")
             
             # Add the combined viewer as a single Results tab (Requirements 5.1, 5.3)
             # This keeps all wings from the same execution together
             tab_widget.addTab(combined_viewer, f"Results - Exec {exec_id_display}")
-            print(f"[DynamicResultsTabWidget] ✓ Results tab created with {len(wing_summaries)} wings combined")
+            print(f"[DynamicResultsTabWidget] [OK] Results tab created with {len(wing_summaries)} wings combined")
             
             update_progress("Loading complete!", 100)
             
-            print(f"[DynamicResultsTabWidget] ✓ Successfully loaded last results: {len(wing_summaries)} wings, {aggregate_stats['total_matches_all_wings']} total matches")
-            print(f"[DynamicResultsTabWidget] ✓ Created 2 tabs: Summary and Results (all wings combined) (Requirements 5.1, 5.2, 5.3)")
+            print(f"[DynamicResultsTabWidget] [OK] Successfully loaded last results: {len(wing_summaries)} wings, {aggregate_stats['total_matches_all_wings']} total matches")
+            print(f"[DynamicResultsTabWidget] [OK] Created 2 tabs: Summary and Results (all wings combined) (Requirements 5.1, 5.2, 5.3)")
             
             QMessageBox.information(
                 self,
@@ -3186,8 +3244,8 @@ class DynamicResultsTabWidget(QWidget):
                 f"Wings: {len(wing_summaries)}\n"
                 f"Total Matches: {aggregate_stats['total_matches_all_wings']:,}\n\n"
                 f"Two tabs created:\n"
-                f"  • Summary - Exec {exec_id_display}\n"
-                f"  • Results - Exec {exec_id_display} (all {len(wing_summaries)} wings combined)"
+                f" • Summary - Exec {exec_id_display}\n"
+                f" • Results - Exec {exec_id_display} (all {len(wing_summaries)} wings combined)"
             )
             
         except Exception as e:
@@ -3238,7 +3296,7 @@ class DynamicResultsTabWidget(QWidget):
             """, (execution_id,))
             
             wing_summaries = []
-            wing_index = 0  # Track wing index manually
+            wing_index = 0 # Track wing index manually
             
             for row in cursor.fetchall():
                 result_id, wing_id, wing_name, engine_type, exec_id, \
@@ -3253,7 +3311,7 @@ class DynamicResultsTabWidget(QWidget):
                         # Log first few feather IDs for debugging
                         feather_ids = [fid for fid in feather_metadata.keys() if not fid.startswith('_')]
                         if feather_ids:
-                            print(f"[DynamicResultsTabWidget]   Feather IDs: {feather_ids[:5]}{'...' if len(feather_ids) > 5 else ''}")
+                            print(f"[DynamicResultsTabWidget] Feather IDs: {feather_ids[:5]}{'...' if len(feather_ids) > 5 else ''}")
                     except Exception as e:
                         print(f"[DynamicResultsTabWidget] Warning: Failed to parse feather_metadata for wing {wing_name}: {e}")
                 
@@ -3267,10 +3325,10 @@ class DynamicResultsTabWidget(QWidget):
                     'total_matches': total_matches or 0,
                     'execution_time': execution_duration or 0.0,
                     'feather_metadata': feather_metadata,
-                    'timestamp': execution_duration  # Use execution_duration from results table
+                    'timestamp': execution_duration # Use execution_duration from results table
                 }
                 
-                wing_index += 1  # Increment for next wing
+                wing_index += 1 # Increment for next wing
                 
                 wing_summaries.append(wing_summary)
                 print(f"[DynamicResultsTabWidget] Detected wing: {wing_name} (index={wing_index}, matches={total_matches})")
@@ -3304,7 +3362,11 @@ class DynamicResultsTabWidget(QWidget):
         """
         try:
             print(f"[DynamicResultsTabWidget] Updating Summary tab with aggregate statistics")
-            
+
+            # Mirror diagnostics into the Issues tab. Idempotent — safe to
+            # call alongside summary tab refresh whenever stats change.
+            self._refresh_issues_tab(aggregate_stats)
+
             # Get Summary tab (index 0)
             summary_tab = self.enhanced_tab_widget.tab_widget.widget(0)
             if not summary_tab:
@@ -3422,7 +3484,7 @@ class DynamicResultsTabWidget(QWidget):
             stats_layout.addStretch()
             
             scroll_layout.addWidget(stats_frame)
-            print(f"[DynamicResultsTabWidget] ✓ Stats with Execution ID added to Summary tab: {exec_id_str}")
+            print(f"[DynamicResultsTabWidget] [OK] Stats with Execution ID added to Summary tab: {exec_id_str}")
             
             # Combine feather statistics from all wings
             feather_statistics = aggregate_stats.get('feather_statistics', {})
@@ -3458,19 +3520,19 @@ class DynamicResultsTabWidget(QWidget):
                             wing_feather_metadata = first_result.get('feather_metadata', {})
                             print(f"[DynamicResultsTabWidget] Extracted feather_metadata from results[0]: {len(wing_feather_metadata)} feathers")
                         else:
-                            print(f"[DynamicResultsTabWidget] ⚠ No results in wing_summary for '{wing_summary.get('wing_name')}'")
+                            print(f"[DynamicResultsTabWidget] [WARN] No results in wing_summary for '{wing_summary.get('wing_name')}'")
                     else:
-                        print(f"[DynamicResultsTabWidget] ⚠ Wing '{wing_summary.get('wing_name')}' has no feather_metadata or results")
+                        print(f"[DynamicResultsTabWidget] [WARN] Wing '{wing_summary.get('wing_name')}' has no feather_metadata or results")
                     
                     # Aggregate feather statistics
                     for feather_id, metadata in wing_feather_metadata.items():
-                        if feather_id.startswith('_'):  # Skip metadata entries
+                        if feather_id.startswith('_'): # Skip metadata entries
                             continue
                         
                         if feather_id not in feather_statistics:
                             feather_statistics[feather_id] = {
                                 'identities_found': 0,
-                                'identities_extracted': 0,  # FIXED: Add identities_extracted
+                                'identities_extracted': 0, # FIXED: Add identities_extracted
                                 'records_processed': 0,
                                 'matches_created': 0
                             }
@@ -3478,16 +3540,16 @@ class DynamicResultsTabWidget(QWidget):
                         # Aggregate counts
                         if isinstance(metadata, dict):
                             feather_statistics[feather_id]['identities_found'] += metadata.get('identities_found', metadata.get('identities_final', 0))
-                            feather_statistics[feather_id]['identities_extracted'] += metadata.get('identities_extracted', metadata.get('identities_found', 0))  # FIXED: Add with fallback
+                            feather_statistics[feather_id]['identities_extracted'] += metadata.get('identities_extracted', metadata.get('identities_found', 0)) # FIXED: Add with fallback
                             feather_statistics[feather_id]['records_processed'] += metadata.get('records_processed', 0)
                             feather_statistics[feather_id]['matches_created'] += metadata.get('matches_created', 0)
-                            print(f"[DynamicResultsTabWidget]   - {feather_id}: identities={metadata.get('identities_found', 0)}, extracted={metadata.get('identities_extracted', 0)}, records={metadata.get('records_processed', 0)}, matches={metadata.get('matches_created', 0)}")
+                            print(f"[DynamicResultsTabWidget] - {feather_id}: identities={metadata.get('identities_found', 0)}, extracted={metadata.get('identities_extracted', 0)}, records={metadata.get('records_processed', 0)}, matches={metadata.get('matches_created', 0)}")
                 
                 print(f"[DynamicResultsTabWidget] After aggregation: {len(feather_statistics)} feathers with data")
             
             # Create charts section with three charts
             if feather_statistics:
-                print(f"[DynamicResultsTabWidget] ✓ Creating charts for {len(feather_statistics)} feathers...")
+                print(f"[DynamicResultsTabWidget] [OK] Creating charts for {len(feather_statistics)} feathers...")
                 try:
                     charts_frame = QFrame()
                     charts_frame.setStyleSheet("""
@@ -3537,7 +3599,7 @@ class DynamicResultsTabWidget(QWidget):
                         chart1.set_data(sorted_data, "Matches by Feather", "Matches")
                         chart1.setMinimumHeight(180)
                         charts_row.addWidget(chart1, stretch=1)
-                        print(f"[DynamicResultsTabWidget] ✓ Chart 1 added: Matches Found ({len(sorted_data)} feathers)")
+                        print(f"[DynamicResultsTabWidget] [OK] Chart 1 added: Matches Found ({len(sorted_data)} feathers)")
                     
                     # Chart 2: Records Processed per Feather (Pie Chart with Breakdown)
                     records_data = {}
@@ -3553,9 +3615,9 @@ class DynamicResultsTabWidget(QWidget):
                         chart2 = PyQt5PieChart(show_legend=True)
                         chart2.set_data(sorted_data, "Records by Feather")
                         chart2.setMinimumHeight(200)
-                        chart2.setMinimumWidth(700)  # Ensure enough width for pie + two-column legend
+                        chart2.setMinimumWidth(700) # Ensure enough width for pie + two-column legend
                         charts_row.addWidget(chart2, stretch=1)
-                        print(f"[DynamicResultsTabWidget] ✓ Chart 2 added: Records Pie ({len(sorted_data)} feathers)")
+                        print(f"[DynamicResultsTabWidget] [OK] Chart 2 added: Records Pie ({len(sorted_data)} feathers)")
 
                     
                     charts_layout.addLayout(charts_row)
@@ -3587,7 +3649,7 @@ class DynamicResultsTabWidget(QWidget):
                         
                         # Get extracted evidence count (identities_extracted)
                         extracted = stats.get('identities_extracted', 0)
-                        has_extraction_data = extracted > 0  # Track if we have real extraction data
+                        has_extraction_data = extracted > 0 # Track if we have real extraction data
                         
                         # Fallback for display purposes only
                         if extracted == 0:
@@ -3609,7 +3671,7 @@ class DynamicResultsTabWidget(QWidget):
                         if has_extraction_data and extracted > 0:
                             correlation_percentage = (correlated / extracted * 100)
                         else:
-                            correlation_percentage = 0  # N/A when using fallback data
+                            correlation_percentage = 0 # N/A when using fallback data
                         
                         extraction_data.append((feather_id, extracted, records, correlated, extraction_percentage, correlation_percentage))
                     
@@ -3631,11 +3693,11 @@ class DynamicResultsTabWidget(QWidget):
                         card = QFrame()
                         # Color border based on PRIMARY extraction percentage
                         if extraction_percentage >= 50:
-                            border_color = "#10B981"  # green
+                            border_color = "#10B981" # green
                         elif extraction_percentage >= 20:
-                            border_color = "#F59E0B"  # yellow
+                            border_color = "#F59E0B" # yellow
                         else:
-                            border_color = "#EF4444"  # red
+                            border_color = "#EF4444" # red
                         
                         card.setStyleSheet(f"""
                             QFrame {{
@@ -3678,22 +3740,23 @@ class DynamicResultsTabWidget(QWidget):
                     
                     extraction_layout.addWidget(grid_widget)
                     charts_layout.addWidget(extraction_frame)
-                    print(f"[DynamicResultsTabWidget] ✓ Chart 3 added: Extraction grid with {len(extraction_data)} feathers")
+                    print(f"[DynamicResultsTabWidget] [OK] Chart 3 added: Extraction grid with {len(extraction_data)} feathers")
                     
                     scroll_layout.addWidget(charts_frame)
-                    print(f"[DynamicResultsTabWidget] ✓ Charts frame added to scroll layout")
+                    print(f"[DynamicResultsTabWidget] [OK] Charts frame added to scroll layout")
                     
                 except Exception as e:
-                    print(f"[DynamicResultsTabWidget] ✗ ERROR creating charts: {e}")
+                    print(f"[DynamicResultsTabWidget] [FAIL] ERROR creating charts: {e}")
                 import traceback
                 traceback.print_exc()
             else:
-                print("[DynamicResultsTabWidget] ⚠ WARNING: No feather_statistics available - charts not created")
+                print("[DynamicResultsTabWidget] [WARN] WARNING: No feather_statistics available - charts not created")
                 print(f"[DynamicResultsTabWidget] aggregate_stats keys: {list(aggregate_stats.keys())}")
                 print(f"[DynamicResultsTabWidget] feather_statistics content: {aggregate_stats.get('feather_statistics', {})}")
                 
                 # Add a message to the summary tab
-                no_charts_label = QLabel("⚠ No feather statistics available for charts")
+                no_charts_label = QLabel()
+                apply_status_to_label(no_charts_label, "WARN", "No feather statistics available for charts")
                 no_charts_label.setStyleSheet("color: #FF9800; font-size: 10pt; padding: 20px;")
                 no_charts_label.setAlignment(Qt.AlignCenter)
                 scroll_layout.addWidget(no_charts_label)
@@ -3785,7 +3848,7 @@ class DynamicResultsTabWidget(QWidget):
                     exec_time = wing_summary.get('execution_time', 0)
                     time_formatted = format_time(exec_time)
                     
-                    print(f"[DynamicResultsTabWidget]   Row {row}: {wing_name} | {engine_type} | {matches:,} matches | {time_formatted}")
+                    print(f"[DynamicResultsTabWidget] Row {row}: {wing_name} | {engine_type} | {matches:,} matches | {time_formatted}")
                     
                     wing_table.setItem(row, 0, QTableWidgetItem(wing_name))
                     wing_table.setItem(row, 1, QTableWidgetItem(engine_type))
@@ -3799,9 +3862,9 @@ class DynamicResultsTabWidget(QWidget):
                 breakdown_layout.addWidget(wing_table)
                 scroll_layout.addWidget(breakdown_frame)
                 
-                print(f"[DynamicResultsTabWidget] ✓ Wing breakdown table created with {len(wing_summaries)} wings")
+                print(f"[DynamicResultsTabWidget] [OK] Wing breakdown table created with {len(wing_summaries)} wings")
             else:
-                print(f"[DynamicResultsTabWidget] ⚠ No wing summaries available for breakdown table")
+                print(f"[DynamicResultsTabWidget] [WARN] No wing summaries available for breakdown table")
             
             scroll_layout.addStretch()
             
@@ -3809,13 +3872,13 @@ class DynamicResultsTabWidget(QWidget):
             scroll_area.setWidget(scroll_content)
             summary_layout.addWidget(scroll_area)
             
-            print(f"[DynamicResultsTabWidget] ✓ Summary tab updated with aggregate statistics")
-            print(f"  - Execution ID: {execution_id if execution_id else 'N/A'}")
-            print(f"  - Total wings: {total_wings}")
-            print(f"  - Total matches: {total_matches:,}")
-            print(f"  - Total time: {total_time:.2f}s")
-            print(f"  - Charts displayed: 3")
-            print(f"  - Wing breakdown rows: {len(wing_summaries)}")
+            print(f"[DynamicResultsTabWidget] [OK] Summary tab updated with aggregate statistics")
+            print(f" - Execution ID: {execution_id if execution_id else 'N/A'}")
+            print(f" - Total wings: {total_wings}")
+            print(f" - Total matches: {total_matches:,}")
+            print(f" - Total time: {total_time:.2f}s")
+            print(f" - Charts displayed: 3")
+            print(f" - Wing breakdown rows: {len(wing_summaries)}")
             
         except Exception as e:
             print(f"[Error] Failed to update summary tab: {e}")
@@ -3832,18 +3895,19 @@ class ResultsViewer(QWidget):
     """
     
     # Signals
-    results_loaded = pyqtSignal(str)  # output_dir
-    match_selected = pyqtSignal(dict)  # match_data
-    export_completed = pyqtSignal(str)  # export_path
+    results_loaded = pyqtSignal(str) # output_dir
+    match_selected = pyqtSignal(dict) # match_data
+    export_completed = pyqtSignal(str) # export_path
     
     def __init__(self, parent=None):
         """Initialize the Results Viewer"""
         super().__init__(parent)
         
-        # Initialize centralized score configuration manager
+        # Initialize centralized score configuration manager via the
+        # integrated façade so all external entry points share one route.
         # Requirements: 7.2, 8.4
-        from ..config.score_configuration_manager import ScoreConfigurationManager
-        self.score_config_manager = ScoreConfigurationManager()
+        from ..config.integrated_configuration_manager import IntegratedConfigurationManager
+        self.score_config_manager = IntegratedConfigurationManager().score_config_manager
         
         self.current_output_dir = None
         self.engine_type = "time_based"
@@ -4030,7 +4094,7 @@ class ResultsViewer(QWidget):
         except Exception as e:
             error_msg = f"Failed to load results: {str(e)}"
             self.status_label.setText(error_msg)
-            print(f"❌ {error_msg}")
+            print(f"[ERROR] {error_msg}")
             import traceback
             traceback.print_exc()
     

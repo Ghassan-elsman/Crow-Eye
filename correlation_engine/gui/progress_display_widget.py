@@ -12,11 +12,11 @@ from typing import Dict, Any, List, Optional
 
 # Severity colors for error visualization
 SEVERITY_COLORS = {
-    "critical": "#FF0000",  # Red
-    "high": "#FF6600",      # Orange-Red
-    "medium": "#FFCC00",    # Yellow-Orange
-    "low": "#FFFF00",       # Yellow
-    "info": "#00CCFF"       # Cyan
+    "critical": "#FF0000", # Red
+    "high": "#FF6600", # Orange-Red
+    "medium": "#FFCC00", # Yellow-Orange
+    "low": "#FFFF00", # Yellow
+    "info": "#00CCFF" # Cyan
 }
 
 
@@ -57,12 +57,12 @@ class ProgressDisplayWidget(QTextEdit):
         
         # Throttling for progress updates
         self._last_progress_update: Optional[datetime] = None
-        self._min_update_interval_seconds: float = 1.0  # Update at most once per second
-        self._last_progress_line_index: int = -1  # Track last progress line for updating
+        self._min_update_interval_seconds: float = 1.0 # Update at most once per second
+        self._last_progress_line_index: int = -1 # Track last progress line for updating
         
         # Correlation statistics tracking
-        self._statistics_tracker = None  # Will be initialized when engine type is known
-        self._last_percentage_display: float = -1.0  # Track last displayed percentage
+        self._statistics_tracker = None # Will be initialized when engine type is known
+        self._last_percentage_display: float = -1.0 # Track last displayed percentage
     
     def _should_throttle_progress(self) -> bool:
         """Check if progress update should be throttled."""
@@ -117,7 +117,7 @@ class ProgressDisplayWidget(QTextEdit):
                     new_text = message
                 
                 self.setPlainText(new_text)
-                self._last_progress_line_index = 1  # Mark that we have a progress line
+                self._last_progress_line_index = 1 # Mark that we have a progress line
             
             # Move cursor to end and ensure visible
             cursor = self.textCursor()
@@ -136,7 +136,7 @@ class ProgressDisplayWidget(QTextEdit):
             # Fall back to appending
             try:
                 self.append_progress(message)
-            except:
+            except Exception as e:
                 pass
     
     def append_progress(self, message: str):
@@ -190,7 +190,7 @@ class ProgressDisplayWidget(QTextEdit):
                 self._statistics_tracker = CorrelationStatisticsTracker(engine_type)
             
             if event.event_type == ProgressEventType.SCANNING_START:
-                self._last_progress_line_index = -1  # Reset progress line tracking
+                self._last_progress_line_index = -1 # Reset progress line tracking
                 progress = event.overall_progress
                 
                 # Initialize statistics tracker
@@ -217,7 +217,7 @@ class ProgressDisplayWidget(QTextEdit):
                     self._display_percentage_analysis(progress)
                     self._last_percentage_display = percentage
                 
-                progress_msg = f"    [Working] {percentage:.1f}% complete - {progress.matches_found} matches found"
+                progress_msg = f" [Working] {percentage:.1f}% complete - {progress.matches_found} matches found"
                 self.update_progress_line(progress_msg)
             
             elif event.event_type == ProgressEventType.WINDOW_COMPLETE:
@@ -228,7 +228,7 @@ class ProgressDisplayWidget(QTextEdit):
                 # Also update on window complete
                 progress = event.overall_progress
                 percentage = progress.completion_percentage
-                progress_msg = f"    [Working] {percentage:.1f}% complete - {progress.matches_found} matches found"
+                progress_msg = f" [Working] {percentage:.1f}% complete - {progress.matches_found} matches found"
                 self.update_progress_line(progress_msg)
             
             elif event.event_type == ProgressEventType.SCANNING_COMPLETE:
@@ -254,9 +254,9 @@ class ProgressDisplayWidget(QTextEdit):
                 self.append_progress(f"\n[Error] {event.message}")
                 if event.error_details:
                     # Show error details on separate lines
-                    for line in event.error_details.split('\n')[:5]:  # Show first 5 lines
+                    for line in event.error_details.split('\n')[:5]: # Show first 5 lines
                         if line.strip():
-                            self.append_progress(f"  {line}")
+                            self.append_progress(f" {line}")
             
             elif event.event_type == ProgressEventType.STREAMING_ENABLED:
                 self._last_progress_line_index = -1
@@ -285,15 +285,15 @@ class ProgressDisplayWidget(QTextEdit):
                        self._statistics_tracker.engine_type == "identity_based" else "windows"
             
             self.append_progress(f"\n[Progress Analysis]")
-            self.append_progress(f"  Completed: {percentage_complete:.1f}% ({progress.windows_processed:,} {item_type})")
-            self.append_progress(f"  Remaining: {percentage_remaining:.1f}% ({progress.total_windows - progress.windows_processed:,} {item_type})")
+            self.append_progress(f" Completed: {percentage_complete:.1f}% ({progress.windows_processed:,} {item_type})")
+            self.append_progress(f" Remaining: {percentage_remaining:.1f}% ({progress.total_windows - progress.windows_processed:,} {item_type})")
             
             if progress.time_remaining_seconds and progress.time_remaining_seconds > 0:
                 remaining_time = timedelta(seconds=progress.time_remaining_seconds)
-                self.append_progress(f"  Estimated Time Remaining: {remaining_time}")
+                self.append_progress(f" Estimated Time Remaining: {remaining_time}")
             
             if progress.processing_rate_windows_per_second and progress.processing_rate_windows_per_second > 0:
-                self.append_progress(f"  Processing Rate: {progress.processing_rate_windows_per_second:.2f} {item_type}/sec")
+                self.append_progress(f" Processing Rate: {progress.processing_rate_windows_per_second:.2f} {item_type}/sec")
             
         except Exception as e:
             # Silently fail if percentage display fails
@@ -377,7 +377,7 @@ class ProgressDisplayWidget(QTextEdit):
         data = event.data
         
         if event_type == "wing_start":
-            self._last_progress_line_index = -1  # Reset progress line tracking
+            self._last_progress_line_index = -1 # Reset progress line tracking
             self.append_progress(f"\n[Correlation] Processing Wing: {data['wing_name']}")
         
         elif event_type == "correlation_start":
@@ -386,7 +386,7 @@ class ProgressDisplayWidget(QTextEdit):
         elif event_type == "anchor_progress" or event_type == "summary_progress":
             # Simple progress message without anchor details
             matches_found = data.get('matches_found', 0)
-            progress_msg = f"    [Working] Correlation in progress... {matches_found} matches found"
+            progress_msg = f" [Working] Correlation in progress... {matches_found} matches found"
             self.update_progress_line(progress_msg)
     
     def _display_semantic_stats(self, semantic_stats):
@@ -672,7 +672,7 @@ class ProgressDisplayWidget(QTextEdit):
             case_value = conflict.get('case_value', 'N/A')
             resolution = conflict.get('resolution', 'unknown')
             
-            self.append_progress(f"[Config]   {i}. {field}: {global_value} -> {case_value} ({resolution})")
+            self.append_progress(f"[Config] {i}. {field}: {global_value} -> {case_value} ({resolution})")
         
         self.append_progress(f"[Config] {len(conflicts)} conflicts resolved using case-specific precedence")
     
@@ -811,25 +811,25 @@ class ProgressDisplayWidget(QTextEdit):
             
             if total_records > 0:
                 mapping_rate = (mappings_applied / total_records) * 100
-                self.append_progress(f"  Mappings applied: {mappings_applied} ({mapping_rate:.1f}% coverage)")
+                self.append_progress(f" Mappings applied: {mappings_applied} ({mapping_rate:.1f}% coverage)")
             
             pattern_matches = semantic_stats.get('pattern_matches', 0)
             exact_matches = semantic_stats.get('exact_matches', 0)
             if pattern_matches > 0 or exact_matches > 0:
-                self.append_progress(f"  Pattern matches: {pattern_matches}, Exact matches: {exact_matches}")
+                self.append_progress(f" Pattern matches: {pattern_matches}, Exact matches: {exact_matches}")
             
             case_specific_used = semantic_stats.get('case_specific_mappings_used', 0)
             global_used = semantic_stats.get('global_mappings_used', 0)
             if case_specific_used > 0 or global_used > 0:
-                self.append_progress(f"  Global mappings: {global_used}, Case-specific: {case_specific_used}")
+                self.append_progress(f" Global mappings: {global_used}, Case-specific: {case_specific_used}")
             
             unmapped_fields = semantic_stats.get('unmapped_fields', 0)
             if unmapped_fields > 0:
-                self.append_progress(f"  Unmapped fields: {unmapped_fields}")
+                self.append_progress(f" Unmapped fields: {unmapped_fields}")
             
             fallback_count = semantic_stats.get('fallback_count', 0)
             if fallback_count > 0:
-                self.append_progress(f"  Fallback to raw values: {fallback_count}")
+                self.append_progress(f" Fallback to raw values: {fallback_count}")
             
             # Error handling statistics
             manager_failures = semantic_stats.get('manager_failure_count', 0)
@@ -837,10 +837,10 @@ class ProgressDisplayWidget(QTextEdit):
             successful_recoveries = semantic_stats.get('successful_recovery_count', 0)
             
             if manager_failures > 0:
-                self.append_progress(f"  Manager failures: {manager_failures}")
+                self.append_progress(f" Manager failures: {manager_failures}")
                 if recovery_attempts > 0:
                     recovery_rate = (successful_recoveries / recovery_attempts) * 100
-                    self.append_progress(f"  Recovery attempts: {recovery_attempts} ({recovery_rate:.1f}% successful)")
+                    self.append_progress(f" Recovery attempts: {recovery_attempts} ({recovery_rate:.1f}% successful)")
         
         # Weighted scoring statistics
         scoring_stats = final_stats.get('scoring_stats', {})
@@ -854,13 +854,13 @@ class ProgressDisplayWidget(QTextEdit):
             
             if scores_calculated > 0:
                 success_rate = (scores_calculated / max(1, total_matches_scored)) * 100
-                self.append_progress(f"  Scores calculated: {scores_calculated}/{total_matches_scored} ({success_rate:.1f}%)")
-                self.append_progress(f"  Score range: {lowest_score:.3f} - {highest_score:.3f} (avg: {average_score:.3f})")
+                self.append_progress(f" Scores calculated: {scores_calculated}/{total_matches_scored} ({success_rate:.1f}%)")
+                self.append_progress(f" Score range: {lowest_score:.3f} - {highest_score:.3f} (avg: {average_score:.3f})")
             
             fallback_count = scoring_stats.get('fallback_to_simple_count', 0)
             if fallback_count > 0:
                 fallback_rate = (fallback_count / max(1, total_matches_scored)) * 100
-                self.append_progress(f"  Simple count fallbacks: {fallback_count} ({fallback_rate:.1f}%)")
+                self.append_progress(f" Simple count fallbacks: {fallback_count} ({fallback_rate:.1f}%)")
             
             # Configuration usage
             case_specific_used = scoring_stats.get('case_specific_configs_used', 0)
@@ -868,7 +868,7 @@ class ProgressDisplayWidget(QTextEdit):
             if case_specific_used > 0 or global_used > 0:
                 total_configs = case_specific_used + global_used
                 case_percentage = (case_specific_used / total_configs) * 100 if total_configs > 0 else 0
-                self.append_progress(f"  Global configs: {global_used}, Case-specific: {case_specific_used} ({case_percentage:.1f}%)")
+                self.append_progress(f" Global configs: {global_used}, Case-specific: {case_specific_used} ({case_percentage:.1f}%)")
             
             # Error statistics
             config_errors = scoring_stats.get('configuration_errors', 0)
@@ -876,10 +876,10 @@ class ProgressDisplayWidget(QTextEdit):
             conflict_resolutions = scoring_stats.get('conflict_resolutions', 0)
             
             if config_errors > 0 or validation_failures > 0:
-                self.append_progress(f"  Configuration errors: {config_errors}, Validation failures: {validation_failures}")
+                self.append_progress(f" Configuration errors: {config_errors}, Validation failures: {validation_failures}")
             
             if conflict_resolutions > 0:
-                self.append_progress(f"  Configuration conflicts resolved: {conflict_resolutions}")
+                self.append_progress(f" Configuration conflicts resolved: {conflict_resolutions}")
         
         # Memory and performance statistics
         memory_stats = final_stats.get('memory_stats', {})
@@ -986,21 +986,21 @@ class ProgressDisplayWidget(QTextEdit):
                                          key=lambda x: ['critical', 'high', 'medium', 'low', 'info'].index(x[0]) 
                                          if x[0] in ['critical', 'high', 'medium', 'low', 'info'] else 99):
                 color = SEVERITY_COLORS.get(severity, "#FFFFFF")
-                self.display_error(f"  {severity}: {count}", severity=severity)
+                self.display_error(f" {severity}: {count}", severity=severity)
         
         # By component
         by_component = aggregated_errors.get('by_component', {})
         if by_component:
             self.append_progress("\nBy Component:")
             for component, count in by_component.items():
-                self.append_progress(f"  {component}: {count}")
+                self.append_progress(f" {component}: {count}")
         
         # By error type
         by_type = aggregated_errors.get('by_type', {})
         if by_type:
             self.append_progress("\nBy Error Type:")
-            for error_type, count in sorted(by_type.items(), key=lambda x: -x[1])[:5]:  # Top 5
-                self.append_progress(f"  {error_type}: {count}")
+            for error_type, count in sorted(by_type.items(), key=lambda x: -x[1])[:5]: # Top 5
+                self.append_progress(f" {error_type}: {count}")
         
         # Recovery stats
         recovery_stats = aggregated_errors.get('recovery_stats', {})
@@ -1049,7 +1049,7 @@ class ProgressDisplayWidget(QTextEdit):
         if 'error_attributes' in details:
             detail_text += "\n--- Attributes ---\n"
             for key, value in details['error_attributes'].items():
-                detail_text += f"  {key}: {value}\n"
+                detail_text += f" {key}: {value}\n"
         
         # Show in message box
         msg_box = QMessageBox(self)
@@ -1093,13 +1093,13 @@ class ProgressDisplayWidget(QTextEdit):
         # Log recovery information if available
         if integration_error.recovery_attempted:
             if integration_error.recovery_successful:
-                self.append_progress(f"  ✓ Recovery successful")
+                self.append_progress(f" [OK] Recovery successful")
             else:
-                self.append_progress(f"  ✗ Recovery failed")
+                self.append_progress(f" [FAIL] Recovery failed")
         
         if integration_error.fallback_applied:
             fallback_name = integration_error.fallback_applied.value if hasattr(integration_error.fallback_applied, 'value') else str(integration_error.fallback_applied)
-            self.append_progress(f"  → Fallback applied: {fallback_name}")
+            self.append_progress(f" → Fallback applied: {fallback_name}")
 
     # Engine-Specific Progress Formatting
     
@@ -1148,7 +1148,7 @@ class ProgressDisplayWidget(QTextEdit):
         timestamp = datetime.now().strftime("%H:%M:%S")
         
         # Use animated indicator
-        indicator = "⏳"
+        indicator = ""
         
         self.append_progress(f"[{timestamp}] {indicator} {message}")
     
@@ -1227,7 +1227,7 @@ class ProgressDisplayWidget(QTextEdit):
         
         elif status_type == "match_found":
             count = kwargs.get('count', 1)
-            self.append_progress(f"[{timestamp}] ✓ Found {count} new match{'es' if count > 1 else ''}")
+            self.append_progress(f"[{timestamp}] [OK] Found {count} new match{'es' if count > 1 else ''}")
         
         elif status_type == "error":
             error_category = kwargs.get('category', 'Error')

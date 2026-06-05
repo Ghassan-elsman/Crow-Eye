@@ -20,16 +20,42 @@ class WeightedScoringEngine:
     then interpreted using configurable thresholds to provide human-readable confidence levels.
     """
     
-    def calculate_match_score(self, 
+    def calculate_match_score(self,
                              match_records: Dict[str, Dict],
                              wing_config: Any) -> Dict[str, Any]:
         """
         Calculate weighted score for a match.
+
+        Score semantics (normalised in [0.0, 1.0]):
+            score = (sum of weights of matched feathers) / (sum of all feather weights)
+
+        Three correctness fixes vs. the legacy summed-weight model:
+
+        1. **Silent-zero bug.** If every feather in the wing has weight=0.0
+           (the FeatherSpec dataclass default — i.e. an unconfigured wing),
+           the legacy code returned 0.0 even on full match coverage, which
+           made every match look like "Insufficient Evidence." We now fall
+           back to equal weighting (1/N per feather) so that unconfigured
+           wings still produce a meaningful proportional score.
+
+        2. **No normalisation.** The legacy code summed raw weights, so a
+           wing with weights [1.0, 0.5, 0.5] could yield scores up to 2.0.
+           Interpretation thresholds (0.70/0.40/0.20) were calibrated for
+           the [0, 1] range, so they triggered "Confirmed" on any single
+           heavy match. We now divide by total weight, giving a stable
+           [0, 1] score regardless of the user's weight magnitudes.
+
+        3. **Per-feather contribution.** The breakdown now reports each
+           feather's NORMALISED contribution (its share of the total)
+           rather than its raw weight, so the breakdown rows sum to the
+           reported score. Tier numbers are still surfaced in the breakdown
+           as metadata — they are intentionally NOT applied as a separate
+           multiplier (the wing's `weight` is the single source of truth
+           for scoring magnitude).
         """
-        # Check if weighted scoring is enabled
+        # Fast path: scoring disabled → count fallback.
         scoring_config = getattr(wing_config, 'scoring', {})
         if not scoring_config.get('enabled', False):
-            # Fall back to simple count-based scoring
             return {
                 'score': len(match_records),
                 'interpretation': 'Match Count',
@@ -37,58 +63,90 @@ class WeightedScoringEngine:
                 'matched_feathers': len(match_records),
                 'total_feathers': len(getattr(wing_config, 'feathers', []))
             }
-        
-        total_score = 0.0
-        breakdown = {}
-        
-        # OPTIMIZATION: Cache feathers list to avoid repeated getattr
+
         feathers = getattr(wing_config, 'feathers', [])
-        
-        # Calculate weighted score
-        for feather_spec in feathers:
-            # OPTIMIZATION: Faster extraction of feather info
-            if isinstance(feather_spec, dict):
-                feather_id = feather_spec.get('feather_id', '')
-                weight = feather_spec.get('weight', 0.0)
-                tier = feather_spec.get('tier', 0)
-                tier_name = feather_spec.get('tier_name', '')
-            else:
-                feather_id = getattr(feather_spec, 'feather_id', '')
-                weight = getattr(feather_spec, 'weight', 0.0)
-                tier = getattr(feather_spec, 'tier', 0)
-                tier_name = getattr(feather_spec, 'tier_name', '')
-            
-            if feather_id in match_records:
-                total_score += weight
-                
-                breakdown[feather_id] = {
-                    'matched': True,
-                    'weight': weight,
-                    'contribution': weight,
-                    'tier': tier,
-                    'tier_name': tier_name
-                }
-            else:
-                breakdown[feather_id] = {
-                    'matched': False,
-                    'weight': weight,
-                    'contribution': 0.0,
-                    'tier': tier,
-                    'tier_name': tier_name
-                }
-        
-        # Determine interpretation
+        n_feathers = len(feathers)
+        if n_feathers == 0:
+            return {
+                'score': 0.0,
+                'interpretation': self._interpret_score(
+                    0.0, scoring_config.get('score_interpretation', {})
+                ),
+                'breakdown': {},
+                'matched_feathers': 0,
+                'total_feathers': 0,
+                'weights_normalised': False,
+                'used_equal_weight_fallback': False,
+            }
+
+        # ---- Step 1: read weights + tier metadata per feather ----
+        def _read(spec, key, default):
+            if isinstance(spec, dict):
+                return spec.get(key, default)
+            return getattr(spec, key, default)
+
+        weights_raw = []
+        for spec in feathers:
+            try:
+                w = float(_read(spec, 'weight', 0.0) or 0.0)
+            except (TypeError, ValueError):
+                w = 0.0
+            if w < 0.0:
+                w = 0.0 # negative weights would invert semantics — clamp.
+            weights_raw.append(w)
+
+        # ---- Step 2: silent-zero fix — equal weights if all are zero ----
+        total_raw = sum(weights_raw)
+        used_equal_weight = False
+        if total_raw <= 0.0:
+            # User didn't configure weights; treat every feather as equal.
+            weights_effective = [1.0 / n_feathers] * n_feathers
+            total_effective = 1.0
+            used_equal_weight = True
+        else:
+            # ---- Step 3: normalisation fix — divide by total ----
+            weights_effective = [w / total_raw for w in weights_raw]
+            total_effective = 1.0 # by construction after normalisation
+
+        # ---- Step 4: build breakdown + score in one pass ----
+        total_score = 0.0
+        breakdown: Dict[str, Dict[str, Any]] = {}
+        matched_count = 0
+
+        for spec, w_norm in zip(feathers, weights_effective):
+            feather_id = _read(spec, 'feather_id', '') or ''
+            tier = _read(spec, 'tier', 0) or 0
+            tier_name = _read(spec, 'tier_name', '') or ''
+            raw_weight = float(_read(spec, 'weight', 0.0) or 0.0)
+            is_matched = feather_id in match_records
+
+            contribution = w_norm if is_matched else 0.0
+            if is_matched:
+                total_score += contribution
+                matched_count += 1
+
+            breakdown[feather_id] = {
+                'matched': is_matched,
+                'weight': raw_weight, # what the user configured
+                'weight_normalised': round(w_norm, 4), # share of total used in score
+                'contribution': round(contribution, 4),
+                'tier': tier,
+                'tier_name': tier_name,
+            }
+
         interpretation = self._interpret_score(
             total_score,
             scoring_config.get('score_interpretation', {})
         )
-        
+
         return {
-            'score': round(total_score, 2),
+            'score': round(total_score, 4),
             'interpretation': interpretation,
             'breakdown': breakdown,
-            'matched_feathers': len([b for b in breakdown.values() if b['matched']]),
-            'total_feathers': len(breakdown)
+            'matched_feathers': matched_count,
+            'total_feathers': n_feathers,
+            'weights_normalised': True,
+            'used_equal_weight_fallback': used_equal_weight,
         }
     
     def _interpret_score(self, score: float, 
@@ -106,9 +164,20 @@ class WeightedScoringEngine:
         if not interpretation_config:
             return "Unknown"
         
+        # Normalize interpretation config to handle both dict and flat float values
+        normalized = {}
+        for level, config in interpretation_config.items():
+            if isinstance(config, dict):
+                normalized[level] = config
+            else:
+                try:
+                    normalized[level] = {'min': float(config), 'label': level.title()}
+                except (TypeError, ValueError):
+                    normalized[level] = {'min': 0.0, 'label': level.title()}
+
         # Sort by minimum threshold in descending order
         sorted_levels = sorted(
-            interpretation_config.items(),
+            normalized.items(),
             key=lambda x: x[1].get('min', 0.0),
             reverse=True
         )

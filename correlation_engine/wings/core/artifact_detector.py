@@ -181,26 +181,27 @@ class ArtifactDetector:
         """
         try:
             conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Check if metadata table exists
-            cursor.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='feather_metadata'"
-            )
-            if not cursor.fetchone():
+            try:
+                cursor = conn.cursor()
+                
+                # Check if metadata table exists
+                cursor.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='feather_metadata'"
+                )
+                if not cursor.fetchone():
+                    return None
+                
+                # Read artifact_type from metadata
+                cursor.execute("SELECT artifact_type FROM feather_metadata LIMIT 1")
+                row = cursor.fetchone()
+                
+                if row and row[0]:
+                    artifact_type = row[0]
+                    logger.info(f"Detected artifact type from metadata: {artifact_type}")
+                    return artifact_type
+            finally:
                 conn.close()
-                return None
-            
-            # Read artifact_type from metadata
-            cursor.execute("SELECT artifact_type FROM feather_metadata LIMIT 1")
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row and row[0]:
-                artifact_type = row[0]
-                logger.info(f"Detected artifact type from metadata: {artifact_type}")
-                return artifact_type
             
             return None
             
@@ -215,15 +216,15 @@ class ArtifactDetector:
     def detect_from_table_name(cls, db_path: str) -> Tuple[str, str]:
         """
         Detect artifact type from table names in database.
-        
+
         Args:
             db_path: Path to database file
-            
+
         Returns:
             Tuple of (artifact_type, confidence)
             - artifact_type: Detected type or 'Unknown'
             - confidence: 'high', 'medium', or 'low'
-            
+
         Examples:
             Database with "prefetch_data" table → ("Prefetch", "high")
             Database with "data_log" table → ("SystemLog", "medium")
@@ -231,26 +232,28 @@ class ArtifactDetector:
         """
         try:
             conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Get all table names
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-            tables = [row[0] for row in cursor.fetchall()]
-            conn.close()
-            
+            try:
+                cursor = conn.cursor()
+
+                # Get all table names
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+                tables = [row[0] for row in cursor.fetchall()]
+            finally:
+                conn.close()
+
             # Filter out system tables
             data_tables = [
                 t for t in tables 
                 if t not in ['feather_metadata', 'sqlite_sequence', 
                             'import_history', 'data_lineage']
             ]
-            
+
             if not data_tables:
                 logger.warning(f"No data tables found in {db_path}")
                 return ("Unknown", "low")
-            
+
             # Try to match table names against patterns
             for table_name in data_tables:
                 artifact_type, confidence = cls._match_table_pattern(table_name.lower())
@@ -260,25 +263,25 @@ class ArtifactDetector:
                         f"{artifact_type} ({confidence} confidence)"
                     )
                     return (artifact_type, confidence)
-            
+
             logger.info(f"No matching table patterns found in {db_path}")
             return ("Unknown", "low")
-            
+
         except sqlite3.Error as e:
             logger.warning(f"Failed to detect from table names in {db_path}: {e}")
             return ("Unknown", "low")
         except Exception as e:
             logger.warning(f"Unexpected error detecting from table names in {db_path}: {e}")
             return ("Unknown", "low")
-    
+
     @classmethod
     def _match_table_pattern(cls, table_name: str) -> Tuple[str, str]:
         """
         Match table name against known patterns.
-        
+
         Args:
             table_name: Table name in lowercase
-            
+
         Returns:
             Tuple of (artifact_type, confidence)
         """
@@ -286,28 +289,28 @@ class ArtifactDetector:
         for artifact_type, patterns in cls.TABLE_PATTERNS.items():
             if table_name in patterns['exact']:
                 return (artifact_type, "high")
-        
+
         # Try partial matches (medium confidence)
         for artifact_type, patterns in cls.TABLE_PATTERNS.items():
             for pattern in patterns['partial']:
                 if pattern in table_name:
                     return (artifact_type, "medium")
-        
+
         return ("Unknown", "low")
-    
+
     @classmethod
     def detect_from_filename(cls, filename: str) -> Tuple[str, str]:
         """
         Detect artifact type from Feather database filename.
-        
+
         Args:
             filename: Database filename (e.g., "Prefetch.db", "feather_srum.db")
-        
+
         Returns:
             Tuple of (artifact_type, confidence)
             - artifact_type: Detected type or 'Unknown'
             - confidence: 'high', 'medium', or 'low'
-        
+
         Examples:
             "Prefetch.db" → ("Prefetch", "high")
             "prefe.db" → ("Prefetch", "medium")
@@ -315,31 +318,31 @@ class ArtifactDetector:
         """
         # Extract filename without extension and clean it
         filename_clean = cls._clean_filename(filename)
-        
+
         if not filename_clean:
             return ('Unknown', 'low')
-        
+
         # Find best match
         best_match = None
         best_score = 0
-        
+
         for artifact_type, variations in cls.PATTERNS.items():
             for pattern in variations:
                 # Calculate similarity ratio
                 ratio = SequenceMatcher(None, filename_clean, pattern).ratio()
-                
+
                 # Boost score if pattern is substring
                 if pattern in filename_clean:
                     ratio = max(ratio, 0.85)
-                
+
                 # Boost score if exact match
                 if filename_clean == pattern:
                     ratio = 1.0
-                
+
                 if ratio > best_score:
                     best_score = ratio
                     best_match = artifact_type
-        
+
         # Determine confidence based on score
         if best_score >= 0.8:
             confidence = 'high'
@@ -348,79 +351,79 @@ class ArtifactDetector:
         else:
             confidence = 'low'
             best_match = 'Unknown'
-        
+
         return (best_match, confidence)
-    
+
     @classmethod
     def _clean_filename(cls, filename: str) -> str:
         """
         Clean filename for comparison.
-        
+
         - Remove extension
         - Convert to lowercase
         - Remove separators (_, -, spaces)
         """
         # Get basename if full path provided
         filename = os.path.basename(filename)
-        
+
         # Remove extension
         filename = os.path.splitext(filename)[0]
-        
+
         # Convert to lowercase
         filename = filename.lower()
-        
+
         # Remove separators
         filename = filename.replace('_', '').replace('-', '').replace(' ', '')
-        
+
         return filename
-    
+
     @classmethod
     def get_all_artifact_types(cls) -> List[str]:
         """Get list of all supported artifact types including enhanced subtypes"""
         # Basic artifact types
         basic_types = list(cls.PATTERNS.keys())
-        
+
         # Enhanced subtypes from feather mappings
         enhanced_types = [
             # Registry subtypes
             'UserAssist', 'ShellBags', 'MUICache', 'RecentDocs', 'OpenSaveMRU', 
             'LastSaveMRU', 'TypedPaths', 'WordWheelQuery', 'BAM', 'InstalledSoftware',
             'SystemServices', 'AutoStartPrograms',
-            
-            # SRUM subtypes  
+
+            # SRUM subtypes 
             'SRUM_ApplicationUsage', 'SRUM_NetworkDataUsage',
-            
+
             # Log subtypes
             'SecurityLogs', 'SystemLogs', 'ApplicationLogs',
-            
+
             # AmCache subtypes
             'InventoryApplication', 'InventoryApplicationFile', 'InventoryApplicationShortcut',
-            
+
             # Jumplist subtypes
             'AutomaticJumplist', 'CustomJumplist',
-            
+
             # Additional types
             'Registry', 'RecycleBin', 'BrowserHistory'
         ]
-        
+
         # Combine and remove duplicates while preserving order
         all_types = []
         seen = set()
-        
+
         # Add basic types first
         for artifact_type in basic_types:
             if artifact_type not in seen:
                 all_types.append(artifact_type)
                 seen.add(artifact_type)
-        
+
         # Add enhanced types
         for artifact_type in enhanced_types:
             if artifact_type not in seen:
                 all_types.append(artifact_type)
                 seen.add(artifact_type)
-        
+
         return sorted(all_types)
-    
+
     @classmethod
     def get_confidence_description(cls, confidence: str) -> str:
         """Get human-readable description of confidence level"""
@@ -430,31 +433,31 @@ class ArtifactDetector:
             'low': 'Low confidence - Please select manually'
         }
         return descriptions.get(confidence, 'Unknown confidence')
-    
+
     @classmethod
     def get_confidence_icon(cls, confidence: str) -> str:
         """Get icon for confidence level"""
         icons = {
-            'high': '✓',
-            'medium': '●',
-            'low': '○'
+            'high': '[OK]',
+            'medium': '',
+            'low': ''
         }
-        return icons.get(confidence, '⚠')
-    
+        return icons.get(confidence, '[WARN]')
+
     @classmethod
     def detect_artifact_type(cls, db_path: str) -> Tuple[Optional[str], float, str]:
         """
         Detect artifact type from database using multiple methods.
-        
+
         Args:
             db_path: Path to database file
-            
+
         Returns:
             Tuple of (artifact_type, confidence_score, detection_reason)
             - artifact_type: Detected type or None if unknown
             - confidence_score: 0.0-1.0 confidence level
             - detection_reason: Human-readable explanation
-            
+
         Examples:
             Database with metadata → ("Prefetch", 1.0, "From metadata table")
             Database with prefetch_data table → ("Prefetch", 0.9, "From table name match")
@@ -464,90 +467,90 @@ class ArtifactDetector:
         artifact_type = cls.detect_from_metadata(db_path)
         if artifact_type:
             return (artifact_type, 1.0, "Detected from feather_metadata table")
-        
+
         # Try table name detection (high confidence)
         artifact_type, confidence = cls.detect_from_table_name(db_path)
         if artifact_type != "Unknown" and confidence in ["high", "medium"]:
             confidence_score = 0.9 if confidence == "high" else 0.7
             return (artifact_type, confidence_score, f"Detected from table names ({confidence} confidence)")
-        
+
         # Try filename detection (medium confidence)
         filename = os.path.basename(db_path)
         artifact_type, confidence = cls.detect_from_filename(filename)
         if artifact_type != "Unknown" and confidence in ["high", "medium"]:
             confidence_score = 0.8 if confidence == "high" else 0.6
             return (artifact_type, confidence_score, f"Detected from filename ({confidence} confidence)")
-        
+
         # Try column pattern matching (lower confidence)
         artifact_type, confidence_score = cls._detect_from_columns(db_path)
         if artifact_type:
             return (artifact_type, confidence_score, "Detected from column patterns")
-        
+
         # No detection
         return (None, 0.0, "No matching patterns found")
-    
+
     @classmethod
     def _detect_from_columns(cls, db_path: str) -> Tuple[Optional[str], float]:
         """
         Detect artifact type from column patterns.
-        
+
         Args:
             db_path: Path to database file
-            
+
         Returns:
             Tuple of (artifact_type, confidence_score)
         """
         try:
             conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            # Get all tables
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-            tables = [row[0] for row in cursor.fetchall()]
-            
-            # Filter out system tables
-            data_tables = [
-                t for t in tables 
-                if t not in ['feather_metadata', 'sqlite_sequence', 
-                            'import_history', 'data_lineage']
-            ]
-            
-            if not data_tables:
+            try:
+                cursor = conn.cursor()
+
+                # Get all tables
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+                tables = [row[0] for row in cursor.fetchall()]
+
+                # Filter out system tables
+                data_tables = [
+                    t for t in tables 
+                    if t not in ['feather_metadata', 'sqlite_sequence', 
+                                'import_history', 'data_lineage']
+                ]
+
+                if not data_tables:
+                    return (None, 0.0)
+
+                # Get columns from first data table
+                table_name = data_tables[0]
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = [row[1].lower() for row in cursor.fetchall()]
+            finally:
                 conn.close()
-                return (None, 0.0)
-            
-            # Get columns from first data table
-            table_name = data_tables[0]
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = [row[1].lower() for row in cursor.fetchall()]
-            
-            conn.close()
-            
+
             # Match column patterns
             scores = cls._match_column_patterns(columns)
-            
+
             if scores:
                 best_match = max(scores.items(), key=lambda x: x[1])
                 artifact_type, score = best_match
                 if score >= 0.5:
-                    return (artifact_type, score * 0.7)  # Reduce confidence for column-only match
-            
+                    return (artifact_type, score * 0.7) # Reduce confidence for column-only match
+
             return (None, 0.0)
-            
+
         except Exception as e:
             logger.warning(f"Error detecting from columns in {db_path}: {e}")
             return (None, 0.0)
-    
+
     @classmethod
     def _match_column_patterns(cls, columns: List[str]) -> Dict[str, float]:
         """
         Match column names against known patterns.
-        
+
         Args:
             columns: List of column names (lowercase)
-            
+
         Returns:
             Dictionary of artifact_type -> confidence_score
         """
@@ -565,91 +568,92 @@ class ArtifactDetector:
             'USN': ['usn', 'file_reference_number', 'reason', 'source_info'],
             'Logs': ['event_id', 'source', 'log_name', 'event_data']
         }
-        
+
         scores = {}
-        
+
         for artifact_type, signature_columns in COLUMN_SIGNATURES.items():
             # Count how many signature columns are present
             matches = sum(1 for sig_col in signature_columns if sig_col in columns)
-            
+
             if matches > 0:
                 # Calculate confidence based on match ratio
                 confidence = matches / len(signature_columns)
                 scores[artifact_type] = confidence
-        
+
         return scores
-    
+
     @classmethod
     def generate_feather_name(cls, artifact_type: str) -> str:
         """
         Generate feather name from artifact type.
-        
+
         Args:
             artifact_type: Type of artifact (e.g., "MFT", "Prefetch")
-            
+
         Returns:
             Generated feather name (e.g., "MFT_feather", "Prefetch_feather")
         """
         if not artifact_type or artifact_type == "Unknown":
             return "Unknown_feather"
-        
+
         # Clean artifact type and format
         clean_type = artifact_type.strip().replace(' ', '_')
         return f"{clean_type}_feather"
-    
+
     @classmethod
     def get_table_names(cls, db_path: str) -> List[str]:
         """
         Get all table names from database.
-        
+
         Args:
             db_path: Path to database file
-            
+
         Returns:
             List of table names
         """
         try:
             conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-            tables = [row[0] for row in cursor.fetchall()]
-            
-            conn.close()
+            try:
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+                tables = [row[0] for row in cursor.fetchall()]
+            finally:
+                conn.close()
             return tables
-            
+
         except Exception as e:
             logger.warning(f"Error getting table names from {db_path}: {e}")
             return []
-    
+
     @classmethod
     def get_column_names(cls, db_path: str, table_name: str) -> List[str]:
         """
         Get column names for specific table.
-        
+
         Args:
             db_path: Path to database file
             table_name: Name of table
-            
+
         Returns:
             List of column names
         """
         try:
             conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = [row[1] for row in cursor.fetchall()]
-            
-            conn.close()
+            try:
+                cursor = conn.cursor()
+
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = [row[1] for row in cursor.fetchall()]
+            finally:
+                conn.close()
             return columns
-            
+
         except Exception as e:
             logger.warning(f"Error getting column names from {db_path}.{table_name}: {e}")
-            return []
-    
+            return [] 
     @classmethod
     def test_detection(cls) -> Dict[str, Tuple[str, str]]:
         """

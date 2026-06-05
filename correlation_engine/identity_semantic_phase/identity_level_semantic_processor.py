@@ -159,7 +159,7 @@ class IdentityLevelSemanticProcessor:
         
         progress_reporter = CorrelationProgressReporter(
             total_items=total_identities,
-            report_percentage_interval=10.0,  # Report every 10%
+            report_percentage_interval=10.0, # Report every 10%
             phase_name="Semantic Matching"
         )
         
@@ -211,13 +211,13 @@ class IdentityLevelSemanticProcessor:
         """
         # Use adaptive batch sizing based on dataset size
         if total_identities < 1000:
-            return total_identities  # Process all at once for small datasets
+            return total_identities # Process all at once for small datasets
         elif total_identities < 10000:
-            return 500  # Medium batches for medium datasets
+            return 500 # Medium batches for medium datasets
         elif total_identities < 100000:
-            return 1000  # Larger batches for large datasets
+            return 1000 # Larger batches for large datasets
         else:
-            return 2000  # Very large batches for very large datasets
+            return 2000 # Very large batches for very large datasets
     
     def _process_identities_in_batches(self, pending_identities: List[IdentityRecord], 
                                       batch_size: int, 
@@ -372,8 +372,8 @@ class IdentityLevelSemanticProcessor:
             identity_lookup_record = {
                 'identity_value': identity_record.identity_value,
                 'identity_type': identity_record.identity_type,
-                '_feather_id': '_identity',  # Special feather ID for identity-level matching
-                '_is_identity_lookup': True  # Flag to indicate this is identity-level lookup
+                '_feather_id': '_identity', # Special feather ID for identity-level matching
+                '_is_identity_lookup': True # Flag to indicate this is identity-level lookup
             }
             
             # Add identity value to common field names that semantic rules look for
@@ -563,13 +563,13 @@ class IdentityLevelSemanticProcessor:
         """
         # Use adaptive batch sizing based on dataset size
         if total_identities < 1000:
-            return total_identities  # Process all at once for small datasets
+            return total_identities # Process all at once for small datasets
         elif total_identities < 10000:
-            return 500  # Medium batches for medium datasets
+            return 500 # Medium batches for medium datasets
         elif total_identities < 100000:
-            return 1000  # Larger batches for large datasets
+            return 1000 # Larger batches for large datasets
         else:
-            return 2000  # Very large batches for very large datasets
+            return 2000 # Very large batches for very large datasets
     
     def _process_identities_in_batches(self, pending_identities: List[IdentityRecord], 
                                       batch_size: int, 
@@ -711,13 +711,13 @@ class IdentityLevelSemanticProcessor:
         """
         # Use adaptive batch sizing based on dataset size
         if total_identities < 1000:
-            return total_identities  # Process all at once for small datasets
+            return total_identities # Process all at once for small datasets
         elif total_identities < 10000:
-            return 500  # Medium batches for medium datasets
+            return 500 # Medium batches for medium datasets
         elif total_identities < 100000:
-            return 1000  # Larger batches for large datasets
+            return 1000 # Larger batches for large datasets
         else:
-            return 2000  # Very large batches for very large datasets
+            return 2000 # Very large batches for very large datasets
     
     def _process_identities_in_batches(self, pending_identities: List[IdentityRecord], 
                                       batch_size: int, 

@@ -14,18 +14,19 @@ from PyQt5.QtGui import QFont
 
 from correlation_engine.wings.core.wing_model import FeatherSpec
 from correlation_engine.wings.core.artifact_detector import ArtifactDetector
+from ...gui.crow_eye_icons import apply_status_to_label
 
 
 class FeatherWidget(QWidget):
     """Widget for configuring a single feather"""
     
     feather_changed = pyqtSignal()
-    remove_requested = pyqtSignal(object)  # Passes self as argument
+    remove_requested = pyqtSignal(object) # Passes self as argument
     
     def __init__(self, feather_number: int):
         super().__init__()
         self.feather_number = feather_number
-        self.case_directory = None  # Store case directory for path resolution
+        self.case_directory = None # Store case directory for path resolution
         self.feather_spec = FeatherSpec(
             feather_id=f"feather_{feather_number}",
             database_filename="",
@@ -64,7 +65,7 @@ class FeatherWidget(QWidget):
         # If it's already an absolute path that exists, use it
         if current_path and os.path.isabs(current_path) and os.path.exists(current_path):
             self.db_path_edit.setText(current_path)
-            self.db_path_edit.setStyleSheet("color: #00FF00;")  # Green = found
+            self.db_path_edit.setStyleSheet("color: #00FF00;") # Green = found
             print(f"[FeatherWidget] Using absolute path: {current_path}")
             return
         
@@ -113,7 +114,7 @@ class FeatherWidget(QWidget):
                 config_name = self.feather_spec.feather_config_name
                 potential_paths.extend([
                     correlation_dir / f"{config_name}.db",
-                    correlation_dir / config_name,  # In case it already has .db
+                    correlation_dir / config_name, # In case it already has .db
                     direct_feathers_dir / f"{config_name}.db",
                     direct_feathers_dir / config_name,
                 ])
@@ -139,28 +140,28 @@ class FeatherWidget(QWidget):
         # Debug: Print first few paths being tried
         # print(f"[FeatherWidget] Trying {len(potential_paths)} potential paths (showing first 3):")
         # for i, path in enumerate(potential_paths[:3]):
-        #     print(f"[FeatherWidget]   {i+1}. {path}")
+        # print(f"[FeatherWidget] {i+1}. {path}")
         
         # Try each path
         for path in potential_paths:
             if path.exists():
                 resolved_path = str(path.absolute())
-                # print(f"[FeatherWidget] ✓ Resolved path: {resolved_path}")
+                # print(f"[FeatherWidget] [OK] Resolved path: {resolved_path}")
                 self.db_path_edit.setText(resolved_path)
-                self.db_path_edit.setStyleSheet("color: #00FF00;")  # Green = found
+                self.db_path_edit.setStyleSheet("color: #00FF00;") # Green = found
                 
                 # Update feather spec with resolved path
                 self.feather_spec.database_filename = resolved_path
                 return
         
         # Not found - show original path in orange
-        # print(f"[FeatherWidget] ✗ Could not resolve path for: {current_path}")
-        # print(f"[FeatherWidget]   Tried {len(potential_paths)} locations")
+        # print(f"[FeatherWidget] [FAIL] Could not resolve path for: {current_path}")
+        # print(f"[FeatherWidget] Tried {len(potential_paths)} locations")
         if current_path:
             self.db_path_edit.setText(current_path)
         else:
             self.db_path_edit.setText(f"[Not Set - {self.feather_spec.feather_id}]")
-        self.db_path_edit.setStyleSheet("color: #FFA500;")  # Orange = not found
+        self.db_path_edit.setStyleSheet("color: #FFA500;") # Orange = not found
     
     def init_ui(self):
         """Initialize the user interface"""
@@ -222,7 +223,8 @@ class FeatherWidget(QWidget):
         
         # Detection result
         layout.addWidget(QLabel("Auto-Detected:"), 0, 0)
-        self.detection_label = QLabel("⚠ No database selected")
+        self.detection_label = QLabel()
+        apply_status_to_label(self.detection_label, "WARN", "No database selected")
         layout.addWidget(self.detection_label, 0, 1)
         
         # Artifact type selection
@@ -240,7 +242,8 @@ class FeatherWidget(QWidget):
         self.artifact_combo.clear()
         
         # Add "Unknown" option
-        self.artifact_combo.addItem("⚠ Unknown - Please select")
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.artifact_combo.addItem(CrowEyeIcons.warning(), "Unknown - Please select")
         
         # Add all artifact types
         for artifact_type in ArtifactDetector.get_all_artifact_types():
@@ -262,14 +265,14 @@ class FeatherWidget(QWidget):
         
         if not db_path:
             self.db_info_label.setText("No database selected")
-            self.detection_label.setText("⚠ No database selected")
-            self.artifact_combo.setCurrentIndex(0)  # Unknown
+            apply_status_to_label(self.detection_label, "WARN", "No database selected")
+            self.artifact_combo.setCurrentIndex(0) # Unknown
             return
         
         # Check if file exists
         if not os.path.exists(db_path):
-            self.db_info_label.setText("⚠ File not found")
-            self.detection_label.setText("⚠ File not found")
+            apply_status_to_label(self.db_info_label, "WARN", "File not found")
+            apply_status_to_label(self.detection_label, "WARN", "File not found")
             return
         
         # Update feather spec
@@ -304,7 +307,7 @@ class FeatherWidget(QWidget):
             file_size = os.path.getsize(db_path)
             size_mb = file_size / (1024 * 1024)
             self.db_info_label.setText(f"Database loaded - {size_mb:.1f} MB")
-        except:
+        except Exception as e:
             self.db_info_label.setText("Database loaded")
         
         self.feather_changed.emit()
@@ -345,7 +348,9 @@ class FeatherWidget(QWidget):
         """Handle artifact type selection change"""
         selected_text = self.artifact_combo.currentText()
         
-        if selected_text.startswith("⚠ Unknown"):
+        # The first combo entry is "Unknown - Please select" (with a
+        # Crow-Eye warning icon; the text itself is icon-free now).
+        if selected_text.startswith("Unknown"):
             self.feather_spec.artifact_type = "Unknown"
         else:
             self.feather_spec.artifact_type = selected_text
@@ -359,9 +364,7 @@ class FeatherWidget(QWidget):
                 if detected_type != selected_text:
                     self.feather_spec.manually_overridden = True
                     # Update detection label to show override
-                    self.detection_label.setText(
-                        f"✓ {selected_text} (manually selected, was {detected_type})"
-                    )
+                    apply_status_to_label(self.detection_label, "OK", f"{selected_text} (manually selected, was {detected_type})")
         
         self.feather_changed.emit()
     
@@ -388,9 +391,7 @@ class FeatherWidget(QWidget):
         
         # Update detection display with proper icons
         if feather_spec.manually_overridden:
-            self.detection_label.setText(
-                f"✓ {feather_spec.artifact_type} (manually selected)"
-            )
+            apply_status_to_label(self.detection_label, "OK", f"{feather_spec.artifact_type} (manually selected)")
         else:
             icon = ArtifactDetector.get_confidence_icon(feather_spec.detection_confidence)
             method_text = self._get_method_display_text(

@@ -41,7 +41,7 @@ class ResolutionStrategy(Enum):
 class ConfigurationConflict:
     """Represents a configuration conflict"""
     conflict_id: str
-    section: str  # semantic_mapping, weighted_scoring, etc.
+    section: str # semantic_mapping, weighted_scoring, etc.
     field: str
     global_value: Any
     case_value: Optional[Any] = None
@@ -72,7 +72,7 @@ class ConfigurationConflictResolver:
     
     Priority order (highest to lowest):
     1. Case-specific configuration
-    2. Wing-specific configuration  
+    2. Wing-specific configuration 
     3. Pipeline-specific configuration
     4. Global configuration
     """
@@ -192,7 +192,7 @@ class ConfigurationConflictResolver:
         
         if case_config and case_config.use_case_specific_mappings:
             # Case-specific semantic mapping settings would override global
-            case_enabled = True  # Implicit enabling when case-specific is used
+            case_enabled = True # Implicit enabling when case-specific is used
         
         if wing_config and 'semantic_mapping' in wing_config:
             wing_enabled = wing_config['semantic_mapping'].get('enabled')
@@ -264,7 +264,7 @@ class ConfigurationConflictResolver:
         pipeline_enabled = None
         
         if case_config and case_config.use_case_specific_scoring:
-            case_enabled = True  # Implicit enabling when case-specific is used
+            case_enabled = True # Implicit enabling when case-specific is used
         
         if wing_config and 'weighted_scoring' in wing_config:
             wing_enabled = wing_config['weighted_scoring'].get('enabled')
@@ -327,7 +327,7 @@ class ConfigurationConflictResolver:
                     pipeline_value=pipeline_weight,
                     severity=ConflictSeverity.LOW,
                     description=f"Weight for {artifact_type} differs between configuration levels",
-                    suggested_resolution=ResolutionStrategy.WING_PRECEDENCE  # Wing weights are more specific
+                    suggested_resolution=ResolutionStrategy.WING_PRECEDENCE # Wing weights are more specific
                 )
                 conflicts.append(conflict)
         
@@ -562,13 +562,13 @@ class ConfigurationConflictResolver:
             logger.info(f"Description: {conflict.description}")
             
             logger.info("Values:")
-            logger.info(f"  Global: {conflict.global_value}")
+            logger.info(f" Global: {conflict.global_value}")
             if conflict.pipeline_value is not None:
-                logger.info(f"  Pipeline: {conflict.pipeline_value}")
+                logger.info(f" Pipeline: {conflict.pipeline_value}")
             if conflict.wing_value is not None:
-                logger.info(f"  Wing: {conflict.wing_value}")
+                logger.info(f" Wing: {conflict.wing_value}")
             if conflict.case_value is not None:
-                logger.info(f"  Case: {conflict.case_value}")
+                logger.info(f" Case: {conflict.case_value}")
             
             logger.info(f"Resolution: {conflict.resolved_value}")
             logger.info(f"Reason: {conflict.resolution_reason}")

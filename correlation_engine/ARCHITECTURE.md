@@ -1,14 +1,74 @@
 # Correlation Engine Architecture
 
+> **Version 0.11.0 — Reliability & Extensibility Release.** This document describes the architecture as of 0.11.0.
+
 This document describes the architecture of the Crow-Eye Correlation Engine, explaining how the various components work together to process forensic data and produce correlation results.
+
+> ## What's New in 0.11.0 (architectural impact)
+>
+> 0.11.0 doesn't change the high-level dual-engine architecture — it makes the supporting infrastructure trustworthy and extensible.
+>
+> **New canonical modules** (single source of truth):
+> - `utils/standard_fields.py` — loads field-name synonyms from `config/standard_fields/*.json`. Replaces hardcoded `CORE_IDENTITY_FIELDS` / `_TIMESTAMP_FIELDS` constants the engine, GUI viewers, and identity-semantic phase used to duplicate.
+> - `correlation_engine/config/feather_schemas.json` + `feather_schemas.py` — per-table metadata (primary timestamp column, multi-timestamp JSON columns, identity priority). Engine consults this before falling back to heuristics.
+> - `correlation_engine/engine/identity_grouping.py` — canonical `identity_key` (heavy) and `sub_identity_key` (mild) normalization. Engine, both viewers, and identity-semantic phase all delegate here.
+> - `correlation_engine/engine/timestamp_format_codec.py` — `detect_column_format()` + `format_for_query()` codec pair, extracted from `OptimizedFeatherQuery` so other engines can reuse it.
+> - `correlation_engine/feather/writer.py` — `FeatherWriter`: WAL mode, manual transactions, `executemany()` batched inserts, schema metadata stamping, multi-timestamp JSON column declaration. Canonical write contract for parsers + Feather Builder.
+>
+> **New engine module layout** (re-export shims today; physical extraction staged):
+> ```
+> correlation_engine/engine/
+> ├── feather_query.py              # OptimizedFeatherQuery
+> ├── window_query_manager.py       # WindowQueryManager
+> ├── time_window_engine.py         # TimeWindowScanningEngine
+> ├── identity_grouping.py          # ← canonical identity normalization
+> ├── timestamp_format_codec.py     # ← canonical column-format codec
+> └── time_based_engine.py          # historical megafile; class bodies stay here
+>                                   # for back-compat, re-exported by the new modules
+> ```
+> External imports continue working unchanged — new code can use either path.
+>
+> **New diagnostics surface**:
+> - Per-window INFO log: `records_in / no_identity / parse_cache_hits / below_threshold / matches_emitted / min_feathers`. Locates dropped evidence at a glance.
+> - `_last_window_correlation_stats` dict exposes the same data programmatically.
+> - `TimeWindowScanningConfig.min_feathers_override` + `low_confidence_review_mode` let analysts tune correlation strictness per case.
+>
+> **Performance foundation**:
+> - `OptimizedFeatherQuery._cache_lock` (RLock) wraps cache mutations — thread safety for opt-in parallel correlation.
+> - `query_time_range_iter()` — streaming generator, O(1) memory across feather size.
+> - `TimeWindowScanningConfig.parallel_strategy` (`'none' | 'threads' | 'processes'`) — opt-in escape hatch wired in but disabled by default; profiling + process-pool dispatch staged for follow-up.
+>
+> **Test coverage**: 78-test pytest regression suite under `correlation_engine/tests/`.
+>
+> See [`docs/CORRELATION_ENGINE_OVERVIEW.md`](docs/CORRELATION_ENGINE_OVERVIEW.md#whats-new-in-0110) for the full release notes and [`docs/ADDING_AN_ARTIFACT.md`](docs/ADDING_AN_ARTIFACT.md) for the new "plug in a parser" workflow.
+
+> ## Earlier consolidation (still applies)
+>
+> Prior structural cleanup that 0.11.0 builds on:
+>
+> **Dead code deleted (8 files, ~3,200 LoC):**
+> - `gui/correlation_results_view.py`, `gui/hierarchical_results_view.py`, `gui/time_based_results_view.py` (empty) — superseded by the `identity_results_view.py` + `timebased_results_viewer.py` dual-viewer split
+> - `engine/semantic_matches_evaluator.py` and `engine/semantic_matches_evaluator_enhanced.py` (empty) — superseded by `semantic_rule_evaluator.py`
+> - `config/score_config_migration_tool.py` — one-shot migration utility, no live callers
+> - `integration/error_handling.py` (empty) and `integration/integration_logging.py` (truncated, no callers)
+>
+> **Config public surface: 7 manager classes → 3.** The three `case_*_manager.py` files were renamed to private services (`_case_config_file_service.py`, `_case_specific_config_service.py`, `_case_coordinator_service.py`) and are now reached exclusively through `IntegratedConfigurationManager`. See [Configuration façade](#configuration-façade-integratedconfigurationmanager) below and [docs/config/CONFIG_DOCUMENTATION.md](docs/config/CONFIG_DOCUMENTATION.md) for the full mapping.
+>
+> **Result views: 5 → 2 active + orchestrator.** Both `IdentityResultsView` and `TimeBasedResultsViewer` are active (hosted by `DynamicResultsTabWidget` in `results_viewer.py`); the two superseded views were deleted.
+>
+> The architecture diagrams below still apply — only the file inventory changed, not the data-flow.
+
+---
 
 ## Overview
 
 The Correlation Engine is a modular system for correlating forensic artifacts across multiple data sources (feathers). It implements a **dual-engine architecture** that provides two distinct correlation strategies optimized for different use cases and dataset sizes:
 
-- **Time-Based Correlation Engine**: Uses temporal proximity as the primary correlation factor with comprehensive field matching. Best for small datasets (< 1,000 records) requiring detailed analysis. Complexity: O(N²)
+- **Time-Window Scanning Engine (TWSE)**: Systematically scans the timeline in fixed windows, using indexed timestamp queries to gather records within each window. Suitable for any dataset size; recommended for time-based artifact analysis. **Complexity: O(N log N)**
 
-- **Identity-Based Correlation Engine**: Groups records by identity (application/file) first, then creates temporal anchors. Best for large datasets (> 1,000 records) requiring fast execution and identity tracking. Complexity: O(N log N)
+- **Identity-Based Correlation Engine (IBCE)**: Groups records by identity (application/file) first, then creates temporal anchors within each identity bucket. Suitable for any dataset size; recommended for identity tracking and filtering. **Complexity: O(N log N)**
+
+Both engines share the **same asymptotic complexity** — neither performs the pairwise O(N²) comparison that an older naive approach would. The choice between them is about *what question you're asking* (time-bucketed vs. identity-bucketed), not about dataset size.
 
 Both engines implement the `BaseCorrelationEngine` interface, allowing seamless switching between strategies based on dataset characteristics and analysis requirements. The `EngineSelector` factory provides a unified interface for engine creation and metadata retrieval.
 
@@ -143,10 +203,13 @@ For detailed engine documentation, see [ENGINE_DOCUMENTATION.md](docs/engine/ENG
 - `EngineSelector`: Factory class with static methods
 
 **Engine Types**:
-| Type | Class | Complexity | Best For |
-|------|-------|------------|----------|
-| `time_based` | `TimeBasedCorrelationEngine` | O(N²) | Small datasets, detailed analysis |
-| `identity_based` | `IdentityBasedEngineAdapter` | O(N log N) | Large datasets, identity tracking |
+| Type | Class | Complexity | Best For | Default |
+|------|-------|------------|----------|---------|
+| `identity_based` | `IdentityBasedEngineAdapter` | **O(N log N)** | Identity tracking & filtering | **Yes** |
+| `time_based`     | `TimeWindowScanningEngine`   | **O(N log N)** | Time-bucketed temporal analysis | No |
+
+Both engines share the same asymptotic complexity. Choose by *question*
+(time-bucketed vs identity-bucketed), not by dataset size.
 
 ---
 
@@ -200,6 +263,9 @@ def metadata(self) -> EngineMetadata
    - Sort evidence by timestamp
    - Create temporal anchors (clusters)
    - Classify evidence (primary/secondary/supporting)
+
+**Identity Case-Sensitivity**:
+The `IdentityRegistry` manages identity keys with specific case-sensitivity rules based on the identity type. Identity keys are case-sensitive for types defined in `_CASE_SENSITIVE_IDENTITY_TYPES` (e.g., SIDs, Hashes, and POSIX paths), while Windows-style paths and usernames are handled case-insensitively to ensure accurate grouping across different forensic artifacts.
 
 3. Convert to CorrelationMatch objects
    - One match per anchor
@@ -360,14 +426,59 @@ When `save_result()` detects a streamed result (`_result_id > 0`):
 
 **Features**:
 - Groups matches by identity
-- Shows identity hierarchy (name → anchors → evidence)
+- Shows identity hierarchy (Identity → Sub-Identity → Anchor → Evidence)
 - Displays feather contribution per identity
 - Timeline visualization
+- **Cascade expand on Sub-Identity click**: clicking a Sub-Identity row opens it AND each of its Anchor children in one go, so the underlying evidence rows surface without a second click. Implemented in `_on_item_clicked` via `_set_subtree_expanded(item, expanded=True, max_depth=2)`.
 
 **Key Classes**:
 - `IdentityResultsView`: Main widget
 - `IdentityTreeWidget`: Tree view of identities
 - `AnchorDetailWidget`: Details for selected anchor
+
+---
+
+## 10. Time-Based Results View (`gui/timebased_results_viewer.py`)
+
+**Purpose**: Specialized view for time-window correlation results — the complement to the Identity view.
+
+**Tree shape**: `Time Window → Identity → Sub-Identity → Anchor → Evidence`. The user-adjustable window size (default 3 hours) drives the top-level grouping; identities within a window are clustered chronologically.
+
+**Features**:
+- Pagination (100 windows/page)
+- Dynamic re-grouping when window size changes
+- Shares the semantic-search utility with the Identity view (`_search_semantic_data`)
+- **Cascade expand on Sub-Identity click**, identical to the Identity view
+
+**Hosted by**: `DynamicResultsTabWidget` in `results_viewer.py`, added as a dynamic tab.
+
+**Key Classes**:
+- `TimeBasedResultsViewer`: Main widget
+
+---
+
+## 11. Configuration façade (`IntegratedConfigurationManager`)
+
+**Purpose**: Single public entry point for case-level and scoring configuration. Replaces what used to be three separate public managers (`CaseConfigurationManager`, `CaseConfigurationFileManager`, `CaseSpecificConfigurationManager`) — those are now private services and reached only through this class.
+
+**Import**:
+```python
+from correlation_engine.config import IntegratedConfigurationManager
+```
+
+**Surface** (selection):
+- `m.case_files.*` — file-lifecycle ops for case configs (validate / repair / archive / compress / statistics)
+- `m.case_specific.*` — per-case semantic mappings, scoring weights, metadata; CRUD + copy + backup + export/import
+- `m.score_config_manager` — routes to the `ScoreConfigurationManager` singleton
+- `m.load_case_specific_configuration(case_id)` / `m.save_case_specific_configuration(config)` — global+case merged view
+- `m.validate_configuration(config)` — schema check
+- `m.resolve_configuration_conflicts(...)` — multi-source reconciliation
+
+**Sibling public classes** (orthogonal domains, kept separate):
+- `ConfigManager` — Feather/Wing/Pipeline JSON artifact CRUD
+- `PipelineConfigurationManager` — pipeline execution session state
+
+See [docs/config/CONFIG_DOCUMENTATION.md](docs/config/CONFIG_DOCUMENTATION.md) for the full method inventory.
 
 ---
 
@@ -480,12 +591,15 @@ PipelineConfig ──────► PipelineExecutor
 | `pipeline_executor.py` | Execute pipelines | `PipelineExecutor` |
 | `engine_selector.py` | Engine factory | `EngineSelector`, `EngineType` |
 | `base_engine.py` | Engine interface | `BaseCorrelationEngine`, `FilterConfig` |
-| `identity_correlation_engine.py` | Identity correlation | `IdentityCorrelationEngine`, `IdentityBasedEngineAdapter` |
+| `identity_based_engine_adapter.py` | Identity correlation adapter | `IdentityBasedEngineAdapter` |
+| `identity_correlation_engine.py` | Identity correlation | `IdentityCorrelationEngine` |
 | `time_based_engine.py` | Time correlation | `TimeBasedCorrelationEngine` |
 | `correlation_result.py` | Result data structures | `CorrelationResult`, `CorrelationMatch` |
 | `database_persistence.py` | SQLite storage | `ResultsDatabase`, `StreamingMatchWriter` |
-| `results_viewer.py` | Results GUI | `DynamicResultsTabWidget`, `ResultsTableWidget` |
-| `identity_results_view.py` | Identity results GUI | `IdentityResultsView` |
+| `results_viewer.py` | Results GUI orchestrator (the tab host) | `DynamicResultsTabWidget`, `FilterPanelWidget`, `MatchDetailViewer` |
+| `results_tab_widget.py` | Tab container for the two viewers | `ResultsTabWidget` |
+| `identity_results_view.py` | Identity-centric results tree (Sub-Identity → Anchor → Evidence) | `IdentityResultsView` |
+| `timebased_results_viewer.py` | Time-window results tree (Window → Identity → Anchor → Evidence) | `TimeBasedResultsViewer` |
 
 ---
 
@@ -1194,3 +1308,28 @@ Identity: chrome.exe
 
 ---
 
+## 12. Reliability and Robustness
+
+The Crow-eye Correlation Engine implements several measures to ensure data integrity and system stability:
+
+- **Atomic Configuration Saving**: All configuration updates (feathers, wings, pipelines) use atomic file operations via `os.replace`. This prevents configuration corruption during power failures or crashes on both POSIX and Windows systems.
+- **Specific Exception Handling**: The codebase has eliminated bare `except:` clauses in favor of specific exception handling (e.g., `except sqlite3.Error`, `except ValueError`). This ensures that critical system errors (like `KeyboardInterrupt` or `MemoryError`) are not accidentally suppressed.
+- **Resource Management**: All database connections and file handles are managed using `try...finally` blocks or context managers. Specifically, all temporary database connections are safely wrapped in `try...finally: conn.close()` blocks to prevent resource leaks during long-running correlation tasks.
+- **Resilient Timestamp Parsing**: All engines now delegate timestamp parsing to `ResilientTimestampParser`. This centralized component provides consistent, robust parsing across a wide variety of forensic timestamp formats (FILETIME, Unix, ISO, etc.) with built-in validation.
+
+---
+
+## 13. Logging & Output
+
+The engine uses a tiered approach to communication:
+
+- **Internal Logic Logging**: All internal state changes, errors, and debugging information are recorded using the standard Python `logging` module. This allows for fine-grained control over log levels and persistent logging to files.
+- **Real-time User Feedback**: Progress updates, SQL semantic phase notifications (e.g., `[Progress]`, `[SQL Semantic]`), and immediate status reports use `print()` statements. This ensures that the user receives immediate, non-buffered feedback in the console or GUI during long-running operations.
+
+---
+
+## 14. Centralized Score Configuration
+
+**Authoritative Source**: `CentralizedScoreConfig` (`config/centralized_score_config.py`)
+
+**Purpose**: Single source of truth for all score-interpretation thresholds, penalties, bonuses, and tier weights across the engine and UI. By centralizing these values, Crow-eye ensures consistent behavior between the correlation engines, wings, and GUI components. Previous versions of the codebase had duplicated default values in `wings/core/wing_model.py`, `integration/default_wings`, and `config/config_manager.py`. `CentralizedScoreConfig` is now the ONLY authoritative source. Any new engines, wings, or integrations MUST compute or reference their default thresholds and weights from `CentralizedScoreConfig` to ensure consistent forensic analysis.
