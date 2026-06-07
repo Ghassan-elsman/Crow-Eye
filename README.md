@@ -916,18 +916,7 @@ Eye is engineered for evidence that has to stand up to scrutiny. Compliance isn'
 - **Full Eye architecture:** [`eye/README.md`](eye/README.md)
 - **Correlation Engine** (Eye can author Wings & mappings): [see above](#-correlation-engine)
 
----
 
-## 🚀 Coming Soon Features
-
-### Crow-Eye Core Features
-- 📊 **Advanced GUI Views and Reports** - Enhanced visualization and reporting capabilities
-- 🔄 **Enhanced Search Dialog** - Advanced filtering with natural language support
-- 🤖 **AI Integration** - Query results, summarize findings, and assist non-technical users with natural language questions
-
-### Correlation Engine Features
-- 🎯 **Enhanced Semantic Mapping** - Comprehensive field mapping across all artifact types
-- 📈 **Advanced Correlation Scoring** - Refined confidence scoring algorithms with explainability
 
 ---
 
