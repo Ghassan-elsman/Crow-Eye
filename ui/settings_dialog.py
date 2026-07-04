@@ -52,19 +52,24 @@ except ImportError:
 class SettingsDialog(QtWidgets.QDialog):
     """Centralized settings dialog for Crow Eye."""
     
-    def __init__(self, case_history_manager, current_case_path=None, parent=None):
+    def __init__(self, case_history_manager, current_case_path=None, parent=None,
+                 clone_case_callback=None):
         """Initialize the settings dialog.
-        
+
         Args:
             case_history_manager: CaseHistoryManager instance
             current_case_path: Path to currently active case (optional)
             parent: Parent widget
+            clone_case_callback: Optional callable invoked (after this dialog
+                closes) when the user picks "Import Case Data from Another Case…".
         """
         super().__init__(parent)
-        
+
         self.case_history_manager = case_history_manager
         self.current_case_path = current_case_path
         self.current_case = None
+        self._clone_case_callback = clone_case_callback
+        self._clone_requested = False
         
         if current_case_path:
             self.current_case = case_history_manager.get_case_by_path(current_case_path)
@@ -209,7 +214,9 @@ class SettingsDialog(QtWidgets.QDialog):
         sidebar_layout.addWidget(pipelines_btn)
         self.nav_buttons.append(pipelines_btn)
 
-        eye_ai_btn = self.create_nav_button("🧠 Eye AI", 5)
+        eye_ai_btn = self.create_nav_button("Eye AI", 5)
+        eye_ai_btn.setIcon(QtGui.QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        eye_ai_btn.setIconSize(QtCore.QSize(20, 20))
         sidebar_layout.addWidget(eye_ai_btn)
         self.nav_buttons.append(eye_ai_btn)
         
@@ -556,11 +563,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 border: 2px solid #00FFFF;
                 image: none;
             }
-            QCheckBox::indicator:checked:after {
-                content: "✓";
-                color: #0F172A;
-                font-weight: bold;
-            }
         """)
         self.identity_semantic_phase_checkbox.setToolTip(
             "When enabled, semantic mappings are applied once per identity after correlation completes,\n"
@@ -621,11 +623,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 border: 2px solid #00FFFF;
                 image: none;
             }
-            QCheckBox::indicator:checked:after {
-                content: "✓";
-                color: #0F172A;
-                font-weight: bold;
-            }
         """)
         self.wings_semantic_mapping_checkbox.setToolTip(
             "When enabled, semantic mappings are applied to Wings correlation results\n"
@@ -685,11 +682,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 border: 2px solid #00FFFF;
                 image: none;
             }
-            QCheckBox::indicator:checked:after {
-                content: "✓";
-                color: #0F172A;
-                font-weight: bold;
-            }
         """)
 
         cascade_desc = QtWidgets.QLabel(
@@ -713,9 +705,9 @@ class SettingsDialog(QtWidgets.QDialog):
         # Add form to panel layout
         layout.addWidget(form_widget)
         layout.addStretch()
-        
+
         return panel
-    
+
     def create_case_management_panel(self):
         """Create the case management panel."""
         panel = QtWidgets.QWidget()
@@ -834,14 +826,21 @@ class SettingsDialog(QtWidgets.QDialog):
         self.cases_table.itemSelectionChanged.connect(self.on_case_selection_changed)
         
         actions_layout.addWidget(self.remove_case_btn)
+
         actions_layout.addStretch()
-        
+
         layout.addLayout(actions_layout)
-        
+
         # Load cases into table
         self.load_cases_table()
-        
+
         return panel
+
+    def _on_clone_case_data(self):
+        """Close Settings, then invoke the controller's clone handler (which opens
+        its own file pickers + loading dialog — avoids a nested modal)."""
+        self._clone_requested = True
+        self.accept()
     
     def create_case_settings_panel(self):
         """Create the case settings panel."""
@@ -908,11 +907,51 @@ class SettingsDialog(QtWidgets.QDialog):
                 }
             """)
             layout.addWidget(no_case_label)
-        
+
+        # Import Case Data from Another Case — copies another case's parsed + collected
+        # artifacts INTO the current case and loads them into the GUI, WITHOUT its Eye
+        # memory or correlation results. Enabled only when a case is currently open.
+        self.clone_case_btn = QtWidgets.QPushButton("⧉ Import Case Data from Another Case…")
+        self.clone_case_btn.setFixedHeight(45)
+        self.clone_case_btn.setMinimumWidth(240)
+        self.clone_case_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0E7490;
+                color: #FFFFFF;
+                border: 2px solid #22D3EE;
+                border-radius: 8px;
+                padding: 12px 24px;
+                font-weight: 700;
+                font-size: 13px;
+                font-family: 'Segoe UI', sans-serif;
+            }
+            QPushButton:hover {
+                background-color: #0891B2;
+                border: 2px solid #67E8F9;
+            }
+            QPushButton:pressed {
+                background-color: #155E75;
+            }
+            QPushButton:disabled {
+                background-color: #64748B;
+                color: #94A3B8;
+                border: 2px solid #475569;
+            }
+        """)
+        self.clone_case_btn.setToolTip(
+            "Copy another case's parsed + collected artifacts into THIS case and load them "
+            "into the GUI (no Eye memory / correlation results imported)."
+        )
+        self.clone_case_btn.setEnabled(bool(self.current_case_path))
+        if not self.current_case_path:
+            self.clone_case_btn.setToolTip("Open a case first to import another case's data into it.")
+        self.clone_case_btn.clicked.connect(self._on_clone_case_data)
+        layout.addWidget(self.clone_case_btn)
+
         layout.addStretch()
-        
+
         return panel
-    
+
     def create_semantic_mappings_panel(self):
         """Create the semantic mappings configuration panel."""
         panel = QtWidgets.QWidget()
@@ -1176,6 +1215,12 @@ class SettingsDialog(QtWidgets.QDialog):
         # Brand term is "Eye" / "Eye AI" — never uppercased to "EYE".
         # (PyQt5 ignores text-transform/letter-spacing anyway, so the literal
         # casing is what matters.)
+        title_row = QtWidgets.QHBoxLayout()
+        title_row.setSpacing(10)
+        title_icon = QtWidgets.QLabel()
+        title_icon.setPixmap(
+            QtGui.QPixmap("GUI Resources/the Eye AI agent transparent.png").scaled(
+                28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         title = QtWidgets.QLabel("Eye AI")
         title.setStyleSheet("""
             QLabel {
@@ -1185,7 +1230,10 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
             }
         """)
-        layout.addWidget(title)
+        title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         info = QtWidgets.QLabel(
             "Chain-of-custody storage for what the Eye sent to the model. "
@@ -1229,7 +1277,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QSpinBox, QDoubleSpinBox {
                 background-color: #1E293B; color: #FFFFFF; border: 2px solid #475569;
                 border-radius: 6px; padding: 8px 12px; min-height: 35px;
-                font-size: 16px; font-weight: 700; font-family: 'Segoe UI', sans-serif;
+                font-size: 14px; font-weight: 600; font-family: 'Segoe UI', sans-serif;
             }
             QSpinBox:hover, QSpinBox:focus,
             QDoubleSpinBox:hover, QDoubleSpinBox:focus {
@@ -1270,6 +1318,26 @@ class SettingsDialog(QtWidgets.QDialog):
             }
         """
         desc_style = "QLabel { color: #94A3B8; font-size: 11px; font-style: italic; padding-top: 3px; }"
+        # Text-input style matching the spin boxes (the embedding Model/Endpoint fields
+        # were previously handed spin_style, whose QSpinBox-only selectors never matched
+        # a QLineEdit — so they rendered as default white boxes).
+        input_style = """
+            QLineEdit {
+                background-color: #1E293B; color: #FFFFFF; border: 2px solid #475569;
+                border-radius: 6px; padding: 8px 12px; min-height: 35px;
+                font-size: 14px; font-weight: 600; font-family: 'Segoe UI', sans-serif;
+            }
+            QLineEdit:hover, QLineEdit:focus { border: 2px solid #00FFFF; background-color: #263449; }
+            QLineEdit:disabled { background-color: #1E293B; color: #64748B; border: 2px solid #334155; }
+        """
+        # Small non-italic sub-label sitting inline next to an input (e.g. "Model:",
+        # "Endpoint:", "Max recalled turns:") — legible, not shrunken like desc_style.
+        sublabel_style = "QLabel { color: #94A3B8; font-size: 13px; font-weight: 600; }"
+        # Single shared style for every subsection header so they stay identical
+        # (cyan, 15px, 700) — previously the Embeddings header drifted to grey 13px.
+        section_header_style = (
+            "QLabel { color: #00FFFF; font-size: 15px; font-weight: 700; "
+            "font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif; padding-top: 6px; }")
 
         form_widget = QtWidgets.QWidget()
         form_layout = QtWidgets.QFormLayout(form_widget)
@@ -1384,6 +1452,482 @@ class SettingsDialog(QtWidgets.QDialog):
         tool_layout.addWidget(tool_desc)
         form_layout.addRow(tool_label, tool_container)
 
+        # --- Reasoning (Multi-Step Investigation) subsection ----------------
+        reasoning_header = QtWidgets.QLabel("Reasoning (Multi-Step Investigation)")
+        reasoning_header.setStyleSheet(section_header_style)
+        form_layout.addRow(reasoning_header)
+
+        # Decompose multi-part questions
+        decomp_label = QtWidgets.QLabel("Question Decomposition:")
+        decomp_label.setStyleSheet(label_style)
+        decomp_container = QtWidgets.QWidget()
+        decomp_layout = QtWidgets.QVBoxLayout(decomp_container)
+        decomp_layout.setContentsMargins(0, 0, 0, 0)
+        decomp_layout.setSpacing(5)
+        self.eye_enable_decomposition_checkbox = QtWidgets.QCheckBox(
+            "Split multi-part questions into sub-questions and correlate the answers")
+        self.eye_enable_decomposition_checkbox.setStyleSheet(checkbox_style)
+        decomp_desc = QtWidgets.QLabel(
+            "💡 Each part is investigated to completion, then merged into one consolidated answer.")
+        decomp_desc.setWordWrap(True)
+        decomp_desc.setStyleSheet(desc_style)
+        decomp_layout.addWidget(self.eye_enable_decomposition_checkbox)
+        decomp_layout.addWidget(decomp_desc)
+        form_layout.addRow(decomp_label, decomp_container)
+
+        # Max sub-questions
+        subq_label = QtWidgets.QLabel("Max Sub-Questions:")
+        subq_label.setStyleSheet(label_style)
+        subq_container = QtWidgets.QWidget()
+        subq_layout = QtWidgets.QVBoxLayout(subq_container)
+        subq_layout.setContentsMargins(0, 0, 0, 0)
+        subq_layout.setSpacing(5)
+        self.eye_max_subq_spin = QtWidgets.QSpinBox()
+        self.eye_max_subq_spin.setRange(1, 20)
+        self.eye_max_subq_spin.setValue(6)
+        self.eye_max_subq_spin.setStyleSheet(spin_style)
+        subq_desc = QtWidgets.QLabel(
+            "💡 Upper bound on how many sub-questions a single query is split into.")
+        subq_desc.setWordWrap(True)
+        subq_desc.setStyleSheet(desc_style)
+        subq_layout.addWidget(self.eye_max_subq_spin)
+        subq_layout.addWidget(subq_desc)
+        form_layout.addRow(subq_label, subq_container)
+
+        # --- Hierarchical Investigation (verdict → narrative → sub-narrative) ---
+        hier_header = QtWidgets.QLabel("Hierarchical Investigation")
+        hier_header.setStyleSheet(section_header_style)
+        form_layout.addRow(hier_header)
+
+        # Enable the claim-hierarchy engine
+        hier_label = QtWidgets.QLabel("Plan-Driven Hierarchy:")
+        hier_label.setStyleSheet(label_style)
+        hier_container = QtWidgets.QWidget()
+        hier_layout = QtWidgets.QVBoxLayout(hier_container)
+        hier_layout.setContentsMargins(0, 0, 0, 0)
+        hier_layout.setSpacing(5)
+        self.eye_enable_hierarchy_checkbox = QtWidgets.QCheckBox(
+            "Plan the case as a Verdict → Narrative → Sub-narrative claim hierarchy and prove it step by step")
+        self.eye_enable_hierarchy_checkbox.setStyleSheet(checkbox_style)
+        hier_desc = QtWidgets.QLabel(
+            "💡 The Eye builds the plan up front, seeds it onto the Narrative Map, then proves one "
+            "sub-narrative at a time with the right tools — flipping each card as evidence lands. "
+            "Off = the classic flat sub-question flow.")
+        hier_desc.setWordWrap(True)
+        hier_desc.setStyleSheet(desc_style)
+        hier_layout.addWidget(self.eye_enable_hierarchy_checkbox)
+        hier_layout.addWidget(hier_desc)
+        form_layout.addRow(hier_label, hier_container)
+
+        # Max narratives
+        narr_label = QtWidgets.QLabel("Max Narratives:")
+        narr_label.setStyleSheet(label_style)
+        narr_container = QtWidgets.QWidget()
+        narr_layout = QtWidgets.QVBoxLayout(narr_container)
+        narr_layout.setContentsMargins(0, 0, 0, 0)
+        narr_layout.setSpacing(5)
+        self.eye_max_narratives_spin = QtWidgets.QSpinBox()
+        self.eye_max_narratives_spin.setRange(1, 30)
+        self.eye_max_narratives_spin.setValue(12)
+        self.eye_max_narratives_spin.setStyleSheet(spin_style)
+        narr_desc = QtWidgets.QLabel(
+            "💡 Upper bound on the activities/behaviors the plan splits the verdict into.")
+        narr_desc.setWordWrap(True)
+        narr_desc.setStyleSheet(desc_style)
+        narr_layout.addWidget(self.eye_max_narratives_spin)
+        narr_layout.addWidget(narr_desc)
+        form_layout.addRow(narr_label, narr_container)
+
+        # Max sub-narratives per narrative
+        subnarr_label = QtWidgets.QLabel("Max Sub-Narratives:")
+        subnarr_label.setStyleSheet(label_style)
+        subnarr_container = QtWidgets.QWidget()
+        subnarr_layout = QtWidgets.QVBoxLayout(subnarr_container)
+        subnarr_layout.setContentsMargins(0, 0, 0, 0)
+        subnarr_layout.setSpacing(5)
+        self.eye_max_sub_narratives_spin = QtWidgets.QSpinBox()
+        self.eye_max_sub_narratives_spin.setRange(1, 20)
+        self.eye_max_sub_narratives_spin.setValue(8)
+        self.eye_max_sub_narratives_spin.setStyleSheet(spin_style)
+        subnarr_desc = QtWidgets.QLabel(
+            "💡 Upper bound on the evidence-bearing steps inside EACH narrative.")
+        subnarr_desc.setWordWrap(True)
+        subnarr_desc.setStyleSheet(desc_style)
+        subnarr_layout.addWidget(self.eye_max_sub_narratives_spin)
+        subnarr_layout.addWidget(subnarr_desc)
+        form_layout.addRow(subnarr_label, subnarr_container)
+
+        # Max iterations (overall model-call budget for one hierarchical run)
+        maxiter_label = QtWidgets.QLabel("Max Iterations:")
+        maxiter_label.setStyleSheet(label_style)
+        maxiter_container = QtWidgets.QWidget()
+        maxiter_layout = QtWidgets.QVBoxLayout(maxiter_container)
+        maxiter_layout.setContentsMargins(0, 0, 0, 0)
+        maxiter_layout.setSpacing(5)
+        self.eye_max_iterations_spin = QtWidgets.QSpinBox()
+        self.eye_max_iterations_spin.setRange(20, 2000)
+        self.eye_max_iterations_spin.setSingleStep(20)
+        self.eye_max_iterations_spin.setValue(300)
+        self.eye_max_iterations_spin.setStyleSheet(spin_style)
+        maxiter_desc = QtWidgets.QLabel(
+            "💡 Upper bound on the model-call steps one investigation may use (scaled to plan size, "
+            "capped here). Raise it for very large plans; each sub-narrative is still individually bounded.")
+        maxiter_desc.setWordWrap(True)
+        maxiter_desc.setStyleSheet(desc_style)
+        maxiter_layout.addWidget(self.eye_max_iterations_spin)
+        maxiter_layout.addWidget(maxiter_desc)
+        form_layout.addRow(maxiter_label, maxiter_container)
+
+        # Premise verification
+        premise_label = QtWidgets.QLabel("Premise Verification:")
+        premise_label.setStyleSheet(label_style)
+        premise_container = QtWidgets.QWidget()
+        premise_layout = QtWidgets.QVBoxLayout(premise_container)
+        premise_layout.setContentsMargins(0, 0, 0, 0)
+        premise_layout.setSpacing(5)
+        self.eye_enable_premise_checkbox = QtWidgets.QCheckBox(
+            "Prove or disprove the investigator's claims against the artifacts")
+        self.eye_enable_premise_checkbox.setStyleSheet(checkbox_style)
+        premise_desc = QtWidgets.QLabel(
+            "💡 Treats stated facts as hypotheses; tells you when a claim is contradicted by evidence.")
+        premise_desc.setWordWrap(True)
+        premise_desc.setStyleSheet(desc_style)
+        premise_layout.addWidget(self.eye_enable_premise_checkbox)
+        premise_layout.addWidget(premise_desc)
+        form_layout.addRow(premise_label, premise_container)
+
+        # Question memory (reuse prior answers)
+        qmem_label = QtWidgets.QLabel("Answer Memory:")
+        qmem_label.setStyleSheet(label_style)
+        qmem_container = QtWidgets.QWidget()
+        qmem_layout = QtWidgets.QVBoxLayout(qmem_container)
+        qmem_layout.setContentsMargins(0, 0, 0, 0)
+        qmem_layout.setSpacing(5)
+        self.eye_enable_question_memory_checkbox = QtWidgets.QCheckBox(
+            "Remember prior answers and reuse them on related follow-ups")
+        self.eye_enable_question_memory_checkbox.setStyleSheet(checkbox_style)
+        qmem_desc = QtWidgets.QLabel(
+            "💡 Saves each answer + its findings to the case, so related questions reuse data "
+            "instead of re-querying.")
+        qmem_desc.setWordWrap(True)
+        qmem_desc.setStyleSheet(desc_style)
+        qmem_layout.addWidget(self.eye_enable_question_memory_checkbox)
+        qmem_layout.addWidget(qmem_desc)
+        form_layout.addRow(qmem_label, qmem_container)
+
+        # Prior findings to reuse
+        prior_label = QtWidgets.QLabel("Prior Findings to Reuse:")
+        prior_label.setStyleSheet(label_style)
+        prior_container = QtWidgets.QWidget()
+        prior_layout = QtWidgets.QVBoxLayout(prior_container)
+        prior_layout.setContentsMargins(0, 0, 0, 0)
+        prior_layout.setSpacing(5)
+        self.eye_prior_findings_spin = QtWidgets.QSpinBox()
+        self.eye_prior_findings_spin.setRange(0, 20)
+        self.eye_prior_findings_spin.setValue(3)
+        self.eye_prior_findings_spin.setStyleSheet(spin_style)
+        prior_desc = QtWidgets.QLabel(
+            "💡 How many recent prior-question findings are surfaced to the model for reuse "
+            "(0 disables reuse).")
+        prior_desc.setWordWrap(True)
+        prior_desc.setStyleSheet(desc_style)
+        prior_layout.addWidget(self.eye_prior_findings_spin)
+        prior_layout.addWidget(prior_desc)
+        form_layout.addRow(prior_label, prior_container)
+
+        # --- Resilience subsection (v0.11.2): Gemini 500s, big questions, big data ---
+        resilience_header = QtWidgets.QLabel("Resilience (Large Questions & Data)")
+        resilience_header.setStyleSheet(section_header_style)
+        form_layout.addRow(resilience_header)
+
+        # Model retry attempts (transient 500 backoff)
+        retry_label = QtWidgets.QLabel("Model Retry Attempts:")
+        retry_label.setStyleSheet(label_style)
+        retry_container = QtWidgets.QWidget()
+        retry_layout = QtWidgets.QVBoxLayout(retry_container)
+        retry_layout.setContentsMargins(0, 0, 0, 0)
+        retry_layout.setSpacing(5)
+        self.eye_model_retry_spin = QtWidgets.QSpinBox()
+        self.eye_model_retry_spin.setRange(1, 6)
+        self.eye_model_retry_spin.setValue(3)
+        self.eye_model_retry_spin.setStyleSheet(spin_style)
+        retry_desc = QtWidgets.QLabel(
+            "💡 Attempts (with exponential backoff) when the provider returns a transient error "
+            "such as a Gemini 500/INTERNAL. 1 = no retry.")
+        retry_desc.setWordWrap(True)
+        retry_desc.setStyleSheet(desc_style)
+        retry_layout.addWidget(self.eye_model_retry_spin)
+        retry_layout.addWidget(retry_desc)
+        form_layout.addRow(retry_label, retry_container)
+
+        # Auto-segment big questions
+        seg_label = QtWidgets.QLabel("Auto-Segment Big Questions:")
+        seg_label.setStyleSheet(label_style)
+        seg_container = QtWidgets.QWidget()
+        seg_layout = QtWidgets.QVBoxLayout(seg_container)
+        seg_layout.setContentsMargins(0, 0, 0, 0)
+        seg_layout.setSpacing(5)
+        self.eye_auto_segment_checkbox = QtWidgets.QCheckBox(
+            "Let the Eye (LLM) break a big/complex question into focused logical sub-questions")
+        self.eye_auto_segment_checkbox.setStyleSheet(checkbox_style)
+        seg_desc = QtWidgets.QLabel(
+            "💡 The model decides the split along logical boundaries (artifacts, time ranges, "
+            "entities, claims) and works each in turn, then consolidates. Off = split only "
+            "genuinely multi-part questions. (No character-length rule.)")
+        seg_desc.setWordWrap(True)
+        seg_desc.setStyleSheet(desc_style)
+        seg_layout.addWidget(self.eye_auto_segment_checkbox)
+        seg_layout.addWidget(seg_desc)
+        form_layout.addRow(seg_label, seg_container)
+
+        # Auto map-reduce big data reads
+        mr_label = QtWidgets.QLabel("Auto Map-Reduce Big Data:")
+        mr_label.setStyleSheet(label_style)
+        mr_container = QtWidgets.QWidget()
+        mr_layout = QtWidgets.QVBoxLayout(mr_container)
+        mr_layout.setContentsMargins(0, 0, 0, 0)
+        mr_layout.setSpacing(5)
+        self.eye_auto_mapreduce_checkbox = QtWidgets.QCheckBox(
+            "Analyze very large query results in full via sealed map-reduce segments")
+        self.eye_auto_mapreduce_checkbox.setStyleSheet(checkbox_style)
+        self.eye_auto_mapreduce_rows_spin = QtWidgets.QSpinBox()
+        self.eye_auto_mapreduce_rows_spin.setRange(100, 1000000)
+        self.eye_auto_mapreduce_rows_spin.setSingleStep(100)
+        self.eye_auto_mapreduce_rows_spin.setValue(1500)
+        self.eye_auto_mapreduce_rows_spin.setStyleSheet(spin_style)
+        mr_desc = QtWidgets.QLabel(
+            "💡 A query returning at least this many rows is auto-divided and analyzed in full "
+            "(every segment sealed in the Compliance log) instead of sampled.")
+        mr_desc.setWordWrap(True)
+        mr_desc.setStyleSheet(desc_style)
+        mr_layout.addWidget(self.eye_auto_mapreduce_checkbox)
+        mr_layout.addWidget(self.eye_auto_mapreduce_rows_spin)
+        mr_layout.addWidget(mr_desc)
+        form_layout.addRow(mr_label, mr_container)
+
+        # --- Reasoning transparency & tuning subsection (v0.11.3) ---
+        rtune_header = QtWidgets.QLabel("Reasoning Transparency & Tuning")
+        rtune_header.setStyleSheet(section_header_style)
+        form_layout.addRow(rtune_header)
+
+        # Reasoning trace (why each sub-question + why each conclusion)
+        rtrace_label = QtWidgets.QLabel("Reasoning Trace:")
+        rtrace_label.setStyleSheet(label_style)
+        rtrace_container = QtWidgets.QWidget()
+        rtrace_layout = QtWidgets.QVBoxLayout(rtrace_container)
+        rtrace_layout.setContentsMargins(0, 0, 0, 0)
+        rtrace_layout.setSpacing(5)
+        self.eye_reasoning_trace_checkbox = QtWidgets.QCheckBox(
+            "Record WHY each sub-question was created and WHY each conclusion follows from its evidence")
+        self.eye_reasoning_trace_checkbox.setStyleSheet(checkbox_style)
+        rtrace_desc = QtWidgets.QLabel(
+            "💡 After a decomposed question, a sealed pass captures the decomposition + per-conclusion "
+            "rationale (with evidence refs) and shows it in the Compliance window.")
+        rtrace_desc.setWordWrap(True)
+        rtrace_desc.setStyleSheet(desc_style)
+        rtrace_layout.addWidget(self.eye_reasoning_trace_checkbox)
+        rtrace_layout.addWidget(rtrace_desc)
+        form_layout.addRow(rtrace_label, rtrace_container)
+
+        # Answer temperature
+        atemp_label = QtWidgets.QLabel("Answer Temperature:")
+        atemp_label.setStyleSheet(label_style)
+        atemp_container = QtWidgets.QWidget()
+        atemp_layout = QtWidgets.QVBoxLayout(atemp_container)
+        atemp_layout.setContentsMargins(0, 0, 0, 0)
+        atemp_layout.setSpacing(5)
+        self.eye_answer_temp_spin = QtWidgets.QDoubleSpinBox()
+        self.eye_answer_temp_spin.setRange(0.0, 2.0)
+        self.eye_answer_temp_spin.setSingleStep(0.1)
+        self.eye_answer_temp_spin.setValue(0.2)
+        self.eye_answer_temp_spin.setStyleSheet(spin_style)
+        atemp_desc = QtWidgets.QLabel(
+            "💡 Sampling temperature for investigative/synthesis answers. Lower = more deterministic, "
+            "evidence-faithful output (0.2 recommended for forensics).")
+        atemp_desc.setWordWrap(True)
+        atemp_desc.setStyleSheet(desc_style)
+        atemp_layout.addWidget(self.eye_answer_temp_spin)
+        atemp_layout.addWidget(atemp_desc)
+        form_layout.addRow(atemp_label, atemp_container)
+
+        # Planning temperature
+        ptemp_label = QtWidgets.QLabel("Planning Temperature:")
+        ptemp_label.setStyleSheet(label_style)
+        ptemp_container = QtWidgets.QWidget()
+        ptemp_layout = QtWidgets.QVBoxLayout(ptemp_container)
+        ptemp_layout.setContentsMargins(0, 0, 0, 0)
+        ptemp_layout.setSpacing(5)
+        self.eye_planning_temp_spin = QtWidgets.QDoubleSpinBox()
+        self.eye_planning_temp_spin.setRange(0.0, 2.0)
+        self.eye_planning_temp_spin.setSingleStep(0.1)
+        self.eye_planning_temp_spin.setValue(0.0)
+        self.eye_planning_temp_spin.setStyleSheet(spin_style)
+        ptemp_desc = QtWidgets.QLabel(
+            "💡 Temperature for the planning + reasoning-trace passes. Near-zero for repeatable "
+            "decomposition.")
+        ptemp_desc.setWordWrap(True)
+        ptemp_desc.setStyleSheet(desc_style)
+        ptemp_layout.addWidget(self.eye_planning_temp_spin)
+        ptemp_layout.addWidget(ptemp_desc)
+        form_layout.addRow(ptemp_label, ptemp_container)
+
+        # RAG top-k
+        ragk_label = QtWidgets.QLabel("Knowledge Chunks (RAG top-k):")
+        ragk_label.setStyleSheet(label_style)
+        ragk_container = QtWidgets.QWidget()
+        ragk_layout = QtWidgets.QVBoxLayout(ragk_container)
+        ragk_layout.setContentsMargins(0, 0, 0, 0)
+        ragk_layout.setSpacing(5)
+        self.eye_rag_topk_spin = QtWidgets.QSpinBox()
+        self.eye_rag_topk_spin.setRange(1, 20)
+        self.eye_rag_topk_spin.setValue(5)
+        self.eye_rag_topk_spin.setStyleSheet(spin_style)
+        ragk_desc = QtWidgets.QLabel(
+            "💡 Max ranked knowledge-base chunks retrieved per query (semantic when an embedding "
+            "server is present, otherwise the built-in lexical ranker) beyond keyword-mapped docs.")
+        ragk_desc.setWordWrap(True)
+        ragk_desc.setStyleSheet(desc_style)
+        ragk_layout.addWidget(self.eye_rag_topk_spin)
+        ragk_layout.addWidget(ragk_desc)
+        form_layout.addRow(ragk_label, ragk_container)
+
+        # Sub-question-aware RAG
+        ragsq_label = QtWidgets.QLabel("Sub-Question Knowledge:")
+        ragsq_label.setStyleSheet(label_style)
+        ragsq_container = QtWidgets.QWidget()
+        ragsq_layout = QtWidgets.QVBoxLayout(ragsq_container)
+        ragsq_layout.setContentsMargins(0, 0, 0, 0)
+        ragsq_layout.setSpacing(5)
+        self.eye_rag_subq_checkbox = QtWidgets.QCheckBox(
+            "Retrieve targeted knowledge for each sub-question (not just the main query)")
+        self.eye_rag_subq_checkbox.setStyleSheet(checkbox_style)
+        ragsq_desc = QtWidgets.QLabel(
+            "💡 After decomposition, each sub-question pulls its own artifact knowledge so multi-part "
+            "questions aren't limited to the main query's matches.")
+        ragsq_desc.setWordWrap(True)
+        ragsq_desc.setStyleSheet(desc_style)
+        ragsq_layout.addWidget(self.eye_rag_subq_checkbox)
+        ragsq_layout.addWidget(ragsq_desc)
+        form_layout.addRow(ragsq_label, ragsq_container)
+
+        # Conversation memory — sliding window size (turns kept verbatim)
+        winturns_label = QtWidgets.QLabel("Conversation Window (turns):")
+        winturns_label.setStyleSheet(label_style)
+        winturns_container = QtWidgets.QWidget()
+        winturns_layout = QtWidgets.QVBoxLayout(winturns_container)
+        winturns_layout.setContentsMargins(0, 0, 0, 0)
+        winturns_layout.setSpacing(5)
+        self.eye_history_window_spin = QtWidgets.QSpinBox()
+        self.eye_history_window_spin.setRange(1, 50)
+        self.eye_history_window_spin.setValue(5)
+        self.eye_history_window_spin.setStyleSheet(spin_style)
+        winturns_desc = QtWidgets.QLabel(
+            "💡 Most-recent turns kept VERBATIM (the sliding window). Older non-evidence turns are "
+            "folded into a rolling summary; evidence/pinned turns and the first turn are always kept.")
+        winturns_desc.setWordWrap(True)
+        winturns_desc.setStyleSheet(desc_style)
+        winturns_layout.addWidget(self.eye_history_window_spin)
+        winturns_layout.addWidget(winturns_desc)
+        form_layout.addRow(winturns_label, winturns_container)
+
+        # Conversation memory — summarization buffer toggle
+        sumbuf_label = QtWidgets.QLabel("Summarization Buffer:")
+        sumbuf_label.setStyleSheet(label_style)
+        sumbuf_container = QtWidgets.QWidget()
+        sumbuf_layout = QtWidgets.QVBoxLayout(sumbuf_container)
+        sumbuf_layout.setContentsMargins(0, 0, 0, 0)
+        sumbuf_layout.setSpacing(5)
+        self.eye_summary_buffer_checkbox = QtWidgets.QCheckBox(
+            "Summarize older turns before dropping them (Stage 1)")
+        self.eye_summary_buffer_checkbox.setStyleSheet(checkbox_style)
+        sumbuf_desc = QtWidgets.QLabel(
+            "💡 When the window fills, fold older turns into a rolling summary first; the "
+            "sliding-window drop (Stage 2) is the hard floor when even that won't fit.")
+        sumbuf_desc.setWordWrap(True)
+        sumbuf_desc.setStyleSheet(desc_style)
+        sumbuf_layout.addWidget(self.eye_summary_buffer_checkbox)
+        sumbuf_layout.addWidget(sumbuf_desc)
+        form_layout.addRow(sumbuf_label, sumbuf_container)
+
+        # Conversation memory — long-term recall toggle + top-k
+        recall_label = QtWidgets.QLabel("Conversation Recall:")
+        recall_label.setStyleSheet(label_style)
+        recall_container = QtWidgets.QWidget()
+        recall_layout = QtWidgets.QVBoxLayout(recall_container)
+        recall_layout.setContentsMargins(0, 0, 0, 0)
+        recall_layout.setSpacing(5)
+        self.eye_conversation_recall_checkbox = QtWidgets.QCheckBox(
+            "Recall earlier (summarized / slid-out) turns relevant to the query")
+        self.eye_conversation_recall_checkbox.setStyleSheet(checkbox_style)
+        recall_topk_row = QtWidgets.QHBoxLayout()
+        recall_topk_row.setContentsMargins(0, 0, 0, 0)
+        recall_topk_inner_label = QtWidgets.QLabel("Max recalled turns:")
+        recall_topk_inner_label.setStyleSheet(sublabel_style)
+        self.eye_conversation_recall_topk_spin = QtWidgets.QSpinBox()
+        self.eye_conversation_recall_topk_spin.setRange(1, 20)
+        self.eye_conversation_recall_topk_spin.setValue(3)
+        self.eye_conversation_recall_topk_spin.setStyleSheet(spin_style)
+        recall_topk_row.addWidget(recall_topk_inner_label)
+        recall_topk_row.addWidget(self.eye_conversation_recall_topk_spin)
+        recall_topk_row.addStretch()
+        recall_desc = QtWidgets.QLabel(
+            "💡 Long-term memory: retrieve specific older turns by relevance and inject a "
+            "'Recalled Earlier Conversation' block, so nothing is truly lost when the window fills.")
+        recall_desc.setWordWrap(True)
+        recall_desc.setStyleSheet(desc_style)
+        recall_layout.addWidget(self.eye_conversation_recall_checkbox)
+        recall_layout.addLayout(recall_topk_row)
+        recall_layout.addWidget(recall_desc)
+        form_layout.addRow(recall_label, recall_container)
+
+        # --- Semantic retrieval (embeddings) subsection ---
+        emb_header = QtWidgets.QLabel("Semantic Retrieval (Embeddings)")
+        emb_header.setStyleSheet(section_header_style)
+        form_layout.addRow(emb_header)
+
+        emb_label = QtWidgets.QLabel("Embedding Server:")
+        emb_label.setStyleSheet(label_style)
+        emb_container = QtWidgets.QWidget()
+        emb_layout = QtWidgets.QVBoxLayout(emb_container)
+        emb_layout.setContentsMargins(0, 0, 0, 0)
+        emb_layout.setSpacing(5)
+        self.eye_embedding_enabled_checkbox = QtWidgets.QCheckBox(
+            "Enable embedding-backed semantic retrieval (requires a reachable server, e.g. Ollama)")
+        self.eye_embedding_enabled_checkbox.setStyleSheet(checkbox_style)
+        emb_model_row = QtWidgets.QHBoxLayout()
+        emb_model_row.setContentsMargins(0, 0, 0, 0)
+        emb_model_lbl = QtWidgets.QLabel("Model:")
+        emb_model_lbl.setStyleSheet(sublabel_style)
+        self.eye_embedding_model_input = QtWidgets.QLineEdit()
+        self.eye_embedding_model_input.setPlaceholderText("nomic-embed-text")
+        self.eye_embedding_model_input.setStyleSheet(input_style)
+        emb_model_row.addWidget(emb_model_lbl)
+        emb_model_row.addWidget(self.eye_embedding_model_input)
+        emb_ep_row = QtWidgets.QHBoxLayout()
+        emb_ep_row.setContentsMargins(0, 0, 0, 0)
+        emb_ep_lbl = QtWidgets.QLabel("Endpoint:")
+        emb_ep_lbl.setStyleSheet(sublabel_style)
+        self.eye_embedding_endpoint_input = QtWidgets.QLineEdit()
+        self.eye_embedding_endpoint_input.setPlaceholderText("http://localhost:11434")
+        self.eye_embedding_endpoint_input.setStyleSheet(input_style)
+        emb_ep_row.addWidget(emb_ep_lbl)
+        emb_ep_row.addWidget(self.eye_embedding_endpoint_input)
+        self.eye_embedding_index_evidence_checkbox = QtWidgets.QCheckBox(
+            "Build a per-case semantic index over forensic data (enables semantic_search_artifacts)")
+        self.eye_embedding_index_evidence_checkbox.setStyleSheet(checkbox_style)
+        emb_desc = QtWidgets.QLabel(
+            "💡 Optional. When off (or the server is unreachable) the Eye uses the built-in BM25 "
+            "lexical ranker — Cloud/CLI deployments are unaffected. Semantic search is a DISCOVERY "
+            "aid; exact SQL stays authoritative for counts, timelines, and completeness.")
+        emb_desc.setWordWrap(True)
+        emb_desc.setStyleSheet(desc_style)
+        emb_layout.addWidget(self.eye_embedding_enabled_checkbox)
+        emb_layout.addLayout(emb_model_row)
+        emb_layout.addLayout(emb_ep_row)
+        emb_layout.addWidget(self.eye_embedding_index_evidence_checkbox)
+        emb_layout.addWidget(emb_desc)
+        form_layout.addRow(emb_label, emb_container)
+
         layout.addWidget(form_widget)
 
         # Advanced context / token-budget dialog (existing Eye dialog).
@@ -1402,11 +1946,45 @@ class SettingsDialog(QtWidgets.QDialog):
         if read_eye_ai_settings is None or write_eye_ai_settings is None:
             for w in (self.eye_store_full_payload_checkbox, self.eye_recent_uncompressed_spin,
                       self.eye_confidence_spin, self.eye_max_tokens_spin,
-                      self.eye_lock_tokens_checkbox, self.eye_tool_output_spin):
+                      self.eye_lock_tokens_checkbox, self.eye_tool_output_spin,
+                      self.eye_enable_decomposition_checkbox, self.eye_max_subq_spin,
+                      self.eye_enable_hierarchy_checkbox, self.eye_max_narratives_spin,
+                      self.eye_max_sub_narratives_spin, self.eye_max_iterations_spin,
+                      self.eye_enable_premise_checkbox, self.eye_enable_question_memory_checkbox,
+                      self.eye_prior_findings_spin,
+                      self.eye_model_retry_spin, self.eye_auto_segment_checkbox,
+                      self.eye_auto_mapreduce_checkbox,
+                      self.eye_auto_mapreduce_rows_spin,
+                      self.eye_reasoning_trace_checkbox, self.eye_answer_temp_spin,
+                      self.eye_planning_temp_spin, self.eye_rag_topk_spin,
+                      self.eye_rag_subq_checkbox, self.eye_history_window_spin,
+                      self.eye_summary_buffer_checkbox, self.eye_conversation_recall_checkbox,
+                      self.eye_conversation_recall_topk_spin,
+                      self.eye_embedding_enabled_checkbox, self.eye_embedding_model_input,
+                      self.eye_embedding_endpoint_input, self.eye_embedding_index_evidence_checkbox):
                 w.setEnabled(False)
             info.setText("Eye AI settings module unavailable (config.eye_ai_settings could not be imported).")
 
-        return panel
+        # Wrap the (tall) settings stack in a scroll area so every setting stays
+        # reachable on short windows instead of being clipped/collapsed.
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(panel)
+        scroll.setStyleSheet(
+            "QScrollArea{border:none;background:#0F172A;} "
+            "QScrollBar:vertical{background:#0F172A;width:10px;margin:0;border:none;} "
+            "QScrollBar::handle:vertical{background:#334155;border-radius:5px;min-height:30px;} "
+            "QScrollBar::handle:vertical:hover{background:#475569;} "
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;background:none;} "
+            # Without explicit add-page/sub-page (the groove above & below the handle)
+            # PyQt5 reverts the track to the pale native painting once the bar is styled.
+            "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:#0F172A;} "
+            "QScrollBar::corner{background:#0F172A;}"
+        )
+        scroll.viewport().setStyleSheet("background:#0F172A;")
+        return scroll
 
     def _open_eye_onboarding(self):
         """Launch the existing Eye OnboardingWizard (backend / model / API key)."""
@@ -2052,6 +2630,34 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.eye_max_tokens_spin.setValue(int(eye_ai["max_total_tokens"]))
                 self.eye_lock_tokens_checkbox.setChecked(bool(eye_ai["lock_max_total_tokens"]))
                 self.eye_tool_output_spin.setValue(int(eye_ai["max_tool_output_chars"]))
+                # Reasoning (v0.11.1) — tolerant of missing keys.
+                self.eye_enable_decomposition_checkbox.setChecked(bool(eye_ai.get("enable_decomposition", True)))
+                self.eye_max_subq_spin.setValue(int(eye_ai.get("max_sub_questions", 6)))
+                self.eye_enable_hierarchy_checkbox.setChecked(bool(eye_ai.get("enable_hierarchy", True)))
+                self.eye_max_narratives_spin.setValue(int(eye_ai.get("max_narratives", 12)))
+                self.eye_max_sub_narratives_spin.setValue(int(eye_ai.get("max_sub_narratives", 8)))
+                self.eye_max_iterations_spin.setValue(int(eye_ai.get("max_iterations", 300)))
+                self.eye_enable_premise_checkbox.setChecked(bool(eye_ai.get("enable_premise_verification", True)))
+                self.eye_enable_question_memory_checkbox.setChecked(bool(eye_ai.get("enable_question_memory", True)))
+                self.eye_prior_findings_spin.setValue(int(eye_ai.get("prior_findings_count", 3)))
+                self.eye_model_retry_spin.setValue(int(eye_ai.get("model_retry_max_attempts", 3)))
+                self.eye_auto_segment_checkbox.setChecked(bool(eye_ai.get("auto_segment_question", True)))
+                self.eye_auto_mapreduce_checkbox.setChecked(bool(eye_ai.get("enable_auto_map_reduce", True)))
+                self.eye_auto_mapreduce_rows_spin.setValue(int(eye_ai.get("auto_map_reduce_row_threshold", 1500)))
+                # Reasoning transparency & tuning (v0.11.3).
+                self.eye_reasoning_trace_checkbox.setChecked(bool(eye_ai.get("enable_reasoning_trace", True)))
+                self.eye_answer_temp_spin.setValue(float(eye_ai.get("answer_temperature", 0.2)))
+                self.eye_planning_temp_spin.setValue(float(eye_ai.get("planning_temperature", 0.0)))
+                self.eye_rag_topk_spin.setValue(int(eye_ai.get("rag_top_k", 5)))
+                self.eye_rag_subq_checkbox.setChecked(bool(eye_ai.get("rag_subquestion_aware", True)))
+                self.eye_history_window_spin.setValue(int(eye_ai.get("history_window_turns", 5)))
+                self.eye_summary_buffer_checkbox.setChecked(bool(eye_ai.get("enable_summary_buffer", True)))
+                self.eye_conversation_recall_checkbox.setChecked(bool(eye_ai.get("enable_conversation_recall", True)))
+                self.eye_conversation_recall_topk_spin.setValue(int(eye_ai.get("conversation_recall_top_k", 3)))
+                self.eye_embedding_enabled_checkbox.setChecked(bool(eye_ai.get("embedding_enabled", False)))
+                self.eye_embedding_model_input.setText(str(eye_ai.get("embedding_model", "nomic-embed-text")))
+                self.eye_embedding_endpoint_input.setText(str(eye_ai.get("embedding_endpoint", "http://localhost:11434")))
+                self.eye_embedding_index_evidence_checkbox.setChecked(bool(eye_ai.get("embedding_index_evidence", False)))
                 backend = eye_ai.get("backend") or "—"
                 model = eye_ai.get("model_name") or "—"
                 self.eye_backend_label.setText(f"Backend: {backend} / {model}")
@@ -2080,6 +2686,32 @@ class SettingsDialog(QtWidgets.QDialog):
                     "max_total_tokens": self.eye_max_tokens_spin.value(),
                     "lock_max_total_tokens": self.eye_lock_tokens_checkbox.isChecked(),
                     "max_tool_output_chars": self.eye_tool_output_spin.value(),
+                    "enable_decomposition": self.eye_enable_decomposition_checkbox.isChecked(),
+                    "max_sub_questions": self.eye_max_subq_spin.value(),
+                    "enable_hierarchy": self.eye_enable_hierarchy_checkbox.isChecked(),
+                    "max_narratives": self.eye_max_narratives_spin.value(),
+                    "max_sub_narratives": self.eye_max_sub_narratives_spin.value(),
+                    "max_iterations": self.eye_max_iterations_spin.value(),
+                    "enable_premise_verification": self.eye_enable_premise_checkbox.isChecked(),
+                    "enable_question_memory": self.eye_enable_question_memory_checkbox.isChecked(),
+                    "prior_findings_count": self.eye_prior_findings_spin.value(),
+                    "model_retry_max_attempts": self.eye_model_retry_spin.value(),
+                    "auto_segment_question": self.eye_auto_segment_checkbox.isChecked(),
+                    "enable_auto_map_reduce": self.eye_auto_mapreduce_checkbox.isChecked(),
+                    "auto_map_reduce_row_threshold": self.eye_auto_mapreduce_rows_spin.value(),
+                    "enable_reasoning_trace": self.eye_reasoning_trace_checkbox.isChecked(),
+                    "answer_temperature": self.eye_answer_temp_spin.value(),
+                    "planning_temperature": self.eye_planning_temp_spin.value(),
+                    "rag_top_k": self.eye_rag_topk_spin.value(),
+                    "rag_subquestion_aware": self.eye_rag_subq_checkbox.isChecked(),
+                    "history_window_turns": self.eye_history_window_spin.value(),
+                    "enable_summary_buffer": self.eye_summary_buffer_checkbox.isChecked(),
+                    "enable_conversation_recall": self.eye_conversation_recall_checkbox.isChecked(),
+                    "conversation_recall_top_k": self.eye_conversation_recall_topk_spin.value(),
+                    "embedding_enabled": self.eye_embedding_enabled_checkbox.isChecked(),
+                    "embedding_model": self.eye_embedding_model_input.text(),
+                    "embedding_endpoint": self.eye_embedding_endpoint_input.text(),
+                    "embedding_index_evidence": self.eye_embedding_index_evidence_checkbox.isChecked(),
                 })
 
             # Save semantic mappings if manager is available
@@ -2301,20 +2933,32 @@ class SimpleSemanticMappingDialog(QtWidgets.QDialog):
         }
 
 
-def show_settings_dialog(case_history_manager, current_case_path=None, parent=None):
+def show_settings_dialog(case_history_manager, current_case_path=None, parent=None,
+                         clone_case_callback=None):
     """
     Show the settings dialog.
-    
+
     Args:
         case_history_manager: CaseHistoryManager instance
         current_case_path: Path to currently active case (optional)
         parent: Parent widget
-        
+        clone_case_callback: Optional callable run after the dialog closes when the
+            user chose "Import Case Data from Another Case…" in the Case Management panel.
+
     Returns:
         True if settings were saved, False if cancelled
     """
-    dialog = SettingsDialog(case_history_manager, current_case_path, parent)
+    dialog = SettingsDialog(case_history_manager, current_case_path, parent,
+                            clone_case_callback=clone_case_callback)
     result = dialog.exec_()
+    # Run the clone flow AFTER Settings has closed so its file pickers / loading
+    # dialog don't stack on top of a modal.
+    if getattr(dialog, '_clone_requested', False) and clone_case_callback:
+        try:
+            clone_case_callback()
+        except Exception as e:
+            print(f"[Settings] Clone-case callback failed: {e}")
+        return False
     return result == QtWidgets.QDialog.Accepted
 
 

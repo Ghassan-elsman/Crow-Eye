@@ -41,11 +41,12 @@ class LLMBackend(ABC):
     
     @abstractmethod
     def generate(
-        self, 
-        system_prompt: str, 
+        self,
+        system_prompt: str,
         user_message: str,
         tools: Optional[List[Dict]] = None,
-        history: Optional[List[Dict[str, Any]]] = None
+        history: Optional[List[Dict[str, Any]]] = None,
+        gen_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Generate a response from the AI model.

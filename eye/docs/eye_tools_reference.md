@@ -130,8 +130,8 @@ section 5, write side).
         `artifact_type`, `weight`, `tier`, `tier_name`)
     *   `time_window_minutes` (default 180), `minimum_matches` (default 1)
     *   `anchor_priority`, `semantic_rules`, `tags`, `case_types`
-    *   `reason` — **REQUIRED** (GEP Rule 9)
-    *   `related_evidence` — **REQUIRED** (GEP Rule 10)
+    *   `reason` — **REQUIRED** (GEP-9 — Reason-Required)
+    *   `related_evidence` — **REQUIRED** (GEP-2 — Evidence-Link)
 *   **Returns**: `wing_id` (e.g. `eye_wing_a1b2c3d4`), `path` to the
     saved JSON, `human_summary` for chat display, `gep_rules` status.
 

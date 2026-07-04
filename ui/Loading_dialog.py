@@ -96,7 +96,11 @@ class LoadingDialog(QtWidgets.QDialog):
         except Exception:
             pass  # Fallback if icon resource is not available
         
-        self.setWindowFlags(QtCore.Qt.Dialog | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+        # NOTE: deliberately NOT WindowStaysOnTopHint. The dialog stays modal (below)
+        # so it sits above the main window and blocks the half-loaded UI, but it must
+        # NOT force itself above a *newer* modal QMessageBox — otherwise any dialog
+        # shown during a load gets trapped behind the loading screen and freezes it.
+        self.setWindowFlags(QtCore.Qt.Dialog | QtCore.Qt.FramelessWindowHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setModal(True)
         
@@ -236,6 +240,9 @@ class LoadingDialog(QtWidgets.QDialog):
         """Override showEvent to center dialog after Qt finalizes geometry"""
         super().showEvent(event)
         self.center_on_screen()
+        # Without WindowStaysOnTopHint, raise once so the frameless dialog reliably
+        # appears in front of the main window when shown.
+        self.raise_()
         
     def is_cancelled(self):
         """Check if cancellation has been requested"""

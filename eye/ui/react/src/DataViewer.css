@@ -25,6 +25,13 @@
   font-weight: 600;
 }
 
+/* Header label for model-authored (chat_add_table) tables that have no SQL query. */
+.caption-text {
+  font-size: 13px;
+  color: #e5e7eb;
+  font-weight: 600;
+}
+
 .query-text {
   font-size: 12px;
   color: #fbbf24;

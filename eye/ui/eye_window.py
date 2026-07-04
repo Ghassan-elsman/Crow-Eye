@@ -8,6 +8,7 @@ Integrates the React chat interface and report builder panel with a split pane l
 
 import os
 import logging
+import threading
 from typing import Optional
 
 from PyQt5.QtWidgets import (
@@ -87,6 +88,43 @@ class EYECompliancePopupWindow(QWidget):
         self.setStyleSheet("background-color: #0B1220;")
 
 
+class EYENarrativeMapPopupWindow(QWidget):
+    """
+    Standalone OS window hosting the Narrative Map — the Eye's persistent working
+    memory (Verdict → Narrative → Evidence). Shares the same EYEBridge instance as
+    the main Eye AI window via a fresh QWebChannel, so edits land in the same backend
+    state and are sealed + injected into the Eye's prompt.
+    """
+
+    def __init__(self, react_build_url: str, bridge, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Window)
+        self.setWindowTitle("Eye AI — Narrative Map")
+        self.setWindowIcon(QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        self.resize(1100, 800)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.view = QWebEngineView(self)
+        self.view.setPage(SilentWebEnginePage(self.view))
+        self.view.setAttribute(Qt.WA_TranslucentBackground)
+        self.view.page().setBackgroundColor(Qt.transparent)
+        settings = self.view.settings()
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
+        settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, True)
+
+        self.web_channel = QWebChannel(self.view.page())
+        self.web_channel.registerObject("bridge", bridge)
+        self.view.page().setWebChannel(self.web_channel)
+
+        self.view.load(QUrl(react_build_url + "?view=map"))
+        layout.addWidget(self.view)
+        self.setStyleSheet("background-color: #0d0e14;")
+
+
 class EYEAssistantWindow(QWidget):
     """
     Main Eye AI Assistant window with split pane layout.
@@ -119,6 +157,7 @@ class EYEAssistantWindow(QWidget):
         self.web_channel = None
         self.bridge = None
         self._compliance_window = None  # lazy-instantiated EYECompliancePopupWindow
+        self._narrative_map_window = None  # lazy-instantiated EYENarrativeMapPopupWindow
         self._session_started = False  # gate so start_session() runs once per window
 
         # Debounce chart reflow so dragging the splitter doesn't fire dozens of
@@ -214,6 +253,63 @@ class EYEAssistantWindow(QWidget):
         widget can't stall the next init step waiting on unrelated events."""
         QCoreApplication.processEvents(QEventLoop.ExcludeUserInputEvents, 15)
 
+    def _build_embedding_client(self, config):
+        """Construct an embedding client for semantic retrieval, gated on config.
+
+        Returns None (→ the RAG service uses its always-available BM25 fallback)
+        unless ``embedding.enabled`` is set AND a quick probe of the embedding
+        server succeeds. This keeps Cloud/CLI deployments (no local Ollama)
+        working unchanged; semantic retrieval is strictly opt-in. Default model is
+        ``nomic-embed-text`` (v1.5 task prefixes applied automatically).
+        """
+        emb_cfg = (config or {}).get("embedding") or {}
+        if not emb_cfg.get("enabled", False):
+            return None
+        log = logging.getLogger(__name__)
+        try:
+            from eye.services.rag_service import OllamaEmbeddingClient
+            client = OllamaEmbeddingClient(
+                api_endpoint=emb_cfg.get("endpoint", "http://localhost:11434"),
+                model_name=emb_cfg.get("model", "nomic-embed-text"),
+                timeout=int(emb_cfg.get("timeout", 10) or 10),
+            )
+            if client.embed_text("probe", is_query=True):
+                log.info(f"Embedding client ready: {client.model_name} @ {client.api_endpoint}")
+                return client
+            log.warning("Embedding server/model not reachable; using BM25 retrieval fallback.")
+        except Exception as e:
+            log.warning(f"Embedding client init failed; using BM25 fallback: {e}")
+        return None
+
+    def _warm_embedding_client_async(self, config):
+        """Build the optional embedding client on a background daemon thread and,
+        on success, attach it to the already-running RAG service.
+
+        Keeps the blocking embedding-server probe (``_build_embedding_client``)
+        OFF the GUI thread so the startup splash never freezes on it. Safe by
+        design: the RAG vector index is built lazily on the first retrieval (the
+        first query, long after startup), so attaching the client a moment later
+        just upgrades BM25 → semantic when ready; a query that fires before the
+        warmup finishes transparently uses BM25 (strictly additive). No Qt
+        objects are touched, and ``embedding_client`` is only read during a later
+        query, so the single attribute set needs no lock."""
+        emb_cfg = (config or {}).get("embedding") or {}
+        if not emb_cfg.get("enabled", False):
+            return
+
+        def _warm():
+            try:
+                client = self._build_embedding_client(config)
+                if client is not None and getattr(self, "rag_service", None) is not None:
+                    self.rag_service.embedding_client = client
+                    logging.getLogger(__name__).info(
+                        "Semantic embedding client attached to RAG service (background warmup).")
+            except Exception as e:
+                logging.getLogger(__name__).warning(
+                    f"Background embedding warmup failed; staying on BM25: {e}")
+
+        threading.Thread(target=_warm, name="eye-embedding-warmup", daemon=True).start()
+
     def _init_services(self):
         """Initialize all AI backend services."""
         self.credential_manager = CredentialManager()
@@ -229,7 +325,14 @@ class EYEAssistantWindow(QWidget):
         self._pump_splash()
         self.search_service = ForensicSearchService(artifacts_dir)
         self._pump_splash()
-        self.rag_service = RAGService()
+        # Build RAG with the always-available BM25 fallback IMMEDIATELY (no I/O),
+        # then warm up the optional embedding client OFF the GUI thread. The
+        # embedding probe is a blocking network call (up to its timeout); running
+        # it inline froze the startup splash whenever the embedding server was
+        # slow/unreachable. The vector index is built lazily on the first query,
+        # so attaching the client a moment later loses nothing.
+        self.rag_service = RAGService(embedding_client=None)
+        self._warm_embedding_client_async(config)
         self._pump_splash()
 
         self.report_engine = ReportEngine(self.case_directory)
@@ -462,6 +565,7 @@ class EYEAssistantWindow(QWidget):
         self.bridge.case_summary_requested.connect(self._on_case_summary_clicked)
         self.bridge.settings_requested.connect(self._show_onboarding_wizard)
         self.bridge.compliance_window_requested.connect(self._open_compliance_window)
+        self.bridge.narrative_map_window_requested.connect(self._open_narrative_map_window)
 
         # Reflow report-pane charts whenever the splitter is dragged so charts
         # stay aligned with their container width. Debounced via _chart_reflow_timer.
@@ -539,6 +643,11 @@ class EYEAssistantWindow(QWidget):
                 self.bridge.database_service = self.database_service
                 self.bridge.search_service = self.search_service
                 self.bridge.report_engine = self.report_engine
+                # Re-register the live Narrative Map update callback on the new CM.
+                try:
+                    self.context_manager.narrative_map_update_callback = self.bridge.emit_narrative_map_changed
+                except Exception:
+                    pass
                 logger.info("Eye AI services refreshed successfully after configuration update.")
                 
         except Exception as e:
@@ -632,11 +741,41 @@ class EYEAssistantWindow(QWidget):
         self._compliance_window.raise_()
         self._compliance_window.activateWindow()
 
+    def _open_narrative_map_window(self):
+        """Open the Narrative Map as a separate OS window so the investigator can view
+        chat, report, and the case's narrative memory simultaneously."""
+        if self._narrative_map_window is not None:
+            try:
+                if not self._narrative_map_window.isVisible():
+                    self._narrative_map_window.show()
+                self._narrative_map_window.raise_()
+                self._narrative_map_window.activateWindow()
+                return
+            except RuntimeError:
+                # Underlying C++ object was deleted — drop the dangling ref and rebuild.
+                self._narrative_map_window = None
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        react_build_path = os.path.join(base_dir, 'ui', 'react', 'dist', 'index.html')
+        if not os.path.exists(react_build_path):
+            logger.error("Cannot open Narrative Map window: React build missing at %s", react_build_path)
+            return
+        react_build_url = QUrl.fromLocalFile(react_build_path).toString()
+
+        self._narrative_map_window = EYENarrativeMapPopupWindow(react_build_url, self.bridge, parent=self)
+        self._narrative_map_window.destroyed.connect(lambda *_: setattr(self, '_narrative_map_window', None))
+        self._narrative_map_window.show()
+        self._narrative_map_window.raise_()
+        self._narrative_map_window.activateWindow()
+
     def closeEvent(self, event):
-        """Close the Compliance popup when the main Eye AI window closes."""
+        """Close the popup windows when the main Eye AI window closes."""
         if self._compliance_window is not None:
             self._compliance_window.close()
             self._compliance_window = None
+        if self._narrative_map_window is not None:
+            self._narrative_map_window.close()
+            self._narrative_map_window = None
         super().closeEvent(event)
 
 

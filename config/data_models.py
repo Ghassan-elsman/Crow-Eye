@@ -76,7 +76,7 @@ class GlobalConfig:
     identity_semantic_phase_enabled: bool = True  # Enable identity-level semantic mapping by default
     wings_semantic_mapping_enabled: bool = True  # Enable semantic mapping for Wings by default
     cascade_tree_expansion_enabled: bool = True  # Enable cascade expansion in tree views by default
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {

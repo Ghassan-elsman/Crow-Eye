@@ -36,6 +36,8 @@
             gap: 18px;
             position: relative;
             overflow: hidden;
+            /* Own compositor layer so the card's animations don't depend on page layout. */
+            transform: translateZ(0);
             animation: ld-slide-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both;
         }
 
@@ -91,6 +93,7 @@
             border: 2px solid transparent;
             border-top-color: #a855f7;
             border-right-color: #22d3ee;
+            will-change: transform;
             animation: ld-spin 1.2s linear infinite;
         }
 
@@ -112,6 +115,7 @@
             height: 6px;
             border-radius: 50%;
             background: #a855f7;
+            will-change: transform, opacity;
             animation: ld-dot-pulse 1s ease-in-out infinite;
         }
 
@@ -133,9 +137,14 @@
 
         .ld-progress-bar {
             height: 100%;
+            width: 40%;
             background: linear-gradient(90deg, #4f46e5, #a855f7, #22d3ee);
             border-radius: 1px;
-            animation: ld-indeterminate 1.6s ease-in-out infinite;
+            /* GPU-composited sweep (transform only) so it keeps moving smoothly even
+               while the main process is busy building the Eye window. */
+            transform: translateX(-100%);
+            will-change: transform;
+            animation: ld-indeterminate 1.4s ease-in-out infinite;
         }
 
         @keyframes ld-slide-in {
@@ -145,7 +154,7 @@
         @keyframes ld-spin { to { transform: rotate(360deg); } }
         @keyframes ld-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         @keyframes ld-dot-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.75); } }
-        @keyframes ld-indeterminate { 0% { margin-left: -100%; width: 60%; } 50% { margin-left: 60%; width: 40%; } 100% { margin-left: 120%; width: 60%; } }
+        @keyframes ld-indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
     </style>
 </head>
 <body>

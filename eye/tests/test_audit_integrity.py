@@ -15,6 +15,47 @@ from unittest.mock import MagicMock
 
 from eye.services.truncation_auditor import TruncationAuditor
 from eye.services.history_manager import HistoryManager
+from eye.services.evidence_seal import EvidenceSeal
+
+
+def _seal_some(seal, n=3):
+    for i in range(n):
+        seal.seal(payload_text=f"payload-{i}", phase="request", iteration=i,
+                  query="q", model="m", max_context=8192, token_count=10)
+
+
+class TestEvidenceSealChain(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _seal_log(self):
+        return os.path.join(self.dir, "EYE_Logs", "eye_payload_seal.jsonl")
+
+    def test_empty_log_is_vacuously_valid(self):
+        self.assertTrue(EvidenceSeal(self.dir).verify_chain())
+
+    def test_intact_chain_verifies(self):
+        s = EvidenceSeal(self.dir)
+        _seal_some(s, 3)
+        self.assertTrue(s.verify_chain())
+        # A fresh instance reading the same log also verifies.
+        self.assertTrue(EvidenceSeal(self.dir).verify_chain())
+
+    def test_tamper_is_detected(self):
+        s = EvidenceSeal(self.dir)
+        _seal_some(s, 3)
+        log = self._seal_log()
+        with open(log, "r", encoding="utf-8") as f:
+            lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+        rec = json.loads(lines[1])
+        rec["payload_sha256"] = "0" * 64          # tamper a sealed sub-hash
+        lines[1] = json.dumps(rec)
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        self.assertFalse(EvidenceSeal(self.dir).verify_chain())
 
 
 def _log_some(auditor, n=3):

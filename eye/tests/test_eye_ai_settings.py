@@ -75,6 +75,35 @@ class TestEyeAiSettings(unittest.TestCase):
         self.assertEqual(s["backend"], "gemini")
         self.assertEqual(s["model_name"], "gemini-2.5-flash")
 
+    def test_reasoning_roundtrip_nested_and_clamped(self):
+        write_eye_ai_settings({
+            "enable_decomposition": False,
+            "max_sub_questions": 99,            # clamp to 20
+            "enable_premise_verification": False,
+            "enable_question_memory": False,
+            "prior_findings_count": -5,         # clamp to 0
+        }, self.path)
+        # Lands under a top-level "reasoning" section (sibling of context_window).
+        cfg = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertIn("reasoning", cfg)
+        self.assertEqual(cfg["reasoning"]["max_sub_questions"], 20)
+        self.assertEqual(cfg["reasoning"]["prior_findings_count"], 0)
+        # Round-trips through read.
+        s = read_eye_ai_settings(self.path)
+        self.assertFalse(s["enable_decomposition"])
+        self.assertFalse(s["enable_premise_verification"])
+        self.assertFalse(s["enable_question_memory"])
+        self.assertEqual(s["max_sub_questions"], 20)
+        self.assertEqual(s["prior_findings_count"], 0)
+
+    def test_reasoning_write_preserves_context_window(self):
+        write_eye_ai_settings({"max_total_tokens": 128000}, self.path)
+        write_eye_ai_settings({"enable_decomposition": False}, self.path)
+        cfg = json.loads(self.path.read_text(encoding="utf-8"))
+        # Both sections coexist; neither clobbers the other.
+        self.assertEqual(cfg["context_window"]["max_total_tokens"], 128000)
+        self.assertFalse(cfg["reasoning"]["enable_decomposition"])
+
     def test_clamping_and_atomic(self):
         write_eye_ai_settings({"sealed_payload_recent_uncompressed": -3,
                                "max_total_tokens": 10, "max_tool_output_chars": 10}, self.path)

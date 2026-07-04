@@ -2187,6 +2187,30 @@ class CrowEyeStyles:
         }
     """
 
+    # User Behavior Analytics Button Style (Sentinel crimson)
+    UBA_BUTTON = """
+        QPushButton {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                      stop:0 #B4233A, stop:1 #FF3B56);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 600;
+            font-size: 13px;
+            font-family: 'Segoe UI', sans-serif;
+            min-width: 120px;
+        }
+        QPushButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                      stop:0 #D12A45, stop:1 #FF5069);
+            border: 1px solid #FFFFFF;
+        }
+        QPushButton:pressed {
+            background: #8E1A2C;
+        }
+    """
+
     # Parser Button Style (Primary Blue - Standardized with Dark Gradients)
     PARSER_BUTTON = """
         QPushButton {

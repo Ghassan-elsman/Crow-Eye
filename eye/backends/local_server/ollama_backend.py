@@ -218,11 +218,12 @@ class OllamaBackend(LLMBackend):
                 )
     
     def generate(
-        self, 
-        system_prompt: str, 
-        user_message: str, 
-        tools: Optional[List[Dict]] = None, 
-        history: Optional[List[Dict[str, Any]]] = None
+        self,
+        system_prompt: str,
+        user_message: str,
+        tools: Optional[List[Dict]] = None,
+        history: Optional[List[Dict[str, Any]]] = None,
+        gen_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Standardizes Ollama chat completion requests.
@@ -266,11 +267,23 @@ class OllamaBackend(LLMBackend):
             
             # Build the request payload
             payload = {
-                "model": self.model_name, 
-                "messages": messages, 
+                "model": self.model_name,
+                "messages": messages,
                 "stream": False  # We want the complete response, not streaming
             }
-            
+
+            # Ollama generation knobs go under "options"; num_predict bounds the reply.
+            gp = gen_params or {}
+            options = {}
+            if gp.get("temperature") is not None:
+                options["temperature"] = gp["temperature"]
+            if gp.get("top_p") is not None:
+                options["top_p"] = gp["top_p"]
+            if gp.get("max_output_tokens") is not None:
+                options["num_predict"] = gp["max_output_tokens"]
+            if options:
+                payload["options"] = options
+
             if tools:
                 # Ollama expects tools wrapped in a specific format - we're translating from 
                 # Eye's standard format to what Ollama understands

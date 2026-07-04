@@ -34,6 +34,9 @@
   gap: 18px;
   position: relative;
   overflow: hidden;
+  /* Own compositor layer so the dialog's animations don't depend on the busy
+     chat tree re-painting. */
+  transform: translateZ(0);
   -webkit-animation: ld-slide-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both;
   animation: ld-slide-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
@@ -101,6 +104,7 @@
   border: 2px solid transparent;
   border-top-color: #a855f7;
   border-right-color: #22d3ee;
+  will-change: transform;
   -webkit-animation: ld-spin 1.2s linear infinite;
   animation: ld-spin 1.2s linear infinite;
 }
@@ -127,6 +131,7 @@
   border-radius: 50%;
   background: #a855f7;
   flex-shrink: 0;
+  will-change: transform, opacity;
   -webkit-animation: ld-dot-pulse 1s ease-in-out infinite;
   animation: ld-dot-pulse 1s ease-in-out infinite;
 }
@@ -152,10 +157,15 @@
 
 .ld-progress-bar {
   height: 100%;
+  width: 40%;
   background: linear-gradient(90deg, #4f46e5, #a855f7, #22d3ee);
   border-radius: 1px;
-  -webkit-animation: ld-indeterminate 1.6s ease-in-out infinite;
-  animation: ld-indeterminate 1.6s ease-in-out infinite;
+  /* GPU-composited sweep (transform only) so it keeps moving even while the
+     JS main thread is saturated by streaming Eye updates. */
+  transform: translateX(-100%);
+  will-change: transform;
+  -webkit-animation: ld-indeterminate 1.4s ease-in-out infinite;
+  animation: ld-indeterminate 1.4s ease-in-out infinite;
 }
 
 /* ══════════════════════════════════════
@@ -233,12 +243,10 @@
 }
 
 @-webkit-keyframes ld-indeterminate {
-  0%   { margin-left: -100%; width: 60%; }
-  50%  { margin-left: 60%; width: 40%; }
-  100% { margin-left: 120%; width: 60%; }
+  0%   { -webkit-transform: translateX(-100%); transform: translateX(-100%); }
+  100% { -webkit-transform: translateX(250%); transform: translateX(250%); }
 }
 @keyframes ld-indeterminate {
-  0%   { margin-left: -100%; width: 60%; }
-  50%  { margin-left: 60%; width: 40%; }
-  100% { margin-left: 120%; width: 60%; }
+  0%   { -webkit-transform: translateX(-100%); transform: translateX(-100%); }
+  100% { -webkit-transform: translateX(250%); transform: translateX(250%); }
 }

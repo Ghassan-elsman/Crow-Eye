@@ -2,12 +2,14 @@ import { useState, useMemo } from 'react';
 import type { DataViewerProps } from './types';
 import './DataViewer.css';
 
-const DataViewer: React.FC<DataViewerProps> = ({ 
-  columns, 
-  rows, 
-  query, 
-  database, 
-  table 
+const DataViewer: React.FC<DataViewerProps> = ({
+  columns,
+  rows,
+  query,
+  database,
+  table,
+  caption,
+  title,
 }) => {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -169,7 +171,7 @@ const DataViewer: React.FC<DataViewerProps> = ({
         caption: `Evidence from ${table || 'query results'}`
       });
       
-      await window.bridge.report_add_data_table(query, payload);
+      await window.bridge.report_add_data_table(query || '', payload);
       console.log('Row added to report bucket');
     } catch (error) {
       console.error('Failed to add row to report:', error);
@@ -186,7 +188,7 @@ const DataViewer: React.FC<DataViewerProps> = ({
         caption: `Full result set from ${table || 'query results'}`
       });
       
-      await window.bridge.report_add_data_table(query, payload);
+      await window.bridge.report_add_data_table(query || '', payload);
       console.log('All rows added to report bucket');
     } catch (error) {
       console.error('Failed to add all rows to report:', error);
@@ -196,12 +198,24 @@ const DataViewer: React.FC<DataViewerProps> = ({
   return (
     <div className="data-viewer">
       <div className="data-viewer-header">
-        <div className="query-info">
-          <span className="query-label">Query:</span>
-          <code className="query-text">{query}</code>
-        </div>
+        {query ? (
+          <div className="query-info">
+            <span className="query-label">Query:</span>
+            <code className="query-text">{query}</code>
+          </div>
+        ) : (
+          <div className="query-info">
+            <span className="caption-text">{caption || title || 'Table'}</span>
+          </div>
+        )}
         <div className="data-viewer-meta">
-          <span className="database-info">{database} • {table}</span>
+          {query ? (
+            <span className="database-info">{database} • {table}</span>
+          ) : (
+            database && database !== 'Forensic Result' && (
+              <span className="database-info">{database}</span>
+            )
+          )}
           <span className="row-count">{sortedRows.length} rows</span>
         </div>
       </div>

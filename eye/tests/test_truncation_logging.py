@@ -386,11 +386,14 @@ class TestQueryProcessorTruncationLogging(unittest.TestCase):
     @patch("time.sleep", return_value=None)
     def test_transient_retry_uses_sealed_slimmed_payload(self, mock_sleep):
         # A transient model error must be retried with the SAME slimmed history
-        # that was sealed (`working`), not the original un-slimmed `history` —
-        # otherwise the model sees a payload that doesn't match its seal and may
-        # re-overflow. We force self-heal (small window + long messages) so the
-        # slimmed payload genuinely differs from the original, then make the
-        # first generate() call fail transiently.
+        # that was sealed (`working`), not the original un-slimmed `history`.
+        # Retry now lives in ModelRouter.generate (the single choke point), so we
+        # use a REAL ModelRouter over a mock backend: guarded_generate slims +
+        # seals + calls router.generate(history=working) once, and the router
+        # retries backend.generate with that same slimmed history.
+        import logging as _logging
+        from eye.services.model_router import ModelRouter
+
         self.cm.max_total_tokens = 500  # usable ~250 -> forces summarization
         history = [
             {"id": "h1", "role": "user", "content": "A very long user message " * 20, "metadata": {}},
@@ -405,25 +408,29 @@ class TestQueryProcessorTruncationLogging(unittest.TestCase):
 
         call_count = {"n": 0}
 
-        def gen_side_effect(*args, **kwargs):
+        def backend_gen(system_prompt, user_message, tools=None, history=None, gen_params=None):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise Exception("503 UNAVAILABLE - temporarily unavailable")
             return {"content": "Final synthesis.", "tool_calls": []}
 
-        self.cm.model_router.generate.side_effect = gen_side_effect
+        router = ModelRouter.__new__(ModelRouter)  # skip _initialize_backend
+        router.logger = _logging.getLogger("test-router")
+        router.config = {"model_name": "mock", "backend": "anthropic",
+                         "reasoning": {"model_retry_max_attempts": 3}}
+        router.backend = MagicMock()
+        router.backend.generate.side_effect = backend_gen
+        self.cm.model_router = router
 
         self.processor.process_query("Tell me about the execution pattern")
 
-        calls = self.cm.model_router.generate.call_args_list
-        self.assertGreaterEqual(len(calls), 2, "expected a transient call plus a retry")
-        first_history = calls[0].kwargs.get("history")
-        retry_history = calls[1].kwargs.get("history")
-        # The retry must send the exact slimmed payload that was sealed...
-        self.assertEqual(first_history, retry_history)
-        # ...and that slimmed payload must be smaller than the original history
-        # (proves self-heal happened and we did NOT fall back to `history`).
-        self.assertLess(len(retry_history), len(history))
+        calls = router.backend.generate.call_args_list
+        self.assertGreaterEqual(len(calls), 2, "expected a transient call plus a retry inside ModelRouter")
+        # backend.generate is called positionally: (system_prompt, user_message, tools, history)
+        first_history = calls[0].args[3]
+        retry_history = calls[1].args[3]
+        self.assertEqual(first_history, retry_history)  # retry reuses the sealed slimmed payload
+        self.assertLess(len(retry_history), len(history))  # self-heal happened
 
     @patch("time.sleep", return_value=None)
     def test_tool_output_truncation_logging_cut_content(self, mock_sleep):

@@ -53,7 +53,7 @@ class OpenAIBackend(LLMBackend):
             self._client = openai.OpenAI(api_key=api_key)
         return self._client
 
-    def generate(self, system_prompt, user_message, tools=None, history=None):
+    def generate(self, system_prompt, user_message, tools=None, history=None, gen_params=None):
         """Performs generation and captures rate-limit headers for UI feedback."""
         try:
             # Build the raw messages array (system + history + user)
@@ -70,6 +70,13 @@ class OpenAIBackend(LLMBackend):
             # Explicit request timeout so a slow/hung provider cannot freeze the
             # worker thread indefinitely (parity with Ollama/LM Studio).
             params = {"model": self.model_name, "messages": messages, "timeout": 120}
+            gp = gen_params or {}
+            if gp.get("temperature") is not None:
+                params["temperature"] = gp["temperature"]
+            if gp.get("max_output_tokens") is not None:
+                params["max_tokens"] = gp["max_output_tokens"]
+            if gp.get("top_p") is not None:
+                params["top_p"] = gp["top_p"]
             if tools:
                 # Format tools to strict OpenAI specification: {"type": "function", "function": {...}}
                 formatted_tools = []
@@ -94,7 +101,10 @@ class OpenAIBackend(LLMBackend):
                     self.quota_stats = f"{rem} requests remaining"
                     if reset: self.quota_stats += f" (resets in {reset})"
 
-            msg = resp_raw.parse().choices[0].message
+            choices = resp_raw.parse().choices
+            if not choices:
+                raise RuntimeError("OpenAI returned no choices (the response may have been content-filtered or truncated).")
+            msg = choices[0].message
             tool_calls = []
             if msg.tool_calls:
                 for tc in msg.tool_calls:

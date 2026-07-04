@@ -9,15 +9,18 @@ configuration on behalf of the investigator:
 * ``handle_correlation_create_semantic_mapping``
 * ``handle_correlation_edit_semantic_mapping``
 
-Every write is governed by three Ghassan Elsman Protocol rules:
+Every write is governed by three Ghassan Elsman Protocol (GEP) write-side rules
+These write-side checks UPHOLD GEP principles (the GEP standard is in
+`eye/docs/GEP_standard.md`); the machine codes are semantic:
 
-* **Rule 9 — Reason-Required**: ``reason`` parameter must be non-empty.
-* **Rule 10 — Evidence-Link (write-side)**: ``related_evidence`` must
+* **Reason-Required** (upholds **GEP-9 Human Authority** + GEP-2): ``reason`` must be non-empty;
+  violation code ``"reason_required"``.
+* **Evidence-Link** (upholds **GEP-2 Traceability**): ``related_evidence`` must
   contain at least one ``database:table:rowid`` reference. The handler
   attempts to resolve each ref; unresolved refs are recorded as a soft
-  warning (the artifact is still persisted) and GEP Rule 10 is logged
-  as ``"partially_satisfied"``.
-* **Rule 11 — Eye-Stamped**: every persisted artifact carries a
+  warning (the artifact is still persisted) and ``evidence_link`` is logged
+  as ``"partially_satisfied"``; violation code ``"evidence_link"``.
+* **Eye-Stamped** (upholds **GEP-7 Non-Repudiation**): every persisted artifact carries a
   populated :class:`EyeAuthorship` block.
 
 The edit handlers additionally enforce the **read-only invariant**:
@@ -47,7 +50,7 @@ from correlation_engine.config.semantic_mapping import (
 logger = logging.getLogger(__name__)
 
 
-# Regex for the GEP Rule 10 "database:table:rowid" evidence-ref shape.
+# Regex for the GEP-2 "database:table:rowid" evidence-ref shape.
 # rowid must be a positive integer; database/table names allow letters,
 # digits, underscore, and dot (for files like Log_Claw.db).
 _EVIDENCE_REF_RE = re.compile(r'^([A-Za-z0-9_.\-]+):([A-Za-z0-9_]+):(\d+)$')
@@ -77,18 +80,18 @@ class CorrelationConfigHandlers:
          "human_summary"?: str, "gep_rules": dict, "error"?: str}``.
         """
         try:
-            # ---- GEP Rule 9: Reason-Required ----
+            # ---- Reason-Required (upholds GEP-9) ----
             reason = (params.get("reason") or "").strip()
             if not reason:
-                return self._gep_violation("rule_9", "`reason` is required (GEP Rule 9 — Reason-Required).")
+                return self._gep_violation("reason_required", "`reason` is required (upholds GEP-9 Human Authority).")
 
-            # ---- Argument coercion + GEP Rule 10 evidence-link ----
+            # ---- Argument coercion + GEP-2 evidence-link ----
             related_evidence = list(params.get("related_evidence") or [])
             if not related_evidence:
                 return self._gep_violation(
-                    "rule_10",
+                    "evidence_link",
                     "`related_evidence` is required and must contain at least one "
-                    "'database:table:rowid' reference (GEP Rule 10 — Evidence-Link).",
+                    "'database:table:rowid' reference (GEP-2 — Evidence-Link).",
                 )
             resolved_status, unresolved_refs = self._resolve_evidence_refs(related_evidence)
 
@@ -164,7 +167,7 @@ class CorrelationConfigHandlers:
         try:
             reason = (params.get("reason") or "").strip()
             if not reason:
-                return self._gep_violation("rule_9", "`reason` is required for every edit (GEP Rule 9).")
+                return self._gep_violation("reason_required", "`reason` is required for every edit (GEP-9 — Reason-Required).")
 
             wing_id = (params.get("wing_id") or "").strip()
             if not wing_id:
@@ -205,7 +208,7 @@ class CorrelationConfigHandlers:
                     setattr(wing, list_field, list(params[list_field]))
                     diff_summary_parts.append(list_field)
 
-            # Evidence link for the edit itself (still GEP Rule 10).
+            # Evidence link for the edit itself (still GEP-2).
             edit_related_evidence = list(params.get("related_evidence") or [])
             resolved_status = "satisfied"
             unresolved_refs: List[str] = []
@@ -227,7 +230,7 @@ class CorrelationConfigHandlers:
                 diff_summary=", ".join(diff_summary_parts) or "(no field changes)",
                 unresolved_evidence_refs=unresolved_refs,
             )
-            wing.eye_authorship.gep_rules_applied["rule_10_last_edit"] = resolved_status
+            wing.eye_authorship.gep_rules_applied["evidence_link_last_edit"] = resolved_status
             wing.last_modified = self._now_iso()
 
             self._atomic_write_json(target, wing.to_dict())
@@ -254,13 +257,13 @@ class CorrelationConfigHandlers:
         try:
             reason = (params.get("reason") or "").strip()
             if not reason:
-                return self._gep_violation("rule_9", "`reason` is required (GEP Rule 9).")
+                return self._gep_violation("reason_required", "`reason` is required (GEP-9 — Reason-Required).")
 
             related_evidence = list(params.get("related_evidence") or [])
             if not related_evidence:
                 return self._gep_violation(
-                    "rule_10",
-                    "`related_evidence` is required (GEP Rule 10).",
+                    "evidence_link",
+                    "`related_evidence` is required (GEP-2).",
                 )
             resolved_status, unresolved_refs = self._resolve_evidence_refs(related_evidence)
 
@@ -355,7 +358,7 @@ class CorrelationConfigHandlers:
         try:
             reason = (params.get("reason") or "").strip()
             if not reason:
-                return self._gep_violation("rule_9", "`reason` is required for every edit (GEP Rule 9).")
+                return self._gep_violation("reason_required", "`reason` is required for every edit (GEP-9 — Reason-Required).")
 
             artifact_id = (params.get("artifact_id") or "").strip()
             if not artifact_id:
@@ -422,7 +425,7 @@ class CorrelationConfigHandlers:
                 diff_summary=", ".join(diff_summary_parts) or "(no field changes)",
                 unresolved_evidence_refs=unresolved_refs,
             )
-            obj.eye_authorship.gep_rules_applied["rule_10_last_edit"] = resolved_status
+            obj.eye_authorship.gep_rules_applied["evidence_link_last_edit"] = resolved_status
 
             self._atomic_write_json(target, obj.to_dict())
             self._record_audit_event(
@@ -456,7 +459,7 @@ class CorrelationConfigHandlers:
         gep_rule_10_status: str,
     ) -> EyeAuthorship:
         """Construct the EyeAuthorship block for a freshly created artifact."""
-        rule_10 = gep_rule_10_status if gep_rule_10_status in (
+        rule_16 = gep_rule_10_status if gep_rule_10_status in (
             "satisfied", "partially_satisfied"
         ) else "satisfied"
         return EyeAuthorship.for_eye(
@@ -468,9 +471,9 @@ class CorrelationConfigHandlers:
             conversation_id=self._current_conversation_id(),
             eye_version=self._current_eye_version(),
             gep_rules_applied={
-                "rule_9": "satisfied",
-                "rule_10": rule_10,
-                "rule_11": "satisfied",
+                "reason_required": "satisfied",   # upholds GEP-9 (+ GEP-2)
+                "evidence_link": rule_16,          # upholds GEP-2 Traceability
+                "eye_stamped": "satisfied",        # upholds GEP-7 Non-Repudiation
             },
         )
 
@@ -506,7 +509,13 @@ class CorrelationConfigHandlers:
                 # Cheap probe: row count for the exact rowid.
                 probe_sql = f'SELECT 1 FROM "{table}" WHERE rowid = ? LIMIT 1'
                 res = db_service.execute_query(db_name, probe_sql, params=[rowid])
-                rows = (res or {}).get("rows") or []
+                # ForensicDatabaseService.execute_query returns matched rows under
+                # "data" (a failed query returns success=False with empty data).
+                # The "rows" fallback keeps older/mock services working. Reading
+                # only "rows" (the prior bug) made EVERY ref resolve as unresolved.
+                rows = (res or {}).get("data")
+                if rows is None:
+                    rows = (res or {}).get("rows") or []
                 if not rows:
                     unresolved.append(ref)
             except Exception as e:

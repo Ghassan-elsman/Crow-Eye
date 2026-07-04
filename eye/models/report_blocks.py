@@ -43,7 +43,7 @@ class ReportBlock:
     Base class for all report blocks.
     
     Attributes:
-        block_id: GEP Rule 4 (Non-Repudiation) hash-chained identifier. Filled in
+        block_id: GEP-7 (Non-Repudiation) hash-chained identifier. Filled in
             by ReportEngine._stamp_and_append() at insertion time. Falls back to
             a UUID only if a block is constructed outside of ReportEngine.
         block_type: Type of block (text/table/image/reference)

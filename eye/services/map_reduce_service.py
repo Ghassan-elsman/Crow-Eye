@@ -43,6 +43,7 @@ class MapReduceService:
         instruction: str,
         chunk_token_budget: int = 3000,
         progress: Optional[Callable[[int, int], None]] = None,
+        prefetched_rows: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         tc = self.cm.token_counter
         model = self.cm.model_router.config.get("model_name", "LLM")
@@ -51,13 +52,30 @@ class MapReduceService:
         # (two writers would fork it).
         seal = self.cm.evidence_seal
 
-        res = self.cm.database_service.execute_query(database_name, sql_query)
-        if not res.get("success"):
-            return {"success": False, "error": f"Query failed: {res.get('error')}"}
-        rows = res.get("data") or res.get("rows") or []
+        # When the caller already has the rows (transparent auto map-reduce from
+        # the query loop), analyze EXACTLY those — no second DB hit, and we
+        # guarantee the same rows the query returned are the ones map-reduced.
+        if prefetched_rows is not None:
+            rows = prefetched_rows
+        else:
+            res = self.cm.database_service.execute_query(database_name, sql_query)
+            if not res.get("success"):
+                return {"success": False, "error": f"Query failed: {res.get('error')}"}
+            rows = res.get("data") or res.get("rows") or []
         if not rows:
             return {"success": True, "summary": "No rows matched the query — nothing to analyze.",
                     "chunks_processed": 0, "rows_analyzed": 0}
+
+        # Each map payload is the (large) system prompt PLUS the chunk, so the
+        # rows must be packed against what's actually left after the system
+        # prompt — not the raw requested budget — or a small/local model would
+        # overflow and abort. effective_budget = min(requested, usable - sysp - margin).
+        sysp = self._base_system_prompt()
+        usable = self._max_ctx() - max(512, int(self._max_ctx() * 0.1))
+        sysp_tokens = tc.count_tokens(sysp)
+        map_prompt_overhead = 300  # instruction + boilerplate around the rows
+        effective_budget = max(500, min(int(chunk_token_budget),
+                                        usable - sysp_tokens - map_prompt_overhead))
 
         # ---- Pack rows into chunks (fail hard if a single row won't fit) ----
         chunks: List[List[Dict[str, Any]]] = []
@@ -65,16 +83,18 @@ class MapReduceService:
         current_tokens = 0
         for idx, row in enumerate(rows):
             row_tokens = tc.count_tokens(json.dumps(row, default=str))
-            if row_tokens > chunk_token_budget:
+            if row_tokens > effective_budget:
                 return {
                     "success": False,
                     "error": (
                         f"Row {idx} alone is {row_tokens} tokens, larger than the per-chunk "
-                        f"budget of {chunk_token_budget}. Refusing to split a single evidence "
-                        "record across chunks. Select fewer/narrower columns or raise the budget."
+                        f"budget of {effective_budget} (after reserving {sysp_tokens} tokens for "
+                        f"the system prompt within the {self._max_ctx()}-token window). Refusing to "
+                        "split a single evidence record across chunks. Select fewer/narrower "
+                        "columns, or use a model with a larger context window."
                     ),
                 }
-            if current and current_tokens + row_tokens > chunk_token_budget:
+            if current and current_tokens + row_tokens > effective_budget:
                 chunks.append(current)
                 current, current_tokens = [], 0
             current.append({"_row_index": idx, **row})
@@ -83,7 +103,6 @@ class MapReduceService:
             chunks.append(current)
 
         n = len(chunks)
-        sysp = self._base_system_prompt()
         summaries: List[str] = []
 
         for ci, chunk in enumerate(chunks):
@@ -164,6 +183,22 @@ class MapReduceService:
             ]
             return self._reduce(intermediate, instruction, database_name, sql_query,
                                 total_rows, seal, model, tc, sysp, chunk_token_budget)
+
+        # Residual case (e.g. a single batch summary that alone exceeds the
+        # window): truncate the body with an explicit marker rather than send an
+        # over-window payload that the provider would silently cut.
+        if tc.count_tokens(payload) > usable:
+            body_budget_chars = max(1000, (usable - tc.count_tokens(sysp) - 200) * 4)
+            if len(joined) > body_budget_chars:
+                joined = joined[:body_budget_chars] + "\n... [BATCH FINDINGS TRUNCATED TO FIT THE MODEL WINDOW] ..."
+                reduce_prompt = (
+                    f"You analyzed {total_rows} forensic records from '{database_name}' in "
+                    f"{len(summaries)} batches.\nINSTRUCTION: {instruction}\n\n"
+                    "Synthesize the per-batch findings below into ONE consolidated, chronological "
+                    "forensic analysis citing specific records/timestamps. Do not invent data.\n\n"
+                    f"BATCH FINDINGS:\n{joined}"
+                )
+                payload = f"<<SYSTEM>>\n{sysp}\n<<USER>>\n{reduce_prompt}"
 
         seal.seal(
             payload, phase="mapreduce_reduce", iteration=0, query=instruction,

@@ -194,16 +194,17 @@ class LMStudioBackend(LLMBackend):
                 )
     
     def generate(
-        self, 
-        system_prompt: str, 
-        user_message: str, 
-        tools: Optional[List[Dict]] = None, 
-        history: Optional[List[Dict[str, Any]]] = None
+        self,
+        system_prompt: str,
+        user_message: str,
+        tools: Optional[List[Dict]] = None,
+        history: Optional[List[Dict[str, Any]]] = None,
+        gen_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Uses standard OpenAI-compatible chat completion payload.
         
-        Note: Per Ghassan Protocol v2.0, we perform a 'Pre-Flight Ping' 
+        Note: Per the GEP Pre-Flight Integrity guarantee (GEP-1), we perform a 'Pre-Flight Ping'
         to ensure the backend is alive before sending forensic data.
         """
         # Ensure we have a model name. If not, try to pick one from the server.
@@ -258,10 +259,18 @@ class LMStudioBackend(LLMBackend):
             
             # Build the request payload (OpenAI-compatible format)
             payload = {
-                "model": target_model, 
+                "model": target_model,
                 "messages": messages
             }
-            
+
+            gp = gen_params or {}
+            if gp.get("temperature") is not None:
+                payload["temperature"] = gp["temperature"]
+            if gp.get("max_output_tokens") is not None:
+                payload["max_tokens"] = gp["max_output_tokens"]
+            if gp.get("top_p") is not None:
+                payload["top_p"] = gp["top_p"]
+
             if tools:
                 # Format tools to strict OpenAI specification
                 formatted_tools = []

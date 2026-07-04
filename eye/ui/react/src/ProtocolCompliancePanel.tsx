@@ -21,17 +21,21 @@ import {
   getStepHistory,
   getDialogueHistory,
   getGepTurns,
+  getReasoningTurns,
   getPayloadSeals,
   getTruncationEvents,
   getPayloadCutDetails,
   getDroppedPayloadFull,
   getSealedPayloadFull,
+  onNarrativeMapUpdated,
   type GepRuleStatus,
+  type GepPrinciple,
   type ActivityAuditEntry,
   type AuditEntryType,
   type StepHistoryGroup,
   type DialogueConversation,
   type GepTurn,
+  type ReasoningTurn,
   type PayloadSeal,
   type TruncationEvent,
   type FlatCutDetail,
@@ -46,6 +50,7 @@ const STATUS_STYLE: Record<string, { bg: string; fg: string; border: string }> =
   PARTIAL: { bg: 'rgba(245,158,11,0.12)',  fg: '#f59e0b', border: 'rgba(245,158,11,0.45)' },
   FAIL:    { bg: 'rgba(244,63,94,0.14)',   fg: '#f43f5e', border: 'rgba(244,63,94,0.5)'  },
   'N-A':   { bg: 'rgba(148,163,184,0.12)', fg: '#94a3b8', border: 'rgba(148,163,184,0.4)' },
+  INFO:    { bg: 'rgba(59,130,246,0.12)',  fg: '#3b82f6', border: 'rgba(59,130,246,0.45)' },
 };
 
 // Pipeline-step status ("active" | "done" | "error") -> the same colour
@@ -60,12 +65,25 @@ const STEP_STATUS_STYLE = (status: string) => {
 // Chain-of-custody audit action -> badge colour.
 const AUDIT_ACTION_STYLE = (action: string) => {
   if (action === 'PRESERVED' || action === 'PINNED') return STATUS_STYLE.PASS;
-  if (action === 'SUMMARIZED' || action === 'TRUNCATED' || action === 'BUDGET_REDUCED') return STATUS_STYLE.PARTIAL;
-  if (action === 'REFUSED_OVERFLOW') return STATUS_STYLE.FAIL;
+  if (action === 'SUMMARIZED' || action === 'TRUNCATED' || action === 'BUDGET_REDUCED'
+      || action === 'RETRY') return STATUS_STYLE.PARTIAL;
+  if (action === 'REFUSED_OVERFLOW' || action === 'SEAL_FAILED') return STATUS_STYLE.FAIL;
+  // Automatic resilience actions (v0.11.2): question segmentation + auto map-reduce.
+  if (action === 'SEGMENTED' || action === 'AUTO_MAPREDUCE') return STATUS_STYLE.INFO;
   return STATUS_STYLE['N-A'];
 };
 
-const RULE_BLURB: Record<number, string> = {
+// Per-step GEP turn records use internal command strings as their `query`.
+// Map those to human labels for the Compliance list header; ordinary questions
+// (and refusal / overflow-recovery turns, which carry the real user query) fall
+// through unchanged. Display-only — the persisted record keeps the raw query.
+const GEP_TURN_LABEL: Record<string, string> = {
+  initialize_case_report: 'Automated Triage',
+  analyze_case_context: 'Context Analysis',
+};
+const gepTurnLabel = (q: string) => GEP_TURN_LABEL[q] || q || '(question)';
+
+const RULE_BLURB: Record<number | string, string> = {
   0: 'Initial blueprinting of case context injected into the system prompt.',
   1: 'Validates backend connectivity before each query.',
   2: 'Auto-tags raw forensic context (hashes, IPs, timestamps) into history.',
@@ -86,7 +104,7 @@ const RULE_BLURB: Record<number, string> = {
  * the rule is in its current state and what to do if it's not PASS.
  * Keys: rule id → { PASS | PARTIAL | FAIL | 'N-A' → guidance string }.
  */
-const RULE_GUIDANCE: Record<number, Partial<Record<string, string>>> = {
+const RULE_GUIDANCE: Record<number | string, Partial<Record<string, string>>> = {
   0: {
     PASS: 'Case context is loaded and injected into every prompt the EYE sends.',
     FAIL: 'No case context is loaded. Open / create a case in Crow-Eye so the EYE can ground its answers in real evidence.',
@@ -153,6 +171,7 @@ const TYPE_STYLE: Record<AuditEntryType, { label: string; color: string; bg: str
   report_edited:      { label: 'REPORT ✎',      color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.45)'  },
   report_deleted:     { label: 'REPORT −',      color: '#f43f5e', bg: 'rgba(244,63,94,0.12)',   border: 'rgba(244,63,94,0.45)'   },
   report_other:       { label: 'REPORT',        color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.30)' },
+  narrative_map:      { label: 'MAP',           color: '#a855f7', bg: 'rgba(168,85,247,0.12)',  border: 'rgba(168,85,247,0.45)'  },
 };
 
 const formatTs = (ts: string): string => {
@@ -161,6 +180,11 @@ const formatTs = (ts: string): string => {
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString();
 };
+
+// Toggle a key in a Set-based "expanded groups" state. Module-level so the
+// per-section callbacks built from it can be made referentially stable.
+const toggleInSet = (setter: React.Dispatch<React.SetStateAction<Set<string>>>) => (k: string) =>
+  setter(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
 
 /* ── Group-by-question helpers ───────────────────────────────────────────
  * Several chain-of-custody sections (seals, cuts, events, steps) emit many
@@ -189,7 +213,7 @@ function groupByQuestion<T>(
   return groups;
 }
 
-function QuestionGroups<T>(props: {
+function QuestionGroupsInner<T>(props: {
   groups: QGroup<T>[];
   openKeys: Set<string>;
   onToggle: (k: string) => void;
@@ -208,6 +232,9 @@ function QuestionGroups<T>(props: {
     () => (needle ? groups.filter(g => g.query.toLowerCase().includes(needle)) : groups),
     [groups, needle],
   );
+  // Window the group list too, so cases with very many questions don't mount
+  // hundreds of group headers at once.
+  const groupsPaged = usePaged(filtered);
   return (
     <div style={styles.timeline}>
       <input
@@ -217,7 +244,7 @@ function QuestionGroups<T>(props: {
         style={qStyles.search}
       />
       {filtered.length === 0 && <div style={styles.timelineEmpty}>{emptyText}</div>}
-      {filtered.map((g) => {
+      {groupsPaged.visible.map((g) => {
         const open = openKeys.has(g.key);
         return (
           <div key={g.key} style={qStyles.groupWrap}>
@@ -227,13 +254,78 @@ function QuestionGroups<T>(props: {
               <span style={styles.timelineTools}>{g.items.length} {unit}</span>
               <span style={styles.timelineTs}>{formatTs(g.latestTs)}</span>
             </button>
-            {open && <div style={{ padding: '2px 0 6px 10px' }}>{g.items.map((it, i) => renderItem(it, i))}</div>}
+            {open && <OpenGroupBody items={g.items} unit={unit} renderItem={renderItem} />}
           </div>
         );
       })}
+      <ShowMore paged={groupsPaged} unit="questions" />
     </div>
   );
 }
+// memo so a section only re-renders when ITS props change (its groups/search/
+// openKeys/renderItem) — interacting with one section no longer re-renders the
+// others. The cast restores the generic call signature memo() erases.
+const QuestionGroups = memo(QuestionGroupsInner) as unknown as typeof QuestionGroupsInner;
+
+// Body of an expanded question group — windows its items so opening a group
+// with thousands of seals/events/steps only mounts a page at a time.
+function OpenGroupBodyInner<T>(props: {
+  items: T[];
+  unit: string;
+  renderItem: (item: T, idx: number) => React.ReactNode;
+}): React.ReactElement {
+  const { items, unit, renderItem } = props;
+  const paged = usePaged(items);
+  return (
+    <div style={{ padding: '2px 0 6px 10px' }}>
+      {paged.visible.map((it, i) => renderItem(it, i))}
+      <ShowMore paged={paged} unit={unit} />
+    </div>
+  );
+}
+const OpenGroupBody = memo(OpenGroupBodyInner) as unknown as typeof OpenGroupBodyInner;
+
+// ── Windowed rendering: render only a page of large lists ("load what we
+//    need", like the Data Viewer's virtual table) so the panel stays snappy
+//    instead of mounting thousands of rows at once. ──────────────────────────
+const PAGE_SIZE = 25;
+
+function usePaged<T>(items: T[] | null | undefined, pageSize = PAGE_SIZE) {
+  const [shown, setShown] = useState(pageSize);
+  // Reset to the first page whenever the underlying list is replaced (a fetch).
+  useEffect(() => { setShown(pageSize); }, [items, pageSize]);
+  const list = items || [];
+  const total = list.length;
+  const visibleCount = Math.min(shown, total);
+  return {
+    visible: shown >= total ? list : list.slice(0, shown),
+    total,
+    visibleCount,
+    hasMore: total > visibleCount,
+    showMore: () => setShown((s) => s + pageSize),
+    showAll: () => setShown(total),
+  };
+}
+
+const _showMoreBtn: React.CSSProperties = {
+  background: 'rgba(99,102,241,0.15)', color: '#c7d2fe',
+  border: '1px solid rgba(99,102,241,0.4)', borderRadius: '6px',
+  padding: '4px 12px', fontSize: '12px', cursor: 'pointer',
+};
+
+const ShowMore: React.FC<{
+  paged: { total: number; visibleCount: number; hasMore: boolean; showMore: () => void; showAll: () => void };
+  unit?: string;
+}> = ({ paged, unit = 'rows' }) => {
+  if (!paged.hasMore) return null;
+  return (
+    <div style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '8px 4px', color: '#94a3b8', fontSize: '12.5px' }}>
+      <span>Showing {paged.visibleCount} of {paged.total} {unit}</span>
+      <button style={_showMoreBtn} onClick={paged.showMore}>Show more</button>
+      <button style={_showMoreBtn} onClick={paged.showAll}>Show all</button>
+    </div>
+  );
+};
 
 const qStyles: Record<string, React.CSSProperties> = {
   search: {
@@ -353,6 +445,7 @@ const ForensicDiff = memo(function ForensicDiff(props: {
 
 const ProtocolCompliancePanel: React.FC = () => {
   const [rules, setRules] = useState<GepRuleStatus[] | null>(null);
+  const [gepPrinciples, setGepPrinciples] = useState<GepPrinciple[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast>(null);
@@ -363,7 +456,7 @@ const ProtocolCompliancePanel: React.FC = () => {
   const [auditLoading, setAuditLoading] = useState<boolean>(true);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
-  const [auditFilter, setAuditFilter] = useState<'all' | 'queries' | 'evidence' | 'report'>('all');
+  const [auditFilter, setAuditFilter] = useState<'all' | 'queries' | 'evidence' | 'report' | 'map'>('all');
   const [rulesExpanded, setRulesExpanded] = useState<boolean>(false);
 
   // Per-step execution history (grouped). Shown expanded by default so the
@@ -393,6 +486,13 @@ const ProtocolCompliancePanel: React.FC = () => {
   const [gepTurnsError, setGepTurnsError] = useState<string | null>(null);
   const [gepTurnsExpanded, setGepTurnsExpanded] = useState<boolean>(true);
   const [openTurnIdx, setOpenTurnIdx] = useState<number | null>(null);
+
+  // Per-answer reasoning traces (why each sub-question + why each conclusion).
+  const [reasoningTurns, setReasoningTurns] = useState<ReasoningTurn[] | null>(null);
+  const [reasoningLoading, setReasoningLoading] = useState<boolean>(false);
+  const [reasoningError, setReasoningError] = useState<string | null>(null);
+  const [reasoningExpanded, setReasoningExpanded] = useState<boolean>(false);
+  const [openReasoningIdx, setOpenReasoningIdx] = useState<number | null>(null);
 
   // Chain-of-custody Evidence Seals (exact bytes the model saw).
   const [seals, setSeals] = useState<PayloadSeal[] | null>(null);
@@ -426,9 +526,12 @@ const ProtocolCompliancePanel: React.FC = () => {
   // Full sidecar bytes fetched on demand, keyed by content SHA-256.
   const [fullPayloads, setFullPayloads] = useState<Record<string, string>>({});
 
-  // Toggle a key in a Set-based "expanded groups" state.
-  const toggleInSet = (setter: React.Dispatch<React.SetStateAction<Set<string>>>) => (k: string) =>
-    setter(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  // Stable per-section group togglers so a memoized section isn't invalidated
+  // when another section's state changes (the setters are stable → [] is safe).
+  const toggleSealGroups  = useCallback((k: string) => toggleInSet(setSealGroupsOpen)(k), []);
+  const toggleCutGroups   = useCallback((k: string) => toggleInSet(setCutGroupsOpen)(k), []);
+  const toggleEventGroups = useCallback((k: string) => toggleInSet(setEventGroupsOpen)(k), []);
+  const toggleStepGroups  = useCallback((k: string) => toggleInSet(setStepGroupsOpen)(k), []);
 
   // Context Events carry no query; attribute each to the question whose seal
   // window contains it (latest seal at/before the event time). Memoized so it
@@ -475,13 +578,16 @@ const ProtocolCompliancePanel: React.FC = () => {
       const res = await getGepComplianceStatus();
       if (res.success && res.data) {
         setRules(res.data.rules);
+        setGepPrinciples(res.data.gep_principles || null);
       } else {
         setError(res.error || 'Unknown bridge error');
         setRules(null);
+        setGepPrinciples(null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRules(null);
+      setGepPrinciples(null);
     } finally {
       setLoading(false);
     }
@@ -505,6 +611,13 @@ const ProtocolCompliancePanel: React.FC = () => {
       setAuditLoading(false);
     }
   }, []);
+
+  // Live-refresh the activity log when the Narrative Map changes (Eye or
+  // investigator edit), so sealed map events appear without a manual refresh.
+  useEffect(() => {
+    const off = onNarrativeMapUpdated(() => { if (audit !== null) fetchAudit(); });
+    return off;
+  }, [audit, fetchAudit]);
 
   const fetchSteps = useCallback(async () => {
     setStepsLoading(true);
@@ -560,6 +673,25 @@ const ProtocolCompliancePanel: React.FC = () => {
       setGepTurns([]);
     } finally {
       setGepTurnsLoading(false);
+    }
+  }, []);
+
+  const fetchReasoning = useCallback(async () => {
+    setReasoningLoading(true);
+    setReasoningError(null);
+    try {
+      const res = await getReasoningTurns();
+      if (res.success && res.data) {
+        setReasoningTurns(res.data.turns);
+      } else {
+        setReasoningError(res.error || 'Unable to load reasoning traces');
+        setReasoningTurns([]);
+      }
+    } catch (e) {
+      setReasoningError(e instanceof Error ? e.message : String(e));
+      setReasoningTurns([]);
+    } finally {
+      setReasoningLoading(false);
     }
   }, []);
 
@@ -684,6 +816,9 @@ const ProtocolCompliancePanel: React.FC = () => {
   useEffect(() => {
     if (convExpanded && conversations === null && !convLoading) fetchConversations();
   }, [convExpanded, conversations, convLoading, fetchConversations]);
+  useEffect(() => {
+    if (reasoningExpanded && reasoningTurns === null && !reasoningLoading) fetchReasoning();
+  }, [reasoningExpanded, reasoningTurns, reasoningLoading, fetchReasoning]);
 
   const filteredAudit = useMemo(() => (audit || []).filter(e => {
     if (auditFilter === 'all') return true;
@@ -692,8 +827,16 @@ const ProtocolCompliancePanel: React.FC = () => {
     }
     if (auditFilter === 'evidence') return e.type === 'tool_result';
     if (auditFilter === 'report') return e.type.startsWith('report_');
+    if (auditFilter === 'map') return e.type === 'narrative_map';
     return true;
   }), [audit, auditFilter]);
+
+  // Windowed views of the large lists — render a page at a time (the bridge
+  // already caps each log; this keeps the DOM small and the panel responsive).
+  const gepTurnsPaged = usePaged(gepTurns);
+  const reasoningPaged = usePaged(reasoningTurns);
+  const convPaged = usePaged(conversations);
+  const auditPaged = usePaged(filteredAudit);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -725,6 +868,287 @@ const ProtocolCompliancePanel: React.FC = () => {
     showToast(`Copied ${label} offset: ${offset}`, 'info');
   }, [showToast]);
 
+  // Stable per-section item renderers. Hoisting these out of the JSX (instead of
+  // inline `renderItem={(x)=>…}`) keeps their identity stable across unrelated
+  // parent re-renders, so the memoized QuestionGroups for a section only
+  // re-renders when ITS own inputs change — not when another section's state
+  // (search/expand) changes. The heavy JSON.stringify only runs for an open row.
+  const renderSeal = useCallback((s: PayloadSeal) => {
+    const key = s.seal_hash || String(s.seq);
+    const isOpen = openSealKey === key;
+    const over = s.payload_tokens > s.max_context_tokens;
+    return (
+      <article
+        key={key}
+        style={{ ...styles.timelineItem, borderLeftColor: over ? STATUS_STYLE.FAIL.fg : STATUS_STYLE.PASS.fg }}
+      >
+        <button
+          onClick={() => setOpenSealKey(isOpen ? null : key)}
+          style={styles.timelineRow}
+          title={isOpen ? 'Collapse' : 'Show seal detail'}
+        >
+          <span style={styles.timelineTs}>{formatTs(s.timestamp)}</span>
+          <span style={styles.timelineBadge}>{s.phase}</span>
+          {s.truncated && (
+            <span style={{ ...styles.timelineBadge, color: STATUS_STYLE.PARTIAL.fg, background: STATUS_STYLE.PARTIAL.bg, border: `1px solid ${STATUS_STYLE.PARTIAL.border}` }}>
+              AUTO-COMPACTED
+            </span>
+          )}
+          <span style={styles.timelineTools}>{s.payload_tokens}/{s.max_context_tokens} tok · iter {String(s.iteration)}</span>
+          <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
+        </button>
+        {isOpen && (
+          <div style={{ padding: '6px 16px 10px', fontSize: '12px', color: '#cbd5e1' }}>
+            <div><span style={{ color: '#64748b' }}>model:</span> {s.model} &nbsp; <span style={{ color: '#64748b' }}>iteration:</span> {String(s.iteration)}</div>
+            <div style={{ wordBreak: 'break-all', marginTop: 4 }}>
+              <span style={{ color: '#64748b' }}>payload SHA-256:</span> <code>{s.payload_sha256}</code>
+            </div>
+            <div style={{ wordBreak: 'break-all' }}>
+              <span style={{ color: '#64748b' }}>seal hash:</span> <code>{s.seal_hash}</code>
+            </div>
+            {s.evidence_refs && s.evidence_refs.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <span style={{ color: '#64748b' }}>evidence provenance:</span>
+                <pre style={{ ...styles.helpNote, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8 } as any}>
+                  {JSON.stringify(s.evidence_refs, null, 2)}
+                </pre>
+              </div>
+            )}
+            {s.cut_details && s.cut_details.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <details style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '4px', background: 'rgba(0,0,0,0.2)' }}>
+                  <summary style={{ cursor: 'pointer', padding: '6px 10px', fontWeight: 'bold', color: '#f43f5e', outline: 'none' }}>
+                    Truncated Payload Details ({s.cut_details.length})
+                  </summary>
+                  <div style={{ padding: '0 10px 10px' }}>
+                    {s.cut_details.map((detail, dIdx) => (
+                      <div key={dIdx} style={{ marginTop: 8, borderTop: dIdx > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none', paddingTop: dIdx > 0 ? 8 : 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <strong>Action: <span style={{ color: detail.action === 'SUMMARIZED' ? '#10b981' : '#f43f5e' }}>{detail.action}</span></strong>
+                          <span style={{ color: '#64748b' }}>{detail.token_count} chars/tokens</span>
+                        </div>
+                        <ForensicDiff
+                          processed={detail.processed_content}
+                          dropped={detail.cut_content}
+                          processedOffsets={detail.processed_file_offsets}
+                          droppedOffsets={detail.dropped_file_offsets}
+                          action={detail.action}
+                          onCopyOffset={handleOffsetClick}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </div>
+            )}
+          </div>
+        )}
+      </article>
+    );
+  }, [openSealKey, handleOffsetClick]);
+
+  const renderCut = useCallback((cut: FlatCutDetail, idx: number) => {
+    const key = `${cut.seq}-${cut.message_id || idx}`;
+    const isOpen = openCutKey === key;
+    const cutColor = cut.action === 'SUMMARIZED' ? STATUS_STYLE.PARTIAL : STATUS_STYLE.FAIL;
+    const range = cut.cut_range;
+    const rangeLabel = range
+      ? `kept [${range.processed[0]}–${range.processed[1]}] · dropped [${range.dropped[0]}–${range.dropped[1]}] of ${range.total}`
+      : '';
+    return (
+    <article
+      key={key}
+      style={{ ...styles.timelineItem, borderLeftColor: cutColor.fg }}
+    >
+      <button
+        onClick={() => setOpenCutKey(isOpen ? null : key)}
+        style={styles.timelineRow}
+        title={isOpen ? 'Collapse' : 'Show processed/dropped detail'}
+      >
+        <span style={styles.timelineTs}>{formatTs(cut.timestamp || '')}</span>
+        <span style={{ ...styles.timelineBadge, color: cutColor.fg, background: cutColor.bg, border: `1px solid ${cutColor.border}` }}>
+          {cut.action}
+        </span>
+        <span style={styles.timelineSummary}>{cut.query || cut.phase || '(payload)'}</span>
+        <span style={styles.timelineTools}>
+          {cut.source === 'refused'
+            ? `${cut.token_count} tok refused (> ${cut.max_context_tokens ?? '?'} window)`
+            : `${cut.cut_content_len ?? (cut.cut_content || '').length} dropped chars`}
+        </span>
+        <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
+      </button>
+      {isOpen && (
+        <div style={{ padding: '6px 16px 10px', fontSize: '12px', color: '#cbd5e1' }}>
+          {cut.source === 'refused' ? (
+            <>
+              <div>
+                The Eye <strong style={{ color: '#f43f5e' }}>refused to send</strong> this payload — the
+                irreducible evidence core ({cut.token_count} tok) still exceeded the model window
+                ({cut.max_context_tokens ?? '?'} tok) after auto-compaction. Evidence was preserved,
+                never truncated.
+              </div>
+              <div style={{ wordBreak: 'break-all', marginTop: 4 }}>
+                <span style={{ color: '#64748b' }}>payload SHA-256:</span> <code>{cut.payload_sha256}</code>
+              </div>
+              {cut.cut_content && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ ...styles.diffHeader, color: '#f59e0b', background: 'rgba(245,158,11,0.05)' }}>
+                    <span>↺ ORIGINAL MESSAGE (REFUSED — NOT SENT)</span>
+                    <span>preview</span>
+                  </div>
+                  <div style={{ ...styles.diffContent, ...styles.droppedText }}>{cut.cut_content}</div>
+                </div>
+              )}
+              {cut.payload_sidecar && (
+                <div style={{ marginTop: 8 }}>
+                  {fullPayloads[cut.payload_sha256 || ''] === undefined ? (
+                    <button
+                      style={{ ...styles.btn, ...styles.btnSecondary }}
+                      onClick={() => loadSealedPayload(cut.payload_sha256)}
+                      title="Read the complete payload the Eye refused to send"
+                    >
+                      <IconDownload /> Load the full refused payload (the message itself)
+                    </button>
+                  ) : (
+                    <details open>
+                      <summary style={{ cursor: 'pointer', color: '#f43f5e' }}>
+                        Full refused payload · SHA-256 <code>{cut.payload_sha256}</code>
+                      </summary>
+                      <pre style={{ ...styles.helpNote, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8 } as any}>
+                        {fullPayloads[cut.payload_sha256 || '']}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div style={{ wordBreak: 'break-all' }}>
+                {cut.message_id && (<><span style={{ color: '#64748b' }}>message id:</span> <code>{cut.message_id}</code> &nbsp;</>)}
+                {cut.seq != null && (<><span style={{ color: '#64748b' }}>seal #:</span> <code>{String(cut.seq)}</code> &nbsp;</>)}
+                <span style={{ color: '#64748b' }}>phase:</span> {cut.phase}
+              </div>
+              {rangeLabel && (
+                <div style={{ marginTop: 4 }}>
+                  <span style={{ color: '#64748b' }}>cut range ({range?.unit}):</span> {rangeLabel}
+                </div>
+              )}
+              <div style={{ marginTop: '8px' }}>
+                <ForensicDiff
+                  processed={cut.processed_content}
+                  dropped={cut.cut_content}
+                  processedOffsets={cut.processed_file_offsets}
+                  droppedOffsets={cut.dropped_file_offsets}
+                  action={cut.action}
+                  onCopyOffset={handleOffsetClick}
+                />
+              </div>
+              {/* Full recoverable bytes — only when a sidecar exists (content exceeded the inline cap). */}
+              {cut.cut_content_sidecar && (
+                <div style={{ marginTop: 8 }}>
+                  {fullPayloads[cut.cut_content_sha256 || ''] === undefined ? (
+                    <button
+                      style={{ ...styles.btn, ...styles.btnSecondary }}
+                      onClick={() => loadFullPayload(cut.cut_content_sha256)}
+                      title="Read the complete dropped bytes from the sidecar"
+                    >
+                      <IconDownload /> Load full dropped bytes ({cut.cut_content_len} chars)
+                    </button>
+                  ) : (
+                    <details open>
+                      <summary style={{ cursor: 'pointer', color: '#f43f5e' }}>
+                        Full dropped bytes ({cut.cut_content_len} chars) · SHA-256 <code>{cut.cut_content_sha256}</code>
+                      </summary>
+                      <pre style={{ ...styles.helpNote, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8 } as any}>
+                        {fullPayloads[cut.cut_content_sha256 || '']}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </article>
+    );
+  }, [openCutKey, fullPayloads, loadSealedPayload, loadFullPayload, handleOffsetClick]);
+
+  const renderEvent = useCallback((ev: TruncationEvent, idx: number) => {
+    const s = AUDIT_ACTION_STYLE(ev.action);
+    const key = `${ev.timestamp}-${ev.id || idx}`;
+    const isOpen = openEventKey === key;
+    return (
+      <article
+        key={key}
+        style={{ ...styles.timelineItem, borderLeftColor: s.fg }}
+      >
+        <button
+          onClick={() => setOpenEventKey(isOpen ? null : key)}
+          style={styles.timelineRow}
+          title={isOpen ? 'Collapse' : 'Show event detail'}
+        >
+          <span style={styles.timelineTs}>{formatTs(ev.timestamp)}</span>
+          <span style={{ ...styles.timelineBadge, color: s.fg, background: s.bg, border: `1px solid ${s.border}` }}>
+            {ev.action}
+          </span>
+          <span style={styles.timelineSummary}>{ev.reason}</span>
+          <span style={styles.timelineTools}>{ev.tokens} tok</span>
+          <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
+        </button>
+        {isOpen && (
+          <div style={{ padding: '6px 16px 10px', fontSize: '12px', color: '#cbd5e1' }}>
+            <div style={{ wordBreak: 'break-all' }}>
+              <span style={{ color: '#64748b' }}>message id:</span> <code>{ev.id}</code> &nbsp;
+              <span style={{ color: '#64748b' }}>content hash:</span> <code>{ev.hash}</code>
+            </div>
+            {ev.metadata && Object.keys(ev.metadata).length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                <ForensicDiff
+                  processed={ev.metadata.processed_content}
+                  dropped={ev.metadata.cut_content}
+                  processedOffsets={ev.metadata.processed_file_offsets}
+                  droppedOffsets={ev.metadata.dropped_file_offsets}
+                  action={ev.action}
+                  onCopyOffset={handleOffsetClick}
+                />
+                <details style={{ marginTop: '8px' }}>
+                  <summary style={{ cursor: 'pointer', color: '#64748b' }}>Raw Metadata JSON</summary>
+                  <pre style={{ ...styles.helpNote, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8 } as any}>
+                    {JSON.stringify(ev.metadata, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            )}
+          </div>
+        )}
+      </article>
+    );
+  }, [openEventKey, handleOffsetClick]);
+
+  const renderStepRun = useCallback((run: any, ri: number) => {
+    const rs = STEP_STATUS_STYLE(run.status);
+    return (
+      <div
+        key={`${run.stepType}-${run.timestamp}-${ri}`}
+        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 16px 4px 12px', fontSize: '12px' }}
+      >
+        <span style={{ ...styles.timelineBadge, color: rs.fg, background: rs.bg, border: `1px solid ${rs.border}` }}>
+          {(run.stepType || 'step').toUpperCase()}
+        </span>
+        <span style={{ ...styles.timelineTs, minWidth: '150px' }}>{formatTs(run.timestamp)}</span>
+        <span style={styles.timelineSummary}>{run.stepLabel || '(step)'}</span>
+        <span style={{ ...styles.timelineBadge, color: rs.fg, background: rs.bg, border: `1px solid ${rs.border}` }}>
+          {rs.label}
+        </span>
+        {run.iteration ? (<span style={{ color: '#94a3b8' }}>Loop {run.iteration}</span>) : null}
+        {run.tool ? (<span style={styles.timelineTools}>{run.tool}</span>) : null}
+        {run.detail ? (<span style={{ color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.detail}</span>) : null}
+      </div>
+    );
+  }, []);
+
   return (
     <div style={styles.page}>
       <header style={styles.header}>
@@ -732,7 +1156,8 @@ const ProtocolCompliancePanel: React.FC = () => {
           <div style={styles.eyebrow}>Ghassan Elsman Protocol</div>
           <h1 style={styles.title}>GEP Compliance</h1>
           <p style={styles.subtitle}>
-            Live status of the 8 forensic-integrity rules enforced by the AI agent.
+            Live status of the forensic-integrity rules and Eye processes the AI agent enforces,
+            each mapped to the GEP principle it upholds — plus a status for all 10 GEP principles.
             Diagnostics are read from <code style={styles.code}>EYE_Logs/</code> and
             the live <code style={styles.code}>ContextManager</code> state.
           </p>
@@ -782,8 +1207,9 @@ const ProtocolCompliancePanel: React.FC = () => {
           <div style={styles.helpNote}>
             <span style={styles.helpNoteIcon}>ⓘ</span>
             <div>
-              <strong>How to read this dashboard.</strong> Each row is one of the 8 Ghassan Elsman Protocol rules
-              the EYE enforces while answering. <span style={styles.tagPass}>PASS</span> means the rule is
+              <strong>How to read this dashboard.</strong> Each row is one forensic-integrity rule or Eye process
+              the EYE enforces while answering, tagged with the GEP principle(s) it upholds.
+              <span style={styles.tagPass}>PASS</span> means the rule is
               actively in force right now. <span style={styles.tagPartial}>PARTIAL</span> means it is wired in
               but only partially observed. <span style={styles.tagFail}>FAIL</span> means a precondition is
               missing — see the note under the row for the fix. <span style={styles.tagNa}>N-A</span> means the
@@ -806,6 +1232,17 @@ const ProtocolCompliancePanel: React.FC = () => {
                   <div style={styles.colName}>
                     <div style={styles.ruleName}>{r.name}</div>
                     <div style={styles.ruleBlurb}>{RULE_BLURB[r.id] || ''}</div>
+                    {r.gep && r.gep.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>
+                        {r.gep.map((g) => (
+                          <span key={g} style={{
+                            fontSize: '10px', fontWeight: 700, color: '#c7d2fe',
+                            background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.4)',
+                            borderRadius: '999px', padding: '1px 7px',
+                          }}>{g}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div style={styles.colStatus}>
                     <span
@@ -849,6 +1286,59 @@ const ProtocolCompliancePanel: React.FC = () => {
         </>
       )}
 
+      {/* ── GEP Protocol — 10 Principles ─────────────────────────────── */}
+      {gepPrinciples && gepPrinciples.length > 0 && (
+        <section style={styles.auditWindow}>
+          <header style={styles.auditHeader}>
+            <div>
+              <div style={styles.eyebrow}>The Ghassan Elsman Protocol</div>
+              <h2 style={styles.auditTitle}>GEP Protocol — 10 Principles</h2>
+              <p style={styles.auditSubtitle}>
+                Live status of every GEP principle and the Eye mechanisms that uphold it.
+              </p>
+            </div>
+          </header>
+          <div style={styles.table}>
+            <div style={styles.tableHead}>
+              <div style={styles.colId}>#</div>
+              <div style={styles.colName}>Principle</div>
+              <div style={styles.colStatus}>Status</div>
+              <div style={styles.colDetail}>Upheld by</div>
+            </div>
+            {gepPrinciples.map((p) => {
+              const s = STATUS_STYLE[p.status] || STATUS_STYLE['N-A'];
+              return (
+                <div key={p.id} style={styles.row}>
+                  <div style={styles.colId}>{p.id}</div>
+                  <div style={styles.colName}>
+                    <div style={styles.ruleName}>
+                      {p.name}
+                      {p.basis && (
+                        <span style={{
+                          marginLeft: '8px', fontSize: '10px', fontWeight: 700,
+                          textTransform: 'uppercase', letterSpacing: '0.04em', color: '#a5b4fc',
+                          background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.35)',
+                          borderRadius: '4px', padding: '1px 6px',
+                        }}>{p.basis}</span>
+                      )}
+                    </div>
+                    <div style={styles.ruleBlurb}>{p.detail}</div>
+                  </div>
+                  <div style={styles.colStatus}>
+                    <span style={{ background: s.bg, color: s.fg, border: `1px solid ${s.border}`, ...styles.badge }}>
+                      {p.status}
+                    </span>
+                  </div>
+                  <div style={{ ...styles.colDetail, color: '#cbd5e1' }}>
+                    {p.upheld_by && p.upheld_by.length > 0 ? p.upheld_by.join(', ') : '—'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* ── Per-Answer GEP Compliance ─────────────────────────────── */}
       <section style={styles.auditWindow}>
         <header style={styles.auditHeader}>
@@ -862,9 +1352,12 @@ const ProtocolCompliancePanel: React.FC = () => {
               {gepTurnsExpanded ? '▼' : '▶'} Did Each Answer Follow the Protocol?
             </h2>
             <p style={styles.auditSubtitle}>
-              For every question, whether that specific answer obeyed the behavioral GEP rules:
-              a direct answer (R13), dual output to the report when evidence was found (R17),
-              explicit timestamps (R12), and proactive investigation (R2).
+              For every question, whether that specific answer upheld <strong>all 10 GEP
+              principles</strong> — evidence primacy (GEP-1), traceability (GEP-2), specificity &amp;
+              chronology (GEP-3), cross-corroboration (GEP-4), premise verification (GEP-5),
+              completeness &amp; coverage (GEP-6), integrity/dual-output (GEP-7), transparency
+              (GEP-8), human authority (GEP-9), and defensibility/direct answer (GEP-10) — marked
+              N-A where a principle doesn't apply to that turn.
             </p>
           </div>
           <button
@@ -892,7 +1385,7 @@ const ProtocolCompliancePanel: React.FC = () => {
                 No answered turns recorded yet. Ask the EYE a question to populate this.
               </div>
             )}
-            {(gepTurns || []).map((turn, idx) => {
+            {gepTurnsPaged.visible.map((turn, idx) => {
               const isOpen = openTurnIdx === idx;
               const anyFail = turn.checks.some(c => c.status === 'FAIL');
               const accent = anyFail ? STATUS_STYLE.FAIL.fg : STATUS_STYLE.PASS.fg;
@@ -907,7 +1400,7 @@ const ProtocolCompliancePanel: React.FC = () => {
                     title={isOpen ? 'Collapse' : 'Show per-rule result'}
                   >
                     <span style={styles.timelineTs}>{formatTs(turn.timestamp)}</span>
-                    <span style={styles.timelineSummary}>{turn.query || '(question)'}</span>
+                    <span style={styles.timelineSummary}>{gepTurnLabel(turn.query)}</span>
                     <span style={styles.timelineTools}>{turn.summary}</span>
                     <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
                   </button>
@@ -935,6 +1428,178 @@ const ProtocolCompliancePanel: React.FC = () => {
                 </article>
               );
             })}
+            <ShowMore paged={gepTurnsPaged} unit="answers" />
+          </div>
+        )}
+      </section>
+
+      {/* ── Reasoning: how each question was decomposed & concluded ──── */}
+      <section style={styles.auditWindow}>
+        <header style={styles.auditHeader}>
+          <div>
+            <div style={styles.eyebrow}>Transparency · Reasoning Trace</div>
+            <h2
+              style={{ ...styles.auditTitle, cursor: 'pointer' }}
+              onClick={() => setReasoningExpanded(!reasoningExpanded)}
+              title={reasoningExpanded ? 'Collapse' : 'Expand'}
+            >
+              {reasoningExpanded ? '▼' : '▶'} How Each Question Was Decomposed &amp; Concluded
+            </h2>
+            <p style={styles.auditSubtitle}>
+              For every decomposed question: WHY each sub-question was created from the main question
+              (GEP-8), and WHY each conclusion follows from which evidence (GEP-2), with the
+              <code> database:table:rowid</code> refs it rests on.
+            </p>
+          </div>
+          <button
+            style={{ ...styles.btn, ...styles.btnSecondary }}
+            onClick={() => fetchReasoning()}
+            title="Refresh reasoning traces"
+          >
+            <IconRefresh /> Refresh
+          </button>
+        </header>
+
+        {reasoningError && (
+          <div style={styles.errorBox}>
+            <strong>Reasoning trace error:</strong> {reasoningError}
+          </div>
+        )}
+
+        {reasoningExpanded && (
+          <div style={styles.timeline}>
+            {reasoningLoading && !reasoningTurns && (
+              <div style={styles.timelineEmpty}>Loading reasoning traces…</div>
+            )}
+            {!reasoningLoading && (reasoningTurns || []).length === 0 && (
+              <div style={styles.timelineEmpty}>
+                No reasoning traces yet. Ask the EYE a multi-part question to populate this.
+              </div>
+            )}
+            {reasoningPaged.visible.map((turn, idx) => {
+              const isOpen = openReasoningIdx === idx;
+              const subCount = (turn.sub_questions || []).length;
+              const premCount = (turn.premises || []).length;
+              return (
+                <article
+                  key={`${turn.timestamp}-${idx}`}
+                  style={{ ...styles.timelineItem, borderLeftColor: '#a371f7' }}
+                >
+                  <button
+                    onClick={() => setOpenReasoningIdx(isOpen ? null : idx)}
+                    style={styles.timelineRow}
+                    title={isOpen ? 'Collapse' : 'Show reasoning'}
+                  >
+                    <span style={styles.timelineTs}>{formatTs(turn.timestamp)}</span>
+                    <span style={styles.timelineSummary}>{gepTurnLabel(turn.query)}</span>
+                    <span style={styles.timelineTools}>
+                      {subCount} sub-question{subCount === 1 ? '' : 's'}
+                      {premCount ? ` · ${premCount} premise${premCount === 1 ? '' : 's'}` : ''}
+                    </span>
+                    <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
+                  </button>
+                  {isOpen && (
+                    <div style={{ padding: '6px 16px 12px' }}>
+                      {turn.strategy && (
+                        <p style={{ color: '#c9d1d9', fontSize: '12.5px', margin: '4px 0 12px' }}>
+                          <strong style={{ color: '#a371f7' }}>Strategy:</strong> {turn.strategy}
+                        </p>
+                      )}
+
+                      {(turn.sub_questions || []).map((sq) => (
+                        <div
+                          key={sq.id}
+                          style={{
+                            border: '1px solid #21262d', borderRadius: '8px',
+                            padding: '10px 12px', margin: '0 0 10px',
+                            background: 'rgba(163,113,247,0.05)',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                            <span style={{ ...styles.badge, background: 'rgba(163,113,247,0.15)', color: '#a371f7', border: '1px solid #a371f7', minWidth: '40px', textAlign: 'center' }}>
+                              {sq.id}
+                            </span>
+                            <span style={{ color: '#e6edf3', fontSize: '13px', fontWeight: 600 }}>{sq.q}</span>
+                            <span style={{ marginLeft: 'auto', ...styles.badge, background: sq.status === 'answered' ? 'rgba(63,185,80,0.12)' : 'rgba(210,153,34,0.12)', color: sq.status === 'answered' ? '#3fb950' : '#d29922', border: `1px solid ${sq.status === 'answered' ? '#3fb950' : '#d29922'}` }}>
+                              {sq.status}
+                            </span>
+                          </div>
+                          {sq.why_created && (
+                            <p style={{ margin: '4px 0', fontSize: '12.5px', color: '#94a3b8' }}>
+                              <strong style={{ color: '#c9d1d9' }}>Why this sub-question:</strong> {sq.why_created}
+                            </p>
+                          )}
+                          {sq.conclusion && (
+                            <p style={{ margin: '4px 0', fontSize: '12.5px', color: '#e6edf3' }}>
+                              <strong style={{ color: '#c9d1d9' }}>Conclusion:</strong> {sq.conclusion}
+                            </p>
+                          )}
+                          {sq.why_concluded && (
+                            <p style={{ margin: '4px 0', fontSize: '12.5px', color: '#94a3b8' }}>
+                              <strong style={{ color: '#c9d1d9' }}>Why concluded:</strong> {sq.why_concluded}
+                            </p>
+                          )}
+                          {(sq.evidence || []).length > 0 && (
+                            <div style={{ marginTop: '6px' }}>
+                              <span style={{ fontSize: '11.5px', color: '#8b949e' }}>Evidence:</span>
+                              {(sq.evidence || []).map((ev, i) => (
+                                <div key={i} style={{ display: 'flex', gap: '8px', marginTop: '3px', fontSize: '12px' }}>
+                                  <code style={{ color: '#58a6ff', background: '#0d1117', padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>{ev.ref || '(unref)'}</code>
+                                  {ev.note && <span style={{ color: '#94a3b8' }}>{ev.note}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+
+                      {(turn.premises || []).map((pr, i) => {
+                        const vcolor = pr.verdict === 'CONFIRMED' ? '#3fb950'
+                          : pr.verdict === 'REFUTED' ? '#f85149' : '#d29922';
+                        return (
+                          <div
+                            key={`p${i}`}
+                            style={{ border: '1px solid #21262d', borderRadius: '8px', padding: '10px 12px', margin: '0 0 10px', background: 'rgba(248,81,73,0.04)' }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                              <span style={{ ...styles.badge, background: 'transparent', color: vcolor, border: `1px solid ${vcolor}`, minWidth: '96px', textAlign: 'center' }}>
+                                {pr.verdict}
+                              </span>
+                              <span style={{ color: '#e6edf3', fontSize: '13px' }}>Premise: {pr.claim}</span>
+                            </div>
+                            {pr.why && (
+                              <p style={{ margin: '4px 0', fontSize: '12.5px', color: '#94a3b8' }}>{pr.why}</p>
+                            )}
+                            {(pr.evidence || []).map((ev, j) => (
+                              <div key={j} style={{ display: 'flex', gap: '8px', marginTop: '3px', fontSize: '12px' }}>
+                                <code style={{ color: '#58a6ff', background: '#0d1117', padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>{ev.ref || '(unref)'}</code>
+                                {ev.note && <span style={{ color: '#94a3b8' }}>{ev.note}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+
+                      {turn.consolidation && (
+                        <p style={{ margin: '10px 0 6px', fontSize: '12.5px', color: '#e6edf3' }}>
+                          <strong style={{ color: '#a371f7' }}>Consolidation:</strong> {turn.consolidation}
+                        </p>
+                      )}
+
+                      {(turn.knowledge_consulted || []).length > 0 && (
+                        <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                          <span style={{ fontSize: '11.5px', color: '#8b949e' }}>Knowledge consulted:</span>
+                          {(turn.knowledge_consulted || []).map((k, i) => (
+                            <span key={i} style={{ ...styles.badge, background: '#161b22', color: '#8b949e', border: '1px solid #21262d' }}>{k}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+            <ShowMore paged={reasoningPaged} unit="answers" />
           </div>
         )}
       </section>
@@ -989,85 +1654,13 @@ const ProtocolCompliancePanel: React.FC = () => {
               <QuestionGroups
                 groups={sealGroups}
                 openKeys={sealGroupsOpen}
-                onToggle={toggleInSet(setSealGroupsOpen)}
+                onToggle={toggleSealGroups}
                 search={sealSearch}
                 setSearch={setSealSearch}
                 placeholder="Search seals by question…"
                 unit="seals"
                 emptyText="No payloads sealed yet. Ask the EYE a question to generate sealed records."
-                renderItem={(s) => {
-                  const key = s.seal_hash || String(s.seq);
-                  const isOpen = openSealKey === key;
-                  const over = s.payload_tokens > s.max_context_tokens;
-                  return (
-                  <article
-                    key={key}
-                    style={{ ...styles.timelineItem, borderLeftColor: over ? STATUS_STYLE.FAIL.fg : STATUS_STYLE.PASS.fg }}
-                  >
-                    <button
-                      onClick={() => setOpenSealKey(isOpen ? null : key)}
-                      style={styles.timelineRow}
-                      title={isOpen ? 'Collapse' : 'Show seal detail'}
-                    >
-                      <span style={styles.timelineTs}>{formatTs(s.timestamp)}</span>
-                      <span style={styles.timelineBadge}>{s.phase}</span>
-                      {s.truncated && (
-                        <span style={{ ...styles.timelineBadge, color: STATUS_STYLE.PARTIAL.fg, background: STATUS_STYLE.PARTIAL.bg, border: `1px solid ${STATUS_STYLE.PARTIAL.border}` }}>
-                          AUTO-COMPACTED
-                        </span>
-                      )}
-                      <span style={styles.timelineTools}>{s.payload_tokens}/{s.max_context_tokens} tok · iter {String(s.iteration)}</span>
-                      <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
-                    </button>
-                    {isOpen && (
-                      <div style={{ padding: '6px 16px 10px', fontSize: '12px', color: '#cbd5e1' }}>
-                        <div><span style={{ color: '#64748b' }}>model:</span> {s.model} &nbsp; <span style={{ color: '#64748b' }}>iteration:</span> {String(s.iteration)}</div>
-                        <div style={{ wordBreak: 'break-all', marginTop: 4 }}>
-                          <span style={{ color: '#64748b' }}>payload SHA-256:</span> <code>{s.payload_sha256}</code>
-                        </div>
-                        <div style={{ wordBreak: 'break-all' }}>
-                          <span style={{ color: '#64748b' }}>seal hash:</span> <code>{s.seal_hash}</code>
-                        </div>
-                        {s.evidence_refs && s.evidence_refs.length > 0 && (
-                          <div style={{ marginTop: 6 }}>
-                            <span style={{ color: '#64748b' }}>evidence provenance:</span>
-                            <pre style={{ ...styles.helpNote, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8 } as any}>
-                              {JSON.stringify(s.evidence_refs, null, 2)}
-                            </pre>
-                          </div>
-                        )}
-                        {s.cut_details && s.cut_details.length > 0 && (
-                          <div style={{ marginTop: 8 }}>
-                            <details style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '4px', background: 'rgba(0,0,0,0.2)' }}>
-                              <summary style={{ cursor: 'pointer', padding: '6px 10px', fontWeight: 'bold', color: '#f43f5e', outline: 'none' }}>
-                                Truncated Payload Details ({s.cut_details.length})
-                              </summary>
-                              <div style={{ padding: '0 10px 10px' }}>
-                                {s.cut_details.map((detail, dIdx) => (
-                                  <div key={dIdx} style={{ marginTop: 8, borderTop: dIdx > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none', paddingTop: dIdx > 0 ? 8 : 0 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                                      <strong>Action: <span style={{ color: detail.action === 'SUMMARIZED' ? '#10b981' : '#f43f5e' }}>{detail.action}</span></strong>
-                                      <span style={{ color: '#64748b' }}>{detail.token_count} chars/tokens</span>
-                                    </div>
-                                    <ForensicDiff
-                                      processed={detail.processed_content}
-                                      dropped={detail.cut_content}
-                                      processedOffsets={detail.processed_file_offsets}
-                                      droppedOffsets={detail.dropped_file_offsets}
-                                      action={detail.action}
-                                      onCopyOffset={handleOffsetClick}
-                                    />
-                                  </div>
-                                ))}
-                              </div>
-                            </details>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </article>
-                  );
-                }}
+                renderItem={renderSeal}
               />
             )}
           </>
@@ -1117,139 +1710,13 @@ const ProtocolCompliancePanel: React.FC = () => {
             <QuestionGroups
               groups={cutGroups}
               openKeys={cutGroupsOpen}
-              onToggle={toggleInSet(setCutGroupsOpen)}
+              onToggle={toggleCutGroups}
               search={cutSearch}
               setSearch={setCutSearch}
               placeholder="Search payload cuts by question…"
               unit="cuts"
               emptyText="No drops yet — every payload fit the context window intact (no budget trims, self-heal cuts, or refusals)."
-              renderItem={(cut, idx) => {
-                const key = `${cut.seq}-${cut.message_id || idx}`;
-                const isOpen = openCutKey === key;
-                const cutColor = cut.action === 'SUMMARIZED' ? STATUS_STYLE.PARTIAL : STATUS_STYLE.FAIL;
-                const range = cut.cut_range;
-                const rangeLabel = range
-                  ? `kept [${range.processed[0]}–${range.processed[1]}] · dropped [${range.dropped[0]}–${range.dropped[1]}] of ${range.total}`
-                  : '';
-                return (
-                <article
-                  key={key}
-                  style={{ ...styles.timelineItem, borderLeftColor: cutColor.fg }}
-                >
-                  <button
-                    onClick={() => setOpenCutKey(isOpen ? null : key)}
-                    style={styles.timelineRow}
-                    title={isOpen ? 'Collapse' : 'Show processed/dropped detail'}
-                  >
-                    <span style={styles.timelineTs}>{formatTs(cut.timestamp || '')}</span>
-                    <span style={{ ...styles.timelineBadge, color: cutColor.fg, background: cutColor.bg, border: `1px solid ${cutColor.border}` }}>
-                      {cut.action}
-                    </span>
-                    <span style={styles.timelineSummary}>{cut.query || cut.phase || '(payload)'}</span>
-                    <span style={styles.timelineTools}>
-                      {cut.source === 'refused'
-                        ? `${cut.token_count} tok refused (> ${cut.max_context_tokens ?? '?'} window)`
-                        : `${cut.cut_content_len ?? (cut.cut_content || '').length} dropped chars`}
-                    </span>
-                    <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
-                  </button>
-                  {isOpen && (
-                    <div style={{ padding: '6px 16px 10px', fontSize: '12px', color: '#cbd5e1' }}>
-                      {cut.source === 'refused' ? (
-                        <>
-                          <div>
-                            The Eye <strong style={{ color: '#f43f5e' }}>refused to send</strong> this payload — the
-                            irreducible evidence core ({cut.token_count} tok) still exceeded the model window
-                            ({cut.max_context_tokens ?? '?'} tok) after auto-compaction. Evidence was preserved,
-                            never truncated.
-                          </div>
-                          <div style={{ wordBreak: 'break-all', marginTop: 4 }}>
-                            <span style={{ color: '#64748b' }}>payload SHA-256:</span> <code>{cut.payload_sha256}</code>
-                          </div>
-                          {cut.cut_content && (
-                            <div style={{ marginTop: 8 }}>
-                              <div style={{ ...styles.diffHeader, color: '#f59e0b', background: 'rgba(245,158,11,0.05)' }}>
-                                <span>↺ ORIGINAL MESSAGE (REFUSED — NOT SENT)</span>
-                                <span>preview</span>
-                              </div>
-                              <div style={{ ...styles.diffContent, ...styles.droppedText }}>{cut.cut_content}</div>
-                            </div>
-                          )}
-                          {cut.payload_sidecar && (
-                            <div style={{ marginTop: 8 }}>
-                              {fullPayloads[cut.payload_sha256 || ''] === undefined ? (
-                                <button
-                                  style={{ ...styles.btn, ...styles.btnSecondary }}
-                                  onClick={() => loadSealedPayload(cut.payload_sha256)}
-                                  title="Read the complete payload the Eye refused to send"
-                                >
-                                  <IconDownload /> Load the full refused payload (the message itself)
-                                </button>
-                              ) : (
-                                <details open>
-                                  <summary style={{ cursor: 'pointer', color: '#f43f5e' }}>
-                                    Full refused payload · SHA-256 <code>{cut.payload_sha256}</code>
-                                  </summary>
-                                  <pre style={{ ...styles.helpNote, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8 } as any}>
-                                    {fullPayloads[cut.payload_sha256 || '']}
-                                  </pre>
-                                </details>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <div style={{ wordBreak: 'break-all' }}>
-                            {cut.message_id && (<><span style={{ color: '#64748b' }}>message id:</span> <code>{cut.message_id}</code> &nbsp;</>)}
-                            {cut.seq != null && (<><span style={{ color: '#64748b' }}>seal #:</span> <code>{String(cut.seq)}</code> &nbsp;</>)}
-                            <span style={{ color: '#64748b' }}>phase:</span> {cut.phase}
-                          </div>
-                          {rangeLabel && (
-                            <div style={{ marginTop: 4 }}>
-                              <span style={{ color: '#64748b' }}>cut range ({range?.unit}):</span> {rangeLabel}
-                            </div>
-                          )}
-                          <div style={{ marginTop: '8px' }}>
-                            <ForensicDiff
-                              processed={cut.processed_content}
-                              dropped={cut.cut_content}
-                              processedOffsets={cut.processed_file_offsets}
-                              droppedOffsets={cut.dropped_file_offsets}
-                              action={cut.action}
-                              onCopyOffset={handleOffsetClick}
-                            />
-                          </div>
-                          {/* Full recoverable bytes — only when a sidecar exists (content exceeded the inline cap). */}
-                          {cut.cut_content_sidecar && (
-                            <div style={{ marginTop: 8 }}>
-                              {fullPayloads[cut.cut_content_sha256 || ''] === undefined ? (
-                                <button
-                                  style={{ ...styles.btn, ...styles.btnSecondary }}
-                                  onClick={() => loadFullPayload(cut.cut_content_sha256)}
-                                  title="Read the complete dropped bytes from the sidecar"
-                                >
-                                  <IconDownload /> Load full dropped bytes ({cut.cut_content_len} chars)
-                                </button>
-                              ) : (
-                                <details open>
-                                  <summary style={{ cursor: 'pointer', color: '#f43f5e' }}>
-                                    Full dropped bytes ({cut.cut_content_len} chars) · SHA-256 <code>{cut.cut_content_sha256}</code>
-                                  </summary>
-                                  <pre style={{ ...styles.helpNote, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8 } as any}>
-                                    {fullPayloads[cut.cut_content_sha256 || '']}
-                                  </pre>
-                                </details>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </article>
-                );
-              }}
+              renderItem={renderCut}
             />
           )
         )}
@@ -1303,63 +1770,13 @@ const ProtocolCompliancePanel: React.FC = () => {
               <QuestionGroups
                 groups={eventGroups}
                 openKeys={eventGroupsOpen}
-                onToggle={toggleInSet(setEventGroupsOpen)}
+                onToggle={toggleEventGroups}
                 search={eventSearch}
                 setSearch={setEventSearch}
                 placeholder="Search context events by question…"
                 unit="events"
                 emptyText="No context-integrity events yet (no preservation, compaction, or refusal has occurred)."
-                renderItem={(ev, idx) => {
-                const s = AUDIT_ACTION_STYLE(ev.action);
-                const key = `${ev.timestamp}-${ev.id || idx}`;
-                const isOpen = openEventKey === key;
-                return (
-                  <article
-                    key={key}
-                    style={{ ...styles.timelineItem, borderLeftColor: s.fg }}
-                  >
-                    <button
-                      onClick={() => setOpenEventKey(isOpen ? null : key)}
-                      style={styles.timelineRow}
-                      title={isOpen ? 'Collapse' : 'Show event detail'}
-                    >
-                      <span style={styles.timelineTs}>{formatTs(ev.timestamp)}</span>
-                      <span style={{ ...styles.timelineBadge, color: s.fg, background: s.bg, border: `1px solid ${s.border}` }}>
-                        {ev.action}
-                      </span>
-                      <span style={styles.timelineSummary}>{ev.reason}</span>
-                      <span style={styles.timelineTools}>{ev.tokens} tok</span>
-                      <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
-                    </button>
-                    {isOpen && (
-                      <div style={{ padding: '6px 16px 10px', fontSize: '12px', color: '#cbd5e1' }}>
-                        <div style={{ wordBreak: 'break-all' }}>
-                          <span style={{ color: '#64748b' }}>message id:</span> <code>{ev.id}</code> &nbsp;
-                          <span style={{ color: '#64748b' }}>content hash:</span> <code>{ev.hash}</code>
-                        </div>
-                        {ev.metadata && Object.keys(ev.metadata).length > 0 && (
-                          <div style={{ marginTop: '8px' }}>
-                            <ForensicDiff
-                              processed={ev.metadata.processed_content}
-                              dropped={ev.metadata.cut_content}
-                              processedOffsets={ev.metadata.processed_file_offsets}
-                              droppedOffsets={ev.metadata.dropped_file_offsets}
-                              action={ev.action}
-                              onCopyOffset={handleOffsetClick}
-                            />
-                            <details style={{ marginTop: '8px' }}>
-                              <summary style={{ cursor: 'pointer', color: '#64748b' }}>Raw Metadata JSON</summary>
-                              <pre style={{ ...styles.helpNote, whiteSpace: 'pre-wrap', margin: '4px 0 0', padding: 8 } as any}>
-                                {JSON.stringify(ev.metadata, null, 2)}
-                              </pre>
-                            </details>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </article>
-                );
-                }}
+                renderItem={renderEvent}
               />
             )}
           </>
@@ -1418,33 +1835,13 @@ const ProtocolCompliancePanel: React.FC = () => {
             <QuestionGroups
               groups={stepQuestionGroups}
               openKeys={stepGroupsOpen}
-              onToggle={toggleInSet(setStepGroupsOpen)}
+              onToggle={toggleStepGroups}
               search={stepSearch}
               setSearch={setStepSearch}
               placeholder="Search steps by question…"
               unit="steps"
               emptyText="No steps recorded yet. Run an investigation query to populate this timeline."
-              renderItem={(run, ri) => {
-                const rs = STEP_STATUS_STYLE(run.status);
-                return (
-                  <div
-                    key={`${run.stepType}-${run.timestamp}-${ri}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 16px 4px 12px', fontSize: '12px' }}
-                  >
-                    <span style={{ ...styles.timelineBadge, color: rs.fg, background: rs.bg, border: `1px solid ${rs.border}` }}>
-                      {(run.stepType || 'step').toUpperCase()}
-                    </span>
-                    <span style={{ ...styles.timelineTs, minWidth: '150px' }}>{formatTs(run.timestamp)}</span>
-                    <span style={styles.timelineSummary}>{run.stepLabel || '(step)'}</span>
-                    <span style={{ ...styles.timelineBadge, color: rs.fg, background: rs.bg, border: `1px solid ${rs.border}` }}>
-                      {rs.label}
-                    </span>
-                    {run.iteration ? (<span style={{ color: '#94a3b8' }}>Loop {run.iteration}</span>) : null}
-                    {run.tool ? (<span style={styles.timelineTools}>{run.tool}</span>) : null}
-                    {run.detail ? (<span style={{ color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.detail}</span>) : null}
-                  </div>
-                );
-              }}
+              renderItem={renderStepRun}
             />
           ) : (
           <div style={styles.timeline}>
@@ -1579,7 +1976,7 @@ const ProtocolCompliancePanel: React.FC = () => {
                 No conversation recorded yet. Ask the EYE a question to populate this transcript.
               </div>
             )}
-            {(conversations || []).map((conv, idx) => {
+            {convPaged.visible.map((conv, idx) => {
               const isOpen = openConvIdx === idx;
               return (
                 <article
@@ -1608,6 +2005,7 @@ const ProtocolCompliancePanel: React.FC = () => {
                 </article>
               );
             })}
+            <ShowMore paged={convPaged} unit="conversations" />
           </div>
         )}
       </section>
@@ -1624,7 +2022,7 @@ const ProtocolCompliancePanel: React.FC = () => {
             </p>
           </div>
           <div style={styles.auditFilters}>
-            {(['all', 'queries', 'evidence', 'report'] as const).map(f => (
+            {(['all', 'queries', 'evidence', 'report', 'map'] as const).map(f => (
               <button
                 key={f}
                 onClick={() => setAuditFilter(f)}
@@ -1670,7 +2068,7 @@ const ProtocolCompliancePanel: React.FC = () => {
                 : `No "${auditFilter}" activity in this session.`}
             </div>
           )}
-          {filteredAudit.map((entry, idx) => {
+          {auditPaged.visible.map((entry, idx) => {
             const s = TYPE_STYLE[entry.type] || TYPE_STYLE.report_other;
             const isOpen = expandedIdx === idx;
             return (
@@ -1709,6 +2107,7 @@ const ProtocolCompliancePanel: React.FC = () => {
               </article>
             );
           })}
+          <ShowMore paged={auditPaged} unit="events" />
         </div>
       </section>
 

@@ -305,8 +305,8 @@ class TestGeminiLiveGEPProtocol(unittest.TestCase):
                                 "Eye did not persist a per-answer GEP evaluation")
         last = turns["data"]["turns"][-1]
         self.assertIn("checks", last)
-        r13 = next((c for c in last["checks"] if c.get("id") == 13), None)
-        self.assertIsNotNone(r13, "Direct Answer (R13) check missing from GEP turn")
+        r13 = next((c for c in last["checks"] if c.get("id") == "GEP-10"), None)
+        self.assertIsNotNone(r13, "Direct Answer (GEP-10) check missing from GEP turn")
         self.assertEqual(r13["status"], "PASS", f"Direct Answer not PASS: {r13}")
         print(f"[live][GEP] turn summary: {last.get('summary')}")
 

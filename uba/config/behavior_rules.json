@@ -1,0 +1,269 @@
+{
+  "version": 1,
+  "comment": "Master Behavioral Timeline Correlation Matrix — declarative rule metadata. Each rule names a Python extractor (uba/engine/extractors/*) that implements the query + correlation; 'requires' drives the coverage panel: missing tables => unavailable, missing log EIDs => degraded (artifact-only confidence).",
+  "rules": [
+    {
+      "id": "interactive_logon", "matrix_row": 1, "behavior_class": "user",
+      "activity": "logon", "title": "Signed in",
+      "extractor": "sessions_logon", "severity": "routine", "color_token": "class_user",
+      "requires": {"tables": {"logs": ["SecurityLogs"]}, "log_eids": {"SecurityLogs": [4624]}}
+    },
+    {
+      "id": "logoff", "matrix_row": 2, "behavior_class": "user",
+      "activity": "logoff", "title": "Signed out",
+      "extractor": "sessions_logoff", "severity": "routine", "color_token": "class_user",
+      "requires": {"tables": {"logs": ["SecurityLogs"]}, "log_eids": {"SecurityLogs": [4634]}}
+    },
+    {
+      "id": "workstation_unlock", "matrix_row": 3, "behavior_class": "user",
+      "activity": "unlock", "title": "Unlocked the computer",
+      "extractor": "sessions_unlock", "severity": "routine", "color_token": "class_user",
+      "requires": {"tables": {"logs": ["SecurityLogs"]}, "log_eids": {"SecurityLogs": [4624]}},
+      "degrade_note": "Lock/unlock auditing (4800/4801) is not enabled on most systems; unlocks are recovered from logon type 7 events instead."
+    },
+    {
+      "id": "gui_app_launch", "matrix_row": 4, "behavior_class": "user",
+      "activity": "app_launch", "title": "Opened a program",
+      "extractor": "userassist_launch", "severity": "routine", "color_token": "class_user",
+      "log_join": {"table": "SecurityLogs", "event_ids": [4688], "delta_seconds": 5},
+      "requires": {"tables": {"registry": ["UserAssist"]}, "optional_log_eids": {"SecurityLogs": [4688]}}
+    },
+    {
+      "id": "program_run", "matrix_row": 5, "behavior_class": "application",
+      "activity": "program_run", "title": "Program ran",
+      "extractor": "prefetch_execution", "severity": "routine", "color_token": "class_application",
+      "log_join": {"table": "SecurityLogs", "event_ids": [4688], "delta_seconds": 5},
+      "requires": {"tables": {"prefetch": ["prefetch_data"]}, "optional_log_eids": {"SecurityLogs": [4688]}}
+    },
+    {
+      "id": "process_created", "matrix_row": 5, "behavior_class": "application",
+      "activity": "process_created", "title": "Program started (security log)",
+      "extractor": "process_creation_4688", "severity": "routine", "color_token": "class_application",
+      "requires": {"tables": {"logs": ["SecurityLogs"]}, "log_eids": {"SecurityLogs": [4688]}}
+    },
+    {
+      "id": "program_presence", "matrix_row": 6, "behavior_class": "application",
+      "activity": "program_presence", "title": "Program was present on this computer",
+      "extractor": "shimcache_presence", "severity": "routine", "color_token": "class_application",
+      "requires": {"tables": {"shimcache": ["shimcache_entries"]}}
+    },
+    {
+      "id": "program_presence_amcache", "matrix_row": 6, "behavior_class": "application",
+      "activity": "program_presence", "title": "Program present (application inventory)",
+      "extractor": "amcache_file_presence", "severity": "routine", "color_token": "class_application",
+      "requires": {"any_tables": {"amcache": ["InventoryApplicationFile", "InventoryApplicationShortcut"], "registry": ["MUICache"]}}
+    },
+    {
+      "id": "network_session", "matrix_row": 23, "behavior_class": "system",
+      "activity": "network_session", "title": "Computer connected to a network",
+      "extractor": "srum_network_sessions", "severity": "routine", "color_token": "class_system",
+      "requires": {"tables": {"srum": ["srum_network_connectivity"]}}
+    },
+    {
+      "id": "device_present", "matrix_row": 17, "behavior_class": "system",
+      "activity": "device_present", "title": "Hardware / peripheral device seen",
+      "extractor": "device_present", "severity": "routine", "color_token": "class_system",
+      "requires": {"tables": {"amcache": ["InventoryDevicePnp"]}}
+    },
+    {
+      "id": "app_installed", "matrix_row": 7, "behavior_class": "application",
+      "activity": "app_installed", "title": "Program installed",
+      "extractor": "app_install", "severity": "notable", "color_token": "class_application",
+      "requires": {"any_tables": {"registry": ["InstalledSoftware"], "amcache": ["InventoryApplication"]}}
+    },
+    {
+      "id": "folder_browsing", "matrix_row": 9, "behavior_class": "user",
+      "activity": "folder_browsing", "title": "Browsed folders",
+      "extractor": "shellbags_browsing", "severity": "routine", "color_token": "class_user",
+      "requires": {"tables": {"registry": ["Shellbags"]}}
+    },
+    {
+      "id": "network_share_access", "matrix_row": 18, "behavior_class": "user",
+      "activity": "network_share", "title": "Accessed a network share",
+      "extractor": "network_share_access", "severity": "notable", "color_token": "class_user",
+      "requires": {"tables": {"registry": ["Shellbags"]}}
+    },
+    {
+      "id": "file_opened", "matrix_row": 10, "behavior_class": "user",
+      "activity": "file_opened", "title": "Opened a file",
+      "extractor": "file_open_artifacts", "severity": "routine", "color_token": "class_user",
+      "requires": {"any_tables": {"lnk": ["LNK_Files", "Automatic_JumpLists"], "registry": ["RecentDocs", "OpenSaveMRU", "LastSaveMRU"]}},
+      "degrade_note": "File-access auditing (4663) is not enabled; opens are shown from shortcut/jump-list artifacts."
+    },
+    {
+      "id": "file_created", "matrix_row": 11, "behavior_class": "user",
+      "activity": "file_created", "title": "Files created",
+      "extractor": "usn_file_activity", "severity": "routine", "color_token": "class_files",
+      "requires": {"tables": {"usn": ["journal_events"]}}
+    },
+    {
+      "id": "file_deleted", "matrix_row": 12, "behavior_class": "user",
+      "activity": "file_deleted", "title": "Files deleted",
+      "extractor": "usn_file_activity", "severity": "notable", "color_token": "class_files",
+      "requires": {"tables": {"usn": ["journal_events"]}},
+      "degrade_note": "Hard deletes (bypassing the Recycle Bin) are proven by NTFS journal FILE_DELETE records."
+    },
+    {
+      "id": "file_soft_deleted", "matrix_row": 13, "behavior_class": "user",
+      "activity": "file_soft_deleted", "title": "Moved to Recycle Bin",
+      "extractor": "usn_file_activity", "severity": "notable", "color_token": "class_files",
+      "requires": {"any_tables": {"recyclebin": ["recycle_bin_entries"], "usn": ["journal_events"]}},
+      "degrade_note": "When the Recycle Bin database is not collected, deletions are recovered from NTFS journal renames into $Recycle.Bin."
+    },
+    {
+      "id": "file_renamed", "matrix_row": 14, "behavior_class": "user",
+      "activity": "file_renamed", "title": "Files renamed or moved",
+      "extractor": "usn_file_activity", "severity": "routine", "color_token": "class_files",
+      "requires": {"tables": {"usn": ["journal_events"]}}
+    },
+    {
+      "id": "file_edited", "matrix_row": 15, "behavior_class": "user",
+      "activity": "file_edited", "title": "Files changed",
+      "extractor": "usn_file_activity", "severity": "routine", "color_token": "class_files",
+      "requires": {"tables": {"usn": ["journal_events"]}}
+    },
+    {
+      "id": "file_copy_inferred", "matrix_row": 16, "behavior_class": "user",
+      "activity": "file_copied", "title": "Files appear to have been copied",
+      "extractor": "file_copy_inferred", "severity": "notable", "color_token": "class_files",
+      "requires": {"tables": {"mft_usn_correlated": ["mft_usn_correlated"]}}
+    },
+    {
+      "id": "usb_connected", "matrix_row": 17, "behavior_class": "user",
+      "activity": "usb_connected", "title": "USB device connected",
+      "extractor": "usb_devices", "severity": "notable", "color_token": "class_user",
+      "requires": {"any_tables": {"registry": ["USBDevices", "USBStorageDevices"]}}
+    },
+    {
+      "id": "web_browsing", "matrix_row": 19, "behavior_class": "user",
+      "activity": "web_browsing", "title": "Visited a website",
+      "extractor": "browser_history", "severity": "routine", "color_token": "class_user",
+      "requires": {"tables": {"registry": ["BrowserHistory"]}},
+      "degrade_note": "Only registry-recorded (typed) URLs are available; full browser history requires collecting the browser databases."
+    },
+    {
+      "id": "local_search", "matrix_row": 20, "behavior_class": "user",
+      "activity": "local_search", "title": "Searched or typed a location",
+      "extractor": "local_search", "severity": "routine", "color_token": "class_user",
+      "requires": {"any_tables": {"registry": ["WordWheelQuery", "RunMRU", "TypedPaths"]}}
+    },
+    {
+      "id": "app_foreground_usage", "matrix_row": 21, "behavior_class": "user",
+      "activity": "app_usage", "title": "Actively used a program",
+      "extractor": "srum_foreground", "severity": "routine", "color_token": "class_user",
+      "requires": {"tables": {"srum": ["srum_application_usage"]}}
+    },
+    {
+      "id": "background_network_usage", "matrix_row": 22, "behavior_class": "application",
+      "activity": "network_usage", "title": "Program transferred data",
+      "extractor": "srum_network", "severity": "routine", "color_token": "class_application",
+      "requires": {"tables": {"srum": ["srum_network_data_usage"]}}
+    },
+    {
+      "id": "network_changed", "matrix_row": 23, "behavior_class": "system",
+      "activity": "network_changed", "title": "Connected to a network",
+      "extractor": "network_profiles", "severity": "routine", "color_token": "class_system",
+      "requires": {"tables": {"registry": ["Network_list"]}},
+      "optional_log_eids": {"SystemLogs": [50036, 50013]}
+    },
+    {
+      "id": "service_installed", "matrix_row": 24, "behavior_class": "system",
+      "activity": "service_installed", "title": "New background service installed",
+      "extractor": "service_installed", "severity": "notable", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SystemLogs"]}, "log_eids": {"SystemLogs": [7045]}}
+    },
+    {
+      "id": "driver_present", "matrix_row": 26, "behavior_class": "system",
+      "activity": "driver_present", "title": "Hardware driver on the system",
+      "extractor": "driver_binaries", "severity": "routine", "color_token": "class_system",
+      "requires": {"tables": {"amcache": ["InventoryDriverBinary"]}}
+    },
+    {
+      "id": "autostart_persistence", "matrix_row": 27, "behavior_class": "application",
+      "activity": "autostart", "title": "Program set to start automatically",
+      "extractor": "autostart_programs", "severity": "notable", "color_token": "class_application",
+      "requires": {"tables": {"registry": ["AutoStartPrograms"]}}
+    },
+    {
+      "id": "autostart_service", "matrix_row": 27, "behavior_class": "system",
+      "activity": "autostart_service", "title": "Service set to auto-start (persistence)",
+      "extractor": "autostart_service", "severity": "notable", "color_token": "class_system",
+      "requires": {"tables": {"registry": ["SystemServices"]}}
+    },
+    {
+      "id": "boot_shutdown", "matrix_row": 28, "behavior_class": "system",
+      "activity": "boot_shutdown", "title": "Computer started or shut down",
+      "extractor": "boot_shutdown", "severity": "routine", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SystemLogs"]}, "optional_log_eids": {"SystemLogs": [1074, 6008]}}
+    },
+    {
+      "id": "time_changed", "matrix_row": 29, "behavior_class": "system",
+      "activity": "time_changed", "title": "System clock changed",
+      "extractor": "time_changed", "severity": "suspicious", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SystemLogs"]}, "optional_log_eids": {"SystemLogs": [1], "SecurityLogs": [4616]}},
+      "degrade_note": "Security time-change auditing (4616) is not enabled; changes are recovered from the kernel event (which does not record who made the change)."
+    },
+    {
+      "id": "log_cleared", "matrix_row": 30, "behavior_class": "system",
+      "activity": "log_cleared", "title": "Event log erased",
+      "extractor": "log_cleared", "severity": "critical", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SecurityLogs", "SystemLogs"]}, "log_eids": {"SecurityLogs": [1102], "SystemLogs": [104]}, "log_eids_mode": "any"}
+    },
+    {
+      "id": "privileged_logon", "matrix_row": 31, "behavior_class": "system",
+      "activity": "privileged_logon", "title": "Signed in with administrator rights",
+      "extractor": "privileged_logon", "severity": "routine", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SecurityLogs"]}, "log_eids": {"SecurityLogs": [4672]}}
+    },
+    {
+      "id": "explicit_credentials", "matrix_row": 32, "behavior_class": "system",
+      "activity": "runas", "title": "Used another account's credentials",
+      "extractor": "explicit_credentials", "severity": "notable", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SecurityLogs"]}, "log_eids": {"SecurityLogs": [4648]}}
+    },
+    {
+      "id": "account_enumeration", "matrix_row": 33, "behavior_class": "system",
+      "activity": "account_enumeration", "title": "Account information was looked up",
+      "extractor": "account_enumeration", "severity": "routine", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SecurityLogs"]}, "log_eids": {"SecurityLogs": [4798, 4799]}, "log_eids_mode": "any"}
+    },
+    {
+      "id": "account_management", "matrix_row": 33, "behavior_class": "system",
+      "activity": "account_management", "title": "User account created / changed / group membership",
+      "extractor": "account_management", "severity": "notable", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SecurityLogs"]}, "log_eids": {"SecurityLogs": [4720, 4722, 4724, 4725, 4726, 4728, 4732, 4738]}, "log_eids_mode": "any"}
+    },
+    {
+      "id": "windows_update", "matrix_row": 34, "behavior_class": "system_app",
+      "activity": "windows_update", "title": "Windows updated itself",
+      "extractor": "windows_update", "severity": "routine", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SystemLogs"]}, "log_eids": {"SystemLogs": [19, 43, 44]}, "log_eids_mode": "any"}
+    },
+    {
+      "id": "app_error", "matrix_row": 5, "behavior_class": "application",
+      "activity": "app_error", "title": "Application error / crash reported",
+      "extractor": "app_error", "severity": "routine", "color_token": "class_application",
+      "requires": {"tables": {"logs": ["ApplicationLogs"]}, "log_eids": {"ApplicationLogs": [1001]}}
+    },
+    {
+      "id": "service_state_changed", "matrix_row": 25, "behavior_class": "system",
+      "activity": "service_state_changed", "title": "Service start type changed",
+      "extractor": "service_state_changed", "severity": "notable", "color_token": "class_system",
+      "requires": {"tables": {"logs": ["SystemLogs"]}, "log_eids": {"SystemLogs": [7040]}}
+    }
+  ],
+  "requires_collection": [
+    {"activity": "Process injection / inter-process tampering", "needs": "Sysmon event log (EID 8/10)"},
+    {"activity": "Password-memory (LSASS) access attempts", "needs": "Security auditing 4656/4663 with object auditing, or Sysmon EID 10"},
+    {"activity": "Registry persistence telemetry (COM hijack)", "needs": "Sysmon EID 12/13"},
+    {"activity": "Printing documents", "needs": "PrintService operational log (EID 307)"},
+    {"activity": "Command-line / PowerShell history", "needs": "ConsoleHost_history.txt collection and PowerShell script-block auditing (4104)"},
+    {"activity": "Per-user USB drive mapping", "needs": "MountPoints2 registry parsing"},
+    {"activity": "Office macro trust decisions", "needs": "Trusted Documents registry parsing"},
+    {"activity": "Browser extension installs", "needs": "Browser 'Secure Preferences' collection"},
+    {"activity": "File-type hijacking (UserChoice)", "needs": "UserChoice registry parsing + registry auditing (4657)"},
+    {"activity": "Scheduled task creation", "needs": "Scheduled task cache parsing + task auditing (4698/200)"},
+    {"activity": "System crash analysis", "needs": "MEMORY.DMP collection"},
+    {"activity": "Network share browsing", "needs": "Share auditing (5140/5145) + MountPoints2"}
+  ]
+}

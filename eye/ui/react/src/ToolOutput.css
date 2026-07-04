@@ -1,0 +1,118 @@
+/* ToolOutput — dedicated, collapsed-by-default tool-call/result section.
+   Forensic dark palette, aligned with EyeDialogue.css. Green accent = "tool". */
+
+.tool-output {
+  margin-top: 8px;
+}
+
+.tool-output-toggle {
+  background: none;
+  border: none;
+  color: #34d399;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 0;
+  letter-spacing: 0.01em;
+}
+
+.tool-output-toggle:hover {
+  color: #6ee7b7;
+}
+
+.tool-output-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.tool-output-entry {
+  border: 1px solid #1f2530;
+  border-left: 3px solid #10b981;
+  border-radius: 8px;
+  background: #0e131c;
+  overflow: hidden;
+}
+
+.tool-output-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px 10px;
+  color: #e6edf3;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.tool-output-caret {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.tool-output-index {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.tool-output-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  color: #34d399;
+  flex: 1;
+}
+
+.tool-output-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.tool-output-badge--ok {
+  color: #34d399;
+  border: 1px solid #14532d;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.tool-output-badge--fail {
+  color: #f87171;
+  border: 1px solid #7f1d1d;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.tool-output-entry-body {
+  padding: 0 10px 10px;
+}
+
+.tool-output-sublabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  margin: 8px 0 4px;
+}
+
+.tool-output-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: #070a0f;
+  border: 1px solid #1f2530;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.tool-output-pre--args {
+  color: #93c5fd;
+}

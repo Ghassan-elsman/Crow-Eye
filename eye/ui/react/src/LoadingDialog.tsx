@@ -8,13 +8,14 @@ interface LoadingDialogProps {
   phase?: 'init' | 'processing'; // init = startup, processing = query in-flight
 }
 
-/* Real EYE icon with rotating ring */
-const EyeSpinner: React.FC = () => (
+/* Real EYE icon with rotating ring. Memoized (no props) so it is never
+   reconciled while the parent chat tree re-renders during streaming. */
+const EyeSpinner: React.FC = React.memo(() => (
   <div className="ld-spinner-wrap" aria-hidden="true">
     <div className="ld-ring" />
     <img src={eyeIcon} alt="" className="ld-eye-img" />
   </div>
-);
+));
 
 const INIT_STEPS = [
   'Initializing EYE engine...',
@@ -89,4 +90,7 @@ const LoadingDialog: React.FC<LoadingDialogProps> = ({
   );
 };
 
-export default LoadingDialog;
+/* Memoized: while a query streams, ChatInterface re-renders constantly but the
+   dialog's props (visible/status/phase) stay stable — so its subtree (and its
+   compositor-driven animations) are left untouched. */
+export default React.memo(LoadingDialog);

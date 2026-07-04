@@ -16,11 +16,37 @@ COMPONENTS:
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional
 import logging
+import time
 import requests
 import json
 
 # Import base class and backends from new organized structure
 from eye.backends.base import LLMBackend
+
+
+# Transient (retryable) vs. permanent model-call failures. Mirrors the markers
+# in query_processor; kept here so retry/backoff lives at the single choke point
+# for EVERY model call (main loop, map-reduce, history summarization).
+_TRANSIENT_ERROR_MARKERS = (
+    "500", "502", "503", "504",
+    "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED", "overloaded",
+    "timeout", "timed out", "temporarily unavailable",
+    "connection reset", "connection aborted",
+)
+_PERMANENT_ERROR_MARKERS = (
+    "401", "403", "429", "INVALID_ARGUMENT", "PERMISSION_DENIED",
+    "RESOURCE_EXHAUSTED", "quota",
+)
+
+
+def is_transient_model_error(exc: Exception) -> bool:
+    """True only for server-side hiccups worth retrying (e.g. Gemini 500/
+    INTERNAL/overloaded). Auth/quota/bad-request are permanent and surface
+    immediately so the investigator can act."""
+    s = str(exc)
+    if any(m in s for m in _PERMANENT_ERROR_MARKERS):
+        return False
+    return any(m in s for m in _TRANSIENT_ERROR_MARKERS)
 from eye.backends.cloud_api.openai_backend import OpenAIBackend
 from eye.backends.cloud_api.anthropic_backend import AnthropicBackend
 from eye.backends.cloud_api.gemini_backend import GeminiBackend
@@ -128,9 +154,48 @@ class ModelRouter:
                 raise RuntimeError(f"EYE Assistant is missing a required dependency for the '{bt}' agent. Please check the 'Diagnostics' tool in the setup wizard. Error: {str(e)}")
             raise RuntimeError(f"EYE Assistant could not initialize the '{bt}' agent. Details: {str(e)}")
 
-    def generate(self, system_prompt, user_message, tools=None, history=None):
-        """Delegates generation to the active backend."""
-        return self.backend.generate(system_prompt, user_message, tools, history)
+    def generate(self, system_prompt, user_message, tools=None, history=None, on_retry=None, gen_params=None):
+        """Delegate to the active backend with transient-error retry + backoff.
+
+        Gemini (and others) intermittently return 500/INTERNAL/UNAVAILABLE under
+        load or on large requests. We retry transient failures up to
+        ``reasoning.model_retry_max_attempts`` (default 3) with exponential
+        backoff (1s, 2s, 4s, capped) so a transient 500 doesn't surface to the
+        investigator. Non-transient failures (auth/quota/bad-request) raise
+        immediately. ``on_retry(attempt, exc)`` lets the caller log/seal each
+        retry for the Compliance trail. This is the single choke point for every
+        model call, so map-reduce and history-summarization get resilience too.
+
+        ``gen_params`` (optional dict, e.g. ``{"temperature": 0.2,
+        "max_output_tokens": 8192}``) is forwarded to the backend so callers can
+        tune determinism per phase (planning vs answer). Backends that don't
+        support a given knob ignore it; ``None`` keeps each backend's defaults.
+        """
+        try:
+            attempts = int((self.config.get("reasoning") or {}).get("model_retry_max_attempts", 3))
+        except (TypeError, ValueError, AttributeError):
+            attempts = 3
+        attempts = max(1, min(attempts, 6))
+
+        last_exc = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return self.backend.generate(system_prompt, user_message, tools, history, gen_params=gen_params)
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= attempts or not is_transient_model_error(exc):
+                    raise
+                if on_retry:
+                    try:
+                        on_retry(attempt, exc)
+                    except Exception:
+                        pass
+                self.logger.warning(
+                    f"Transient model error (attempt {attempt}/{attempts}), retrying: {exc}"
+                )
+                time.sleep(min(2 ** (attempt - 1), 8))
+        if last_exc:  # pragma: no cover - loop always returns or raises above
+            raise last_exc
 
     def validate_connectivity(self):
         """
@@ -199,14 +264,23 @@ class ModelRouter:
         Aggregates available models from all configured backends into a 
         grouped structure for the UI model menu.
         """
+        from eye.services.context_window_registry import curated_models
+
         groups = {
             "Cloud API": [],
             "Local Server": [],
             "Local CLI": []
         }
-        
+
+        active_bt = self.config.get("backend")
+        # Dedup (backend, model_name) so a curated entry never duplicates a live one.
+        seen = set()
+
         def add_opt(category, backend, model_name, label=None):
-            active_bt = self.config.get("backend")
+            key = (backend, model_name)
+            if key in seen:
+                return
+            seen.add(key)
             active_mn = self.config.get("model_name")
             is_active = (backend == active_bt and model_name == active_mn)
             groups[category].append({
@@ -218,20 +292,24 @@ class ModelRouter:
 
         # 1. Models from the CURRENT active backend (Live Discovery)
         try:
-            active_bt = self.config.get("backend")
             active_models = self.list_models()
-            
+
             # Map current backend to category
             category = "Cloud API"
             if active_bt in ["ollama", "lm_studio", "vllm"]:
                 category = "Local Server"
             elif active_bt in list_supported_backends():
                 category = "Local CLI"
-                
+
             for m in active_models:
                 add_opt(category, active_bt, m)
         except Exception as e:
             self.logger.error(f"Error listing active models: {e}")
+
+        # 1b. Merge the curated catalog for the active backend (cloud only) so
+        # current models are offered even if a live fetch returned nothing.
+        for m in curated_models(active_bt):
+            add_opt("Cloud API", active_bt, m)
 
         # 2. Add 'Discovery' options for other cloud backends if they have keys
         cloud_providers = [
@@ -239,14 +317,20 @@ class ModelRouter:
             ("anthropic", "Anthropic"),
             ("gemini", "Gemini")
         ]
-        
+
         for bt, label in cloud_providers:
-            if bt == self.config.get("backend"): continue
-            
+            if bt == active_bt: continue
+
             # If we have a key, show a discovery option
             key_name = f"{bt}_api_key"
             if self.credential_manager and self.credential_manager.get_credential(key_name):
                 add_opt("Cloud API", bt, "default", f"Connect to {label}...")
+
+            # Always surface the curated models for the provider so current
+            # Claude models are selectable in the menu (selecting one switches
+            # the backend; the user is prompted for a key if none is stored).
+            for m in curated_models(bt):
+                add_opt("Cloud API", bt, m)
 
         # 3. Add Local Server options if not active
         local_servers = [

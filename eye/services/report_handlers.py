@@ -84,9 +84,54 @@ class ReportHandlers:
             message += f" Note: Result set was truncated from {original_count} rows for performance."
 
         return {
-            "success": True, 
-            "block_id": block_id, 
+            "success": True,
+            "block_id": block_id,
             "message": message
+        }
+
+    def handle_chat_add_table(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Render a model-authored table inline in the chat bubble AND mirror it
+        into the Living Report.
+
+        Unlike report_add_data_table, this takes rows directly (no SQL backing),
+        so it is the correct tool for synthesized tables — verdict matrices,
+        hypothesis summaries, comparisons. The returned columns/rows/caption are
+        picked up by ContextManager._extract_data_viewers and surfaced inline via
+        the React DataViewer component.
+        """
+        columns = params.get("columns", [])
+        data = params.get("rows", [])
+        caption = params.get("caption", "")
+
+        if not data:
+            return {"success": False, "error": "chat_add_table requires non-empty 'rows'."}
+
+        # Infer columns from the data if the model omitted them.
+        if not columns and isinstance(data[0], dict):
+            columns = list(data[0].keys())
+
+        # Mirror to the Living Report (dual-output mandate). No SQL source, so
+        # sql_query is empty — add_data_table stamps provenance + truncates.
+        block_id = None
+        try:
+            block_id = self.cm.report_engine.add_data_table(
+                "", columns, data,
+                caption=caption,
+                author="ai"
+            )
+            self.cm.report_engine.save_report()  # Auto-save
+        except Exception as e:
+            # Report mirroring is best-effort; the inline chat table still renders.
+            self.logger.warning(f"chat_add_table: failed to mirror to report: {e}")
+
+        return {
+            "success": True,
+            "rendered_in_chat": True,
+            "columns": columns,
+            "rows": data,
+            "caption": caption,
+            "block_id": block_id,
+            "message": f"Rendered a {len(data)}-row table in the chat and added it to the report.",
         }
 
     def handle_report_add_evidence(self, params: Dict[str, Any]) -> Dict[str, Any]:

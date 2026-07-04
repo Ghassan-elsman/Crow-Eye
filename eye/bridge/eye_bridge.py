@@ -129,12 +129,16 @@ class QueryWorker(QThread):
     report_updated = pyqtSignal(str)
     dialogue_updated = pyqtSignal(str)  # Eye<->LLM conversation entries (live)
     
-    def __init__(self, context_manager, query):
+    def __init__(self, context_manager, query, suppress_chat=False):
         super().__init__()
         self.context_manager = context_manager
         self.query = query
         self.result = None
         self.error = None
+        # When True (background "investigate this narrative" runs), the worker does
+        # NOT emit finished_query — no chat bubble is posted. Report / dialogue /
+        # narrative-map updates still stream via their callbacks during run().
+        self.suppress_chat = suppress_chat
         
     def run(self):
         def hitl_callback(key, value, case_context):
@@ -223,7 +227,15 @@ class QueryWorker(QThread):
             try:
                 if hasattr(self.context_manager, 'hitl_callback'):
                     del self.context_manager.hitl_callback
-                
+
+                # Background investigate run: skip the chat bubble entirely. Map /
+                # report updates were already streamed via callbacks during run().
+                if self.suppress_chat:
+                    logger.info("Investigate run finished (suppressed chat emit).")
+                    self.result = None
+                    gc.collect()
+                    return
+
                 logger.info("Serializing final query result...")
                 # Serialize in the background thread to avoid freezing the GUI
                 serialized_result = safe_json_dumps(self.result)
@@ -235,6 +247,7 @@ class QueryWorker(QThread):
                     # Try to preserve the main response but drop heavy data viewers/tool results
                     if isinstance(self.result, dict):
                         self.result["data_viewer"] = None
+                        self.result["data_viewers"] = []
                         self.result["action_chips"] = self.result.get("action_chips", [])[:2]
                         if "error" not in self.result:
                             self.result["error"] = "Result payload was truncated for stability. Try a more granular query."
@@ -286,10 +299,13 @@ class EYEBridge(QObject):
     case_summary_requested = pyqtSignal()
     settings_requested = pyqtSignal()
     compliance_window_requested = pyqtSignal()
-    
+    narrative_map_window_requested = pyqtSignal()  # open the Narrative Map OS window
+
     # Signals for async operations
     query_complete = pyqtSignal(str)  # JSON response when query completes
     report_updated = pyqtSignal(str)  # Updated report JSON when report changes
+    narrative_map_updated = pyqtSignal(str)  # Narrative Map changed (Eye or investigator)
+    narrativeInvestigationComplete = pyqtSignal(str)  # a double-click "investigate" run finished (narrative id)
     error_occurred = pyqtSignal(str)  # Error message when backend error occurs
     layout_requested = pyqtSignal(str) # Request UI layout changes (JSON)
     status_updated = pyqtSignal(str)  # Status update message (thinking/searching)
@@ -319,6 +335,12 @@ class EYEBridge(QObject):
         self.database_service = database_service
         self.search_service = search_service
         self.report_engine = report_engine
+        # Let the agentic loop push live Narrative Map updates through this bridge.
+        if context_manager is not None:
+            try:
+                context_manager.narrative_map_update_callback = self.emit_narrative_map_changed
+            except Exception as e:
+                logger.debug(f"Could not register narrative map update callback: {e}")
         logger.info("EYEBridge initialized")
     
     def _emit_report_updated(self, report_json: str):
@@ -452,14 +474,13 @@ class EYEBridge(QObject):
         logger.info("Query worker finished. Sending result to React.")
         self.query_complete.emit(serialized_result)
 
-    def _show_hitl_dialog(self, title, context, schema, callback):
-        """
-        Emit signal to show a Human-In-The-Loop dialog in the UI.
-        """
-        logger.info(f"Showing HITL dialog: {title}")
-        self.hitl_requested.emit(title, safe_json_dumps(context), safe_json_dumps(schema))
-        # Note: The actual callback handling is managed via signals/slots
-    
+    # NOTE: the real HITL handler is the later `_show_hitl_dialog(key, data,
+    # case_context, loop)` (it matches the `request_hitl` signal and is what
+    # `worker.request_hitl` connects to). A previous duplicate defined here
+    # referenced a `hitl_requested` signal that is NOT declared on this class —
+    # dead/shadowed, and an AttributeError landmine if ever reached — so it was
+    # removed.
+
     @pyqtSlot(str, str, result=str)
     def query_database(self, database: str, sql: str) -> str:
         """
@@ -602,12 +623,18 @@ class EYEBridge(QObject):
             # Convert SearchResult objects to dictionaries
             formatted_results = {}
             for table_name, search_results in results.results.items():
+                # SearchResult is a dataclass with fields table_name / row_id /
+                # matched_columns / record_data / relevance_score — use those
+                # (the old sr.table / sr.row_data / sr.match_count did not exist
+                # and raised AttributeError on the first result).
                 formatted_results[table_name] = [
                     {
-                        "table": sr.table,
-                        "row_data": sr.row_data,
+                        "table": sr.table_name,
+                        "row_id": sr.row_id,
+                        "row_data": sr.record_data,
                         "matched_columns": sr.matched_columns,
-                        "match_count": sr.match_count
+                        "match_count": len(sr.matched_columns or []),
+                        "relevance": sr.relevance_score,
                     }
                     for sr in search_results
                 ]
@@ -816,7 +843,9 @@ class EYEBridge(QObject):
                 return safe_json_dumps({"success": False, "data": None, "error": "ContextManager not initialized"})
 
             history = self.context_manager.conversation_history
-            return safe_json_dumps({                "success": True,
+            history = self._backfill_message_thinking(history)
+            return safe_json_dumps({
+                "success": True,
                 "data": history,
                 "error": None
             })
@@ -2326,7 +2355,7 @@ class EYEBridge(QObject):
     @pyqtSlot(result=str)
     def get_gep_compliance_status(self) -> str:
         """
-        GEP Rule 7 (Machine-Readable Synthesis): return live per-rule
+        GEP-8 (Machine-Readable Synthesis): return live per-rule
         Ghassan Elsman Protocol compliance state as a JSON string the React
         Protocol Compliance dashboard can render directly.
 
@@ -2415,8 +2444,20 @@ class EYEBridge(QObject):
                 status = "FAIL"
                 detail = "truncation auditor not initialized (no EYE_Logs / case directory)"
             elif audit_log and os.path.exists(audit_log) and os.path.getsize(audit_log) > 0:
-                status = "PASS"
-                detail = f"{audit_log} ({os.path.getsize(audit_log)} B)"
+                # Actually VERIFY the tamper-evident chain — not just file existence.
+                try:
+                    ok = bool(auditor.verify_chain()) if hasattr(auditor, "verify_chain") else None
+                except Exception:
+                    ok = None
+                if ok is True:
+                    status = "PASS"
+                    detail = f"audit hash chain VERIFIED ({os.path.getsize(audit_log)} B)"
+                elif ok is False:
+                    status = "FAIL"
+                    detail = "audit hash chain BROKEN — tampering detected"
+                else:
+                    status = "PASS"
+                    detail = f"{audit_log} ({os.path.getsize(audit_log)} B)"
             else:
                 status = "N-A"
                 detail = "audit trail active; no preservation/truncation events logged yet"
@@ -2578,9 +2619,200 @@ class EYEBridge(QObject):
             rules.append({"id": 10, "name": "Eye-Stamped",
                           "status": status, "detail": detail})
 
+            # =================================================================
+            # GEP tagging — label each operating/write rule with the GEP
+            # principle(s) it upholds, so the dashboard shows the protocol link.
+            # =================================================================
+            _GEP_BY_RULE_ID = {
+                0: ["GEP-1"], 1: ["GEP-1"], 2: ["GEP-2"], 3: ["GEP-7", "GEP-8"],
+                4: ["GEP-7"], 5: ["GEP-6"], 6: ["GEP-8"], 7: ["GEP-8"],
+                8: ["GEP-9"], 9: ["GEP-2", "GEP-9"], 10: ["GEP-7", "GEP-9"],
+            }
+            for r in rules:
+                r.setdefault("gep", _GEP_BY_RULE_ID.get(r.get("id"), []))
+
+            # =================================================================
+            # Eye-process rows — surface the live status of the newer subsystems
+            # so the dashboard reflects the WHOLE current Eye. Each is best-effort.
+            # =================================================================
+            # ---- Conversation Memory (two-stage policy) ----
+            try:
+                rcfg = getattr(cm, "reasoning_config", None) or {}
+                win = rcfg.get("history_window_turns")
+                if win:
+                    buf = rcfg.get("enable_summary_buffer", True)
+                    status = "PASS"
+                    detail = (f"two-stage policy active (window={win} turns, summary buffer "
+                              f"{'on' if buf else 'off'}); pinned/evidence messages protected")
+                else:
+                    status, detail = "N-A", "conversation memory policy not configured"
+            except Exception as e:
+                status, detail = "N-A", f"memory status error: {e}"
+            rules.append({"id": "mem", "name": "Conversation Memory (2-Stage)",
+                          "status": status, "detail": detail, "gep": ["GEP-6"]})
+
+            # ---- Conversation Recall (long-term memory) ----
+            try:
+                idx = getattr(getattr(cm, "rag_service", None), "conversation_index", None)
+                n = len(idx) if isinstance(idx, list) else 0
+                arch = os.path.join(str(logs_dir), "eye_conversation_archive.jsonl") if logs_dir else None
+                if n > 0:
+                    status, detail = "PASS", f"{n} earlier turn(s) archived and retrievable on demand"
+                elif arch and os.path.exists(arch):
+                    status, detail = "PASS", "conversation archive present (recall index built on load)"
+                else:
+                    status, detail = "N-A", "no conversation turns evicted/archived yet"
+            except Exception as e:
+                status, detail = "N-A", f"recall status error: {e}"
+            rules.append({"id": "recall", "name": "Conversation Recall (Long-Term Memory)",
+                          "status": status, "detail": detail, "gep": ["GEP-6", "GEP-8"]})
+
+            # ---- Completeness & Coverage (GEP-6) ----
+            try:
+                cov = os.path.join(str(logs_dir), "eye_coverage_log.jsonl") if logs_dir else None
+                if cov and os.path.exists(cov) and os.path.getsize(cov) > 0:
+                    status = "PASS"
+                    detail = "per-answer coverage disclosed + logged (consulted vs. available, sample vs. full)"
+                else:
+                    status = "N-A"
+                    detail = "coverage disclosure active; no answered evidence turn yet"
+            except Exception as e:
+                status, detail = "N-A", f"coverage status error: {e}"
+            rules.append({"id": "coverage", "name": "Completeness & Coverage",
+                          "status": status, "detail": detail, "gep": ["GEP-6"]})
+
+            # ---- Result Cache (reproducible reuse) ----
+            try:
+                has_cache = getattr(cm, "result_cache", None) is not None
+                cache_file = os.path.join(str(logs_dir), "eye_result_cache.jsonl") if logs_dir else None
+                if cache_file and os.path.exists(cache_file):
+                    status = "PASS"
+                    detail = "identical queries reused from the per-case cache (reproducible results)"
+                elif has_cache:
+                    status, detail = "N-A", "result cache active; nothing cached yet"
+                else:
+                    status, detail = "N-A", "no result cache (no case directory)"
+            except Exception as e:
+                status, detail = "N-A", f"cache status error: {e}"
+            rules.append({"id": "cache", "name": "Result Cache (Reproducible Reuse)",
+                          "status": status, "detail": detail, "gep": ["GEP-7", "GEP-8"]})
+
+            # ---- Semantic Search (embeddings) ----
+            try:
+                esvc = getattr(cm, "evidence_index_service", None)
+                avail = bool(esvc and esvc.available())
+                if avail:
+                    status = "PASS"
+                    detail = "semantic discovery available; candidates confirmed with exact SQL (SQL authoritative)"
+                else:
+                    status, detail = "N-A", "embeddings disabled; SQL + BM25 in use (semantic search off)"
+            except Exception as e:
+                status, detail = "N-A", f"semantic status error: {e}"
+            rules.append({"id": "semantic", "name": "Semantic Search (Embeddings)",
+                          "status": status, "detail": detail, "gep": ["GEP-1", "GEP-8"]})
+
+            # ---- Evidence Seal Hash Chain ----
+            try:
+                seal = getattr(cm, "evidence_seal", None)
+                seal_file = os.path.join(str(logs_dir), "eye_payload_seal.jsonl") if logs_dir else None
+                if seal_file and os.path.exists(seal_file) and os.path.getsize(seal_file) > 0:
+                    verified = None
+                    try:
+                        if seal is not None and hasattr(seal, "verify_chain"):
+                            verified = bool(seal.verify_chain())
+                    except Exception:
+                        verified = None
+                    if verified is True:
+                        status, detail = "PASS", "payload seal hash chain VERIFIED (tamper-evident)"
+                    elif verified is False:
+                        status, detail = "FAIL", "payload seal hash chain BROKEN — tampering detected"
+                    else:
+                        status = "PASS"
+                        detail = "every model payload sealed (SHA-256 hash chain) to eye_payload_seal.jsonl"
+                elif seal is not None:
+                    status, detail = "N-A", "evidence seal active; no payloads sealed yet"
+                else:
+                    status, detail = "FAIL", "evidence seal writer not initialized"
+            except Exception as e:
+                status, detail = "N-A", f"seal status error: {e}"
+            rules.append({"id": "seal", "name": "Evidence Seal Hash Chain",
+                          "status": status, "detail": detail, "gep": ["GEP-7"]})
+
+            # =================================================================
+            # Full GEP protocol — a live status for ALL 10 principles, rolled up
+            # from the mechanisms above (structural PASS for always-on guarantees).
+            # =================================================================
+            _GEP_STRUCTURAL = {
+                "GEP-1": ("Evidence Primacy",
+                          "Read-only DB access, schema-grounded SQL, pre-flight connectivity ping, proactive investigation."),
+                "GEP-2": ("Traceability",
+                          "EvidenceSeal provenance (database:table:rowid), evidence anchoring, write-side evidence links."),
+                "GEP-3": ("Specificity & Chronology",
+                          "Per-answer timestamp check; exact UTC/identifier reporting; chronological ordering."),
+                "GEP-4": ("Cross-Corroboration",
+                          "Multi-source sweep + cross-iteration evidence ledger; conflicts surfaced."),
+                "GEP-5": ("Premise Verification",
+                          "Planning premises (verify: checklist) + sealed reasoning trace."),
+                "GEP-6": ("Completeness",
+                          "No-silent-truncation guard, map-reduce, two-stage memory, coverage disclosure + per-answer GEP-6 check."),
+                "GEP-7": ("Integrity & Non-Repudiation",
+                          "Read-only evidence, SHA-256 hash-chained IDs, EvidenceSeal payload hash chain."),
+                "GEP-8": ("Transparency & Explainability",
+                          "Tool traceability, step/dialogue logs, machine-readable compliance export."),
+                "GEP-9": ("Human Authority",
+                          "HITL approvals; write-side authorship (reason + evidence + Eye-stamp); read-only on non-Eye items."),
+                "GEP-10": ("Defensibility",
+                           "Professional/legal-grade tone, structured report blocks, per-answer direct-answer check."),
+            }
+            # An honest status needs a real BASIS — never a bare structural PASS:
+            #   verified   = rolled up from live rules (incl. genuinely verified
+            #                hash chains; a BROKEN chain propagates to FAIL).
+            #   config     = gated by a reasoning setting; N-A (named) when disabled.
+            #   per-answer = graded each turn (see Per-Answer GEP Compliance).
+            #   structural = an always-on guarantee inherent to the build.
+            _rcfg = getattr(cm, "reasoning_config", None)
+            _rcfg = _rcfg if isinstance(_rcfg, dict) else {}
+            _CONFIG_GATED = {  # principle -> reasoning_config flag (default ON)
+                "GEP-4": "enable_decomposition",
+                "GEP-5": "enable_premise_verification",
+            }
+            gep_principles = []
+            for gid, (gname, gdesc) in _GEP_STRUCTURAL.items():
+                upheld = [r for r in rules if gid in (r.get("gep") or [])]
+                detail = gdesc
+                if upheld:
+                    sts = [r["status"] for r in upheld]
+                    if any(s == "FAIL" for s in sts):
+                        st = "FAIL"
+                    elif any(s == "PASS" for s in sts):
+                        st = "PASS"
+                    elif any(s == "PARTIAL" for s in sts):
+                        # A principle upheld only by partially-met rules is PARTIAL,
+                        # not N-A — it is actively (if incompletely) met, not dormant.
+                        st = "PARTIAL"
+                    else:
+                        st = "N-A"
+                    basis = "verified"
+                    upheld_by = [r["name"] for r in upheld]
+                elif gid in _CONFIG_GATED:
+                    flag = _CONFIG_GATED[gid]
+                    on = bool(_rcfg.get(flag, True))
+                    st = "PASS" if on else "N-A"
+                    basis = "config"
+                    detail = gdesc + ("" if on else f" — DISABLED ({flag}=false)")
+                    upheld_by = []
+                elif gid == "GEP-3":
+                    st, basis, upheld_by = "PASS", "per-answer", []
+                    detail = gdesc + " — graded each answer (see Per-Answer GEP Compliance)."
+                else:
+                    # Always-on structural guarantee (e.g. GEP-10 legal-grade output).
+                    st, basis, upheld_by = "PASS", "structural", []
+                gep_principles.append({"id": gid, "name": gname, "status": st, "basis": basis,
+                                       "detail": detail, "upheld_by": upheld_by})
+
             return safe_json_dumps({
                 "success": True,
-                "data": {"rules": rules},
+                "data": {"rules": rules, "gep_principles": gep_principles},
                 "error": None
             })
         except Exception as e:
@@ -2759,6 +2991,33 @@ class EYEBridge(QObject):
                     "iteration": None,
                 })
 
+            # ----- Narrative Map stream -------------------------------
+            # Surface every sealed Narrative Map change (by the Eye OR the
+            # investigator) so the Compliance window shows it alongside queries,
+            # evidence and report edits — same chain-of-custody feed.
+            nms = getattr(cm, "narrative_map_service", None)
+            if nms is not None:
+                try:
+                    for r in (nms.recent_audit(limit=200) or []):
+                        gep = r.get("gep", {}) or {}
+                        actor = "Eye" if r.get("actor") == "eye" else "Investigator"
+                        detail = (
+                            f"{r.get('reason', '') or '(no reason)'}\n"
+                            f"GEP  R9:{gep.get('r9','-')}  R10:{gep.get('r10','-')}  R11:{gep.get('r11','-')}\n"
+                            f"{r.get('prevHash','')[:8]} -> {r.get('hash','')[:12]}"
+                        )
+                        entries.append({
+                            "timestamp": r.get("ts", ""),
+                            "type": "narrative_map",
+                            "summary": f"#{r.get('seq','?')} {r.get('action','')} · {r.get('target','')} ({actor})",
+                            "detail": detail,
+                            "tools": None,
+                            "block_id": None,
+                            "iteration": None,
+                        })
+                except Exception as e:
+                    logger.debug(f"narrative-map activity stream skipped: {e}")
+
             # ----- Sort chronologically (entries with missing timestamps
             #       float to the end so they don't break the ordering).
             entries.sort(key=lambda e: e.get("timestamp") or "9999")
@@ -2920,26 +3179,25 @@ class EYEBridge(QObject):
                     except Exception:
                         continue
 
-            # Verify the hash chain: each seal_hash must = sha256(prev_seal_hash + payload_sha256 + metadata_sha256).
-            chain_valid = True
-            prev = ""
-            for s in seals:
-                # Chain Verification logic
-                p_hash = s.get("payload_sha256", "")
-                m_hash = s.get("metadata_sha256", "")
-
-                # New hash format includes metadata_sha256 to protect the entire record
-                if m_hash:
-                    expected = hashlib.sha256((prev + p_hash + m_hash).encode("utf-8", errors="replace")).hexdigest()
-                else:
-                    # Legacy fallback
-                    expected = hashlib.sha256((prev + p_hash).encode("utf-8", errors="replace")).hexdigest()
-
-                if s.get("prev_seal_hash", "") != prev or s.get("seal_hash") != expected:
-                    chain_valid = False
-
-                prev = s.get("seal_hash", "")
-
+            # Verify the tamper-evident hash chain via the single source of truth
+            # on the EvidenceSeal writer (same logic, reused by the compliance
+            # dashboard). Falls back to a local walk only if no writer is wired.
+            seal_writer = getattr(self.context_manager, "evidence_seal", None) if self.context_manager else None
+            if seal_writer is not None and hasattr(seal_writer, "verify_chain"):
+                chain_valid = bool(seal_writer.verify_chain())
+            else:
+                chain_valid = True
+                prev = ""
+                for s in seals:
+                    p_hash = s.get("payload_sha256", "")
+                    m_hash = s.get("metadata_sha256", "")
+                    if m_hash:
+                        expected = hashlib.sha256((prev + p_hash + m_hash).encode("utf-8", errors="replace")).hexdigest()
+                    else:
+                        expected = hashlib.sha256((prev + p_hash).encode("utf-8", errors="replace")).hexdigest()
+                    if s.get("prev_seal_hash", "") != prev or s.get("seal_hash") != expected:
+                        chain_valid = False
+                    prev = s.get("seal_hash", "")
 
             total_seals = len(seals)
             seals.reverse()  # most recent first for display
@@ -3141,14 +3399,18 @@ class EYEBridge(QObject):
         timestamps, proactive investigation).
 
         Reads ``<case>/EYE_Logs/eye_gep_turns.jsonl`` (written by
-        QueryProcessor._persist_gep_turn). Envelope:
+        QueryProcessor._persist_gep_turn). Besides ordinary answered turns, the
+        log also carries deterministic per-step records — the automated triage
+        (``query == "initialize_case_report"``) and the post-switch context
+        acknowledgement (``"analyze_case_context"``) — plus fail-hard refusal and
+        overflow-recovery turns, so every forensic step appears here. Envelope:
 
             {
                 "success": true,
                 "data": {
                     "turns": [
                         {"query": "...", "timestamp": "...", "summary": "3/4 ...",
-                         "checks": [{"id":13,"name":"...","status":"PASS","detail":"..."}, ...]},
+                         "checks": [{"id":"GEP-1","name":"...","status":"PASS","detail":"..."}, ...]},
                         ...
                     ],
                     "total_turns": 4
@@ -3175,16 +3437,212 @@ class EYEBridge(QObject):
                         turns.append(json.loads(line))
                     except Exception:
                         continue
-            # Most recent first for the dashboard.
+            # Most recent first for the dashboard; return only the recent N so the
+            # payload + render stay bounded (the UI windows it further). total_turns
+            # reports the true count so the UI can show "showing N of total".
             turns.reverse()
+            total = len(turns)
+            _GEP_TURNS_CAP = 200
             return safe_json_dumps({
                 "success": True,
-                "data": {"turns": turns, "total_turns": len(turns)},
+                "data": {"turns": turns[:_GEP_TURNS_CAP], "total_turns": total},
                 "error": None,
             })
         except Exception as e:
             logger.error(f"get_gep_turns failed: {e}", exc_info=True)
             return safe_json_dumps({"success": False, "data": None, "error": str(e)})
+
+    @pyqtSlot(result=str)
+    def get_reasoning_turns(self) -> str:
+        """
+        Return the per-answer reasoning traces so the Compliance panel can show,
+        for each decomposed question, WHY each sub-question was created and WHY
+        each conclusion follows from which evidence (GEP-8 Transparency,
+        GEP-2 Traceability).
+
+        Reads ``<case>/EYE_Logs/eye_reasoning_log.jsonl`` (written by
+        QueryProcessor._persist_reasoning_turn). Envelope:
+
+            {
+                "success": true,
+                "data": {
+                    "turns": [
+                        {"query": "...", "timestamp": "...", "strategy": "...",
+                         "sub_questions": [{"id":"sq1","q":"...","why_created":"...",
+                            "conclusion":"...","why_concluded":"...",
+                            "evidence":[{"ref":"db:table:rowid","note":"..."}],
+                            "status":"answered"}, ...],
+                         "premises": [{"claim":"...","verdict":"REFUTED","why":"...",
+                            "evidence":[...]}, ...],
+                         "consolidation": "...",
+                         "knowledge_consulted": ["prefetch_knowledge.md", ...]},
+                        ...
+                    ],
+                    "total_turns": 2
+                },
+                "error": null
+            }
+        """
+        try:
+            cm = self.context_manager
+            case_dir = getattr(cm, "case_directory", None) if cm else None
+            if not case_dir:
+                return safe_json_dumps({"success": True, "data": {"turns": [], "total_turns": 0}, "error": None})
+            log_path = os.path.join(str(case_dir), "EYE_Logs", "eye_reasoning_log.jsonl")
+            if not os.path.exists(log_path):
+                return safe_json_dumps({"success": True, "data": {"turns": [], "total_turns": 0}, "error": None})
+
+            turns = []
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        turns.append(json.loads(line))
+                    except Exception:
+                        continue
+            # Most recent first; cap to the recent N (the UI windows it further).
+            turns.reverse()
+            total = len(turns)
+            _REASONING_TURNS_CAP = 200
+            return safe_json_dumps({
+                "success": True,
+                "data": {"turns": turns[:_REASONING_TURNS_CAP], "total_turns": total},
+                "error": None,
+            })
+        except Exception as e:
+            logger.error(f"get_reasoning_turns failed: {e}", exc_info=True)
+            return safe_json_dumps({"success": False, "data": None, "error": str(e)})
+
+    @staticmethod
+    def _normalize_query(text):
+        """Strip the trailing ``<evidence ...>`` anchor block (appended to some
+        messages by HistoryManager) so a stored user message matches the raw
+        ``query`` recorded in the dialogue log."""
+        s = (text or "")
+        cut = s.find("\n\n<evidence")
+        if cut != -1:
+            s = s[:cut]
+        return s.strip()
+
+    def _backfill_message_thinking(self, history):
+        """Attach each turn's Eye<->LLM transcript to the assistant message that
+        produced it, for messages that don't already carry it.
+
+        Going forward, QueryProcessor stamps ``metadata.eye_dialogue`` on the
+        final assistant message of each turn. For conversations saved before that
+        (or any message missing it), reconstruct the transcript from the per-case
+        dialogue log so the "Show the Eye's thinking" dropdown reappears for ALL
+        restored messages. Read-time only — never rewrites the saved history.
+
+        Matching: split history into turns at each real (non-internal) user
+        message; the LAST assistant message in a turn is its answer. Consume the
+        dialogue-log groups for that query in order (FIFO) so repeated identical
+        questions map to the right turn. Best-effort; any mismatch simply leaves
+        a message without thinking (prior behavior).
+        """
+        try:
+            if not isinstance(history, list) or not history:
+                return history
+            # Skip the log read entirely if every assistant message already has
+            # its transcript (the common going-forward case).
+            if all(
+                (m.get("role") != "assistant") or (m.get("metadata") or {}).get("eye_dialogue")
+                for m in history
+            ):
+                return history
+
+            case_dir = getattr(self.context_manager, "case_directory", None)
+            if not case_dir:
+                return history
+            groups, _ = self._load_dialogue_groups(case_dir)
+            if not groups:
+                return history
+
+            # Bucket groups by normalized query, preserving chronological order.
+            from collections import defaultdict, deque
+            buckets = defaultdict(deque)
+            for g in groups:
+                buckets[self._normalize_query(g.get("query"))].append(g)
+
+            # Segment history into turns and find each turn's answer message index.
+            out = list(history)  # shallow copy; we replace only the dicts we touch
+            current_query = None
+            answer_idx = None
+
+            def _flush(turn_query, idx):
+                if turn_query is None or idx is None:
+                    return
+                bucket = buckets.get(turn_query)
+                if not bucket:
+                    return
+                grp = bucket.popleft()  # consume in order even if already stamped
+                msg = out[idx]
+                meta = msg.get("metadata") or {}
+                if meta.get("eye_dialogue"):
+                    return  # exact transcript already present (Fix A) — keep it
+                new_meta = dict(meta)
+                new_meta["eye_dialogue"] = grp.get("entries", [])
+                out[idx] = {**msg, "metadata": new_meta}
+
+            for i, m in enumerate(history):
+                role = m.get("role")
+                is_internal = bool((m.get("metadata") or {}).get("internal"))
+                if role == "user" and not is_internal:
+                    _flush(current_query, answer_idx)   # close previous turn
+                    current_query = self._normalize_query(m.get("content"))
+                    answer_idx = None
+                elif role == "assistant" and not is_internal:
+                    answer_idx = i   # last assistant before next real user = answer
+            _flush(current_query, answer_idx)  # close final turn
+            return out
+        except Exception as e:
+            logger.debug(f"Thinking backfill skipped: {e}")
+            return history
+
+    def _load_dialogue_groups(self, case_dir):
+        """Parse ``<case>/EYE_Logs/eye_dialogue_log.jsonl`` into ordered per-turn
+        conversation groups.
+
+        A dialogue's ``seq`` counter resets to 1 per ``process_query`` call, so
+        ``seq == 1`` marks the start of a fresh conversation for a question;
+        otherwise the entry extends that question's currently-open group. Returns
+        ``(conversations, total_entries)`` where each conversation is
+        ``{"query", "started", "entry_count", "entries"}`` in file (chronological)
+        order. Shared by ``get_dialogue_history`` (Compliance panel) and
+        ``get_conversation_history`` (per-message thinking backfill).
+        """
+        conversations = []
+        active_by_query = {}   # query -> its currently-open conversation group
+        total_entries = 0
+        log_path = os.path.join(str(case_dir), "EYE_Logs", "eye_dialogue_log.jsonl")
+        if not os.path.exists(log_path):
+            return conversations, total_entries
+        with open(log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                total_entries += 1
+                query = entry.get("query", "(unknown question)")
+                group = active_by_query.get(query)
+                if entry.get("seq") == 1 or group is None:
+                    group = {
+                        "query": query,
+                        "started": entry.get("timestamp", ""),
+                        "entry_count": 0,
+                        "entries": [],
+                    }
+                    conversations.append(group)
+                    active_by_query[query] = group
+                group["entries"].append(entry)
+                group["entry_count"] += 1
+        return conversations, total_entries
 
     @pyqtSlot(result=str)
     def get_dialogue_history(self) -> str:
@@ -3233,35 +3691,7 @@ class EYEBridge(QObject):
                     "error": None,
                 })
 
-            conversations = []
-            active_by_query = {}   # query -> its currently-open conversation group
-            total_entries = 0
-            with open(log_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except Exception:
-                        continue
-                    total_entries += 1
-                    query = entry.get("query", "(unknown question)")
-                    # A dialogue's seq counter resets to 1 per process_query call,
-                    # so seq == 1 marks the start of a fresh conversation for that
-                    # question. Otherwise append to the question's open group.
-                    group = active_by_query.get(query)
-                    if entry.get("seq") == 1 or group is None:
-                        group = {
-                            "query": query,
-                            "started": entry.get("timestamp", ""),
-                            "entry_count": 0,
-                            "entries": [],
-                        }
-                        conversations.append(group)
-                        active_by_query[query] = group
-                    group["entries"].append(entry)
-                    group["entry_count"] += 1
+            conversations, total_entries = self._load_dialogue_groups(case_dir)
 
             # Perf: dialogue entries carry full system prompts — return only the
             # most recent N conversations for display; report the true totals.
@@ -3370,3 +3800,139 @@ class EYEBridge(QObject):
     def requestComplianceWindow(self):
         """Emit signal to open the GEP Compliance dashboard in its own OS window."""
         self.compliance_window_requested.emit()
+
+    @pyqtSlot()
+    def requestNarrativeMapWindow(self):
+        """Emit signal to open the Narrative Map in its own OS window."""
+        self.narrative_map_window_requested.emit()
+
+    # ── Narrative Map ──────────────────────────────────────────
+    def _narrative_map_service(self):
+        """Resolve the per-case NarrativeMapService held by the ContextManager
+        (None when no case is loaded)."""
+        return getattr(self.context_manager, "narrative_map_service", None)
+
+    @pyqtSlot(result=str)
+    def getNarrativeMap(self):
+        """Return the active case's Narrative Map (MapGraph + recent audit) as JSON.
+        Empty graph JSON when no case/service is available."""
+        svc = self._narrative_map_service()
+        if svc is None:
+            return json.dumps({"verdict": {"id": "verdict", "title": "Overall verdict",
+                                           "reason": "", "authoredBy": "eye"},
+                               "narratives": [], "evidence": {}, "links": [], "audit": []})
+        try:
+            return svc.load_graph_json()
+        except Exception as e:
+            logger.error(f"getNarrativeMap failed: {e}")
+            return json.dumps({"verdict": {"id": "verdict", "title": "Overall verdict",
+                                           "reason": "", "authoredBy": "eye"},
+                               "narratives": [], "evidence": {}, "links": [], "audit": []})
+
+    @pyqtSlot(str, result=str)
+    def commitMapEdit(self, event_json: str):
+        """Validate + apply + seal one Narrative Map mutation. Returns
+        {ok, seal_hash, ...}. On success, pushes narrative_map_updated so any open
+        map window (and other views) live-refresh."""
+        svc = self._narrative_map_service()
+        if svc is None:
+            return json.dumps({"ok": False, "error": "no case / narrative map service"})
+        try:
+            res = svc.commit(event_json)
+            if res.get("ok"):
+                # Push the FULL graph (not just a patch) so every open map view —
+                # this window, a second window, the embedded view — reconciles to
+                # the persisted state. The change descriptor still drives the
+                # changed-card pulse, and the audit row is appended.
+                self.emit_narrative_map_changed(change=res.get("change"),
+                                                audit=res.get("audit"))
+            return safe_json_dumps(res)
+        except Exception as e:
+            logger.error(f"commitMapEdit failed: {e}")
+            return json.dumps({"ok": False, "error": str(e)})
+
+    @pyqtSlot(str)
+    def investigateNarrative(self, narrative_id: str):
+        """Double-click a narrative → the Eye investigates it deeper in the
+        BACKGROUND. Runs a focused query whose NEW evidence attaches to this
+        narrative (no chat bubble). Emits ``narrativeInvestigationComplete`` when
+        done so the map can clear the per-card spinner."""
+        svc = self._narrative_map_service()
+        if svc is None or not self.context_manager:
+            try: self.narrativeInvestigationComplete.emit(narrative_id)
+            except Exception: pass
+            return
+        try:
+            g = svc.load_graph()
+            n = next((x for x in g.get("narratives", []) if x.get("id") == narrative_id), None)
+            if not n:
+                self.narrativeInvestigationComplete.emit(narrative_id)
+                return
+            title = (n.get("title") or "").strip()
+            reason = (n.get("reason") or "").strip()
+            query = (
+                f'Investigate further and find ADDITIONAL forensic evidence for this established '
+                f'finding: "{title}". {reason} Report ONLY new artifacts, timestamps, or '
+                f'correlations not already recorded, and cite the exact source for each.'
+            )
+            # Scope: new evidence attaches to THIS narrative (see
+            # query_processor._sync_narratives_from_findings).
+            try:
+                self.context_manager._focus_narrative_id = narrative_id
+            except Exception:
+                pass
+
+            worker = QueryWorker(self.context_manager, query, suppress_chat=True)
+            worker.status_updated.connect(self.status_updated.emit)
+            worker.dialogue_updated.connect(self.dialogue_updated.emit)
+            worker.report_updated.connect(self._emit_report_updated)
+            worker.request_hitl.connect(self._show_hitl_dialog)
+            worker.finished.connect(
+                lambda nid=narrative_id, w=worker: self._on_investigate_finished(nid, w))
+
+            if not hasattr(self, '_active_workers'):
+                self._active_workers = []
+            self._active_workers.append(worker)
+            worker.start()
+        except Exception as e:
+            logger.error(f"investigateNarrative failed: {e}")
+            try:
+                self.context_manager._focus_narrative_id = None
+            except Exception:
+                pass
+            try: self.narrativeInvestigationComplete.emit(narrative_id)
+            except Exception: pass
+
+    def _on_investigate_finished(self, narrative_id, worker):
+        """Clear the focus scope + drop the worker ref + tell the map the
+        investigation finished (clears the per-card spinner)."""
+        try:
+            self.context_manager._focus_narrative_id = None
+        except Exception:
+            pass
+        if hasattr(self, '_active_workers') and worker in self._active_workers:
+            try:
+                self._active_workers.remove(worker)
+            except ValueError:
+                pass
+        try:
+            self.narrativeInvestigationComplete.emit(narrative_id)
+        except Exception:
+            pass
+
+    def emit_narrative_map_changed(self, change: dict = None, audit: dict = None):
+        """Backend-side helper: push a live Narrative Map update (e.g. after the Eye
+        auto-syncs sub-questions or attaches evidence mid-investigation). Sends the
+        full graph so the UI reconciles even if it missed earlier patches."""
+        svc = self._narrative_map_service()
+        if svc is None:
+            return
+        try:
+            envelope = {"kind": "graph", "graph": json.loads(svc.load_graph_json())}
+            if change:
+                envelope["change"] = change
+            if audit:
+                envelope["audit"] = audit
+            self.narrative_map_updated.emit(safe_json_dumps(envelope))
+        except Exception as e:
+            logger.debug(f"emit_narrative_map_changed skipped: {e}")

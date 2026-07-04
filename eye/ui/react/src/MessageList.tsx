@@ -5,8 +5,10 @@ import ActionChips from './ActionChips';
 import OptionMenu from './OptionMenu';
 import ThinkingTrace from './ThinkingTrace';
 import EyeDialogue from './EyeDialogue';
+import ToolOutput from './ToolOutput';
 import MessagePinButton from './MessagePinButton';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import eyeIcon from './assets/eye_icon.png';
 import './MessageList.css';
 
@@ -113,7 +115,7 @@ const MessageList: React.FC<MessageListProps> = ({
 
             <div className="message-bubble">
               <div className="message-content">
-                <ReactMarkdown>{message.content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
               </div>
 
               {message.option_menu && message.option_menu.length > 0 && (
@@ -123,8 +125,12 @@ const MessageList: React.FC<MessageListProps> = ({
                 />
               )}
 
-              {message.data_viewer && (
-                <DataViewer {...message.data_viewer} />
+              {message.data_viewers && message.data_viewers.length > 0 ? (
+                message.data_viewers.map((dv, i) => (
+                  <DataViewer key={`dv-${message.id}-${i}`} {...dv} />
+                ))
+              ) : (
+                message.data_viewer && <DataViewer {...message.data_viewer} />
               )}
 
               {message.action_chips && message.action_chips.length > 0 && (
@@ -132,6 +138,12 @@ const MessageList: React.FC<MessageListProps> = ({
                   chips={message.action_chips}
                   onChipClick={onActionChipClick}
                 />
+              )}
+
+              {/* Dedicated, collapsed-by-default tool-call/result section — keeps
+                  big raw outputs (incl. text-protocol calls) out of the main bubble. */}
+              {message.role === 'assistant' && message.tool_output && message.tool_output.length > 0 && (
+                <ToolOutput entries={message.tool_output} />
               )}
 
               {/* Retained Eye<->LLM conversation transcript (how the Eye thought). */}

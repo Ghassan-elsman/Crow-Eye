@@ -105,44 +105,51 @@ EYE manages its limited "memory" through a strict token budget:
 
 ---
 
-## 5. The Ghassan Elsman Protocol (GEP)
-This is the "Forensic Integrity Boundary" enforced during Stage 7
-(synthesis) and Stages where EYE writes durable artifacts:
+## 5. How the Eye implements the GEP
+The **Ghassan Elsman Protocol (GEP)** is a *vendor-neutral standard for how AI should be used in
+digital forensics* — 10 principles that apply to **any** AI-forensics tool. The canonical
+definition lives in **[`GEP_standard.md`](./GEP_standard.md)** (the source of truth). The GEP is
+**not** a list of Eye features. This section maps each GEP principle to the **Eye mechanisms +
+Operating Rules** that uphold it; the Eye's Operating Rules are *how it gets answers* and exist to
+**satisfy** the GEP.
 
-### Read / synthesis side
-- **Chronology**: Mandatory timeline-based reporting.
-- **Specificity**: No summaries; must report exact timestamps, SIDs, and paths.
-- **Evidence-Link**: Every statement must correlate to a database record.
-- **Anti-Fluff**: Zero conversational filler in synthesis results.
+| GEP principle | How the Eye upholds it |
+|---|---|
+| **GEP-1 Evidence Primacy** | Read-only DB access; "never assume" operating rule; schema-grounded SQL (no invented identifiers); pre-flight connectivity gate (never answers without a live backend). |
+| **GEP-2 Traceability** | Evidence anchoring (raw markers embedded in history); `EvidenceSeal` provenance (`database:table:rowid`, file offsets, hashes); write-side evidence-link (`related_evidence`). |
+| **GEP-3 Specificity & Chronology** | "Timestamp priority" + the 7-step chronological reporting operating rules. |
+| **GEP-4 Cross-Corroboration** | Cross-source correlation operating rule + the cross-iteration evidence ledger; multi-source sweep. |
+| **GEP-5 Premise Verification** | Premise-verification operating rule + the planning pre-pass that turns asserted claims into `verify:` checklist items with explicit CONFIRMED/REFUTED/INCONCLUSIVE verdicts. |
+| **GEP-6 Completeness** | No-silent-truncation: `guarded_generate` self-heal → fail-hard refuse; automatic map-reduce over oversized data/questions; every reduction disclosed + audited. **Coverage disclosure**: `_emit_coverage` records which databases were consulted vs. available + a sampled flag (`EYE_Logs/eye_coverage_log.jsonl`), and the per-turn **GEP-6 Completeness & Coverage** check (`_evaluate_gep_turn`) grades it (PARTIAL when a sample stood in for the full set without map-reduce) so the gap is visible in the Compliance panel. |
+| **GEP-7 Integrity & Non-Repudiation** | Read-only evidence; SHA-256 hash-chained message & report-block IDs; `EvidenceSeal` payload hash chain; tamper-evident `EYE_Logs/`. |
+| **GEP-8 Transparency & Explainability** | Tool traceability (every call logged + LLM-visible); live thinking/dialogue stream; machine-readable per-turn compliance export to the Compliance panel; dual output to the report. |
+| **GEP-9 Human Authority** | "Assistant, not replacement" framing; write-side authorship (`EyeAuthorship`: author + reason + edit history); read-only on non-Eye-authored items; reversible artifacts. |
+| **GEP-10 Defensibility** | Professional/legal-grade tone operating rule; structured report blocks; objective, court-ready output. |
 
-### Write side (Rules 9 / 10 / 11 — apply to authoring tools)
-The four write-capable EYE tools — `correlation_create_wing`,
-`correlation_edit_wing`, `correlation_create_semantic_mapping`,
-`correlation_edit_semantic_mapping` — execute under three additional
-GEP rules. Their handlers refuse calls that don't comply.
+**Per-answer compliance** (`_evaluate_gep_turn`) grades every answer against **all 10 GEP
+principles** — Evidence Primacy (GEP-1), Traceability (GEP-2, via sealed provenance refs),
+Specificity & Chronology (GEP-3), Cross-Corroboration (GEP-4, ≥2 consulted sources), Premise
+Verification (GEP-5, premise checklist verdicts), Completeness & Coverage (GEP-6, consulted-vs-
+available + sample-vs-full), Integrity/Dual-Output (GEP-7), Transparency (GEP-8, tool traceability),
+Human Authority (GEP-9, write-side authorship), and Defensibility/Direct-Answer (GEP-10) — marked
+N-A where a principle doesn't apply to that turn, and persists the result for the Compliance panel.
 
-- **Rule 9 — Reason-Required**: every write or edit call must supply a
-  non-empty `reason` (forensic justification). The handler returns
-  `{success: false, gep_violation: "rule_9"}` on empty values. Edits
-  require a *fresh* reason — the edit history accumulates them.
-- **Rule 10 — Evidence-Link (write-side)**: every authored Wing or
-  Mapping must list at least one `related_evidence` reference in
-  `database:table:rowid` form. The handler attempts to resolve each
-  ref against the case databases:
-  - **Resolved**: GEP Rule 10 logged as `"satisfied"`.
-  - **Unresolved** (DB locked, row deleted, schema drift): the artifact
-    is **still persisted** (soft-warning model). Failed refs are
-    recorded in `eye_authorship.unresolved_evidence_refs` and Rule 10
-    is logged as `"partially_satisfied"`. Empty `related_evidence`
-    remains a hard block.
-- **Rule 11 — Eye-Stamped**: every artifact EYE persists carries a
-  populated `EyeAuthorship` block (see
-  `correlation_engine/config/eye_authorship.py`). This block records
-  the model, timestamp, reason, evidence refs, GEP per-rule status,
-  and the full edit history. Items where
-  `eye_authorship.created_by` does not start with `"eye"` (built-in
-  mappings, human-authored wings, legacy items without authorship)
-  are read-only to EYE — the edit handlers refuse to mutate them.
+**Write-side enforcement** — the authoring tools (`correlation_create/edit_wing`,
+`correlation_create/edit_semantic_mapping`) refuse non-compliant calls and stamp every artifact:
+- **`reason_required`** (upholds GEP-9 Human Authority + GEP-2): a non-empty `reason`; missing →
+  `{success:false, gep_violation:"reason_required"}`.
+- **`evidence_link`** (upholds GEP-2 Traceability): ≥1 `related_evidence` ref in
+  `database:table:rowid` form; resolved → `gep_rules.evidence_link == "satisfied"`, unresolved are
+  still persisted (soft-warning) as `"partially_satisfied"` + `unresolved_evidence_refs`, empty is a
+  hard block (`gep_violation:"evidence_link"`).
+- **`eye_stamped`** (upholds GEP-7 Non-Repudiation + GEP-9): every artifact carries an
+  `EyeAuthorship` block (model, timestamp, reason, evidence refs, `gep_rules_applied`, edit history);
+  items whose `created_by` does not start with `"eye"` are read-only to the Eye.
+
+> **Operating Rules ≠ GEP.** The Eye's system-prompt rules (tagged `[Operating · GEP-k]` where they
+> uphold a principle, or `[Operating]` for pure UX/tooling — action chips, tool disclosure,
+> internet search, etc.) describe **how the Eye works**. They are followed, but the **GEP itself is
+> the tool-agnostic standard** in `GEP_standard.md`; the rules merely implement it.
 
 ---
 

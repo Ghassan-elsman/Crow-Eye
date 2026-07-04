@@ -139,6 +139,45 @@ class EvidenceSeal:
     def _sha256(text: str) -> str:
         return hashlib.sha256((text or "").encode("utf-8", errors="replace")).hexdigest()
 
+    def verify_chain(self) -> bool:
+        """Re-walk the persisted payload seal log and confirm the tamper-evident
+        hash chain is intact end-to-end: for every record,
+        ``seal_hash == sha256(prev_seal_hash + payload_sha256 + metadata_sha256)``
+        and ``prev_seal_hash`` links to the previous record's ``seal_hash``.
+
+        Returns ``True`` when the chain verifies (an empty/missing log is
+        vacuously valid — nothing has been sealed to break). Best-effort: an I/O
+        or parse error returns ``False`` (an unreadable integrity log is not a
+        pass). This is the single source of truth reused by the bridge
+        (``get_payload_seals``) and the compliance dashboard.
+        """
+        try:
+            if not self._log_path or not self._log_path.exists():
+                return True
+            prev = ""
+            with open(self._log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        s = json.loads(line)
+                    except Exception:
+                        return False
+                    p_hash = s.get("payload_sha256", "")
+                    m_hash = s.get("metadata_sha256", "")
+                    if m_hash:
+                        expected = self._sha256(prev + p_hash + m_hash)
+                    else:
+                        expected = self._sha256(prev + p_hash)  # legacy format
+                    if s.get("prev_seal_hash", "") != prev or s.get("seal_hash") != expected:
+                        return False
+                    prev = s.get("seal_hash", "")
+            return True
+        except Exception as e:
+            self.logger.warning(f"verify_chain failed: {e}")
+            return False
+
     @staticmethod
     def extract_evidence_refs(tool_results: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """Derive court-usable provenance handles from the turn's tool results.
@@ -734,9 +773,14 @@ class EvidenceSeal:
         # the chain. (A single case directory should still have one writer; this
         # is defense in depth.) Note: a single case dir must use one EvidenceSeal.
         with self._lock:
-            self._seq += 1
+            # Compute the next seq/hash LOCALLY; only commit them to the instance
+            # AFTER a successful disk append, so a write failure never leaves the
+            # in-memory chain pointing past a record that isn't on disk (which
+            # would make every subsequent record appear to break the chain).
+            new_seq = self._seq + 1
+            prev_seal_hash = self._prev_seal_hash
             # The chain folds the previous hash + payload hash + metadata hash
-            seal_hash = self._sha256(self._prev_seal_hash + payload_sha256 + metadata_sha256)
+            seal_hash = self._sha256(prev_seal_hash + payload_sha256 + metadata_sha256)
             # Persist the full (redacted) payload so the seal is independently
             # reproducible. The sidecar's content hashes to payload_sha256 (already
             # in seal_hash), so it is tamper-evident; not folded into the chain
@@ -749,7 +793,7 @@ class EvidenceSeal:
                 if (self.store_full_payload or force_full_payload) else None
             )
             record = {
-                "seq": self._seq,
+                "seq": new_seq,
                 "timestamp": datetime.now().isoformat(),
                 "phase": phase,
                 "iteration": iteration,
@@ -768,16 +812,24 @@ class EvidenceSeal:
                 # folded into the hash chain, so verification is unaffected.
                 "payload_preview": (payload_text[:self.CUT_PREVIEW_CHARS] if not sent_to_model else None),
                 "metadata_sha256": metadata_sha256,
-                "prev_seal_hash": self._prev_seal_hash,
+                "prev_seal_hash": prev_seal_hash,
                 "seal_hash": seal_hash,
                 "evidence_refs": evidence_refs or [],
             }
-            self._prev_seal_hash = seal_hash
+            wrote = False
             try:
                 if self._log_path:
                     self._log_path.parent.mkdir(parents=True, exist_ok=True)
                     with open(self._log_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+                    wrote = True
             except Exception as e:
                 self.logger.error(f"Failed to write evidence seal: {e}")
+            # Commit the chain pointer ONLY if the record was persisted (or there
+            # is no on-disk log to stay consistent with). On a write failure we
+            # leave _seq/_prev_seal_hash untouched so the next seal retries the
+            # same link instead of stranding the chain ahead of disk.
+            if wrote or not self._log_path:
+                self._seq = new_seq
+                self._prev_seal_hash = seal_hash
         return record

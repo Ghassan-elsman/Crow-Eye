@@ -46,6 +46,39 @@
       "description": "ISO 8601 timestamp of last successful connectivity validation",
       "format": "date-time"
     },
+    "embedding": {
+      "type": "object",
+      "description": "Optional semantic-retrieval embedding server (e.g. Ollama). When disabled or unreachable, the Eye falls back to the always-available BM25 lexical ranker, so Cloud/CLI deployments are unaffected.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable embedding-backed semantic retrieval for the knowledge base (and, if index_evidence is set, the forensic data). Requires a reachable embedding server.",
+          "default": false
+        },
+        "model": {
+          "type": "string",
+          "description": "Embedding model name. nomic-embed-text(-v1.5) applies search_query:/search_document: task prefixes automatically.",
+          "default": "nomic-embed-text"
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Base URL of the embedding server (Ollama API).",
+          "default": "http://localhost:11434"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Per-request embedding timeout in seconds.",
+          "minimum": 1,
+          "maximum": 120,
+          "default": 10
+        },
+        "index_evidence": {
+          "type": "boolean",
+          "description": "Build a per-case semantic index over a curated subset of forensic data rows, enabling semantic_search_artifacts (discovery layer; SQL stays authoritative). No effect unless enabled is also true.",
+          "default": false
+        }
+      }
+    },
     "context_window": {
       "type": "object",
       "description": "Context window and token budget configuration. All fields are optional; the Eye supplies defaults for any that are absent.",
@@ -145,6 +178,148 @@
               "default": 0.7
             }
           }
+        }
+      }
+    },
+    "reasoning": {
+      "type": "object",
+      "description": "Investigator-grade reasoning behaviors (v0.11.1). All fields optional; the Eye supplies defaults (all ON) for any that are absent. Disable to cap cost/latency on small or local backends.",
+      "properties": {
+        "enable_decomposition": {
+          "type": "boolean",
+          "description": "Decompose multi-part questions into a sub-question checklist and correlate the partial answers into a final consolidated answer.",
+          "default": true
+        },
+        "max_sub_questions": {
+          "type": "integer",
+          "description": "Maximum number of sub-questions a single query is split into.",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 6
+        },
+        "enable_premise_verification": {
+          "type": "boolean",
+          "description": "Treat factual claims the investigator makes as hypotheses to prove or disprove against artifacts, and report a verdict.",
+          "default": true
+        },
+        "enable_question_memory": {
+          "type": "boolean",
+          "description": "Persist a per-question answer summary + extracted findings to eye_question_memory.jsonl and reuse them on related follow-up questions.",
+          "default": true
+        },
+        "prior_findings_count": {
+          "type": "integer",
+          "description": "How many recent prior-question findings to surface to the model for reuse.",
+          "minimum": 0,
+          "maximum": 20,
+          "default": 3
+        },
+        "model_retry_max_attempts": {
+          "type": "integer",
+          "description": "Max attempts for a model call when the provider returns a transient error (e.g. Gemini 500/INTERNAL); exponential backoff between attempts.",
+          "minimum": 1,
+          "maximum": 6,
+          "default": 3
+        },
+        "auto_segment_question": {
+          "type": "boolean",
+          "description": "Let the LLM break a big/complex question into focused logical sub-questions (vs. only splitting genuinely multi-part questions). The model decides the split; there is no character-length rule.",
+          "default": true
+        },
+        "enable_auto_map_reduce": {
+          "type": "boolean",
+          "description": "Automatically analyze a very large query result via map-reduce (chunked, each segment sealed) instead of feeding a sample.",
+          "default": true
+        },
+        "auto_map_reduce_row_threshold": {
+          "type": "integer",
+          "description": "A query_database result with at least this many rows is auto-routed through map-reduce.",
+          "minimum": 100,
+          "maximum": 1000000,
+          "default": 1500
+        },
+        "enable_reasoning_trace": {
+          "type": "boolean",
+          "description": "After answering a decomposed question, capture WHY each sub-question was created and WHY each conclusion follows from which evidence (a sealed, tool-less structured pass) to eye_reasoning_log.jsonl for the Compliance UI.",
+          "default": true
+        },
+        "answer_temperature": {
+          "type": "number",
+          "description": "Sampling temperature for the investigative/synthesis (answer) model calls. Lower = more deterministic, evidence-faithful output.",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0.2
+        },
+        "planning_temperature": {
+          "type": "number",
+          "description": "Sampling temperature for the planning + reasoning-trace passes. Near-zero for repeatable decomposition.",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0.0
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "description": "Maximum tokens the model may generate per reply (bounds the answer, not the context window).",
+          "minimum": 256,
+          "maximum": 32768,
+          "default": 8192
+        },
+        "rag_top_k": {
+          "type": "integer",
+          "description": "Maximum number of ranked knowledge-base chunks to retrieve (semantic or lexical) beyond the deterministic keyword-mapped docs.",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 5
+        },
+        "rag_min_score": {
+          "type": "number",
+          "description": "Minimum relevance score (0-1) for a ranked knowledge-base chunk to be included.",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.05
+        },
+        "rag_subquestion_aware": {
+          "type": "boolean",
+          "description": "After decomposition, also retrieve targeted knowledge for each sub-question (not just the main query).",
+          "default": true
+        },
+        "rag_semantic_min_score": {
+          "type": "number",
+          "description": "Minimum cosine similarity (0-1) for a SEMANTIC (embedding) knowledge-base chunk to be included. Only applies when an embedding server is configured; the lexical fallback uses rag_min_score.",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.4
+        },
+        "history_window_turns": {
+          "type": "integer",
+          "description": "Number of most-recent conversation turns kept VERBATIM (the sliding window). Older non-protected turns are folded into a single rolling summary (the summarization buffer). Evidence/pinned turns and the first turn are always kept.",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 5
+        },
+        "enable_summary_buffer": {
+          "type": "boolean",
+          "description": "Stage 1 of the two-stage memory policy: fold older non-protected turns into a rolling summary before the sliding-window drop. When false, only the sliding-window drop (Stage 2) applies.",
+          "default": true
+        },
+        "enable_conversation_recall": {
+          "type": "boolean",
+          "description": "Long-term memory: retrieve earlier turns that were summarized / slid out of the live window (by relevance to the current query) and inject them as a 'Recalled Earlier Conversation' block, so nothing is truly lost when the window fills.",
+          "default": true
+        },
+        "conversation_recall_top_k": {
+          "type": "integer",
+          "description": "Maximum number of recalled earlier conversation turns to inject per query.",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 3
+        },
+        "search_max_rows": {
+          "type": "integer",
+          "description": "Maximum rows returned by the global forensic search tool (search_artifacts).",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 50
         }
       }
     }

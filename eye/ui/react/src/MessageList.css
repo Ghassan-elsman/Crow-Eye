@@ -182,6 +182,32 @@
 .message-content li         { margin: 3px 0; }
 .message-content strong     { font-weight: 600; }
 
+/* GFM markdown tables (remark-gfm fallback). Primary path is the interactive
+   chat_add_table / DataViewer; this just keeps any stray '|' table readable. */
+.message-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 12.5px;
+  display: block;
+  overflow-x: auto;
+}
+.message-content th,
+.message-content td {
+  border: 1px solid #374151;
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+.message-content th {
+  background: #1f2937;
+  color: #e5e7eb;
+  font-weight: 600;
+}
+.message-content tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
 /* Thinking dots */
 .thinking-dots {
   display: flex;

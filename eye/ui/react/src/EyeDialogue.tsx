@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { EyeDialogueEntry } from './types';
 import './EyeDialogue.css';
 
@@ -39,7 +40,10 @@ const Collapsible: React.FC<{ title: string; children: React.ReactNode; defaultO
   );
 };
 
-const EntryView: React.FC<{ entry: EyeDialogueEntry }> = ({ entry }) => {
+// memo: an entry only re-renders when its own `entry` reference changes. This
+// keeps ReactMarkdown / JSON.stringify off the hot path when an unrelated part
+// of the host (e.g. the Compliance panel) re-renders.
+const EntryView = memo(function EntryView({ entry }: { entry: EyeDialogueEntry }) {
   const meta = PHASE_META[entry.phase] || { side: 'eye', label: entry.phase };
   return (
     <article className={`eyed-entry eyed-entry--${meta.side}`}>
@@ -83,7 +87,7 @@ const EntryView: React.FC<{ entry: EyeDialogueEntry }> = ({ entry }) => {
         <div className="eyed-entry-body">
           {entry.content ? (
             <div className="eyed-markdown">
-              <ReactMarkdown>{entry.content}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.content}</ReactMarkdown>
             </div>
           ) : (
             <div className="eyed-muted">(no text — model returned tool calls only)</div>
@@ -126,9 +130,11 @@ const EntryView: React.FC<{ entry: EyeDialogueEntry }> = ({ entry }) => {
       )}
     </article>
   );
-};
+});
 
-const EyeDialogue: React.FC<EyeDialogueProps> = ({ entries, live = false }) => {
+// memo: the transcript re-renders only when its `entries`/`live` props change
+// (a fetch), not on every render of the parent panel.
+const EyeDialogue = memo(function EyeDialogue({ entries, live = false }: EyeDialogueProps) {
   if (!entries || entries.length === 0) return null;
   return (
     <div className={`eye-dialogue ${live ? 'eye-dialogue--live' : ''}`}>
@@ -137,6 +143,6 @@ const EyeDialogue: React.FC<EyeDialogueProps> = ({ entries, live = false }) => {
       ))}
     </div>
   );
-};
+});
 
 export default EyeDialogue;

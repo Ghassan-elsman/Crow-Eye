@@ -108,9 +108,13 @@ class GenericCLIBackend(LLMBackend):
             return (["cmd", "/c", exe, *args], False)
         return ([exe, *args], False)
 
-    def generate(self, system_prompt: str, user_message: str, tools: Optional[List[Dict]] = None, history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    def generate(self, system_prompt: str, user_message: str, tools: Optional[List[Dict]] = None, history: Optional[List[Dict[str, Any]]] = None, gen_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Standardizes the generation request for a CLI environment.
+
+        ``gen_params`` (temperature/max_output_tokens/top_p) is accepted for
+        interface parity but ignored: CLI agents manage their own sampling and
+        expose no per-call generation knobs over stdin.
         """
         try:
             # --- 1. PROMPT ASSEMBLY ---

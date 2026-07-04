@@ -30,6 +30,9 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Callable
 
 from eye.services.evidence_seal import EvidenceSeal
+from eye.services.history_manager import reduce_messages_to_budget
+from eye.services.rag_service import _rag_tokenize
+from eye.services.report_engine import is_triage_block
 
 
 _TRANSIENT_ERROR_MARKERS = (
@@ -72,10 +75,34 @@ class QueryProcessor:
     """
     Main Orchestrator for the Forensic Investigation Pipeline.
     
-    This class is state-agnostic and relies on the provided ContextManager 
+    This class is state-agnostic and relies on the provided ContextManager
     to interact with the case database, history, and AI backends.
     """
-    
+
+    # Forensic artifacts Crow-Eye parses + what each provides. Single source of
+    # truth used to ground the hierarchical planner so every sub-narrative maps its
+    # `evidence_needed` to the artifact that actually holds the evidence. Matches the
+    # artifact set in IntentEngine. The execution model still resolves the exact
+    # database/table at query time, so a not-collected artifact just returns nothing.
+    ARTIFACT_CATALOG = [
+        ("Prefetch", "execution history, run count, first/last run timestamps"),
+        ("Registry", "AutoRun/persistence, UserAssist (GUI program runs), BAM (background activity), "
+                     "networks — also ShellBags (folder views/access) and MRU & RecentDocs (typed paths, Open/Save)"),
+        ("Jump Lists & LNK", "file access, paths, target metadata"),
+        ("Event Logs", "System, Security (logons/4624/4688), Application"),
+        ("AmCache", "full path, install time, publisher, SHA-1"),
+        ("ShimCache", "file name, path, last modified (presence/execution evidence)"),
+        ("MFT", "file metadata, timestamps, deleted-file records"),
+        ("USN Journal", "file create/modify/delete/rename history"),
+        ("Recycle Bin", "deleted file names, original paths, deletion times"),
+        ("SRUM", "per-app resource usage, network bytes sent/received, energy"),
+    ]
+
+    @classmethod
+    def _artifact_catalog_block(cls) -> str:
+        """Render ARTIFACT_CATALOG as a compact reference for the planner prompt."""
+        return "\n".join(f"  - {name}: {desc}" for name, desc in cls.ARTIFACT_CATALOG)
+
     def __init__(self, context_manager):
         """
         Args:
@@ -83,6 +110,413 @@ class QueryProcessor:
         """
         self.cm = context_manager
         self.logger = logging.getLogger(self.__class__.__name__)
+
+    def _push_narrative_map_update(self, change: dict = None, audit: dict = None) -> None:
+        """Notify the UI that the Narrative Map changed mid-investigation (auto-sync,
+        evidence attach, state flip) so any open map window live-refreshes. The
+        bridge registers ``narrative_map_update_callback`` on the ContextManager;
+        when absent (e.g. headless) this is a no-op. Best-effort."""
+        try:
+            cb = getattr(self.cm, "narrative_map_update_callback", None)
+            if callable(cb):
+                cb(change, audit)
+        except Exception as e:
+            self.logger.debug(f"narrative map update push skipped: {e}")
+
+    def _sync_narratives_from_findings(self, checklist, all_tool_results, trace, emit_step,
+                                       user_query: str = "", ai_content: str = "") -> None:
+        """Create Narrative Map narratives from the FINDINGS of this turn.
+
+        A narrative is a finding/claim — NOT the question. The card title is the
+        conclusion (from the reasoning ``trace`` when available, else the best
+        supporting evidence snippet); the originating sub-question is kept only as
+        ``meta.created_from`` provenance. A sub-question that was checked but yielded
+        nothing becomes a ``negative`` narrative so completeness is preserved.
+
+        If ``cm._focus_narrative_id`` is set (a double-click "investigate further"
+        run), newly-found evidence is attached to THAT narrative instead of creating
+        new cards. Best-effort; never raises."""
+        nms = getattr(self.cm, "narrative_map_service", None)
+        if nms is None:
+            return
+        import re as _re
+
+        def _toks(s):
+            return {w for w in _re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", (s or "").lower())}
+
+        def _model():
+            try:
+                return self.cm.model_router.config.get("model_name") or ""
+            except Exception:
+                return ""
+
+        def _best_result(q):
+            q_tokens = _toks(q)
+            best, best_score = None, 0
+            for r in (all_tool_results or []):
+                if not isinstance(r, dict):
+                    continue
+                inner = r.get("result") if isinstance(r.get("result"), dict) else {}
+                if not (r.get("success") or inner.get("success")):
+                    continue
+                blob = str(r.get("data") or inner.get("data") or inner or "")
+                score = len(q_tokens & _toks(blob))
+                if score > best_score:
+                    best, best_score = r, score
+            return best, best_score
+
+        def _evidence_of(r):
+            inner = r.get("result") if isinstance(r.get("result"), dict) else {}
+            params = r.get("parameters") or {}
+            tool = r.get("tool_name") or inner.get("tool_name") or "tool"
+            blob = str(r.get("data") or inner.get("data") or inner or "")
+            # The SQL + database that produced this result, so the evidence can
+            # reload its source rows in the map's detail window.
+            query = params.get("sql_query") or ""
+            database = params.get("database_name") or ""
+            return tool, blob, query, database
+
+        # ── Focused re-investigation of ONE narrative (double-click) ──
+        focus_id = getattr(self.cm, "_focus_narrative_id", None)
+        if focus_id:
+            # Clear it immediately so a later query can never inherit the focus and
+            # mis-attach its findings (the bridge's own clear becomes a no-op).
+            try:
+                self.cm._focus_narrative_id = None
+            except Exception:
+                pass
+            added = 0
+            for r in (all_tool_results or []):
+                if not isinstance(r, dict):
+                    continue
+                inner = r.get("result") if isinstance(r.get("result"), dict) else {}
+                if not (r.get("success") or inner.get("success")):
+                    continue
+                tool, blob, query, database = _evidence_of(r)
+                if not blob.strip():
+                    continue
+                if nms.attach_evidence(focus_id, {
+                    "kicker": tool,
+                    "data": (blob[:120] + "…") if len(blob) > 120 else blob,
+                    "reason": "Additional evidence found during deeper investigation.",
+                    "ref": tool, "query": query, "database": database,
+                }):
+                    added += 1
+            if added:
+                try:
+                    emit_step("synthesis", f"Narrative Map: attached {added} new finding(s)", "done")
+                except Exception:
+                    pass
+                self._push_narrative_map_update()
+            return
+
+        # ── Normal turn: build the 4-level claim tree ──────────────────────────
+        #   VERDICT  (goal-claim, handled in _finalize_verdict)
+        #     └─ MAIN narrative   = a sub-question rendered as a CLAIM the Eye proves
+        #           └─ SUB narrative = a specific behavior that was established
+        #                 • evidence = the tool output that proves the behavior
+        # Card titles always say what is being PROVEN — never the raw (typo-ridden)
+        # user question; the question survives only as meta.created_from provenance.
+        items = [c for c in (checklist or []) if c.get("kind") != "premise"]
+        if not items:
+            return
+        trace_subs = (trace or {}).get("sub_questions") or []
+        model = _model()
+
+        def _ev_from_best(q):
+            """Evidence card from the best-matching tool result for ``q`` (reloadable)."""
+            best, best_score = _best_result(q)
+            if best is None or best_score <= 0:
+                return None
+            tool, blob, query, database = _evidence_of(best)
+            return {
+                "kicker": tool,
+                "data": (blob[:120] + "…") if len(blob) > 120 else blob,
+                "reason": "Result that established this finding.",
+                "ref": tool, "query": query, "database": database,
+            }
+
+        def _ev_from_trace(refs):
+            """Evidence cards from trace ``[{ref,note}]`` refs cited for a behavior."""
+            cards = []
+            for e in (refs or []):
+                if not isinstance(e, dict):
+                    continue
+                ref = (e.get("ref") or "").strip()
+                note = (e.get("note") or "").strip()
+                if not (ref or note):
+                    continue
+                cards.append({
+                    "kicker": ref or "evidence",
+                    "data": note or ref,
+                    "reason": "Evidence cited for this behavior.",
+                    "ref": ref,
+                })
+            return cards
+
+        created = 0
+        for idx, c in enumerate(items):
+            q = c.get("q", "")
+            answered = c.get("status") == "answered"
+            conclusion, why, behaviors = "", c.get("why", ""), []
+            is_inconclusive = False
+            tsub = trace_subs[idx] if idx < len(trace_subs) else None
+            if isinstance(tsub, dict):
+                conclusion = (tsub.get("conclusion") or "").strip()
+                why = (tsub.get("why_concluded") or why or "").strip()
+                behaviors = tsub.get("behaviors") or []
+                if str(tsub.get("status", "")).lower() == "inconclusive":
+                    answered = False
+                    is_inconclusive = True
+
+            # MAIN narrative = the sub-question as a clean claim (the Eye's conclusion
+            # if it reached one, else a deterministic claim — NEVER the raw question).
+            main_title = conclusion or self._claimify(q) or "Investigation finding"
+            main_id = nms.upsert_finding_narrative(
+                main_title, why or "Sub-claim under investigation.",
+                q, evidence=[], state="open", model=model)
+            if not main_id:
+                continue
+            created += 1
+
+            # An inconclusive sub-question is never a proven claim, even if a tool
+            # result keyword-matched or the model emitted behaviors for it.
+            positive = (answered or bool(conclusion) or bool(behaviors)) and not is_inconclusive
+            child_states = []
+
+            if positive and behaviors:
+                # SUB narrative per specific behavior, each with its own evidence.
+                for bi, beh in enumerate(behaviors):
+                    claim = (beh.get("claim") or "").strip()
+                    if not claim:
+                        continue
+                    bwhy = (beh.get("why") or "").strip()
+                    ev = _ev_from_trace(beh.get("evidence"))
+                    if not ev:  # behavior unbacked by trace refs → fall back to the
+                        card = _ev_from_best(q)  # sub-question's best tool result
+                        ev = [card] if card else []
+                    state = "proven" if ev else "negative"
+                    if nms.upsert_finding_narrative(
+                            claim, bwhy or "Specific behavior establishing the claim.",
+                            f"{q}::beh:{bi}", evidence=ev, state=state,
+                            model=model, parent=main_id):
+                        created += 1
+                        child_states.append(state)
+            elif positive:
+                # Graceful degrade (no behavior breakdown): attach the best tool
+                # result straight to the sub-question claim (3-level).
+                card = _ev_from_best(q)
+                if card:
+                    nms.attach_evidence(main_id, card, model=model)  # flips → proven
+                    child_states.append("proven")
+
+            # Roll the main claim's state up from its behavior children.
+            if "proven" in child_states:
+                nms.set_state(main_id, "proven",
+                              reason="Established by the behavior(s) below.", model=model)
+            else:
+                nms.set_state(main_id, "negative",
+                              reason=(why or f"Checked for: {q} — nothing established."),
+                              model=model)
+
+        if created:
+            try:
+                emit_step("synthesis", f"Narrative Map: recorded {created} finding(s)", "done")
+            except Exception:
+                pass
+            self._push_narrative_map_update()
+
+    @staticmethod
+    def _claimify(text: str) -> str:
+        """Turn a (possibly messy / typo-ridden) question into a clean declarative
+        CLAIM for a card title — the map shows *what we are trying to prove*, never the
+        raw question. This is a FALLBACK only; the Eye's reasoning conclusion / behavior
+        claim (already declarative) is preferred. An interrogative becomes
+        ``Whether <…>`` (the proposition under investigation — grammatical for any
+        phrasing and robust to the user's formatting). Returns '' for empty input."""
+        import re as _re
+        t = _re.sub(r'[*_`#>]+', ' ', (text or "")).strip()
+        t = t.strip('"\'' + "“”‘’").strip()
+        t = " ".join(t.split())
+        if not t:
+            return ""
+        t = t.rstrip("?").strip()
+        if not t:
+            return ""
+        # Leading auxiliary / copula → drop it and frame the proposition with
+        # "Whether" (yes/no questions: "is X bad" → "Whether X bad"). Wh-questions
+        # keep their question word (it names what is being determined). Anything
+        # else is already declarative → just capitalize.
+        aux = {"is", "are", "am", "was", "were", "do", "does", "did", "can",
+               "could", "has", "have", "had", "will", "would", "should", "may",
+               "might"}
+        wh = {"who", "what", "when", "where", "why", "how", "which", "whose", "whom"}
+        parts = t.split(" ", 1)
+        first = parts[0].lower()
+        if first in aux and len(parts) > 1:
+            rest = parts[1].strip()
+            claim = "Whether " + rest if rest else "Whether " + t
+        elif first in wh:
+            claim = t[0].upper() + t[1:]
+        else:
+            claim = t[0].upper() + t[1:]
+        return claim[:160]
+
+    @staticmethod
+    def _build_map_checklist(checklist, user_query: str, all_tool_results) -> list:
+        """The checklist to feed the reasoning-trace + Narrative Map sync.
+
+        A NON-decomposed but *investigative* turn (the planner produced no
+        sub-question, yet the Eye ran tools and answered) still gets ONE main claim —
+        the whole question — so the Eye's logical thinking ALWAYS reaches the map.
+        The synthetic item is for the map/trace only; the investigation ``checklist``
+        (which drives the loop and prompt injection) is never mutated. A pure-chat
+        turn with no successful tool result is left off the map (no spurious verdict
+        for "hello")."""
+        checklist = checklist or []
+        has_question = any(c.get("kind") != "premise" for c in checklist)
+        had_results = any(
+            isinstance(r, dict) and (
+                r.get("success")
+                or (isinstance(r.get("result"), dict) and r["result"].get("success"))
+            )
+            for r in (all_tool_results or [])
+        )
+        if not has_question and had_results:
+            return list(checklist) + [
+                {"q": user_query, "status": "answered", "kind": "question", "why": ""}
+            ]
+        return list(checklist)
+
+    @staticmethod
+    def _strip_tool_call_blocks(text: str) -> str:
+        """Remove fenced ```tool_call / ```tool_calls blocks from a chat answer.
+
+        Text-protocol tool calls (the Gemma fallback) are emitted INSIDE the model's
+        reply text; they belong in the dedicated "Tool output" section, not the main
+        chat bubble. The structured calls + their results are preserved separately
+        (eye_dialogue + tool_output), so stripping them here only cleans the prose.
+        Never raises."""
+        if not text:
+            return text
+        import re as _re
+        try:
+            cleaned = _re.sub(r"```tool_calls?\b[^\n]*\n.*?```", "", text,
+                              flags=_re.DOTALL | _re.IGNORECASE)
+            # Collapse the blank gap a removed block leaves behind.
+            cleaned = _re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+            return cleaned or text.strip()
+        except Exception:
+            return text
+
+    @staticmethod
+    def _build_tool_output(all_tool_results: list) -> list:
+        """Compact per-turn tool-call/result list for the dedicated "Tool output" UI
+        section (collapsed by default). One entry per executed tool: name, the call
+        parameters, success, and the result text (truncated). Never raises."""
+        import json as _json
+        out = []
+        for r in (all_tool_results or []):
+            if not isinstance(r, dict):
+                continue
+            name = r.get("tool_name") or r.get("name") or "tool"
+            params = r.get("parameters") if isinstance(r.get("parameters"), dict) else {}
+            inner = r.get("result") if isinstance(r.get("result"), dict) else r
+            success = bool(r.get("success") or (isinstance(inner, dict) and inner.get("success")))
+            try:
+                payload = inner.get("data", inner) if isinstance(inner, dict) else inner
+                result_text = payload if isinstance(payload, str) else _json.dumps(payload, default=str)
+            except Exception:
+                result_text = str(inner)
+            if len(result_text) > 6000:
+                result_text = result_text[:6000] + "\n… [truncated — full result in the data viewer]"
+            out.append({
+                "name": name,
+                "parameters": params,
+                "success": success,
+                "result_text": result_text,
+            })
+        return out
+
+    @staticmethod
+    def _headline(text: str) -> str:
+        """First sentence of the synthesis answer, markdown-stripped, ~120 chars —
+        used as the MAIN narrative's title (a finding, not the question)."""
+        import re as _re
+        t = _re.sub(r'[*_`#>\-]+', ' ', (text or "")).strip()
+        t = _re.split(r'(?<=[.!?])\s+', t)[0] if t else ""
+        t = " ".join(t.split())
+        return (t[:117] + "…") if len(t) > 120 else t
+
+    def _finalize_verdict(self, ai_content: str, user_query: str = "") -> str:
+        """Author the case Verdict as a GOAL-CLAIM and flip its lifecycle state,
+        returning the chat answer with the `VERDICT:` directive line removed.
+
+        The verdict says what the whole investigation is trying to prove — never the
+        raw question and never the generic "Overall verdict" seed. Title = the AI's
+        crafted `VERDICT:` directive if present, else a deterministic claim from the
+        user's goal (`_claimify`). State (Phase-1 lifecycle): ``proven`` if any main
+        claim was proven, ``unproven`` if mains were checked but none proven, else
+        left ``open``. Best-effort; never raises."""
+        nms = getattr(self.cm, "narrative_map_service", None)
+        if not nms or not ai_content:
+            return ai_content
+        import re
+        title, reason = None, ""
+        try:
+            m = re.search(r'(?im)^[ \t>*\-]*VERDICT:\s*(.+?)\s*$', ai_content)
+            if m:
+                line = m.group(1).strip().strip('`').strip()
+                if "||" in line:
+                    title, reason = (p.strip() for p in line.split("||", 1))
+                else:
+                    title = line
+                # Remove the directive line from the chat answer.
+                ai_content = re.sub(r'(?im)^[ \t>*\-]*VERDICT:.*$\n?', '', ai_content).strip()
+
+            model = None
+            try:
+                model = self.cm.model_router.config.get("model_name")
+            except Exception:
+                pass
+
+            g = nms.load_graph()
+            narratives = g.get("narratives", [])
+            # Main claims = narratives that link straight to the verdict.
+            verdict_id = (g.get("verdict") or {}).get("id")
+            link_to = {l.get("from"): l.get("to") for l in g.get("links", [])}
+            mains = [n for n in narratives if link_to.get(n.get("id")) == verdict_id]
+            main_states = [n.get("state") for n in mains]
+            any_proven = any(s in ("proven", "absolute") for s in main_states)
+
+            if not title:
+                # Goal-claim from the user's question — never the seeded default.
+                cur = (g.get("verdict") or {}).get("title", "").strip().lower()
+                if cur in ("", "overall verdict"):
+                    title = self._claimify(user_query) or None
+                    if title and not reason:
+                        proven = [n.get("title", "") for n in mains
+                                  if n.get("state") in ("proven", "absolute") and n.get("title")]
+                        reason = ("Established by: " + "; ".join(proven[:5])) if proven else \
+                                 "No supporting claim could be established."
+
+            if title:
+                nms.set_verdict(title, reason, model=model)
+
+            # Lifecycle state: open → proven / unproven from the main claims' rollup.
+            if mains:
+                new_state = "proven" if any_proven else "unproven"
+                nms.set_verdict_state(
+                    new_state,
+                    reason=("A main claim was established." if any_proven
+                            else "All main claims were checked; none could be established."),
+                    model=model)
+
+            if title or mains:
+                self._push_narrative_map_update()
+        except Exception as e:
+            self.logger.debug(f"verdict finalize skipped: {e}")
+        return ai_content
 
     def _tool_output_char_limit(self) -> int:
         """Max chars of a single tool output kept in memory/history.
@@ -105,6 +539,244 @@ class QueryProcessor:
         token_aware_ceiling = max(configured_char_floor, tool_results_tokens * 4)
         adaptive_char_limit = int(usable * 0.5 * 4)
         return max(4000, min(token_aware_ceiling, adaptive_char_limit))
+
+    def _retrieve_conversation_recall(self, user_query: str, emit_step) -> str:
+        """Retrieve earlier turns (summarized / slid out of the live window) that
+        are relevant to ``user_query`` — the long-term-memory companion to the
+        two-stage history policy. Gated by ``reasoning_config`` and budgeted from
+        ``token_budget['conversation_recall']``. Best-effort: any failure or a
+        backend without the method degrades to no recall (returns "").
+        """
+        rc = getattr(self.cm, "reasoning_config", None)
+        rc = rc if isinstance(rc, dict) else {}
+        if not rc.get("enable_conversation_recall", True):
+            return ""
+        rag = getattr(self.cm, "rag_service", None)
+        if rag is None or not hasattr(rag, "retrieve_conversation"):
+            return ""
+        try:
+            budget = int((getattr(self.cm, "token_budget", {}) or {}).get("conversation_recall", 600))
+            top_k = int(rc.get("conversation_recall_top_k", 3))
+            recalled = rag.retrieve_conversation(
+                user_query=user_query, max_tokens=max(200, budget), top_k=top_k,
+            )
+            if recalled:
+                _srcs = list(getattr(rag, "last_conversation_sources", []) or [])
+                emit_step(
+                    "rag",
+                    f"Recalled {len(_srcs)} earlier conversation turn(s) from memory",
+                    "done",
+                )
+            return recalled or ""
+        except Exception as e:
+            self.logger.debug(f"Conversation recall skipped: {e}")
+            return ""
+
+    def _build_subquestion_context(self, subq_items, history_snapshot, user_query,
+                                   rag_params, emit_step) -> str:
+        """Per-sub-question structured context: for each decomposed sub-question,
+        attach its OWN targeted RAG knowledge plus its RELATED EVIDENCE (matching
+        report blocks + pinned chat, prior findings, conversation recall, and
+        semantic row candidates). Bounded; every source is best-effort and
+        degrades to nothing when unavailable. Returns '' when nothing useful.
+        """
+        try:
+            cm = self.cm
+            top_k = int(rag_params.get("top_k", 2))
+            min_score = float(rag_params.get("min_score", 0.05))
+            sem_min = float(rag_params.get("semantic_min_score", 0.4))
+            per_q_rag_budget = int(rag_params.get("per_q_budget", 500))
+            max_qs = int(rag_params.get("max_qs", 6))
+
+            # Pre-gather reusable evidence sources once.
+            blocks = []
+            try:
+                blocks = [b for b in (getattr(cm.report_engine, "blocks", None) or [])
+                          if not is_triage_block(b)]
+            except Exception:
+                blocks = []
+            pinned_msgs = [m for m in (history_snapshot or [])
+                           if (m.get("metadata") or {}).get("pinned")
+                           or (m.get("metadata") or {}).get("preserve_evidence")]
+            prior = []
+            try:
+                if getattr(cm, "case_context_manager", None):
+                    prior = cm.case_context_manager.get_recent_question_memory(limit=8) or []
+            except Exception:
+                prior = []
+
+            def _block_text(b):
+                return " ".join(str(getattr(b, f, "") or "") for f in
+                                ("title", "caption", "sql_query", "reference_text", "markdown_content"))
+
+            sections = []
+            for sq in subq_items[:max_qs]:
+                if not sq:
+                    continue
+                q_tokens = set(_rag_tokenize(sq))
+                lines = [f"### SubQ: {sq[:200]}"]
+
+                # 1. Targeted knowledge for this sub-question.
+                try:
+                    kws = list(cm.intent_engine.detect_keywords(sq)) if getattr(cm, "intent_engine", None) else []
+                except Exception:
+                    kws = []
+                knowledge = ""
+                try:
+                    knowledge = cm.rag_service.retrieve_context(
+                        keywords=kws, user_query=sq, max_tokens=per_q_rag_budget,
+                        top_k=top_k, min_score=min_score, semantic_min_score=sem_min,
+                    ) or ""
+                except Exception:
+                    knowledge = ""
+                if isinstance(knowledge, str) and knowledge.strip():
+                    lines.append("  Knowledge: " + knowledge.strip()[:per_q_rag_budget * 2])
+
+                evidence = []
+                # 2. Matching report blocks (cite by id; full data in Living Report Evidence).
+                try:
+                    scored = sorted(
+                        ((len(q_tokens & set(_rag_tokenize(_block_text(b)))), b) for b in blocks),
+                        key=lambda x: x[0], reverse=True)
+                    for sc, b in scored[:2]:
+                        if sc <= 0:
+                            break
+                        bid = getattr(b, "block_id", "?")
+                        btype = getattr(b, "block_type", "block")
+                        title = getattr(b, "title", None) or getattr(b, "caption", None) or btype
+                        evidence.append(f"report [{btype} {bid}] {str(title)[:80]}")
+                except Exception:
+                    pass
+                # 3. Matching pinned chat evidence.
+                try:
+                    scored_p = sorted(
+                        ((len(q_tokens & set(_rag_tokenize(m.get('content', '')))), m) for m in pinned_msgs),
+                        key=lambda x: x[0], reverse=True)
+                    for sc, m in scored_p[:1]:
+                        if sc <= 0:
+                            break
+                        evidence.append("pinned: " + str(m.get("content", ""))[:140])
+                except Exception:
+                    pass
+                # 4. Prior findings relevant to this sub-question.
+                try:
+                    scored_pf = sorted(
+                        ((len(q_tokens & set(_rag_tokenize(str(r.get('question', '')) + ' ' + str(r.get('answer_summary', ''))))), r)
+                         for r in prior), key=lambda x: x[0], reverse=True)
+                    for sc, r in scored_pf[:1]:
+                        if sc <= 0:
+                            break
+                        evidence.append(f"prior [{r.get('id','q?')}] {str(r.get('answer_summary',''))[:140]}")
+                except Exception:
+                    pass
+                # 5. Conversation recall for this sub-question.
+                try:
+                    rag = getattr(cm, "rag_service", None)
+                    if rag is not None and hasattr(rag, "retrieve_conversation"):
+                        rc = rag.retrieve_conversation(user_query=sq, max_tokens=300, top_k=1)
+                        if isinstance(rc, str) and rc.strip():
+                            evidence.append("recall: " + rc.strip().replace("\n", " ")[:140])
+                except Exception:
+                    pass
+                # 6. Semantic row candidates (only when the evidence index is available).
+                try:
+                    esvc = getattr(cm, "evidence_index_service", None)
+                    if esvc is not None and esvc.available():
+                        sres = esvc.search(sq, top_k=3)
+                        cands = sres.get("candidates", []) if isinstance(sres, dict) else []
+                        refs = [f"{c.get('database')}:{c.get('table')}#{c.get('rowid')}" for c in cands[:3]]
+                        if refs:
+                            evidence.append("candidates: " + ", ".join(refs))
+                except Exception:
+                    pass
+
+                if evidence:
+                    lines.append("  Related evidence:")
+                    for e in evidence:
+                        lines.append(f"    - {e}")
+                # 7. Narrative Map slice — proven/open narratives + investigator NOTES
+                # whose keywords overlap this sub-question. This is how a human note
+                # added in the map reaches the model verbatim for the relevant part.
+                try:
+                    nms = getattr(cm, "narrative_map_service", None)
+                    nm_slice = nms.relevant_slice(sq) if nms is not None else ""
+                    if isinstance(nm_slice, str) and nm_slice.strip():
+                        lines.append("  " + nm_slice.replace("\n", "\n  "))
+                except Exception:
+                    pass
+                if len(lines) > 1:
+                    sections.append("\n".join(lines))
+
+            if not sections:
+                return ""
+
+            block = ("## Per Sub-Question Context\n"
+                     "(Targeted knowledge + already-known evidence for each part of the question — "
+                     "use it; confirm specifics with tools as needed.)\n" + "\n".join(sections))
+            # Bound the whole block to a slice of the system-prompt budget.
+            try:
+                cap = int((getattr(cm, "token_budget", {}) or {}).get("system_prompt", 4000)) // 2
+                block = cm.token_counter.truncate_text(block, max(800, cap))
+            except Exception:
+                pass
+            try:
+                emit_step("rag", f"Attached per-sub-question context for {len(sections)} sub-question(s)", "done")
+            except Exception:
+                pass
+            return block
+        except Exception as e:
+            self.logger.debug(f"Per-sub-question context skipped: {e}")
+            return ""
+
+    def _emit_coverage(self, consulted_dbs, sampled: bool, user_query: str, emit_step) -> Dict[str, Any]:
+        """Surface a COVERAGE note for the human reviewer: which case databases the
+        Eye consulted vs. which exist, and whether any result was a sample rather
+        than the full set. This does NOT auto-guarantee completeness (sensitive
+        evidence is always reviewed by a real investigator) — it just makes the
+        gaps visible. Persisted to EYE_Logs/eye_coverage_log.jsonl. Best-effort.
+        """
+        try:
+            available = []
+            try:
+                for d in (self.cm.database_service.discover_databases() if self.cm.database_service else []):
+                    if d.get("accessible") and d.get("exists") and d.get("name"):
+                        available.append(d["name"])
+            except Exception:
+                available = []
+
+            consulted = sorted(consulted_dbs)
+            not_consulted = sorted(set(available) - set(consulted_dbs))
+            coverage = {
+                "consulted": consulted,
+                "not_consulted": not_consulted,
+                "available_count": len(available),
+                "sampled": bool(sampled),
+            }
+
+            parts = []
+            if consulted:
+                parts.append("Consulted: " + ", ".join(consulted))
+            if not_consulted:
+                parts.append("NOT consulted: " + ", ".join(not_consulted))
+            if sampled:
+                parts.append("one or more results were a SAMPLE (use analyze_large_dataset for the full set)")
+            note = "Coverage — " + ("; ".join(parts) if parts else "no databases consulted")
+            emit_step("coverage", note, "done")
+
+            try:
+                if self.cm.case_directory:
+                    from pathlib import Path as _Path
+                    logs = _Path(self.cm.case_directory) / "EYE_Logs"
+                    logs.mkdir(parents=True, exist_ok=True)
+                    rec = {"ts": datetime.now().isoformat(), "query": user_query, **coverage}
+                    with open(logs / "eye_coverage_log.jsonl", "a", encoding="utf-8") as f:
+                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            return coverage
+        except Exception as e:
+            self.logger.debug(f"Coverage emit skipped: {e}")
+            return {}
 
     def _run_python_triage(self, emit_step, check_report_sync, initial_report_state):
         """
@@ -559,7 +1231,7 @@ class QueryProcessor:
 - **Active Users**: {', '.join(users[:5])}{'...' if len(users) > 5 else ''}
 - **Remote Protocols**: {', '.join([s['Name'] for s in remote_sw[:3]]) if remote_sw else 'None detected'}
 
-*This report follows the Ghassan Elsman Protocol v2.0 for automated forensic triage.*
+*This report follows the Ghassan Elsman Protocol (GEP) for automated forensic triage.*
 """
         self.cm.report_engine.append_section(
             "Immediate Technical Observations",
@@ -580,14 +1252,51 @@ class QueryProcessor:
         
         # Final Sync to GUI
         check_report_sync(initial_report_state)
-        
+
         emit_step("synthesis", "Forensic Triage Complete.", "done")
-        
+
         response = f"Automated Forensic Triage for **{comp_name}** is complete.\n\n" \
                   f"I have successfully indexed findings across 7 forensic categories into the Living Report. " \
                   f"No AI resources were consumed for this initial extraction pass.\n\n" \
                   f"**Ready for investigation.** What would you like to analyze first?"
-                  
+
+        # Per-step GEP compliance: the triage is the most evidence-heavy step, so it
+        # must also leave a record in the compliance trail (Compliance panel). Grade
+        # the deterministic triage against the 10 principles and persist. Best-effort
+        # — a compliance-logging error must never break the triage.
+        try:
+            _consulted = [d for d in (reg_db, pref_db, mft_db, log_db, bin_db,
+                                      am_db, shim_db, srum_db, lnk_db) if d]
+            _expected = ["registry_data.db", "prefetch_data.db",
+                         "mft_usn_correlated_analysis.db", "Log_Claw.db",
+                         "recyclebin_analysis.db", "amcache.db", "shimcache.db",
+                         "srum_data.db", "LnkDB.db"]
+            _blocks_added = (self.cm.report_engine.get_report_json()["metadata"]["block_count"]
+                             - initial_report_state["metadata"]["block_count"])
+            gep_triage = self._evaluate_gep_triage(_consulted, _expected, _blocks_added, response)
+            self._persist_gep_turn(gep_triage)
+        except Exception as e:
+            self.logger.debug(f"GEP triage evaluation skipped: {e}")
+
+        # Surface the triage's overview onto the Narrative Map as floating GLOBAL
+        # cards (System Identity + Technical Observations) — they sit unconnected in
+        # the left zone until the investigator/Eye links them. Stable card_ids so a
+        # re-triage updates the same cards. Best-effort; never breaks the triage.
+        try:
+            nms = getattr(self.cm, "narrative_map_service", None)
+            if nms is not None:
+                nms.upsert_global("system identity", "System Identity",
+                                  (sys_info_md or "").strip(), card_id="g_sys_identity")
+                nms.upsert_global("technical observation", "Immediate Technical Observations",
+                                  (observations_md or "").strip(), card_id="g_tech_obs")
+                # These are floating GLOBAL cards — drop any verdict-linked narrative copy
+                # the map seed (build_evidence_map) may have created from the same report
+                # blocks, so they don't appear twice.
+                nms.remove_narratives_by_title(
+                    ["System Identity", "Immediate Technical Observations", "Technical Observations"])
+        except Exception as e:
+            self.logger.debug(f"Narrative-map global cards skipped: {e}")
+
         self.cm.history_manager.add_message("assistant", response)
         
         return {
@@ -597,7 +1306,7 @@ class QueryProcessor:
                 {"id": "timeline_view", "label": "View Master Timeline", "query": "Generate a chronological timeline of the most significant security and execution events.", "icon": "history"}
             ],
             "metadata": {
-                "protocol": "Ghassan Elsman Protocol v2.0",
+                "protocol": "Ghassan Elsman Protocol (GEP)",
                 "pillar": 0,
                 "pillar_name": "Case Awareness (The Triage)"
             },
@@ -754,105 +1463,103 @@ class QueryProcessor:
             def payload_tokens(hist):
                 return base_tokens + sum(tc.count_tokens(m.get("content") or "") for m in (hist or []))
 
-            def is_protected(m):
-                md = m.get("metadata") or {}
-                return bool(md.get("pinned") or md.get("preserve_evidence") or md.get("is_tool_result") or md.get("is_summary"))
-
             working = list(history or [])
             healed = False
             cut_details = []
 
-            # ---- SELF-HEAL: summarize old non-evidence context, then drop ----
+            # ---- SELF-HEAL: two-stage memory policy (summary buffer → slide) ----
+            # Shared with HistoryManager.manage_history via
+            # reduce_messages_to_budget, but here Stage 2 (the hard sliding-window
+            # drop) is ENABLED so the OUTGOING payload is forced to fit. The
+            # persistent on-disk history is untouched; only this copy is slimmed.
+            # archive_cb=None: evicted turns are archived exactly once, by the
+            # persistent path (manage_history), never here.
             if payload_tokens(working) > usable:
-                # Summarize pass (once): collapse non-protected messages.
-                non_protected = [m for m in working if not is_protected(m)]
-                if len(non_protected) >= 2:
-                    try:
-                        summary_text = self.cm.history_manager._summarize_chunk(non_protected)
-                        if summary_text:
-                            summary_msg = {
-                                "role": "system",
-                                "content": summary_text,
-                                "metadata": {"is_summary": True, "self_heal": True},
-                            }
-                            # Rebuild: keep protected in order; insert the summary
-                            # at the position of the first non-protected message.
-                            first_np_idx = next((i for i, m in enumerate(working) if not is_protected(m)), len(working))
-                            working = [m for m in working if is_protected(m)]
-                            working.insert(min(first_np_idx, len(working)), summary_msg)
-                            healed = True
-                            emit_step("thinking", f"Self-healing: summarized {len(non_protected)} old non-evidence messages to fit context", "active")
-                            for m in non_protected:
-                                msg_content = m.get("content") or ""
-                                cut_details.append(evidence_seal.build_cut_detail(
-                                    action="SUMMARIZED",
-                                    message_id=m.get("id"),
-                                    role=m.get("role"),
-                                    original_text=msg_content,
-                                    processed_text=summary_text,
-                                    dropped_text=msg_content,
-                                    token_count=tc.count_tokens(msg_content),
-                                ))
-                            if getattr(self.cm, "truncation_auditor", None):
-                                aggregate_dropped = "\n".join(m.get("content", "") for m in non_protected)
-                                agg_detail = evidence_seal.build_cut_detail(
-                                    action="SUMMARIZED",
-                                    message_id=f"selfheal-{phase}-{iteration}",
-                                    role="system",
-                                    original_text=aggregate_dropped,
-                                    processed_text=summary_text,
-                                    dropped_text=aggregate_dropped,
-                                    token_count=sum(tc.count_tokens(m.get("content") or "") for m in non_protected),
-                                )
-                                self.cm.truncation_auditor.log_event(
-                                    action="SUMMARIZED",
-                                    message_id=f"selfheal-{phase}-{iteration}",
-                                    token_count=sum(tc.count_tokens(m.get("content") or "") for m in non_protected),
-                                    reason="self_heal_context_fit",
-                                    message_hash=EvidenceSeal._sha256(summary_text),
-                                    metadata={
-                                        "summarized_count": len(non_protected),
-                                        "phase": phase,
-                                        **agg_detail,
-                                    },
-                                )
-                    except Exception as sum_exc:
-                        self.logger.debug(f"Self-heal summarize failed, will drop instead: {sum_exc}")
+                _rc = getattr(self.cm, "reasoning_config", None)
+                _rc = _rc if isinstance(_rc, dict) else {}
+                _window_turns = int(_rc.get("history_window_turns", 5))
+                _enable_buf = bool(_rc.get("enable_summary_buffer", True))
 
-                # Drop pass: remove oldest non-protected messages until it fits.
-                dropped = 0
-                while payload_tokens(working) > usable:
-                    drop_idx = next((i for i, m in enumerate(working) if not is_protected(m)), None)
-                    if drop_idx is None:
-                        break  # only protected/evidence left — cannot shrink further
-                    removed = working.pop(drop_idx)
-                    dropped += 1
+                working, cut_records, _summary_msg = reduce_messages_to_budget(
+                    working, usable,
+                    token_count_fn=tc.count_tokens,
+                    base_tokens=base_tokens,
+                    window_turns=_window_turns,
+                    summarize_fn=self.cm.history_manager._summarize_chunk,
+                    enable_summary_buffer=_enable_buf,
+                    enable_drop=True,
+                    keep_first=True,
+                    archive_cb=None,
+                )
+                if cut_records:
                     healed = True
-                    removed_content = removed.get("content") or ""
-                    drop_detail = evidence_seal.build_cut_detail(
-                        action="TRUNCATED",
-                        message_id=removed.get("id"),
-                        role=removed.get("role"),
-                        original_text=removed_content,
-                        processed_text="",
-                        dropped_text=removed_content,
-                        token_count=tc.count_tokens(removed_content),
-                    )
-                    cut_details.append(drop_detail)
+
+                _summarized = [c for c in cut_records if c["action"] == "SUMMARIZED"]
+                _dropped = [c for c in cut_records if c["action"] == "TRUNCATED"]
+                _summary_text = next((c["summary_text"] for c in _summarized if c.get("summary_text")), "")
+
+                # Per-message seal cut details (same shapes the seal expects).
+                for c in cut_records:
+                    m = c["msg"]
+                    msg_content = m.get("content") or ""
+                    cut_details.append(evidence_seal.build_cut_detail(
+                        action=c["action"],
+                        message_id=m.get("id"),
+                        role=m.get("role"),
+                        original_text=msg_content,
+                        processed_text=(c["summary_text"] or "") if c["action"] == "SUMMARIZED" else "",
+                        dropped_text=msg_content,
+                        token_count=tc.count_tokens(msg_content),
+                    ))
+
+                if _summarized:
+                    emit_step("thinking", f"Self-healing: summarized {len(_summarized)} old non-evidence message(s) to fit context", "active")
                     if getattr(self.cm, "truncation_auditor", None):
-                        try:
-                            self.cm.truncation_auditor.log_event(
-                                action="TRUNCATED",
-                                message_id=removed.get("id", f"selfheal-drop-{phase}-{iteration}"),
-                                token_count=tc.count_tokens(removed_content),
-                                reason="self_heal_context_fit",
-                                message_hash=EvidenceSeal._sha256(removed_content),
-                                metadata={"phase": phase, **drop_detail},
-                            )
-                        except Exception:
-                            pass
-                if dropped:
-                    emit_step("thinking", f"Self-healing: dropped {dropped} oldest non-evidence message(s) to fit context", "active")
+                        aggregate_dropped = "\n".join(c["msg"].get("content", "") for c in _summarized)
+                        _sum_tokens = sum(tc.count_tokens(c["msg"].get("content") or "") for c in _summarized)
+                        agg_detail = evidence_seal.build_cut_detail(
+                            action="SUMMARIZED",
+                            message_id=f"selfheal-{phase}-{iteration}",
+                            role="system",
+                            original_text=aggregate_dropped,
+                            processed_text=_summary_text,
+                            dropped_text=aggregate_dropped,
+                            token_count=_sum_tokens,
+                        )
+                        self.cm.truncation_auditor.log_event(
+                            action="SUMMARIZED",
+                            message_id=f"selfheal-{phase}-{iteration}",
+                            token_count=_sum_tokens,
+                            reason="self_heal_context_fit",
+                            message_hash=EvidenceSeal._sha256(_summary_text),
+                            metadata={"summarized_count": len(_summarized), "phase": phase, **agg_detail},
+                        )
+
+                if _dropped:
+                    if getattr(self.cm, "truncation_auditor", None):
+                        for c in _dropped:
+                            removed = c["msg"]
+                            removed_content = removed.get("content") or ""
+                            try:
+                                self.cm.truncation_auditor.log_event(
+                                    action="TRUNCATED",
+                                    message_id=removed.get("id", f"selfheal-drop-{phase}-{iteration}"),
+                                    token_count=tc.count_tokens(removed_content),
+                                    reason="self_heal_context_fit",
+                                    message_hash=EvidenceSeal._sha256(removed_content),
+                                    metadata={"phase": phase, **evidence_seal.build_cut_detail(
+                                        action="TRUNCATED",
+                                        message_id=removed.get("id"),
+                                        role=removed.get("role"),
+                                        original_text=removed_content,
+                                        processed_text="",
+                                        dropped_text=removed_content,
+                                        token_count=tc.count_tokens(removed_content),
+                                    )},
+                                )
+                            except Exception:
+                                pass
+                    emit_step("thinking", f"Self-healing: dropped {len(_dropped)} oldest non-evidence message(s) to fit context", "active")
 
             final_tokens = payload_tokens(working)
 
@@ -966,24 +1673,35 @@ class QueryProcessor:
             # Seal the EXACT (possibly slimmed) payload the model will see.
             _seal_exact_payload(token_count=final_tokens, phase_label=phase, sent_to_model=True)
 
-            try:
-                return self.cm.model_router.generate(
-                    system_prompt=system_prompt, user_message=user_message,
-                    tools=tools, history=working,
+            # Transient-error retry + exponential backoff now lives centrally in
+            # ModelRouter.generate (covers main loop, map-reduce, summarization).
+            # We pass on_retry so each attempt is visible in the live status and
+            # the Compliance Chain-of-Custody trail (RETRY events). The model
+            # sees `working` (the slimmed, SEALED history) on every attempt.
+            def _on_retry(attempt, exc):
+                emit_step("thinking",
+                          f"Model transient error ({str(exc)[:60]}) — retrying (attempt {attempt + 1})",
+                          "active")
+                self._audit_event(
+                    "RETRY", reason="transient_model_error",
+                    metadata={"attempt": attempt, "phase": phase, "error": str(exc)[:300]},
                 )
-            except Exception as gen_exc:
-                if _is_transient_model_error(gen_exc):
-                    self.logger.warning(f"Transient model error, retrying once: {gen_exc}")
-                    emit_step("thinking", "Model returned a transient error — retrying", "active")
-                    time.sleep(1.5)
-                    # Retry with `working` (the slimmed, self-healed history that
-                    # was SEALED above) — never the original `history`, which may
-                    # exceed the window and would not match the evidence seal.
-                    return self.cm.model_router.generate(
-                        system_prompt=system_prompt, user_message=user_message,
-                        tools=tools, history=working,
-                    )
-                raise
+            # Phase-aware generation tuning: planning + reasoning-trace passes run
+            # near-deterministic; investigative/synthesis (answer) turns use the
+            # configured answer temperature. Forwarded to every backend via the
+            # router (backends ignore knobs they don't support).
+            _rcfg = getattr(self.cm, "reasoning_config", None) or {}
+            _is_planning_phase = str(phase) in ("planning", "reasoning")
+            _gen_params = {
+                "temperature": _rcfg.get("planning_temperature", 0.0) if _is_planning_phase
+                else _rcfg.get("answer_temperature", 0.2),
+                "max_output_tokens": _rcfg.get("max_output_tokens", 8192),
+            }
+            return self.cm.model_router.generate(
+                system_prompt=system_prompt, user_message=user_message,
+                tools=tools, history=working, on_retry=_on_retry,
+                gen_params=_gen_params,
+            )
 
         def check_report_sync(prev_state):
             """Helper to emit update signal if report blocks were changed (added/edited/deleted)."""
@@ -1059,6 +1777,17 @@ class QueryProcessor:
 
                     # Add only the assistant's acknowledgement to history to keep it clean
                     self.cm.history_manager.add_message("assistant", ai_content)
+
+                    # Per-step GEP compliance: this acknowledgement step runs no
+                    # investigation, but it must still leave a record in the trail.
+                    # With no tool results it grades GEP-10 PASS, the rest N-A — an
+                    # honest record. Best-effort; never breaks the turn.
+                    try:
+                        gep_ctx = self._evaluate_gep_turn("analyze_case_context", ai_content, [])
+                        self._persist_gep_turn(gep_ctx)
+                    except Exception as e:
+                        self.logger.debug(f"GEP context-analysis evaluation skipped: {e}")
+
                     emit_step("synthesis", "Context analysis complete", "done")
 
                     if self.cm.case_directory:
@@ -1128,25 +1857,41 @@ class QueryProcessor:
             emit_step("thinking", f"Detected keywords: {', '.join(keywords) if keywords else 'none'}", "done")
             
             # --- STAGE 3: Knowledge Base (RAG) Lookup ---
+            _rcfg0 = getattr(self.cm, "reasoning_config", None)
+            _rcfg0 = _rcfg0 if isinstance(_rcfg0, dict) else {}
+            rag_top_k = int(_rcfg0.get("rag_top_k", 5))
+            rag_min_score = float(_rcfg0.get("rag_min_score", 0.05))
+            rag_semantic_min_score = float(_rcfg0.get("rag_semantic_min_score", 0.4))
             emit_step("rag", "Retrieving artifact knowledge from knowledge base ", "active")
             rag_budget = self.cm.token_budget.get("rag_context", 2000)
-            rag_context = self.cm.rag_service.retrieve_context(keywords=keywords, user_query=user_query, max_tokens=rag_budget)
+            rag_context = self.cm.rag_service.retrieve_context(
+                keywords=keywords, user_query=user_query, max_tokens=rag_budget,
+                top_k=rag_top_k, min_score=rag_min_score,
+                semantic_min_score=rag_semantic_min_score,
+            )
             audit_rag_trunc(rag_context, 1)
             _rag_sections = rag_context.count("## ") if rag_context else 0
+            _rag_docs = list(getattr(self.cm.rag_service, "last_sources", []) or [])
             emit_step(
                 "rag",
-                f"Loaded {_rag_sections} knowledge section(s)" if _rag_sections
+                (f"Loaded {_rag_sections} knowledge section(s): " + ", ".join(_rag_docs)) if _rag_sections
                 else "No matching knowledge base entries",
                 "done",
             )
-            
+
+            # --- STAGE 3b: Long-term conversation recall ---
+            # Pull earlier turns that were summarized / slid out of the live window
+            # but are relevant to this query, so the model can recall a specific old
+            # detail on demand. Best-effort; degrades to no recall on any failure.
+            recalled_conversation = self._retrieve_conversation_recall(user_query, emit_step)
+
             # --- STAGE 4: Prompt Engineering ---
             # Snapshot history and report for stable prompt construction
             with self.cm.history_manager._lock:
                 history_snapshot = list(self.cm.history_manager.history)
-            
+
             emit_step("thinking", "Building investigative system prompt ", "active")
-            system_prompt = self.cm._build_system_prompt(rag_context, history_snapshot)
+            system_prompt = self.cm._build_system_prompt(rag_context, history_snapshot, recalled_conversation)
             emit_step("thinking", "System prompt ready", "done")
             
             # --- STAGE 5: AI Reasoning & Tool Traceability ---
@@ -1156,7 +1901,23 @@ class QueryProcessor:
             # consumes an iteration, so MAX_ITERATIONS must exceed the nudge cap.
             MAX_ITERATIONS = 20
             MAX_CONTINUE_NUDGES = 10
+            # If the model produces no executable tool call for this many consecutive
+            # iterations while NO tool has executed all turn, it is not going to call
+            # tools (incapable, e.g. Gemma offered none, or refusing). Stop nudging and
+            # answer honestly instead of burning all MAX_CONTINUE_NUDGES on a no-op.
+            MAX_TOOLLESS_BEFORE_EXIT = 2
+            # Hierarchical (plan-driven) execution: prove one sub-narrative at a time.
+            MAX_SUBNARR_ROUNDS = 4  # tool rounds spent on a single sub-narrative before giving up
+            hierarchical = False
+            hierarchy_plan = None
+            plan_steps = []
+            focus_idx = 0
+            sub_rounds = 0
+            step_result_start = 0  # index into all_tool_results where the current step began
             continue_nudges = 0
+            toolless_iters = 0  # consecutive iterations with no parseable tool call
+            force_honest_synthesis = False  # set when we exit a tool-less, evidence-free run
+            text_fallback_offered = False  # taught a capable model the text protocol once
             failing_cycle_hinted = False
             iteration = 0
             
@@ -1172,14 +1933,226 @@ class QueryProcessor:
             all_tool_results = []
             ledger_entries = []  # compact per-iteration index for cross-source correlation
             tool_call_history = []
-            
+            # Coverage signals for the human reviewer (Workstream E): which case
+            # databases the Eye actually consulted, and whether any result was a
+            # sample rather than the full set. Surfaced + persisted at turn end.
+            consulted_dbs = set()
+            coverage_sampled = False
+
             active_keywords = set(keywords)
             active_keywords.add("Global_schema_database_Reference")
-            
+
+            # --- STAGE 4b: Investigation Planning (decomposition + premises) ---
+            # Build a sub-question checklist so multi-part questions are driven
+            # to completion and asserted premises get proven/disproven. Gated by
+            # reasoning_config (default ON); degrades to today's single-question
+            # behavior on any failure or when disabled.
+            # ContextManager always populates reasoning_config with every key
+            # (defaults ON). Treat a missing/non-dict value as "all off" so the
+            # base loop behaves exactly as before when reasoning isn't wired.
+            _rc = getattr(self.cm, "reasoning_config", None)
+            reasoning_cfg = _rc if isinstance(_rc, dict) else {}
+            checklist: List[Dict[str, Any]] = []
+            plan_strategy = ""  # overall decomposition strategy (for the reasoning trace)
+            reuse_hint = ""  # set when the plan flags this question as related to prior ones
+            want_decomp = reasoning_cfg.get("enable_decomposition", False)
+            want_premise = reasoning_cfg.get("enable_premise_verification", False)
+            # The LLM decides whether/how to split into logical sub-questions;
+            # _should_plan is only a trivial-skip pre-filter. auto_segment_question
+            # selects the planner's aggressive (logical decomposition) vs
+            # conservative (multi-part only) prompt.
+            _prefer_segmentation = bool(reasoning_cfg.get("auto_segment_question", True))
+            # HIERARCHICAL plan FIRST: build the verdict → narrative → sub-narrative
+            # claim hierarchy, seed the Narrative Map with it, and drive the sequential
+            # one-narrative-at-a-time engine. Falls back to the flat sub-question path
+            # below on any failure (trivial query, planner error, or no narratives).
+            if reasoning_cfg.get("enable_hierarchy", False):
+                _iter_ceiling = int(reasoning_cfg.get("max_iterations", 300))
+                # RESUME an interrupted plan if this turn is a continuation. The map
+                # cards already exist (stable created_from keys), so we rebuild the
+                # steps WITHOUT re-planning or re-seeding and pick up at the first
+                # still-open sub-narrative.
+                _saved = self._load_active_plan()
+                if _saved:
+                    _open_steps = [s for n in _saved.get("narratives", [])
+                                   for s in n.get("sub_narratives", []) if s.get("status", "open") == "open"]
+                    if _open_steps and self._is_continuation_query(user_query, _saved.get("user_query")):
+                        plan_steps = self._rebuild_plan_steps(_saved)
+                        if plan_steps:
+                            hierarchical = True
+                            hierarchy_plan = _saved
+                            focus_idx = next((k for k, s in enumerate(plan_steps)
+                                              if s["sub"].get("status", "open") == "open"), 0)
+                            plan_strategy = "resumed hierarchical plan"
+                            MAX_ITERATIONS = min(_iter_ceiling, max(MAX_ITERATIONS,
+                                                 len(plan_steps) * (MAX_SUBNARR_ROUNDS + 2) + 5))
+                            emit_step("thinking",
+                                      f"Resuming the saved investigation at sub-narrative "
+                                      f"{focus_idx + 1}/{len(plan_steps)} (continuing where it stopped)",
+                                      "done")
+                    elif _open_steps:
+                        # A new/different question → abandon the stale checkpoint.
+                        self._clear_active_plan()
+                    else:
+                        self._clear_active_plan()  # checkpoint already complete
+
+                if not hierarchical and self._should_plan(user_query):
+                    _hplan = self._plan_hierarchy(
+                        user_query, guarded_generate, emit_step, emit_dialogue, reasoning_cfg)
+                    if _hplan and _hplan.get("narratives"):
+                        plan_steps = self._seed_hierarchy_map(_hplan, user_query)
+                        if plan_steps:
+                            hierarchical = True
+                            hierarchy_plan = _hplan
+                            plan_strategy = "hierarchical plan-driven investigation"
+                            # Budget enough iterations to prove every sub-narrative, but
+                            # cap it (configurable) so a maximal plan can't run away. Each
+                            # step is also bounded by MAX_SUBNARR_ROUNDS + force-advance.
+                            MAX_ITERATIONS = min(_iter_ceiling, max(MAX_ITERATIONS,
+                                                 len(plan_steps) * (MAX_SUBNARR_ROUNDS + 2) + 5))
+                            # Checkpoint the freshly-seeded plan so an interruption is resumable.
+                            self._save_active_plan(_hplan, focus_idx, user_query)
+                            emit_step(
+                                "thinking",
+                                f"Planned {len(_hplan['narratives'])} narrative(s) / {len(plan_steps)} "
+                                "sub-narrative(s) to prove — working them in sequence",
+                                "done")
+
+            if not hierarchical and (want_decomp or want_premise) and self._should_plan(user_query):
+                plan = self._plan_investigation(
+                    user_query, guarded_generate, emit_step, emit_dialogue, reasoning_cfg,
+                    prefer_segmentation=_prefer_segmentation,
+                )
+                if plan:
+                    plan_strategy = plan.get("strategy", "")
+                    if want_decomp:
+                        subs = plan.get("sub_questions", [])
+                        # Only treat as decomposed when there is genuinely >1 part.
+                        if len(subs) > 1:
+                            for s in subs:
+                                checklist.append({
+                                    "q": s.get("q", "") if isinstance(s, dict) else str(s),
+                                    "status": "open", "kind": "question",
+                                    "why": s.get("why", "") if isinstance(s, dict) else "",
+                                })
+                    if want_premise:
+                        for p in plan.get("user_premises", []):
+                            checklist.append({"q": f"verify: {p}", "status": "open", "kind": "premise"})
+                    if checklist:
+                        emit_step("thinking", f"Planned {len(checklist)} investigation item(s) to resolve", "done")
+                    # Surface question segmentation in the Compliance trail.
+                    _q_items = [c for c in checklist if c.get("kind") != "premise"]
+                    if len(_q_items) > 1:
+                        self._audit_event(
+                            "SEGMENTED",
+                            reason="llm_decomposition",
+                            metadata={"parts": [c["q"] for c in _q_items]},
+                        )
+                        emit_step("thinking",
+                                  f"Question segmented into {len(_q_items)} parts — working each in turn", "done")
+                    # Early OPEN goal-claim: show the Verdict as the proposition the
+                    # whole investigation is trying to prove (a clean claim, never the
+                    # raw question) while it runs; _finalize_verdict flips its state.
+                    if _q_items:
+                        try:
+                            _nms = getattr(self.cm, "narrative_map_service", None)
+                            if _nms is not None:
+                                _g = _nms.load_graph()
+                                _cur = (_g.get("verdict") or {}).get("title", "").strip().lower()
+                                if _cur in ("", "overall verdict"):
+                                    _goal = self._claimify(user_query)
+                                    if _goal:
+                                        _nms.set_verdict(_goal, "Goal of this investigation — still open.")
+                                        self._push_narrative_map_update()
+                        except Exception as _e:
+                            self.logger.debug(f"early goal-claim skipped: {_e}")
+                    # Relatedness: if this likely builds on earlier questions and
+                    # answer memory is on, tell the model to reuse the Prior
+                    # Findings (in the system prompt) before re-querying.
+                    if plan.get("related_prior") and reasoning_cfg.get("enable_question_memory", False):
+                        reuse_hint = (
+                            "## Reuse Prior Findings\n"
+                            "This question likely relates to earlier ones in this case. Before running "
+                            "new queries, check the 'Prior Findings' in your system prompt and REUSE "
+                            "their data (cite by id, e.g. [q2]); only re-query if a prior finding is "
+                            "missing or may be stale."
+                        )
+                        emit_step("thinking", "Related to earlier questions — will reuse prior findings", "done")
+
+            # --- STAGE 4b2: (removed) ---
+            # The map no longer creates a provisional narrative per sub-question —
+            # a narrative is a FINDING, not the question. Narratives are created at
+            # synthesis from real findings (see `_sync_narratives_from_findings`),
+            # with the sub-question kept only as `meta.created_from` provenance.
+
+            # --- STAGE 4c: Sub-question-aware knowledge + related evidence ---
+            # Each decomposed sub-question pulls its own targeted artifact
+            # knowledge AND its related evidence (matching report/pinned evidence,
+            # prior findings, conversation recall, semantic row candidates), built
+            # into a structured "Per Sub-Question Context" block. Rebuild the
+            # prompt once so iteration 1 already sees it. Best-effort.
+            subquestion_context = ""
+            if reasoning_cfg.get("rag_subquestion_aware", True):
+                _subq_items = [c.get("q", "") for c in checklist if c.get("kind") != "premise"]
+                if len(_subq_items) > 1:
+                    try:
+                        _subq_keywords = set()
+                        for _sq in _subq_items:
+                            for _kw in self.cm.intent_engine.detect_keywords(_sq):
+                                _subq_keywords.add(_kw)
+                        if _subq_keywords - active_keywords:
+                            active_keywords |= _subq_keywords
+                            emit_step("rag", "Retrieving targeted knowledge for each sub-question...", "active")
+                            rag_context = self.cm.rag_service.retrieve_context(
+                                keywords=list(active_keywords),
+                                user_query=user_query + " " + " ".join(_subq_items),
+                                max_tokens=rag_budget, top_k=rag_top_k, min_score=rag_min_score,
+                                semantic_min_score=rag_semantic_min_score,
+                            )
+                            audit_rag_trunc(rag_context, 1)
+                            _docs = list(getattr(self.cm.rag_service, "last_sources", []) or [])
+                            emit_step("rag",
+                                      f"Knowledge consulted for sub-questions: {', '.join(_docs)}"
+                                      if _docs else "Sub-question knowledge retrieval complete", "done")
+                        # Per-sub-question structured knowledge + related evidence.
+                        subquestion_context = self._build_subquestion_context(
+                            _subq_items, history_snapshot, user_query,
+                            {"top_k": rag_top_k, "min_score": rag_min_score,
+                             "semantic_min_score": rag_semantic_min_score,
+                             "max_qs": int(reasoning_cfg.get("max_sub_questions", 6))},
+                            emit_step,
+                        )
+                        system_prompt = self.cm._build_system_prompt(
+                            rag_context, history_snapshot, recalled_conversation, subquestion_context)
+                    except Exception as _e:
+                        self.logger.debug(f"Sub-question-aware context skipped: {_e}")
+
+            # Gemma models on the Gemini API can't use NATIVE function-calling (the
+            # backend drops the `tools` config, otherwise the API 500s), so they call
+            # tools through the TEXT protocol instead — the system prompt teaches them
+            # the ```tool_call format. Note it ONCE so the investigator understands the
+            # tool calls arrive as text, not native calls. This is NOT a failure.
+            try:
+                _mr_cfg = self.cm.model_router.config
+                _bk = (_mr_cfg.get("backend") or "").lower()
+                _mdl = (_mr_cfg.get("model_name") or "").replace("models/", "").lower()
+                if _bk == "gemini" and _mdl.startswith("gemma"):
+                    emit_step(
+                        "thinking",
+                        "Gemma model: native function-calling is unavailable on the Gemini API — "
+                        "running forensic tools via the text tool-call protocol.",
+                        "done",
+                    )
+                    self.logger.info(
+                        "Active model '%s' is a Gemma model on the Gemini API; using the text "
+                        "tool-call protocol (native function-calling unavailable).", _mdl)
+            except Exception:
+                pass
+
             while iteration < MAX_ITERATIONS:
                 iteration += 1
-                
-                # RE-INSERT USER QUERY: If we just started and tools were run, 
+
+                # RE-INSERT USER QUERY: If we just started and tools were run,
                 # we must ensure the original question is back in the persistent log.
                 if iteration == 1 and popped_user_msg:
                     self.cm.history_manager.add_message(
@@ -1191,12 +2164,17 @@ class QueryProcessor:
                 if iteration > 1:
                     emit_step("rag", "Updating forensic knowledge context...", "active")
                     rag_budget = self.cm.token_budget.get("rag_context", 2000)
-                    rag_context = self.cm.rag_service.retrieve_context(keywords=list(active_keywords), user_query=user_query, max_tokens=rag_budget)
+                    rag_context = self.cm.rag_service.retrieve_context(
+                        keywords=list(active_keywords), user_query=user_query, max_tokens=rag_budget,
+                        top_k=rag_top_k, min_score=rag_min_score,
+                        semantic_min_score=rag_semantic_min_score,
+                    )
                     audit_rag_trunc(rag_context, iteration)
 
                     with self.cm.history_manager._lock:
                         history_snapshot = list(self.cm.history_manager.history)
-                    system_prompt = self.cm._build_system_prompt(rag_context, history_snapshot)
+                    system_prompt = self.cm._build_system_prompt(
+                        rag_context, history_snapshot, recalled_conversation, subquestion_context)
                     _rag_sections = rag_context.count("## ") if rag_context else 0
                     emit_step(
                         "rag",
@@ -1226,7 +2204,15 @@ class QueryProcessor:
                     # across every tool/database it has run — without bloating the
                     # persisted history (only step_message is stored, below).
                     ledger_text = self._build_evidence_ledger(ledger_entries)
-                    outgoing_message = (ledger_text + "\n\n" + step_message) if ledger_text else step_message
+                    # Hierarchical runs focus on the CURRENT sub-narrative only; flat
+                    # runs show the whole open checklist.
+                    checklist_text = (self._build_focus_block(hierarchy_plan, plan_steps, focus_idx)
+                                      if hierarchical
+                                      else self._build_checklist_block(checklist))
+                    # The reuse hint is only worth sending on the first turn.
+                    _hint = reuse_hint if iteration == 1 else ""
+                    _prefix = "\n\n".join(x for x in (_hint, checklist_text, ledger_text) if x)
+                    outgoing_message = (_prefix + "\n\n" + step_message) if _prefix else step_message
 
                     _tool_defs = self.cm._get_tool_definitions()
                     # Record what the Eye SENT to the model this turn (full prompt).
@@ -1275,6 +2261,10 @@ class QueryProcessor:
                     for kw in new_kws:
                         active_keywords.add(kw)
 
+                    # Refresh sub-question/premise checklist from this turn's
+                    # answer + accumulated evidence (drives the completion gate).
+                    self._update_checklist(checklist, ai_content, ledger_entries)
+
                     if "option_menu" in llm_response:
                         final_option_menu = llm_response.get("option_menu")
                     
@@ -1289,7 +2279,77 @@ class QueryProcessor:
                     return self._handle_generation_failure(e, status_callback)
 
                 tool_calls = self.cm._parse_tool_calls(llm_response)
-                if not tool_calls:
+
+                # ── Hierarchical engine: resolve the CURRENT sub-narrative ──────────
+                if hierarchical and focus_idx < len(plan_steps):
+                    sub_rounds += 1
+                    _sv, _sv_reason = self._parse_subverdict(ai_content)
+                    # Budget exhausted without a clean marker → decide from the EVIDENCE
+                    # gathered (so a model that found the data but skipped the marker is
+                    # not auto-failed), not a blind NOT-PROVEN.
+                    if _sv is None and sub_rounds > MAX_SUBNARR_ROUNDS:
+                        _sv, _sv_reason = self._resolve_by_evidence(
+                            plan_steps[focus_idx], all_tool_results[step_result_start:])
+                    if _sv is not None:
+                        self._resolve_substep(plan_steps[focus_idx], _sv, _sv_reason,
+                                              all_tool_results[step_result_start:])
+                        emit_step("synthesis",
+                                  f"Sub-narrative {focus_idx + 1}/{len(plan_steps)} → {_sv}", "done")
+                        focus_idx += 1
+                        sub_rounds = 0
+                        continue_nudges = 0
+                        step_result_start = len(all_tool_results)
+                        # Checkpoint progress so an interruption can resume here.
+                        self._save_active_plan(hierarchy_plan, focus_idx, user_query)
+                        if focus_idx >= len(plan_steps):
+                            emit_step("thinking", "All narratives resolved — aggregating the verdict", "done")
+                            break
+                        current_user_message = "Now prove the NEXT sub-narrative shown below."
+                        self.cm.history_manager.add_message("user", current_user_message, {"internal": True})
+                        with self.cm.history_manager._lock:
+                            history_snapshot = list(self.cm.history_manager.history)
+                        continue
+                    if not tool_calls:
+                        # Narrated without acting AND without concluding → nudge to act
+                        # or conclude; force-advance if it keeps stalling on this step.
+                        continue_nudges += 1
+                        if continue_nudges >= MAX_CONTINUE_NUDGES:
+                            _esv, _ereason = self._resolve_by_evidence(
+                                plan_steps[focus_idx], all_tool_results[step_result_start:])
+                            self._resolve_substep(plan_steps[focus_idx], _esv, _ereason,
+                                                  all_tool_results[step_result_start:])
+                            focus_idx += 1
+                            sub_rounds = 0
+                            continue_nudges = 0
+                            step_result_start = len(all_tool_results)
+                            self._save_active_plan(hierarchy_plan, focus_idx, user_query)
+                            if focus_idx >= len(plan_steps):
+                                break
+                        current_user_message = (
+                            "You did not call a tool or conclude. Either emit a tool call to gather "
+                            "THIS sub-narrative's evidence, or end your turn with "
+                            "`SUBVERDICT: PROVEN || <evidence>` or `SUBVERDICT: NOT-PROVEN || <why>`.")
+                        self.cm.history_manager.add_message("user", current_user_message, {"internal": True})
+                        with self.cm.history_manager._lock:
+                            history_snapshot = list(self.cm.history_manager.history)
+                        continue
+                    # else: tool calls present, step unresolved → fall through to execute.
+
+                if (not hierarchical) and (not tool_calls):
+                    toolless_iters += 1
+                    # No tool has executed ALL TURN and the model keeps not calling
+                    # tools → it is not going to (incapable — e.g. a Gemma model is
+                    # offered none — or refusing). Stop nudging and answer HONESTLY
+                    # rather than burning the whole nudge budget on a no-op and then
+                    # presenting the model's plan as if it were findings.
+                    if not all_tool_results and toolless_iters >= MAX_TOOLLESS_BEFORE_EXIT:
+                        emit_step("thinking",
+                                  "No tool executed after repeated attempts — the model is not "
+                                  "retrieving evidence. Answering honestly without fabricating findings.",
+                                  "done")
+                        force_honest_synthesis = True
+                        break
+
                     # The model produced text but no tool call. If it signaled it
                     # would keep going (e.g. "I will now check prefetch…"), it has
                     # NOT finished — nudge it to actually act instead of ending the
@@ -1302,22 +2362,75 @@ class QueryProcessor:
                         "now investigate", "to further investigate", "i will look",
                         "i'm going to", "i am going to", "let's", "i will proceed",
                     ))
+                    # When NOTHING has executed yet, escalate from a gentle "keep going"
+                    # to a hard "stop narrating, emit an actual call" — re-sending the
+                    # same prod verbatim is what let the old run spin 10× uselessly.
+                    _no_evidence_yet = not all_tool_results
                     if _intent and continue_nudges < MAX_CONTINUE_NUDGES:
                         continue_nudges += 1
                         emit_step("thinking", f"Model narrated next steps without acting — continuing the investigation (nudge {continue_nudges})", "active")
+                        if _no_evidence_yet:
+                            current_user_message = (
+                                "You have executed NO tool yet — you only narrated a plan. STOP "
+                                "describing what you will do. Emit an ACTUAL tool call right now "
+                                "(e.g. `query_database` or `get_schema`) against a relevant database. "
+                                "Output only the tool call, not prose."
+                            )
+                        else:
+                            current_user_message = (
+                                "You stated a next step but did NOT call any tool. Do NOT stop or wait "
+                                "for the user. Emit the tool call(s) for that next step now, and keep "
+                                "checking every relevant database in sequence until you have actually "
+                                "answered the question."
+                            )
+                        # Text-protocol FALLBACK for a capable (native function-calling)
+                        # model that narrated instead of calling a tool: teach it the
+                        # text format ONCE so it has a second way to act. Gemma already
+                        # has the format in its system prompt (tools_unsupported), so we
+                        # only do this for models that were offered native tools.
+                        if (not text_fallback_offered
+                                and not llm_response.get("tools_unsupported")):
+                            text_fallback_offered = True
+                            try:
+                                _fmt = self.cm._build_tool_call_format(
+                                    self.cm._get_tool_definitions(), mandatory=False)
+                                current_user_message += "\n\n" + _fmt
+                            except Exception as _e:
+                                self.logger.debug(f"text-protocol fallback hint skipped: {_e}")
+                        self.cm.history_manager.add_message("user", current_user_message, {"internal": True})
+                        with self.cm.history_manager._lock:
+                            history_snapshot = list(self.cm.history_manager.history)
+                        continue
+
+                    # Decomposition completion gate: don't finish while planned
+                    # sub-questions / premise checks are still OPEN.
+                    open_items = [c for c in checklist if c.get("status") != "answered"]
+                    if open_items and continue_nudges < MAX_CONTINUE_NUDGES:
+                        continue_nudges += 1
+                        emit_step("thinking", f"{len(open_items)} sub-question(s)/premise(s) still open — continuing", "active")
+                        _nudge_lead = (
+                            "You have executed NO tools and produced NO evidence. Call "
+                            "`query_database` / `get_schema` on a relevant database NOW — do not "
+                            "narrate a plan.\n" if _no_evidence_yet else ""
+                        )
                         current_user_message = (
-                            "You stated a next step but did NOT call any tool. Do NOT stop or wait "
-                            "for the user. Emit the tool call(s) for that next step now, and keep "
-                            "checking every relevant database in sequence until you have actually "
-                            "answered the question."
+                            _nudge_lead
+                            + "You have NOT yet addressed every part of the investigator's request. "
+                            "Still OPEN:\n"
+                            + "\n".join(f"- {c.get('q')}" for c in open_items)
+                            + "\nInvestigate the open item(s) NOW with the appropriate tool calls. "
+                            "For any 'verify:' item, PROVE or DISPROVE the claim against the artifacts. "
+                            "Do not stop or hand back to the investigator until every item is resolved."
                         )
                         self.cm.history_manager.add_message("user", current_user_message, {"internal": True})
                         with self.cm.history_manager._lock:
                             history_snapshot = list(self.cm.history_manager.history)
                         continue
+
                     emit_step("thinking", "Investigation complete", "done")
                     break
 
+                toolless_iters = 0  # a real tool call this iteration resets the counter
                 current_calls_signature = [(tc.get("name"), json.dumps(tc.get("parameters", {}), sort_keys=True)) for tc in tool_calls]
 
 
@@ -1356,13 +2469,32 @@ class QueryProcessor:
                     emit_step("tool_call", f"Calling tool: {tool_name} ({i+1}/{len(tool_calls)})", "active", tool=tool_name, params=call.get("parameters"))
                     
                     result = self.cm._execute_tool(call, hitl_callback=hitl_callback)
+                    # Transparent auto map-reduce: a very large query result is
+                    # analyzed in full (sealed segments) instead of sampled.
+                    result = self._maybe_auto_map_reduce(call, result, user_query, reasoning_cfg, emit_step)
+                    # Stamp the originating call params (sql_query, database_name) onto
+                    # the result so evidence built from it can later reload its source.
+                    if isinstance(result, dict):
+                        result.setdefault("parameters", call.get("parameters") or {})
                     iteration_tool_results.append(result)
                     all_tool_results.append(result)
+                    # Coverage tracking: which DBs were consulted + sampled flag.
+                    try:
+                        _p = call.get("parameters") or {}
+                        if tool_name in ("query_database", "get_schema", "analyze_large_dataset") and _p.get("database_name"):
+                            consulted_dbs.add(_p.get("database_name"))
+                        _rr = result.get("result") if isinstance(result.get("result"), dict) else result
+                        if isinstance(_rr, dict) and (_rr.get("compressed") or
+                                (isinstance(_rr.get("row_count"), int) and _rr.get("row_count") > 200)):
+                            coverage_sampled = True
+                    except Exception:
+                        pass
                     # Compact ledger entry (cross-iteration correlation index).
                     ledger_entries.append({
                         "iteration": iteration,
                         "tool": tool_name,
                         "params": call.get("parameters"),
+                        "success": bool(result.get("success")),
                         "result": result.get("result") if isinstance(result.get("result"), dict) else result,
                     })
 
@@ -1386,7 +2518,10 @@ class QueryProcessor:
                 # Sync report changes to GUI
                 initial_report_state = check_report_sync(initial_report_state)
 
-                tool_output_str = json.dumps(iteration_tool_results, indent=2)
+                # default=str so a non-JSON-serializable tool result (e.g. a
+                # dataclass that slipped through a handler) can NEVER crash the
+                # whole investigation turn — it degrades to a string instead.
+                tool_output_str = json.dumps(iteration_tool_results, indent=2, default=str)
 
                 # Token-aware, window-scaled cap on a single tool output (P3 #11).
                 tool_output_limit = self._tool_output_char_limit()
@@ -1430,7 +2565,7 @@ class QueryProcessor:
                 new_kws_from_tools = self.cm.intent_engine.detect_keywords(tool_output_str)
                 for kw in new_kws_from_tools: active_keywords.add(kw)
 
-                # GEP Rule 6 (Tool Traceability): prepend an LLM-visible header
+                # GEP-8 (Tool Traceability): prepend an LLM-visible header
                 # listing every tool call in this iteration with its name + iteration
                 # index BEFORE the JSON payload, so the next model turn sees the trace
                 # literally in the message content (not just in metadata).
@@ -1446,7 +2581,7 @@ class QueryProcessor:
                 # leading block, which would otherwise flatten the
                 # tool-call -> tool-result sequence the model needs to reason
                 # across iterations. The is_tool_result metadata still drives
-                # the Activity audit and GEP Rule 6 (both key on metadata).
+                # the Activity audit and GEP-8 (both key on metadata).
                 self.cm.history_manager.add_message(
                     "user",
                     f"{trace_header}\nInvestigation Tool Results:\n{history_tool_output}",
@@ -1466,6 +2601,22 @@ class QueryProcessor:
                 with self.cm.history_manager._lock:
                     history_snapshot = list(self.cm.history_manager.history)
 
+            # Hierarchical: if the loop exited (e.g. hit MAX_ITERATIONS) with
+            # sub-narratives still unresolved, resolve every remaining one from the
+            # evidence so NO seeded card is left stuck `open` and the verdict reflects
+            # the whole plan. (Safe no-op when all steps already resolved.)
+            if hierarchical and focus_idx < len(plan_steps):
+                emit_step("thinking",
+                          f"Step budget reached — resolving {len(plan_steps) - focus_idx} "
+                          "remaining sub-narrative(s) from the evidence gathered", "done")
+                while focus_idx < len(plan_steps):
+                    _lsv, _lreason = self._resolve_by_evidence(
+                        plan_steps[focus_idx], all_tool_results[step_result_start:])
+                    self._resolve_substep(plan_steps[focus_idx], _lsv, _lreason,
+                                          all_tool_results[step_result_start:])
+                    focus_idx += 1
+                    step_result_start = len(all_tool_results)
+
             # --- STAGE 7: Final Forensic Synthesis & Completion ---
             # Force a synthesis pass whenever the iteration loop exited without
             # a usable text answer. Three triggers:
@@ -1477,21 +2628,45 @@ class QueryProcessor:
             hit_max_iter = bool(tool_calls and iteration >= MAX_ITERATIONS)
             empty_response = not (ai_content or "").strip()
             tools_were_run_but_no_synthesis = bool(all_tool_results) and empty_response
-            needs_synthesis = hit_max_iter or empty_response or tools_were_run_but_no_synthesis
+            # 4. The model never executed a tool and produced no evidence — its text
+            #    (if any) is a plan, not findings. Force an HONEST synthesis so the plan
+            #    is replaced by a truthful "no data retrieved" answer.
+            # 5. A hierarchical run that finished proving its narratives ALWAYS gets a
+            #    synthesis pass to aggregate the sub-narratives into the verdict answer.
+            hierarchical_done = hierarchical and focus_idx >= len(plan_steps)
+            needs_synthesis = (hit_max_iter or empty_response
+                               or tools_were_run_but_no_synthesis or force_honest_synthesis
+                               or hierarchical_done)
 
             if needs_synthesis:
-                if hit_max_iter:
+                if force_honest_synthesis:
+                    reason = "No evidence retrieved — forcing an honest answer"
+                elif hierarchical_done:
+                    reason = "All narratives resolved — aggregating the verdict"
+                elif hit_max_iter:
                     reason = "Max steps reached"
                 elif tools_were_run_but_no_synthesis:
                     reason = "Tools executed but model returned no synthesis"
                 else:
                     reason = "Model returned empty text — forcing synthesis"
                 emit_step("synthesis", f"{reason}. Forcing synthesis.", "active")
+                # Hierarchical: prepend the plan outcomes so the synthesis aggregates
+                # the proven/negative sub-narratives into the final verdict.
+                _ledger = self._build_evidence_ledger(ledger_entries)
+                if hierarchical:
+                    _outcomes = self._hierarchy_outcomes_block(hierarchy_plan)
+                    _ledger = (_outcomes + "\n\n" + _ledger) if _ledger else _outcomes
                 synthesis_prompt = self._build_synthesis_prompt(
                     user_query, all_tool_results,
-                    ledger_text=self._build_evidence_ledger(ledger_entries),
+                    ledger_text=_ledger,
+                    checklist=checklist,
                 )
-                _synth_tools = [t for t in self.cm._get_tool_definitions() if "report_" in t['name']]
+                # With zero successful evidence there is nothing to document — do not
+                # offer report_* tools (a report write would assert a finding we cannot
+                # support). The synthesis must be a plain, honest chat answer.
+                _has_evidence = any(isinstance(r, dict) and r.get("success") for r in all_tool_results)
+                _synth_tools = ([t for t in self.cm._get_tool_definitions() if "report_" in t['name']]
+                                if _has_evidence else [])
                 emit_dialogue({
                     "phase": "synthesis_request",
                     "iteration": iteration,
@@ -1552,6 +2727,7 @@ class QueryProcessor:
                         text_prompt = self._build_synthesis_prompt(
                             user_query, all_tool_results, text_only=True,
                             ledger_text=self._build_evidence_ledger(ledger_entries),
+                            checklist=checklist,
                         )
                         emit_dialogue({
                             "phase": "synthesis_request",
@@ -1656,31 +2832,175 @@ class QueryProcessor:
                 except Exception as e:
                     self.logger.error(f"Failed to log investigation step: {e}")
 
+                # Per-question answer memory (v0.11.1): persist a concise answer
+                # summary + the extracted findings (the evidence ledger) so a
+                # related follow-up can REUSE the data instead of re-querying.
+                try:
+                    if reasoning_cfg.get("enable_question_memory", False) and self.cm.case_context_manager:
+                        _clean = (ai_content or "").strip()
+                        _summary = (_clean[:600] + "…") if len(_clean) > 600 else _clean
+                        self.cm.case_context_manager.save_question_memory(
+                            question=user_query,
+                            answer_summary=_summary,
+                            key_findings=self._build_evidence_ledger(ledger_entries),
+                            artifacts_queried=list({r.get("tool_name") for r in all_tool_results if r.get("tool_name")}),
+                            sub_questions=[c.get("q") for c in checklist],
+                        )
+                except Exception as e:
+                    self.logger.error(f"Failed to save question memory: {e}")
+
+            # NOTE: Narrative Map narratives are now created from FINDINGS (not the
+            # sub-questions) AFTER the reasoning trace below, so they can use the
+            # trace's per-sub-question conclusions as the card titles. See
+            # `_sync_narratives_from_findings` after the reasoning-trace block.
+
+            # Coverage signals (computed BEFORE the GEP evaluation so the GEP-6
+            # Completeness & Coverage check can grade/disclose them): which case
+            # databases were consulted vs. available, and whether any result was a
+            # sample. Surfaced to the investigator + persisted.
+            coverage = self._emit_coverage(consulted_dbs, coverage_sampled, user_query, emit_step)
+
             # Per-answer GEP compliance: evaluate the behavioral rules for this
             # turn and persist so the Compliance panel can show, per question,
             # whether the Eye actually followed the protocol.
             gep_turn = None
             try:
-                gep_turn = self._evaluate_gep_turn(user_query, ai_content, all_tool_results)
+                gep_turn = self._evaluate_gep_turn(user_query, ai_content, all_tool_results, coverage, checklist)
                 self._persist_gep_turn(gep_turn)
             except Exception as e:
                 self.logger.debug(f"GEP turn evaluation skipped: {e}")
 
+            # A HIERARCHICAL run already OWNS the Narrative Map (seeded the plan, then
+            # flipped each sub-narrative live), so the post-hoc flat sync + map-checklist
+            # are skipped — running them would create duplicate/competing cards. Only the
+            # verdict is finalized (its title was seeded; here its proven/unproven state
+            # is rolled up from the narratives by `_finalize_verdict`).
+            _was_focus = bool(getattr(self.cm, "_focus_narrative_id", None))
+            if hierarchical:
+                if not _was_focus:
+                    try:
+                        ai_content = self._finalize_verdict(ai_content, user_query)
+                    except Exception as _e:
+                        self.logger.debug(f"Verdict finalize (hierarchical) skipped: {_e}")
+                # The plan ran to completion (all sub-narratives resolved) — drop the
+                # resume checkpoint so a later turn doesn't re-resume a finished plan.
+                self._clear_active_plan()
+            else:
+                # Map/reasoning checklist: ensures a non-decomposed but investigative turn
+                # still lands one main claim on the Narrative Map (the investigation
+                # `checklist` itself is never mutated). See `_build_map_checklist`.
+                map_checklist = self._build_map_checklist(checklist, user_query, all_tool_results)
+
+                # Reasoning trace (v0.11.3): capture WHY each (sub-)question was created
+                # and WHY each conclusion follows from which evidence — a sealed, tool-less
+                # structured pass grounded in the evidence ledger — for the Compliance UI
+                # and the Narrative Map. Best-effort; never breaks.
+                _reasoning_trace = None
+                try:
+                    _map_q = [c for c in map_checklist if c.get("kind") != "premise"]
+                    if reasoning_cfg.get("enable_reasoning_trace", True) and (_map_q or map_checklist):
+                        _ls = getattr(self.cm.rag_service, "last_sources", None)
+                        _knowledge = list(_ls) if isinstance(_ls, list) else []
+                        trace = self._capture_reasoning_trace(
+                            user_query, map_checklist, ledger_entries, ai_content,
+                            guarded_generate, emit_step, emit_dialogue,
+                            strategy=plan_strategy, knowledge_consulted=_knowledge,
+                        )
+                        if trace:
+                            _reasoning_trace = trace
+                            self._persist_reasoning_turn(trace, user_query)
+                except Exception as e:
+                    self.logger.debug(f"Reasoning trace capture skipped: {e}")
+
+                # Narrative Map: create narratives from the FINDINGS (claim/finding as
+                # the title, the originating sub-question kept only as metadata).
+                try:
+                    self._sync_narratives_from_findings(map_checklist, all_tool_results, _reasoning_trace, emit_step, user_query, ai_content)
+                except Exception as _e:
+                    self.logger.debug(f"Narrative Map findings-sync skipped: {_e}")
+                if not _was_focus:
+                    try:
+                        ai_content = self._finalize_verdict(ai_content, user_query)
+                    except Exception as _e:
+                        self.logger.debug(f"Verdict finalize skipped: {_e}")
+
+            # Keep the chat answer clean: any text-protocol ```tool_call blocks the
+            # model emitted belong in the dedicated "Tool output" section, not the main
+            # bubble. The structured calls + results are preserved (eye_dialogue +
+            # tool_output), so this only strips the raw protocol text from the prose.
+            ai_content = self._strip_tool_call_blocks(ai_content)
+
+            # Persist the full Eye<->LLM transcript ONTO this turn's final
+            # assistant message so the "Show the Eye's thinking" dropdown
+            # survives close/reopen for EVERY message — not just the last.
+            # Stamped here (not at add_message) so `conversation` is complete
+            # (it keeps accruing through synthesis + the reasoning trace). The
+            # transcript lives only in metadata: the prompt builder renders
+            # history from role/content, so it never enters the model context.
+            # Compact per-turn tool-output list for the dedicated, collapsed-by-default
+            # "🔧 Tool output" UI section — keeps the big raw results out of the main
+            # chat bubble while staying one expand away.
+            tool_output = self._build_tool_output(all_tool_results)
+            try:
+                hm = self.cm.history_manager
+                with hm._lock:
+                    for _msg in reversed(hm.history):
+                        if _msg.get("role") == "assistant":
+                            _md = _msg.setdefault("metadata", {})
+                            if conversation:
+                                _md["eye_dialogue"] = conversation
+                            if tool_output:
+                                _md["tool_output"] = tool_output
+                            # Match the cleaned answer shown to the investigator so a
+                            # reload never resurfaces the raw ```tool_call text.
+                            _msg["content"] = ai_content
+                            break
+                hm.save_history()
+            except Exception as _e:
+                self.logger.debug(f"Attaching transcript/tool-output to assistant message skipped: {_e}")
+
+            _data_viewers = self.cm._extract_data_viewers(all_tool_results)
             return {
                 "response": ai_content,
-                "data_viewer": self.cm._extract_data_viewer(all_tool_results),
+                "data_viewer": _data_viewers[0] if _data_viewers else None,
+                "data_viewers": _data_viewers,
                 "action_chips": self.cm._generate_action_chips(user_query, llm_response, all_tool_results),
                 "option_menu": final_option_menu,
                 "eye_llm_conversation": conversation,
+                "tool_output": tool_output,
                 "gep_turn": gep_turn,
+                "coverage": coverage,
                 "error": None,
                 "context_stats": self.cm.get_context_stats()
             }
             
         except ContextOverflowError as oe:
+            self.logger.warning(f"Over-context payload: {oe}")
+            # Auto-recovery BEFORE refusing: if a re-runnable query is the bloat
+            # source, analyze it in full via sealed map-reduce and answer from
+            # that, instead of handing the investigator a refusal. Best-effort;
+            # uses whichever of these locals exist at the point of overflow.
+            _recovered = self._overflow_auto_map_reduce(
+                locals().get("ledger_entries", []),
+                user_query,
+                locals().get("reasoning_cfg", {}) or {},
+                emit_step,
+            )
+            if _recovered is not None:
+                # Per-step GEP compliance: the recovery produced a real
+                # evidence-bearing answer (sealed full-dataset map-reduce), so it
+                # must leave a record like any other answered turn. Best-effort.
+                try:
+                    _gep_rec = self._evaluate_gep_turn(
+                        user_query, _recovered.get("response", ""),
+                        locals().get("all_tool_results", []) or [], None,
+                        locals().get("checklist"))
+                    self._persist_gep_turn(_gep_rec)
+                except Exception as _e:
+                    self.logger.debug(f"GEP overflow-recovery evaluation skipped: {_e}")
+                return _recovered
             # FAIL HARD, never silently truncate. Refuse and tell the
             # investigator how to proceed so the chain of custody stays intact.
-            self.logger.warning(f"Refused over-context payload: {oe}")
             usable = oe.max_context - oe.reserve
             refusal = (
                 "**The evidence is too large to read in one pass — even after automatic compaction.**\n\n"
@@ -1692,6 +3012,13 @@ class QueryProcessor:
                 "Alternatively: narrow the query (tighter time range / specific user or path / a `LIMIT`), "
                 "or switch to a model with a larger context window."
             )
+            # Per-step GEP compliance: a fail-hard refusal IS the GEP-mandated
+            # defensible action — record it so the trail isn't blank for the very
+            # step where the Eye was most protocol-correct. Best-effort.
+            try:
+                self._persist_gep_turn(self._evaluate_gep_refusal(user_query, "context_overflow"))
+            except Exception as _e:
+                self.logger.debug(f"GEP refusal evaluation skipped: {_e}")
             return {
                 "response": refusal,
                 "error": "context_overflow",
@@ -1764,10 +3091,15 @@ class QueryProcessor:
             return False
         return True
 
-    def _evaluate_gep_turn(self, user_query, ai_content, all_tool_results):
+    def _evaluate_gep_turn(self, user_query, ai_content, all_tool_results, coverage=None, checklist=None):
         """Evaluate the objectively-checkable BEHAVIORAL GEP rules for one
         answered turn so the investigator can confirm, per answer, that the Eye
         followed the protocol. Returns a record with per-rule PASS/FAIL/N-A.
+
+        ``coverage`` (optional, from ``_emit_coverage``) drives the GEP-6
+        Completeness & Coverage check: it discloses which databases were
+        consulted vs. available and whether any result was a sample, and flags
+        (PARTIAL) when a sample stood in for the full set with no map-reduce.
         """
         ai_content = ai_content or ""
         investigative = [r for r in all_tool_results
@@ -1779,46 +3111,295 @@ class QueryProcessor:
 
         checks = []
 
-        # R13 — Direct Answer Protocol: a substantive chat answer must exist.
+        # GEP-10 (Defensibility) — Direct Answer: a substantive chat answer must exist.
         substantive = len(ai_content.strip()) >= 40
         checks.append({
-            "id": 13, "name": "Direct Answer (R13)",
+            "id": "GEP-10", "name": "Direct Answer (GEP-10)",
             "status": "PASS" if substantive else "FAIL",
             "detail": f"chat answer is {len(ai_content.strip())} chars"
                       if substantive else "no substantive chat answer produced",
         })
 
-        # R17 — Dual Output: an evidence-bearing turn must also persist a report_* block.
+        # GEP-7 — Dual Output: an evidence-bearing turn must also persist a report_* block.
         if not evidence_present:
-            checks.append({"id": 17, "name": "Dual Output (R17)", "status": "N-A",
+            checks.append({"id": "GEP-7", "name": "Dual Output (GEP-7)", "status": "N-A",
                            "detail": "no forensic evidence produced this turn"})
         elif report_ok:
-            checks.append({"id": 17, "name": "Dual Output (R17)", "status": "PASS",
+            checks.append({"id": "GEP-7", "name": "Dual Output (GEP-7)", "status": "PASS",
                            "detail": f"evidence answered in chat AND {len(report_ok)} report block(s) persisted"})
         else:
-            checks.append({"id": 17, "name": "Dual Output (R17)", "status": "FAIL",
+            checks.append({"id": "GEP-7", "name": "Dual Output (GEP-7)", "status": "FAIL",
                            "detail": "evidence produced but no report_* block was persisted"})
 
-        # R12 — Timestamp Priority: an evidence turn's answer/tool output cites timestamps.
+        # GEP-3 — Specificity & Chronology: an evidence turn cites timestamps.
         if not evidence_present:
-            checks.append({"id": 12, "name": "Timestamp Priority (R12)", "status": "N-A",
+            checks.append({"id": "GEP-3", "name": "Specificity & Chronology (GEP-3)", "status": "N-A",
                            "detail": "no evidence requiring timestamps this turn"})
         else:
             blob = ai_content + " " + " ".join(str(r.get("result", "")) for r in investigative_ok)
             has_ts = bool(self._TIMESTAMP_RE.search(blob))
-            checks.append({"id": 12, "name": "Timestamp Priority (R12)",
+            checks.append({"id": "GEP-3", "name": "Specificity & Chronology (GEP-3)",
                            "status": "PASS" if has_ts else "PARTIAL",
                            "detail": "timestamps present in answer/evidence" if has_ts
                                      else "evidence present but no explicit timestamp detected"})
 
-        # R2 — Proactive Investigation: at least one investigative tool was run.
+        # GEP-1 (Evidence Primacy) — Proactive: at least one investigative tool was run.
         if investigative:
-            checks.append({"id": 2, "name": "Proactive Investigation (R2)", "status": "PASS",
+            checks.append({"id": "GEP-1", "name": "Proactive Investigation (GEP-1)", "status": "PASS",
                            "detail": f"{len(investigative)} investigative tool call(s): "
                                      + ", ".join(sorted({r.get('tool_name') for r in investigative}))})
         else:
-            checks.append({"id": 2, "name": "Proactive Investigation (R2)", "status": "N-A",
+            checks.append({"id": "GEP-1", "name": "Proactive Investigation (GEP-1)", "status": "N-A",
                            "detail": "conversational/no-evidence turn; no database search required"})
+
+        # GEP-6 (Completeness & Coverage) — disclose which databases were consulted
+        # vs. available and whether any result was a SAMPLE rather than the full
+        # set. Disclose-and-grade: PARTIAL when a sample stood in for the whole set
+        # with no full (map-reduce) analysis — the real silent-omission risk — else
+        # PASS; the detail always discloses the coverage so the investigator can
+        # judge. N-A on conversational turns or when coverage wasn't computed.
+        if not investigative or not isinstance(coverage, dict):
+            checks.append({"id": "GEP-6", "name": "Completeness & Coverage (GEP-6)", "status": "N-A",
+                           "detail": "no evidence turn / coverage not computed"})
+        else:
+            consulted = coverage.get("consulted", []) or []
+            not_consulted = coverage.get("not_consulted", []) or []
+            sampled = bool(coverage.get("sampled"))
+            ran_full = any(self._tool_succeeded(r) for r in all_tool_results
+                           if (r.get("tool_name") or "") == "analyze_large_dataset")
+            parts = []
+            if consulted:
+                parts.append("consulted: " + ", ".join(consulted))
+            if not_consulted:
+                parts.append("NOT consulted: " + ", ".join(not_consulted))
+            if sampled:
+                parts.append("a result was a SAMPLE"
+                             + ("" if ran_full else " — full set NOT analyzed (use analyze_large_dataset)"))
+            detail = "; ".join(parts) if parts else "all available databases consulted; no sampled results"
+            status = "PARTIAL" if (sampled and not ran_full) else "PASS"
+            checks.append({"id": "GEP-6", "name": "Completeness & Coverage (GEP-6)",
+                           "status": status, "detail": detail})
+
+        # GEP-2 (Traceability) — every fact links to a specific source record.
+        if not evidence_present:
+            checks.append({"id": "GEP-2", "name": "Traceability (GEP-2)", "status": "N-A",
+                           "detail": "no factual evidence to trace this turn"})
+        else:
+            try:
+                refs = EvidenceSeal.extract_evidence_refs(all_tool_results) or []
+            except Exception:
+                refs = []
+            if refs:
+                checks.append({"id": "GEP-2", "name": "Traceability (GEP-2)", "status": "PASS",
+                               "detail": f"{len(refs)} source provenance handle(s) (database:table:row / sql)"})
+            else:
+                checks.append({"id": "GEP-2", "name": "Traceability (GEP-2)", "status": "PARTIAL",
+                               "detail": "evidence produced but no provenance handle derivable"})
+
+        # GEP-4 (Cross-Corroboration) — conclusions rest on ≥2 sources; single-source flagged.
+        if not evidence_present or not isinstance(coverage, dict):
+            checks.append({"id": "GEP-4", "name": "Cross-Corroboration (GEP-4)", "status": "N-A",
+                           "detail": "no multi-source evidence to corroborate this turn"})
+        else:
+            sources = sorted({s for s in (coverage.get("consulted") or []) if s})
+            if len(sources) >= 2:
+                checks.append({"id": "GEP-4", "name": "Cross-Corroboration (GEP-4)", "status": "PASS",
+                               "detail": f"{len(sources)} sources consulted: " + ", ".join(sources)})
+            else:
+                checks.append({"id": "GEP-4", "name": "Cross-Corroboration (GEP-4)", "status": "PARTIAL",
+                               "detail": "single-source turn — GEP-4 flags single-source claims; corroborate with another artifact"})
+
+        # GEP-5 (Premise Verification) — asserted premises get an explicit verdict.
+        premises = [c for c in (checklist or []) if c.get("kind") == "premise"]
+        if not premises:
+            checks.append({"id": "GEP-5", "name": "Premise Verification (GEP-5)", "status": "N-A",
+                           "detail": "no asserted premises to verify this turn"})
+        else:
+            resolved = [c for c in premises if c.get("status") == "answered"]
+            if len(resolved) == len(premises):
+                checks.append({"id": "GEP-5", "name": "Premise Verification (GEP-5)", "status": "PASS",
+                               "detail": f"all {len(premises)} asserted premise(s) tested with a verdict"})
+            elif resolved:
+                checks.append({"id": "GEP-5", "name": "Premise Verification (GEP-5)", "status": "PARTIAL",
+                               "detail": f"{len(resolved)}/{len(premises)} asserted premise(s) resolved"})
+            else:
+                checks.append({"id": "GEP-5", "name": "Premise Verification (GEP-5)", "status": "FAIL",
+                               "detail": f"{len(premises)} premise(s) asserted but none verified"})
+
+        # GEP-8 (Transparency) — tool calls are traced + logged and LLM-visible.
+        if all_tool_results:
+            checks.append({"id": "GEP-8", "name": "Transparency (GEP-8)", "status": "PASS",
+                           "detail": f"{len(all_tool_results)} tool call(s) traced + logged (steps/dialogue/seals)"})
+        else:
+            checks.append({"id": "GEP-8", "name": "Transparency (GEP-8)", "status": "N-A",
+                           "detail": "conversational turn; reasoning still streamed + logged"})
+
+        # GEP-9 (Human Authority) — durable authored actions are attributable.
+        write_tools = [r for r in all_tool_results
+                       if (r.get("tool_name") or "").startswith(("correlation_create", "correlation_edit"))]
+        if not write_tools:
+            checks.append({"id": "GEP-9", "name": "Human Authority (GEP-9)", "status": "N-A",
+                           "detail": "read-only investigation; no durable authored artifacts this turn"})
+        else:
+            write_ok = [r for r in write_tools if self._tool_succeeded(r)]
+            if len(write_ok) == len(write_tools):
+                checks.append({"id": "GEP-9", "name": "Human Authority (GEP-9)", "status": "PASS",
+                               "detail": f"{len(write_ok)} authored artifact(s) — reason + evidence + Eye-stamp enforced"})
+            else:
+                checks.append({"id": "GEP-9", "name": "Human Authority (GEP-9)", "status": "PARTIAL",
+                               "detail": f"{len(write_ok)}/{len(write_tools)} authoring action(s) succeeded"})
+
+        passed = sum(1 for c in checks if c["status"] == "PASS")
+        gradable = sum(1 for c in checks if c["status"] in ("PASS", "FAIL", "PARTIAL"))
+        return {
+            "query": user_query,
+            "timestamp": datetime.now().isoformat(),
+            "checks": checks,
+            "summary": f"{passed}/{gradable} behavioral GEP rules PASS" if gradable else "no gradable rules this turn",
+        }
+
+    def _evaluate_gep_triage(self, consulted, expected, blocks_added, response):
+        """Grade the DETERMINISTIC automated triage (initialize_case_report) against
+        the 10 GEP principles so the most evidence-heavy step also leaves a per-step
+        compliance record in the trail. The triage runs no agentic tool calls, so —
+        unlike ``_evaluate_gep_turn`` — this grades the triage's real behavior
+        directly (databases resolved + report blocks persisted) with NO fabricated
+        tool-result dicts. Returns the same record shape so ``_persist_gep_turn`` and
+        the Compliance panel consume it identically.
+
+        ``consulted`` = canonical case-DB filenames that resolved; ``expected`` = the
+        full canonical artifact set the triage looks for; ``blocks_added`` = number
+        of report blocks persisted this pass; ``response`` = the chat completion text.
+        """
+        consulted = sorted({d for d in (consulted or []) if d})
+        expected = sorted({d for d in (expected or []) if d})
+        not_consulted = sorted(set(expected) - set(consulted))
+        blocks_added = int(blocks_added or 0)
+        response = response or ""
+        evidence = bool(consulted) and blocks_added > 0
+
+        checks = []
+
+        # GEP-10 (Defensibility) — Direct Answer: a substantive completion summary.
+        substantive = len(response.strip()) >= 40
+        checks.append({
+            "id": "GEP-10", "name": "Direct Answer (GEP-10)",
+            "status": "PASS" if substantive else "FAIL",
+            "detail": f"triage completion summary is {len(response.strip())} chars"
+                      if substantive else "no substantive triage summary produced",
+        })
+
+        # GEP-1 (Evidence Primacy) — Proactive: case databases were queried.
+        if consulted:
+            checks.append({"id": "GEP-1", "name": "Proactive Investigation (GEP-1)", "status": "PASS",
+                           "detail": f"proactively queried {len(consulted)} case database(s): "
+                                     + ", ".join(consulted)})
+        else:
+            checks.append({"id": "GEP-1", "name": "Proactive Investigation (GEP-1)", "status": "N-A",
+                           "detail": "no case databases resolved for this collection"})
+
+        # GEP-7 — Dual Output: chat summary AND persisted report block(s).
+        if not evidence:
+            checks.append({"id": "GEP-7", "name": "Dual Output (GEP-7)", "status": "N-A",
+                           "detail": "no forensic evidence persisted this triage pass"})
+        else:
+            checks.append({"id": "GEP-7", "name": "Dual Output (GEP-7)", "status": "PASS",
+                           "detail": f"triage summarized in chat AND {blocks_added} report block(s) persisted"})
+
+        # GEP-2 (Traceability) — every persisted triage block stores its source SQL.
+        if not evidence:
+            checks.append({"id": "GEP-2", "name": "Traceability (GEP-2)", "status": "N-A",
+                           "detail": "no factual evidence to trace this triage pass"})
+        else:
+            checks.append({"id": "GEP-2", "name": "Traceability (GEP-2)", "status": "PASS",
+                           "detail": f"{blocks_added} report block(s) each store the source SQL query"})
+
+        # GEP-3 (Specificity & Chronology) — triage indexes timestamped events.
+        if not evidence:
+            checks.append({"id": "GEP-3", "name": "Specificity & Chronology (GEP-3)", "status": "N-A",
+                           "detail": "no evidence requiring timestamps this triage pass"})
+        else:
+            checks.append({"id": "GEP-3", "name": "Specificity & Chronology (GEP-3)", "status": "PASS",
+                           "detail": "security/execution events indexed with their event timestamps"})
+
+        # GEP-6 (Completeness & Coverage) — disclose consulted vs absent artifact DBs.
+        if not expected:
+            checks.append({"id": "GEP-6", "name": "Completeness & Coverage (GEP-6)", "status": "N-A",
+                           "detail": "coverage not computed for this triage pass"})
+        else:
+            parts = []
+            if consulted:
+                parts.append("consulted: " + ", ".join(consulted))
+            if not_consulted:
+                parts.append("NOT present: " + ", ".join(not_consulted))
+            checks.append({"id": "GEP-6", "name": "Completeness & Coverage (GEP-6)",
+                           "status": "PASS" if consulted else "PARTIAL",
+                           "detail": "; ".join(parts) if parts else "no expected artifact databases present"})
+
+        # GEP-4 (Cross-Corroboration) — triage spans multiple artifact sources.
+        if not consulted:
+            checks.append({"id": "GEP-4", "name": "Cross-Corroboration (GEP-4)", "status": "N-A",
+                           "detail": "no sources consulted to corroborate this triage pass"})
+        elif len(consulted) >= 2:
+            checks.append({"id": "GEP-4", "name": "Cross-Corroboration (GEP-4)", "status": "PASS",
+                           "detail": f"{len(consulted)} artifact sources indexed for cross-corroboration"})
+        else:
+            checks.append({"id": "GEP-4", "name": "Cross-Corroboration (GEP-4)", "status": "PARTIAL",
+                           "detail": "single-source triage — corroborate with another artifact"})
+
+        # GEP-8 (Transparency) — every triage category traced + persisted.
+        if evidence:
+            checks.append({"id": "GEP-8", "name": "Transparency (GEP-8)", "status": "PASS",
+                           "detail": f"{blocks_added} triage block(s) traced via steps + persisted to the report"})
+        else:
+            checks.append({"id": "GEP-8", "name": "Transparency (GEP-8)", "status": "N-A",
+                           "detail": "no persisted triage artifacts to trace this pass"})
+
+        # GEP-5 (Premise Verification) / GEP-9 (Human Authority) — not applicable:
+        # the triage asserts no premises and authors no durable (correlation) artifacts.
+        checks.append({"id": "GEP-5", "name": "Premise Verification (GEP-5)", "status": "N-A",
+                       "detail": "automated triage asserts no premises to verify"})
+        checks.append({"id": "GEP-9", "name": "Human Authority (GEP-9)", "status": "N-A",
+                       "detail": "read-only triage; no durable authored artifacts"})
+
+        passed = sum(1 for c in checks if c["status"] == "PASS")
+        gradable = sum(1 for c in checks if c["status"] in ("PASS", "FAIL", "PARTIAL"))
+        return {
+            "query": "initialize_case_report",
+            "timestamp": datetime.now().isoformat(),
+            "checks": checks,
+            "summary": f"{passed}/{gradable} behavioral GEP rules PASS" if gradable else "no gradable rules this turn",
+        }
+
+    def _evaluate_gep_refusal(self, user_query, reason=""):
+        """Grade a fail-hard REFUSAL turn so the compliance trail records the step
+        where the Eye was *most* protocol-correct: refusing to read/answer rather
+        than silently truncating evidence preserves the chain of custody, which is
+        exactly GEP-10 (Defensibility). A refusal is not an answered turn, so —
+        unlike ``_evaluate_gep_turn`` — this does NOT grade dual-output/timestamps
+        (there is deliberately no answer/evidence to grade). Same record shape so
+        ``_persist_gep_turn`` and the Compliance panel consume it identically.
+        """
+        why = (reason or "").strip()
+        checks = [{
+            "id": "GEP-10", "name": "Direct Answer (GEP-10)", "status": "PASS",
+            "detail": "fail-hard refusal — refused rather than silently truncate evidence; "
+                      "chain of custody preserved"
+                      + (f" (reason: {why})" if why else ""),
+        }]
+        for gid, name in (
+            ("GEP-1", "Proactive Investigation (GEP-1)"),
+            ("GEP-2", "Traceability (GEP-2)"),
+            ("GEP-3", "Specificity & Chronology (GEP-3)"),
+            ("GEP-4", "Cross-Corroboration (GEP-4)"),
+            ("GEP-5", "Premise Verification (GEP-5)"),
+            ("GEP-6", "Completeness & Coverage (GEP-6)"),
+            ("GEP-7", "Dual Output (GEP-7)"),
+            ("GEP-8", "Transparency (GEP-8)"),
+            ("GEP-9", "Human Authority (GEP-9)"),
+        ):
+            checks.append({"id": gid, "name": name, "status": "N-A",
+                           "detail": "turn refused to preserve chain of custody; nothing to grade"})
 
         passed = sum(1 for c in checks if c["status"] == "PASS")
         gradable = sum(1 for c in checks if c["status"] in ("PASS", "FAIL", "PARTIAL"))
@@ -1840,6 +3421,971 @@ class QueryProcessor:
         log_path = os.path.join(logs_dir, "eye_gep_turns.jsonl")
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+    @staticmethod
+    def _parse_reasoning(raw: str) -> Optional[Dict[str, Any]]:
+        """Pull the first JSON object out of the reasoning-trace model output, or
+        None on any failure (caller then logs a decomposition-only fallback)."""
+        if not raw:
+            return None
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return None
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _norm_evidence(ev: Any) -> List[Dict[str, str]]:
+        """Normalize an evidence list (strings or {ref,note} objects) to a list of
+        {ref, note} dicts; drops empties. Tolerant of malformed model output."""
+        out: List[Dict[str, str]] = []
+        if not isinstance(ev, list):
+            return out
+        for item in ev:
+            if isinstance(item, dict):
+                ref = str(item.get("ref") or item.get("reference") or "").strip()
+                note = str(item.get("note") or item.get("detail") or "").strip()
+            else:
+                ref, note = str(item).strip(), ""
+            if ref or note:
+                out.append({"ref": ref, "note": note})
+        return out
+
+    def _capture_reasoning_trace(self, user_query, checklist, ledger_entries, final_answer,
+                                 guarded_generate, emit_step, emit_dialogue,
+                                 strategy: str = "", knowledge_consulted=None) -> Optional[Dict[str, Any]]:
+        """Capture WHY each sub-question was created and WHY each conclusion
+        follows from which evidence, for the Compliance UI (GEP-8 Transparency,
+        GEP-2 Traceability).
+
+        One tool-less call routed through ``guarded_generate(phase="reasoning")``
+        so it is SEALED and runs at planning temperature. It is given the
+        sub-questions (+their 'why'), the evidence ledger (real
+        database:table:rowid provenance) and the final answer, and must ground
+        its output STRICTLY in the provided ledger (cite only ledger refs, never
+        invent). Best-effort: on any failure it falls back to a decomposition-only
+        record so the 'why each sub-question' rationale is still surfaced.
+        NEVER raises into the pipeline.
+        """
+        subq_items = [c for c in checklist if c.get("kind") != "premise"]
+        prem_items = [c for c in checklist if c.get("kind") == "premise"]
+        ledger_text = self._build_evidence_ledger(ledger_entries) or "(no tool calls this turn)"
+        _ans = (final_answer or "").strip()
+        _ans = (_ans[:4000] + "…") if len(_ans) > 4000 else _ans
+
+        sub_lines = "\n".join(
+            f'  sq{i+1}: {c.get("q","")}' + (f'  (why: {c.get("why","")})' if c.get("why") else "")
+            for i, c in enumerate(subq_items)
+        )
+        prem_lines = "\n".join(
+            f'  p{i+1}: {c.get("q","")[8:] if c.get("q","").startswith("verify: ") else c.get("q","")}'
+            for i, c in enumerate(prem_items)
+        )
+
+        reasoning_system = (
+            "You are the reasoning-audit unit of a forensic investigation assistant. "
+            "Explain the investigation that ALREADY happened. Ground every statement "
+            "STRICTLY in the EVIDENCE LEDGER provided — cite only refs that appear "
+            "there; NEVER invent evidence. Output ONLY a compact JSON object, no prose, "
+            "no code fences."
+        )
+        reasoning_prompt = (
+            "Return a JSON object with keys:\n"
+            '  "sub_questions": array, one object per sub-question below, in order: '
+            '{"id":"sq1","conclusion":"<the conclusion reached, declarative>","why_concluded":"<why this '
+            'conclusion follows from the evidence>","behaviors":[{"claim":"<one specific behavior that '
+            'was established, declarative, e.g. \'wrote a Run registry key for persistence\'>","why":"<why '
+            'this behavior follows from the evidence>","evidence":[{"ref":"db:table:rowid","note":"..."}]}],'
+            '"evidence":[{"ref":"db:table:rowid","note":"..."}],'
+            '"status":"answered|inconclusive"}. Each behavior is a discrete, evidence-backed fact that '
+            'helps establish the conclusion; omit behaviors you cannot ground in the ledger.\n'
+            '  "premises": array, one object per premise: {"verdict":"CONFIRMED|REFUTED|INCONCLUSIVE",'
+            '"why":"...","evidence":[...]}.\n'
+            '  "consolidation": one or two sentences on how the sub-answers correlate into the final conclusion.\n\n'
+            f"MAIN QUESTION:\n{user_query}\n\n"
+            f"SUB-QUESTIONS:\n{sub_lines or '  (none)'}\n\n"
+            f"PREMISES:\n{prem_lines or '  (none)'}\n\n"
+            f"EVIDENCE LEDGER (the only allowed source of evidence refs):\n{ledger_text}\n\n"
+            f"FINAL ANSWER (already given to the investigator):\n{_ans}\n\n"
+            "Return ONLY the JSON object."
+        )
+
+        data = None
+        try:
+            emit_step("thinking", "Recording reasoning trace (why each sub-question + conclusion)", "active")
+            emit_dialogue({
+                "phase": "reasoning_request", "iteration": 0,
+                "system_prompt": reasoning_system, "user_message": reasoning_prompt,
+                "tools_offered": [], "history_count": 0,
+            })
+            resp = guarded_generate(reasoning_system, reasoning_prompt, [], None,
+                                    phase="reasoning", iteration=0)
+            raw = (resp.get("content") or "").strip()
+            emit_dialogue({"phase": "reasoning_response", "iteration": 0, "content": raw, "tool_calls": []})
+            data = self._parse_reasoning(raw)
+            emit_step("thinking", "Reasoning trace recorded", "done")
+        except ContextOverflowError:
+            self.logger.debug("Reasoning trace pass overflowed; logging decomposition-only record.")
+        except Exception as e:
+            self.logger.debug(f"Reasoning trace pass failed; logging decomposition-only record: {e}")
+
+        model_subs = (data or {}).get("sub_questions") or []
+        model_prems = (data or {}).get("premises") or []
+
+        out_subs = []
+        for i, c in enumerate(subq_items):
+            msub = model_subs[i] if i < len(model_subs) and isinstance(model_subs[i], dict) else {}
+            behaviors = []
+            for b in (msub.get("behaviors") or []):
+                if not isinstance(b, dict):
+                    continue
+                claim = str(b.get("claim", "")).strip()
+                if not claim:
+                    continue
+                behaviors.append({
+                    "claim": claim,
+                    "why": str(b.get("why", "")).strip(),
+                    "evidence": self._norm_evidence(b.get("evidence")),
+                })
+            out_subs.append({
+                "id": f"sq{i+1}",
+                "q": c.get("q", ""),
+                "why_created": c.get("why", "") or str(msub.get("why_created", "")).strip(),
+                "conclusion": str(msub.get("conclusion", "")).strip(),
+                "why_concluded": str(msub.get("why_concluded", "")).strip(),
+                "behaviors": behaviors,
+                "evidence": self._norm_evidence(msub.get("evidence")),
+                "status": str(msub.get("status", "")).strip()
+                          or ("answered" if c.get("status") == "answered" else "inconclusive"),
+            })
+
+        out_prems = []
+        for i, c in enumerate(prem_items):
+            q = c.get("q", "")
+            claim = q[8:] if q.startswith("verify: ") else q
+            mp = model_prems[i] if i < len(model_prems) and isinstance(model_prems[i], dict) else {}
+            out_prems.append({
+                "claim": claim,
+                "verdict": str(mp.get("verdict", "INCONCLUSIVE")).strip().upper() or "INCONCLUSIVE",
+                "why": str(mp.get("why", "")).strip(),
+                "evidence": self._norm_evidence(mp.get("evidence")),
+            })
+
+        return {
+            "query": user_query,
+            "timestamp": datetime.now().isoformat(),
+            "strategy": strategy or str((data or {}).get("strategy", "")).strip(),
+            "sub_questions": out_subs,
+            "premises": out_prems,
+            "consolidation": str((data or {}).get("consolidation", "")).strip(),
+            "knowledge_consulted": list(knowledge_consulted or (data or {}).get("knowledge_consulted") or []),
+        }
+
+    def _persist_reasoning_turn(self, record: Dict[str, Any], user_query: str) -> None:
+        """Append a reasoning trace to EYE_Logs/eye_reasoning_log.jsonl so the
+        Compliance panel can show how each question was decomposed and concluded."""
+        case_dir = getattr(self.cm, "case_directory", None)
+        if not case_dir:
+            return
+        logs_dir = os.path.join(str(case_dir), "EYE_Logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        log_path = os.path.join(logs_dir, "eye_reasoning_log.jsonl")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+    def _audit_event(self, action: str, reason: str = "", metadata: Optional[Dict] = None) -> None:
+        """Write one Chain-of-Custody event (RETRY / SEGMENTED / AUTO_MAPREDUCE)
+        to the truncation auditor so the Compliance panel surfaces the automatic
+        resilience actions. Best-effort: never raises into the pipeline."""
+        auditor = getattr(self.cm, "truncation_auditor", None)
+        if not auditor:
+            return
+        try:
+            payload = f"{action}|{reason}|{json.dumps(metadata or {}, default=str, sort_keys=True)}"
+            auditor.log_event(
+                action=action,
+                message_id=f"{action.lower()}-{int(time.time() * 1000)}",
+                token_count=0,
+                reason=reason,
+                message_hash=EvidenceSeal._sha256(payload),
+                metadata=metadata or {},
+            )
+        except Exception as e:
+            self.logger.debug(f"audit event {action} skipped: {e}")
+
+    def _maybe_auto_map_reduce(self, call, result, question, reasoning_cfg, emit_step):
+        """Transparent auto map-reduce: when a `query_database` call returns a
+        very large result, analyze ALL rows via the (sealed) map-reduce service
+        and feed the model the consolidated summary instead of a sample — so big
+        reads are answered completely and automatically. Falls back to the
+        original result on any failure. Visible via emit_step + AUTO_MAPREDUCE."""
+        try:
+            if not reasoning_cfg.get("enable_auto_map_reduce", False):
+                return result
+            if (call.get("name") != "query_database") or not result.get("success"):
+                return result
+            inner = result.get("result") if isinstance(result.get("result"), dict) else {}
+            threshold = int(reasoning_cfg.get("auto_map_reduce_row_threshold", 1500))
+            row_count = inner.get("row_count") or 0
+            full_rows = inner.get("full_rows") or inner.get("data") or []
+            if not isinstance(row_count, int) or row_count < threshold or len(full_rows) < threshold:
+                return result
+            params = call.get("parameters", {}) or {}
+            db = inner.get("database_name") or params.get("database_name")
+            sql = inner.get("sql_query") or params.get("sql_query")
+            if not db or not sql:
+                return result
+
+            emit_step("tool_call",
+                      f"Large result ({row_count} rows) — auto map-reduce over ALL rows", "active")
+            from eye.services.map_reduce_service import MapReduceService
+            mr = MapReduceService(self.cm).analyze(
+                db, sql, instruction=question, prefetched_rows=full_rows
+            )
+            if not mr.get("success"):
+                return result
+            self._audit_event(
+                "AUTO_MAPREDUCE", reason="large_query_result",
+                metadata={"database": db, "rows": row_count, "chunks": mr.get("chunks_processed")},
+            )
+            emit_step("tool_call",
+                      f"Auto map-reduce complete: {mr.get('chunks_processed')} sealed segment(s) over {row_count} rows",
+                      "done")
+            new_inner = {
+                "success": True,
+                "database_name": db,
+                "sql_query": sql,
+                "row_count": row_count,
+                "columns": inner.get("columns", []),
+                "full_rows": full_rows,          # kept for the report / data viewer
+                "auto_map_reduced": True,
+                "summary": mr.get("summary"),
+                "note": (f"Result had {row_count} rows — analyzed IN FULL via "
+                         f"{mr.get('chunks_processed')} sealed map-reduce segment(s). The summary "
+                         "below covers ALL rows; do not treat it as a sample."),
+            }
+            return {"tool_name": "query_database", "success": True,
+                    "result": new_inner, "auto_map_reduced": True}
+        except Exception as e:
+            self.logger.error(f"Auto map-reduce skipped (fell back to sampled result): {e}")
+            return result
+
+    def _overflow_auto_map_reduce(self, ledger_entries, question, reasoning_cfg, emit_step):
+        """Overflow safety net: when the assembled payload can't fit even after
+        self-heal, instead of refusing, find the most recent re-runnable
+        `query_database` in the ledger and map-reduce it (sealed), returning a
+        consolidated answer. Returns a normal response dict, or None to fall
+        through to the existing fail-hard refusal."""
+        try:
+            if not reasoning_cfg.get("enable_auto_map_reduce", False):
+                return None
+            cand = None
+            for e in reversed(ledger_entries or []):
+                if e.get("tool") == "query_database":
+                    res = e.get("result") or {}
+                    params = e.get("params") or {}
+                    sql = res.get("sql_query") or params.get("sql_query")
+                    db = res.get("database_name") or params.get("database_name")
+                    if sql and db:
+                        cand = (db, sql)
+                        break
+            if not cand:
+                return None
+            db, sql = cand
+            emit_step("synthesis",
+                      "Evidence too large to read in one pass — auto map-reducing the dataset instead of refusing",
+                      "active")
+            from eye.services.map_reduce_service import MapReduceService
+            mr = MapReduceService(self.cm).analyze(db, sql, instruction=question)
+            if not mr.get("success"):
+                return None
+            self._audit_event(
+                "AUTO_MAPREDUCE", reason="overflow_recovery",
+                metadata={"database": db, "chunks": mr.get("chunks_processed")},
+            )
+            answer = (
+                "The evidence was too large to read in one pass, so I analyzed the FULL dataset "
+                f"in {mr.get('chunks_processed')} sealed map-reduce segment(s):\n\n{mr.get('summary')}"
+            )
+            try:
+                self.cm.history_manager.add_message("assistant", answer)
+                if self.cm.case_directory:
+                    self.cm.history_manager.save_history()
+            except Exception:
+                pass
+            emit_step("synthesis", "Auto map-reduce recovery complete", "done")
+            return {"response": answer, "error": None, "context_stats": self.cm.get_context_stats()}
+        except Exception as e:
+            self.logger.error(f"Overflow auto map-reduce recovery failed: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Investigation planning: decomposition + premise extraction (v0.11.1)
+    # ------------------------------------------------------------------
+    # Signals that a query is genuinely multi-part (worth decomposing).
+    _MULTIPART_SIGNALS = (
+        " and ", " and then", " then ", " also ", " as well as ", " plus ",
+        "; ", " & ",
+    )
+    # Verb/claim signals that a message ASSERTS a fact (worth premise-checking),
+    # e.g. "prefetch is auto-deleted", "teamviewer was installed".
+    _ASSERTION_SIGNALS = (
+        " is ", " are ", " was ", " were ", " isn't", " aren't", " wasn't",
+        " deletes", " deleted", " removes", " removed", " installed", " ran ",
+        " runs ", " executed", " created", " modified", " auto-", " always ",
+        " never ", " cannot ", " can't", " doesn't", " does not", " did not",
+        " didn't", " happened", " must have",
+    )
+
+    # Greeting / chit-chat openers that never warrant a planning model-call.
+    _GREETING_TOKENS = {
+        "hi", "hii", "hello", "hey", "yo", "thanks", "thank", "thx", "ok",
+        "okay", "cool", "nice", "great", "test", "ping", "sup",
+    }
+
+    @classmethod
+    def _should_plan(cls, user_query: str) -> bool:
+        """Cheap *trivial-skip* pre-filter — NOT the splitter.
+
+        The LLM (``_plan_investigation``) decides whether and how to split a
+        question into logical sub-questions; this only avoids spending a planner
+        call on clearly trivial input. Returns ``False`` for empty text, a bare
+        greeting, or a very short (<=3-word) plain lookup with no question /
+        assertion / multi-part signal; ``True`` for everything substantive (the
+        LLM then judges complexity and may return a single sub-question).
+        """
+        q = (user_query or "").strip()
+        if not q:
+            return False
+        lc = " " + q.lower() + " "
+        words = q.split()
+        has_signal = (
+            "?" in q
+            or any(sig in lc for sig in cls._MULTIPART_SIGNALS)
+            or any(sig in lc for sig in cls._ASSERTION_SIGNALS)
+        )
+        # Short, signal-less input is treated as a trivial lookup / greeting.
+        if len(words) <= 3 and not has_signal:
+            return False
+        # A 1-2 word bare greeting is trivial even if it sneaks a signal char.
+        if len(words) <= 2 and q.lower().strip("?!. ") in cls._GREETING_TOKENS:
+            return False
+        return True
+
+    @staticmethod
+    def _parse_plan(raw: str, max_subq: int = 6) -> Optional[Dict[str, Any]]:
+        """Parse the planning model output into a normalized plan dict, or None.
+
+        Tolerant: pulls the first ``{...}`` JSON object out of any surrounding
+        prose / code fences. Any failure returns None so the caller falls back
+        to the current single-question behavior.
+        """
+        if not raw:
+            return None
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        subs_raw = data.get("sub_questions") or []
+        prems = data.get("user_premises") or []
+        if not isinstance(subs_raw, list):
+            subs_raw = []
+        if not isinstance(prems, list):
+            prems = []
+        # Sub-questions: accept plain strings (legacy) OR {"q"/"question", "why"}
+        # objects. Normalize to {"q","why"} so the rationale ("why this
+        # sub-question") is captured for the Compliance UI.
+        subs: List[Dict[str, str]] = []
+        for s in subs_raw:
+            if isinstance(s, dict):
+                q = str(s.get("q") or s.get("question") or "").strip()
+                why = str(s.get("why") or s.get("reason") or "").strip()
+            else:
+                q, why = str(s).strip(), ""
+            if q:
+                subs.append({"q": q, "why": why})
+            if len(subs) >= max(1, int(max_subq)):
+                break
+        prems = [
+            str(p).strip() for p in prems
+            if str(p).strip() and str(p).strip().lower() not in ("null", "none", "n/a")
+        ]
+        return {
+            "sub_questions": subs,
+            "user_premises": prems,
+            "related_prior": bool(data.get("related_prior", False)),
+            "strategy": str(data.get("strategy") or "").strip(),
+        }
+
+    def _plan_investigation(self, user_query, guarded_generate, emit_step, emit_dialogue,
+                            reasoning_cfg, prefer_segmentation: bool = True):
+        """Lightweight, tool-less planning pre-pass.
+
+        One model call (routed through ``guarded_generate`` so the payload is
+        SEALED like every other call — chain of custody stays intact) where the
+        LLM decides how to split the question into logical sub-questions and
+        extracts any factual premises the investigator asserted (to
+        prove/disprove). Returns a normalized plan dict, or None on any failure
+        (caller treats the query as atomic). NEVER breaks the pipeline.
+
+        ``prefer_segmentation`` selects the splitting instruction:
+          - True (default): break the message into the minimal set of focused,
+            logically-distinct sub-questions (the LLM judges complexity).
+          - False: conservative — split only if it has multiple explicit parts.
+        Either way the MODEL makes the split — there is no length/keyword rule.
+        """
+        max_subq = int(reasoning_cfg.get("max_sub_questions", 6))
+        planning_system = (
+            "You are the planning unit of a forensic investigation assistant. "
+            "Output ONLY a compact JSON object, no prose, no code fences."
+        )
+        if prefer_segmentation:
+            split_instruction = (
+                '  "sub_questions": break the investigator\'s message into the MINIMAL set of '
+                "FOCUSED, logically-distinct sub-questions needed to answer it fully. Split along "
+                "LOGICAL/semantic boundaries — distinct artifacts, time ranges, entities, or "
+                "claims — NEVER arbitrarily or by length. If it is already a single focused "
+                "question, return a one-element array. EACH element is an object "
+                '{"q": "<the sub-question>", "why": "<why this sub-question is needed to answer '
+                'the main question>"}.\n'
+            )
+        else:
+            split_instruction = (
+                '  "sub_questions": array of the distinct sub-questions to investigate. '
+                "Split ONLY if the message genuinely has multiple explicit parts; if it is a "
+                "single question, return a one-element array. EACH element is an object "
+                '{"q": "<the sub-question>", "why": "<why this sub-question is needed>"}.\n'
+            )
+        planning_prompt = (
+            "Analyze the investigator's message and return a JSON object with keys:\n"
+            + split_instruction +
+            '  "strategy": one short sentence describing your overall decomposition strategy.\n'
+            '  "user_premises": array of any factual claims the investigator ASSERTS '
+            "(about OS/system behavior or what happened) that must be PROVEN or DISPROVEN "
+            "against artifacts. Empty array if none.\n"
+            '  "related_prior": boolean — whether this likely relates to earlier questions in the case.\n'
+            f"Cap sub_questions at {max_subq}. Return ONLY the JSON object.\n\n"
+            f"Investigator message: {user_query}"
+        )
+        emit_step("thinking", "Planning investigation (decomposition + premise check)", "active")
+        try:
+            emit_dialogue({
+                "phase": "planning_request", "iteration": 0,
+                "system_prompt": planning_system, "user_message": planning_prompt,
+                "tools_offered": [], "history_count": 0,
+            })
+            resp = guarded_generate(
+                planning_system, planning_prompt, [], None,
+                phase="planning", iteration=0,
+            )
+            raw = (resp.get("content") or "").strip()
+            emit_dialogue({
+                "phase": "planning_response", "iteration": 0,
+                "content": raw, "tool_calls": [],
+            })
+            return self._parse_plan(raw, max_subq)
+        except ContextOverflowError:
+            # Planning is OPTIONAL — never abort the whole query because the
+            # planning payload overflowed. Degrade to atomic; the main loop will
+            # still fail-hard-refuse downstream if the real payload overflows.
+            self.logger.debug("Planning pre-pass overflowed context; treating query as atomic.")
+            return None
+        except Exception as e:
+            self.logger.debug(f"Planning pre-pass failed, treating query as atomic: {e}")
+            return None
+
+    def _plan_hierarchy(self, user_query, guarded_generate, emit_step, emit_dialogue, reasoning_cfg):
+        """Plan the investigation as a CLAIM HIERARCHY, tool-less and sealed.
+
+        Returns a normalized dict
+        ``{"verdict": str, "narratives": [{"claim","why","sub_narratives":[
+              {"claim","evidence_needed","tools":[...]}]}]}`` or ``None`` on any
+        failure (caller falls back to the flat sub-question path). The model decides
+        what to prove (verdict), the activities to prove it (narratives), and the
+        specific evidence-bearing steps + which tools prove each (sub-narratives)."""
+        max_nar = int(reasoning_cfg.get("max_narratives", 12))
+        max_sub = int(reasoning_cfg.get("max_sub_narratives", 8))
+        tool_names = sorted({(t.get("name") or "") for t in self.cm._get_tool_definitions()
+                             if (t.get("name") or "") and not (t.get("name") or "").startswith("report_")})
+        planning_system = (
+            "You are the planning unit of a forensic investigation assistant. You decompose the "
+            "investigator's goal into a claim hierarchy to PROVE. Output ONLY a compact JSON object, "
+            "no prose, no code fences."
+        )
+        planning_prompt = (
+            "Return a JSON object with keys:\n"
+            '  "verdict": one sentence — the overall claim the investigation must PROVE or DISPROVE '
+            "(what we are trying to establish).\n"
+            '  "narratives": array of the distinct activities/behaviors we must prove to settle the '
+            'verdict. EACH narrative is an object {"claim":"<the activity as a claim>","why":"<why it '
+            'matters to the verdict>","sub_narratives":[ ... ]}.\n'
+            '  Each sub_narrative is an object {"claim":"<a specific, evidence-bearing step/behavior>",'
+            '"evidence_needed":"<the concrete artifact evidence that would prove it>","tools":["<tool>", ...]}.\n'
+            "\nBe THOROUGH and SPECIFIC — a richer plan investigates better:\n"
+            "- DECOMPOSE FULLY: cover every distinct angle needed to settle the verdict — each relevant "
+            "artifact (SRUM, registry Run keys, services, prefetch, amcache, event logs, MFT/USN, "
+            "network), time window, user/process/file identity, and any premise the investigator "
+            "assumed. Prefer several focused narratives over one broad one.\n"
+            "- CONCRETE SUB-NARRATIVES: each claim names a specific behavior, and evidence_needed names "
+            "the concrete artifact / table / field / value that proves it (not a vague 'check logs').\n"
+            "- CROSS-SOURCE TOOLS: for each sub_narrative list ALL tools whose results would corroborate "
+            "it — e.g. `query_database` on the relevant artifact AND `query_correlation_results` AND a "
+            "second artifact table — so the proof rests on multiple sources, not one. Use exact names.\n"
+            "\nForensic artifacts available in this case — map each sub_narrative's evidence_needed to "
+            "the artifact that holds its evidence, and choose the tools that read it:\n"
+            + self._artifact_catalog_block() + "\n"
+            "(e.g. execution → Prefetch/AmCache/ShimCache/SRUM; persistence → Registry Run keys; "
+            "deletion → USN Journal/Recycle Bin/MFT; network → SRUM; file access → Jump Lists/LNK/ShellBags.)\n"
+            f"\nAvailable tools (use these exact names): {', '.join(tool_names)}.\n"
+            f"Use up to {max_nar} narratives and up to {max_sub} sub_narratives each — go deep enough to "
+            "actually prove the verdict. Order them so the investigation flows logically. "
+            "Return ONLY the JSON object.\n\n"
+            f"Investigator goal: {user_query}"
+        )
+        emit_step("thinking", "Planning the investigation hierarchy (verdict → narratives → steps)", "active")
+        try:
+            emit_dialogue({
+                "phase": "planning_request", "iteration": 0,
+                "system_prompt": planning_system, "user_message": planning_prompt,
+                "tools_offered": [], "history_count": 0,
+            })
+            resp = guarded_generate(planning_system, planning_prompt, [], None,
+                                    phase="planning", iteration=0)
+            raw = (resp.get("content") or "").strip()
+            emit_dialogue({"phase": "planning_response", "iteration": 0, "content": raw, "tool_calls": []})
+            return self._parse_hierarchy(raw, set(tool_names), max_nar, max_sub)
+        except ContextOverflowError:
+            self.logger.debug("Hierarchy planning overflowed context; falling back to flat path.")
+            return None
+        except Exception as e:
+            self.logger.debug(f"Hierarchy planning failed, falling back to flat path: {e}")
+            return None
+
+    @staticmethod
+    def _parse_hierarchy(raw: str, valid_tools: set, max_nar: int = 5, max_sub: int = 4):
+        """Normalize the hierarchy-planner JSON into
+        ``{"verdict","narratives":[{"claim","why","sub_narratives":[{"claim",
+        "evidence_needed","tools"}]}]}`` — tool names clamped to ``valid_tools``.
+        Returns None unless at least one narrative with one sub-narrative survives."""
+        if not raw:
+            return None
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        verdict = str(data.get("verdict") or "").strip()
+        nars_raw = data.get("narratives") if isinstance(data.get("narratives"), list) else []
+        narratives = []
+        for n in nars_raw:
+            if not isinstance(n, dict):
+                continue
+            n_claim = str(n.get("claim") or n.get("narrative") or "").strip()
+            if not n_claim:
+                continue
+            subs = []
+            for s in (n.get("sub_narratives") if isinstance(n.get("sub_narratives"), list) else []):
+                if not isinstance(s, dict):
+                    continue
+                s_claim = str(s.get("claim") or "").strip()
+                if not s_claim:
+                    continue
+                raw_tools = s.get("tools") if isinstance(s.get("tools"), list) else []
+                tools = [str(t).strip() for t in raw_tools if str(t).strip() in valid_tools]
+                subs.append({
+                    "claim": s_claim,
+                    "evidence_needed": str(s.get("evidence_needed") or "").strip(),
+                    "tools": tools,
+                })
+                if len(subs) >= max(1, int(max_sub)):
+                    break
+            if not subs:
+                continue
+            narratives.append({
+                "claim": n_claim,
+                "why": str(n.get("why") or "").strip(),
+                "sub_narratives": subs,
+            })
+            if len(narratives) >= max(1, int(max_nar)):
+                break
+        if not narratives:
+            return None
+        return {"verdict": verdict, "narratives": narratives}
+
+    def _hier_model(self):
+        try:
+            return self.cm.model_router.config.get("model_name") or ""
+        except Exception:
+            return ""
+
+    def _seed_hierarchy_map(self, plan, user_query):
+        """Seed the Narrative Map from the plan BEFORE any tool runs: the verdict
+        (open goal-claim), each narrative (open), each sub-narrative (open) under its
+        narrative — using stable ``created_from`` keys so execution later flips the
+        SAME nodes (never duplicates). Returns the ordered ``plan_steps`` the engine
+        walks, each carrying its map node ids. Best-effort."""
+        nms = getattr(self.cm, "narrative_map_service", None)
+        steps = []
+        if nms is None:
+            return steps
+        model = self._hier_model()
+        try:
+            verdict = (plan.get("verdict") or "").strip() or self._claimify(user_query)
+            if verdict:
+                nms.set_verdict(verdict, "Goal of this investigation — still open.", model=model)
+            plan["verdict"] = verdict
+            for i, nar in enumerate(plan.get("narratives", [])):
+                nar_id = nms.upsert_finding_narrative(
+                    nar.get("claim", ""), nar.get("why", "") or "Activity to prove for the verdict.",
+                    f"plan:nar:{i}", evidence=[], state="open", model=model)
+                nar["id"] = nar_id
+                subs = nar.get("sub_narratives", [])
+                for j, sub in enumerate(subs):
+                    sub_id = nms.upsert_finding_narrative(
+                        sub.get("claim", ""), sub.get("evidence_needed", "") or "Step to establish.",
+                        f"plan:nar:{i}:sub:{j}", evidence=[], state="open", model=model, parent=nar_id)
+                    sub["id"] = sub_id
+                    sub["status"] = "open"
+                    steps.append({
+                        "nar_index": i, "nar": nar, "nar_id": nar_id,
+                        "sub_index": j, "sub": sub, "sub_id": sub_id,
+                        "claim": sub.get("claim", ""),
+                        "evidence_needed": sub.get("evidence_needed", ""),
+                        "tools": sub.get("tools", []),
+                        "is_last_in_nar": (j == len(subs) - 1),
+                    })
+            self._push_narrative_map_update()
+        except Exception as e:
+            self.logger.debug(f"hierarchy map seeding skipped: {e}")
+        return steps
+
+    def _hierarchy_outcomes_block(self, plan) -> str:
+        """A compact summary of the plan + each sub-narrative's outcome, fed into the
+        final synthesis so it can state whether the verdict is proven from the steps."""
+        if not plan:
+            return ""
+        lines = [f"## Investigation Plan Outcomes — verdict to settle: {plan.get('verdict', '')}"]
+        for i, nar in enumerate(plan.get("narratives", [])):
+            lines.append(f"- NARRATIVE {i + 1}: {nar.get('claim', '')}")
+            for sub in nar.get("sub_narratives", []):
+                st = (sub.get("status") or "open").upper()
+                lines.append(f"    • [{st}] {sub.get('claim', '')}")
+        lines.append(
+            "Decide whether the VERDICT is PROVEN or NOT-PROVEN from the sub-narrative outcomes above "
+            "and the cited evidence, and explain the reasoning.")
+        return "\n".join(lines)
+
+    def _build_focus_block(self, plan, steps, focus_idx: int) -> str:
+        """The per-iteration message for a hierarchical run: focus on the CURRENT
+        sub-narrative only — verdict + current narrative + current sub-narrative +
+        its evidence_needed + the allowed tools — and how to conclude the step."""
+        if focus_idx >= len(steps):
+            return ""
+        step = steps[focus_idx]
+        nar = step["nar"]
+        n_total = len(plan.get("narratives", []))
+        m_total = len(nar.get("sub_narratives", []))
+        tools = ", ".join(step["tools"]) if step["tools"] else "any relevant forensic tool"
+        return "\n".join([
+            "## Investigation Plan — prove ONE step at a time (do not jump ahead)",
+            f"VERDICT (what we are proving): {plan.get('verdict', '')}",
+            f"CURRENT NARRATIVE ({step['nar_index'] + 1}/{n_total}): {nar.get('claim', '')}",
+            f"CURRENT SUB-NARRATIVE ({step['sub_index'] + 1}/{m_total}): {step['claim']}",
+            f"EVIDENCE NEEDED: {step['evidence_needed'] or '(find artifact evidence that proves this sub-narrative)'}",
+            f"TOOLS TO USE: {tools}",
+            "Artifacts: execution → Prefetch/AmCache/ShimCache/SRUM · persistence → Registry Run keys · "
+            "deletion → USN Journal/Recycle Bin/MFT · network → SRUM · file access → Jump Lists/LNK/ShellBags.",
+            "",
+            "Run the tools above to find the evidence for THIS sub-narrative only. When you have run "
+            "them and seen the results, END your turn with EXACTLY ONE line:",
+            "  SUBVERDICT: PROVEN || <the artifact evidence + one-line why>",
+            "  — or —",
+            "  SUBVERDICT: NOT-PROVEN || <what you checked and why it is not established>",
+        ])
+
+    @staticmethod
+    def _parse_subverdict(text: str):
+        """Parse the step conclusion. Returns ("PROVEN"|"NOT-PROVEN"|None, reason).
+
+        Lenient so real models trigger resolution reliably: accepts the canonical
+        ``SUBVERDICT: PROVEN|NOT-PROVEN || <reason>`` line, decorated forms
+        (``**SUBVERDICT**``, ``SUB-VERDICT``), and — as a last resort — a bare line
+        that is JUST a ``PROVEN`` / ``NOT PROVEN`` conclusion. NOT-PROVEN is checked
+        first so 'not proven' never matches as 'proven'."""
+        if not text:
+            return None, ""
+        # Canonical / decorated marker, tolerant of surrounding **/`/_ decoration and
+        # a trailing `|| reason` (anywhere on its line).
+        m = re.search(
+            r'(?im)SUB[\s\-]?VERDICT\b[\s*_`:|-]*?(PROVEN|NOT[\s\-]?PROVEN)\b(.*)$', text)
+        if m:
+            verdict = ("NOT-PROVEN" if m.group(1).upper().replace(" ", "").replace("-", "").startswith("NOT")
+                       else "PROVEN")
+            reason = re.sub(r'^[\s*_`|-]+', '', m.group(2) or '').strip()
+            return verdict, reason
+        # Bare trailing conclusion line (no marker word) — check NOT-PROVEN first.
+        if re.search(r'(?im)^[ \t>*_`-]*NOT[\s\-]?PROVEN\b', text):
+            return "NOT-PROVEN", ""
+        if re.search(r'(?im)^[ \t>*_`-]*PROVEN\b', text):
+            return "PROVEN", ""
+        return None, ""
+
+    def _resolve_by_evidence(self, step, step_results):
+        """Decide a step's outcome from the EVIDENCE when the model never wrote a
+        clean SUBVERDICT (budget/nudge exhausted): PROVEN iff a relevant SUCCESSFUL
+        tool result with real data exists for this step, else NOT-PROVEN. This keeps
+        a model that gathered the evidence but skipped the marker from being
+        auto-failed."""
+        best = self._best_step_result(step_results, step)
+        if best is None:
+            return "NOT-PROVEN", "No supporting tool result was found for this sub-narrative."
+        inner = best.get("result") if isinstance(best.get("result"), dict) else {}
+        blob = str(best.get("data") or (inner.get("data") if isinstance(inner, dict) else "") or inner or "")
+        if blob.strip():
+            return "PROVEN", "Established from the tool evidence gathered for this sub-narrative."
+        return "NOT-PROVEN", "Tool ran but returned no supporting data."
+
+    @staticmethod
+    def _best_step_result(step_results, step):
+        """The most relevant SUCCESSFUL tool result for this step (keyword overlap
+        with the sub-narrative claim + evidence_needed)."""
+        import re as _re
+        def _toks(s):
+            return {w for w in _re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", (s or "").lower())}
+        want = _toks(step.get("claim", "") + " " + step.get("evidence_needed", ""))
+        best, best_score = None, -1
+        for r in (step_results or []):
+            if not isinstance(r, dict):
+                continue
+            inner = r.get("result") if isinstance(r.get("result"), dict) else {}
+            if not (r.get("success") or (isinstance(inner, dict) and inner.get("success"))):
+                continue
+            blob = str(r.get("data") or (inner.get("data") if isinstance(inner, dict) else "") or inner or "")
+            score = len(want & _toks(blob))
+            if score > best_score:
+                best, best_score = r, score
+        return best
+
+    @staticmethod
+    def _evidence_card_from_result(r, reason: str):
+        """Build a Narrative-Map evidence card from a tool result (reloadable)."""
+        if not isinstance(r, dict):
+            return None
+        inner = r.get("result") if isinstance(r.get("result"), dict) else {}
+        params = r.get("parameters") or {}
+        tool = r.get("tool_name") or r.get("name") or (inner.get("tool_name") if isinstance(inner, dict) else None) or "tool"
+        blob = str(r.get("data") or (inner.get("data") if isinstance(inner, dict) else "") or inner or "")
+        return {
+            "kicker": tool,
+            "data": (blob[:120] + "…") if len(blob) > 120 else blob,
+            "reason": reason or "Result that established this sub-narrative.",
+            "ref": tool,
+            "query": params.get("sql_query") or "",
+            "database": params.get("database_name") or "",
+        }
+
+    def _resolve_substep(self, step, subverdict, reason, step_results):
+        """Flip the sub-narrative's map node from the step's outcome, then roll the
+        parent narrative up when its last sub-narrative is resolved. Best-effort."""
+        nms = getattr(self.cm, "narrative_map_service", None)
+        if nms is None:
+            return
+        model = self._hier_model()
+        sub_id, nar_id = step.get("sub_id"), step.get("nar_id")
+        try:
+            if subverdict == "PROVEN":
+                best = self._best_step_result(step_results, step)
+                card = self._evidence_card_from_result(best, reason) if best else None
+                if card and sub_id:
+                    nms.attach_evidence(sub_id, card, model=model)  # flips open -> proven
+                    step["sub"]["status"] = "proven"
+                else:
+                    # Claimed proven but no supporting tool result → honesty: negative.
+                    if sub_id:
+                        nms.set_state(sub_id, "negative",
+                                      reason="Claimed proven but no supporting tool result.", model=model)
+                    step["sub"]["status"] = "negative"
+            else:
+                if sub_id:
+                    nms.set_state(sub_id, "negative", reason=reason or "Not established.", model=model)
+                step["sub"]["status"] = "negative"
+
+            if step.get("is_last_in_nar") and nar_id:
+                any_proven = any(s.get("status") == "proven"
+                                 for s in step["nar"].get("sub_narratives", []))
+                nms.set_state(nar_id, "proven" if any_proven else "negative",
+                              reason=("Established by a proven sub-narrative." if any_proven
+                                      else "No sub-narrative could be established."), model=model)
+            self._push_narrative_map_update()
+        except Exception as e:
+            self.logger.debug(f"resolve substep skipped: {e}")
+
+    # ── Resume-after-disconnect: persist the hierarchical plan + progress ──────
+    def _active_plan_path(self):
+        """Path to the per-case active-plan checkpoint, or None if no case dir."""
+        try:
+            cd = getattr(self.cm, "case_directory", None)
+            if not cd:
+                return None
+            from pathlib import Path as _Path
+            d = _Path(cd) / "EYE_Logs"
+            d.mkdir(parents=True, exist_ok=True)
+            return d / "active_plan.json"
+        except Exception:
+            return None
+
+    def _save_active_plan(self, hierarchy_plan, focus_idx, user_query):
+        """Checkpoint the hierarchy plan + per-sub-narrative status + focus so an
+        interrupted run (LLM drop / app close) can resume where it stopped."""
+        p = self._active_plan_path()
+        if not p or not hierarchy_plan:
+            return
+        try:
+            data = {
+                "user_query": user_query,
+                "verdict": hierarchy_plan.get("verdict", ""),
+                "focus_idx": focus_idx,
+                "ts": datetime.now().isoformat(),
+                "narratives": [
+                    {
+                        "claim": nar.get("claim", ""), "why": nar.get("why", ""),
+                        "id": nar.get("id"),
+                        "sub_narratives": [
+                            {"claim": s.get("claim", ""), "evidence_needed": s.get("evidence_needed", ""),
+                             "tools": s.get("tools", []), "id": s.get("id"),
+                             "status": s.get("status", "open")}
+                            for s in nar.get("sub_narratives", [])
+                        ],
+                    }
+                    for nar in hierarchy_plan.get("narratives", [])
+                ],
+            }
+            import json as _json
+            p.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as e:
+            self.logger.debug(f"save active plan skipped: {e}")
+
+    def _load_active_plan(self):
+        """Load the active-plan checkpoint, or None."""
+        p = self._active_plan_path()
+        if not p or not p.exists():
+            return None
+        try:
+            import json as _json
+            data = _json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("narratives"):
+                return data
+        except Exception:
+            pass
+        return None
+
+    def _clear_active_plan(self):
+        """Delete the checkpoint once the plan completes."""
+        p = self._active_plan_path()
+        try:
+            if p and p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+    def _rebuild_plan_steps(self, plan):
+        """Reconstruct the ordered plan_steps from a saved/loaded plan dict WITHOUT
+        recreating Narrative Map nodes (the seeded cards already exist). Mirrors the
+        step shape produced by `_seed_hierarchy_map`."""
+        steps = []
+        for i, nar in enumerate(plan.get("narratives", [])):
+            subs = nar.get("sub_narratives", [])
+            for j, sub in enumerate(subs):
+                sub.setdefault("status", "open")
+                steps.append({
+                    "nar_index": i, "nar": nar, "nar_id": nar.get("id"),
+                    "sub_index": j, "sub": sub, "sub_id": sub.get("id"),
+                    "claim": sub.get("claim", ""),
+                    "evidence_needed": sub.get("evidence_needed", ""),
+                    "tools": sub.get("tools", []),
+                    "is_last_in_nar": (j == len(subs) - 1),
+                })
+        return steps
+
+    @staticmethod
+    def _is_continuation_query(user_query, saved_query) -> bool:
+        """True if this turn should RESUME the saved plan: an empty/short 'continue'
+        cue, or a query closely matching the saved goal. A different question → False
+        (start fresh)."""
+        q = (user_query or "").strip().lower()
+        if not q:
+            return True
+        cues = ("continue", "resume", "keep going", "carry on", "go on", "proceed",
+                "pick up", "finish it", "carry-on")
+        if len(q.split()) <= 6 and any(c in q for c in cues):
+            return True
+        sq = (saved_query or "").strip().lower()
+        if sq and (q == sq or (len(q) > 12 and q in sq) or (len(sq) > 12 and sq in q)):
+            return True
+        return False
+
+    def _build_checklist_block(self, checklist: List[Dict]) -> str:
+        """Render the sub-question checklist for the outgoing model message so
+        the model sees which parts are still OPEN and targets them."""
+        if not checklist:
+            return ""
+        lines = ["## Sub-Questions to Answer (address every OPEN item before finishing)"]
+        for c in checklist:
+            mark = "x" if c.get("status") == "answered" else " "
+            lines.append(f"[{mark}] {c.get('q', '')}")
+        return "\n".join(lines)
+
+    _CHECKLIST_STOPWORDS = {
+        "verify", "the", "a", "an", "is", "are", "was", "were", "did", "does",
+        "do", "of", "to", "in", "on", "and", "or", "any", "there", "this",
+        "that", "it", "for", "with", "what", "when", "where", "which", "how",
+        "has", "have", "had", "been", "be", "you", "your", "all",
+    }
+
+    def _update_checklist(self, checklist: List[Dict], ai_content: str, ledger_entries: List[Dict]) -> None:
+        """Mark checklist items answered once their key terms show up in REAL
+        EVIDENCE — the successful tool results in ``ledger_entries`` only.
+
+        The model's own answer text (``ai_content``) is DELIBERATELY excluded: a
+        sub-question must be satisfied by artifact data, never because the model
+        *talked about* the topic (e.g. narrated a plan mentioning "CPU/persistence").
+        Folding ``ai_content`` in let planning prose flip items to answered with zero
+        evidence — false completion. ``ai_content`` is kept in the signature for
+        compatibility but is no longer matched against. Drives the completion gate
+        only (bounded by MAX_CONTINUE_NUDGES), so a fuzzy match stays safe."""
+        if not checklist:
+            return
+        haystack = ""
+        for e in ledger_entries or []:
+            if not e.get("success", True):  # only proven evidence satisfies an item
+                continue
+            haystack += " " + str(e.get("result", "")).lower() + " " + str(e.get("params", "")).lower()
+        if not haystack.strip():
+            return  # no evidence yet → nothing can be marked answered
+        for c in checklist:
+            if c.get("status") == "answered":
+                continue
+            words = {
+                w for w in re.findall(r"[a-z0-9.]+", (c.get("q") or "").lower())
+                if w not in self._CHECKLIST_STOPWORDS and len(w) > 2
+            }
+            if not words:
+                continue
+            hits = sum(1 for w in words if w in haystack)
+            if hits >= max(1, int(len(words) * 0.6)):
+                c["status"] = "answered"
 
     def _build_evidence_ledger(self, entries: List[Dict]) -> str:
         """Compact, one-line-per-tool-call index of what every iteration produced,
@@ -1893,7 +4439,36 @@ class QueryProcessor:
             lines.append(line[:300])
         return "\n".join(lines)
 
-    def _build_synthesis_prompt(self, query: str, results: List[Dict], text_only: bool = False, ledger_text: str = None) -> str:
+    def _build_correlation_mandate(self, checklist: List[Dict] = None) -> str:
+        """Build the per-sub-question + per-premise + consolidated-answer mandate
+        appended to the synthesis prompt when a question was decomposed (or had
+        asserted premises). Empty string when there is no checklist."""
+        if not checklist:
+            return ""
+        questions = [c for c in checklist if c.get("kind") != "premise"]
+        premises = [c for c in checklist if c.get("kind") == "premise"]
+        parts = ["DECOMPOSED INVESTIGATION — you MUST resolve every item below:"]
+        if questions:
+            parts.append(
+                "Answer EACH of these sub-questions explicitly and separately:\n"
+                + "\n".join(f"  - {c.get('q')}" for c in questions)
+            )
+        if premises:
+            parts.append(
+                "For EACH premise the investigator asserted, give an explicit verdict — "
+                "CONFIRMED, REFUTED, or INCONCLUSIVE — backed by artifact evidence with UTC "
+                "timestamps. If REFUTED, clearly and directly tell the investigator they are "
+                "mistaken and show the contradicting evidence:\n"
+                + "\n".join(f"  - {c.get('q')}" for c in premises)
+            )
+        parts.append(
+            "Finally, provide a single 'Consolidated Answer' section that CORRELATES the "
+            "partial answers into one coherent conclusion (cross-reference sources per the "
+            "Forensic Evidence Protocol below)."
+        )
+        return "\n\n" + "\n\n".join(parts)
+
+    def _build_synthesis_prompt(self, query: str, results: List[Dict], text_only: bool = False, ledger_text: str = None, checklist: List[Dict] = None) -> str:
         """
         Enforces the 'Forensic Evidence Protocol' for forensic reporting.
         Forces the AI to be technical, chronological, and specific.
@@ -1901,6 +4476,10 @@ class QueryProcessor:
         When ``text_only`` is True the model has already documented the evidence
         to the report but returned no chat text. This pass must produce ONLY a
         conversational answer to the investigator and must NOT call any tools.
+
+        When ``checklist`` is provided (a decomposed/premise-bearing question),
+        the prompt additionally requires a per-sub-question answer, a per-premise
+        verdict, and a final consolidated answer.
         """
         any_successful_results = any(r.get("success") for r in results)
 
@@ -1915,12 +4494,24 @@ class QueryProcessor:
         else:
             report_mandate = (
             "CRITICAL: You MUST perform TWO actions in this turn:\n"
-            "1. PRIMARY TASK: Write a detailed, conversational TEXT narrative answering the investigator's query directly in the chat bubble. Explain your findings naturally as a human forensic assistant would.\n"
+            "1. PRIMARY TASK: Write the answer as a FORENSIC NARRATIVE — a conclusion stated as a finding, immediately followed by the artifact basis for it. Assert what happened, then cite the evidence: e.g. 'Discord accessed the user's files on 2024-06-12 14:25, based on the SRUM network egress (4.2 MB) correlated with the prefetch execution record.' Every claim is a narrative conclusion + its evidentiary basis (artifact, timestamp, count). Do NOT just list raw data — interpret it into findings.\n"
             "2. SUPPORTING TASK: Call a `report_*` tool (e.g., `report_append_section`, `report_add_data_table`) to document the technical evidence for the formal record.\n"
+            "NO HAND-DRAWN TABLES IN CHAT (Rule 29): never draw a table in the chat narrative (no '|' pipe tables, no '+---+'/'____' ASCII grids, no space-aligned columns). To put a real table in the chat answer (verdict matrices, hypothesis summaries, comparisons) call `chat_add_table` with rows directly; for SQL-backed evidence rows call `report_add_data_table`. The narrative itself gives prose + key facts.\n"
+            "VERDICT LINE: end your reply with ONE final line in EXACTLY this form so the case Verdict can be set — `VERDICT: <one-sentence overall conclusion> || <why, grounded in the proven findings>`. Use this only for the case-level conclusion; if it is too early to conclude, omit the line.\n"
             "DO NOT return an empty response. You MUST talk to the investigator and provide a direct answer."
         ) if any_successful_results else (
-            "CRITICAL: You MUST write a detailed, conversational TEXT narrative answering the investigator's query. "
-            "Explain why the evidence was missing or what was checked. NEVER return an empty response."
+            "CRITICAL — NO ARTIFACT DATA WAS RETRIEVED THIS TURN. No forensic tool executed "
+            "successfully, so there is NO evidence to draw a conclusion from. You MUST be honest:\n"
+            "1. State plainly and up front that you could NOT retrieve any artifact data this turn, so "
+            "you cannot answer the question yet.\n"
+            "2. Do NOT describe a plan or what you 'will' do next. FORBIDDEN: future-tense intent such "
+            "as 'I will…', 'I am now…', 'I am acting…', 'let me…', 'my plan is…'. You are reporting an "
+            "outcome, not announcing an investigation.\n"
+            "3. Do NOT assert, imply, or speculate any finding (no 'likely', no 'appears to'). Absence "
+            "of data is NOT evidence of anything.\n"
+            "4. Briefly note what was attempted and, if the model could not run tools, recommend the "
+            "investigator switch to a tool-capable model and re-run.\n"
+            "Write this as a short, direct, conversational message. NEVER return an empty response."
         )
 
         try:
@@ -1931,11 +4522,13 @@ class QueryProcessor:
             results_str = str(results)
 
         ledger_block = (ledger_text + "\n\n") if ledger_text else ""
+        correlation_mandate = self._build_correlation_mandate(checklist)
 
         return (
             f"Synthesize findings for investigator query: {query}\n\n"
             f"{ledger_block}"
-            f"Tool execution results:\n{results_str}\n\n"
+            f"Tool execution results:\n{results_str}\n"
+            f"{correlation_mandate}\n\n"
             "FORENSIC EVIDENCE PROTOCOL:\n"
             "1. Conversational Delivery: Speak directly to the investigator as a helpful forensic peer.\n"
             "2. Extract Exact Timestamps, Usernames, and Process Details.\n"

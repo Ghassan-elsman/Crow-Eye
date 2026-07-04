@@ -170,7 +170,7 @@ Call `correlation_create_wing` when **all** of these are true:
 3. You can point to **concrete evidence rows** that motivated it (the
    `related_evidence` array — at least one
    `database:table:rowid` reference). The handler enforces this as
-   GEP Rule 10; without it your call is rejected.
+   GEP-2 (Evidence-Link); without it your call is rejected.
 4. The pattern isn't already covered by one of the built-in wings
    (Execution Proof, User Activity, etc.). Check first.
 

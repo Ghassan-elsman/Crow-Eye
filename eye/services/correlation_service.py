@@ -36,19 +36,51 @@ class CorrelationService:
     def __init__(self, case_directory: Union[str, Path]):
         """
         Initialize the CorrelationService.
-        
+
         Args:
             case_directory: Path to the case directory containing correlation database
         """
         self.case_directory = Path(case_directory)
-        self.correlation_db_path = self.case_directory / "correlation_results.db"
+        self.correlation_db_path = self._resolve_correlation_db()
         self.logger = logging.getLogger(self.__class__.__name__)
-        
+
         # Validate correlation database exists
         if not self.correlation_db_path.exists():
             self.logger.warning(
                 f"Correlation database does not exist: {self.correlation_db_path}"
             )
+        else:
+            self.logger.info(f"Correlation database located: {self.correlation_db_path}")
+
+    def _resolve_correlation_db(self) -> Path:
+        """Resolve the correlation results DB path across known layouts.
+
+        The Crow-eye Correlation Engine writes results to
+        ``<case>/Correlation/output/correlation_results.db`` (the canonical
+        location advertised to the model in the case-context prompt). Older
+        layouts placed it directly in the case root. We probe, in order:
+          1. ``<case>/Correlation/output/correlation_results.db``  (canonical)
+          2. ``<case>/correlation_results.db``                      (legacy)
+          3. the first ``correlation_results.db`` found anywhere under
+             ``<case>/Correlation`` (defensive glob for variant layouts).
+        The first existing path wins; if none exist we return the canonical
+        path so error messages point at where the engine SHOULD write it.
+        """
+        canonical = self.case_directory / "Correlation" / "output" / "correlation_results.db"
+        legacy = self.case_directory / "correlation_results.db"
+        candidates = [canonical, legacy]
+        for cand in candidates:
+            if cand.exists():
+                return cand
+        try:
+            corr_dir = self.case_directory / "Correlation"
+            if corr_dir.exists():
+                found = next(corr_dir.rglob("correlation_results.db"), None)
+                if found is not None:
+                    return found
+        except Exception:
+            pass
+        return canonical
     
     def _get_connection(self) -> Optional[sqlite3.Connection]:
         """
@@ -500,8 +532,19 @@ class CorrelationService:
     def database_exists(self) -> bool:
         """
         Check if the correlation database exists.
-        
+
+        Re-resolves the path if the cached one is absent, so a Correlation Engine
+        run that happens AFTER the case was opened in the Eye is still picked up
+        without restarting.
+
         Returns:
             True if correlation database exists, False otherwise
         """
-        return self.correlation_db_path.exists()
+        if self.correlation_db_path.exists():
+            return True
+        # Cached path gone/empty — re-probe in case the engine wrote results since.
+        resolved = self._resolve_correlation_db()
+        if resolved.exists():
+            self.correlation_db_path = resolved
+            return True
+        return False

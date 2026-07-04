@@ -82,6 +82,10 @@ edb*.jrs
 partial_results/
 audit_trail.json
 mft_usn_forensic_report.txt
+# Generated case reports
+reports/
+# Mock test-run leftovers
+MagicMock/
 
 # =============================================================================
 # Local configuration / secrets

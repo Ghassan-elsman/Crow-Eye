@@ -17,6 +17,27 @@ import os
 import json
 from dataclasses import fields
 
+# Markers stamped onto report blocks created by the automatic case-open triage
+# (`query_processor._run_python_triage`). Used to exclude that generic, usually
+# unrelated sweep from the evidence injected into the model's context.
+TRIAGE_SOURCE_QUERY = "Eye Automated Triage"
+TRIAGE_CATEGORY = "Automated Triage"
+
+
+def is_triage_block(block) -> bool:
+    """True if a report block was produced by the automatic case-open triage
+    (identified by its stamped source_query or category). Best-effort."""
+    try:
+        md = getattr(block, "metadata", None) or {}
+        if md.get("source_query") == TRIAGE_SOURCE_QUERY:
+            return True
+        if (getattr(block, "category", "") or "") == TRIAGE_CATEGORY:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 class SafeEncoder(json.JSONEncoder):
     """Custom JSON encoder that handles non-serializable objects safely."""
     def default(self, obj):
@@ -73,7 +94,7 @@ class ReportEngine:
         # block inherits its provenance (see _stamp_and_append).
         self.current_source_query: str = ""
 
-        # GEP Rule 4 (Non-Repudiation): rolling hash-chain pointer for block IDs.
+        # GEP-7 (Non-Repudiation): rolling hash-chain pointer for block IDs.
         # Every new block gets sha256(prev_id + block_type + metadata)[:16] so
         # silent edits to any historical block break the chain on next load.
         self._prev_block_id: str = ""
@@ -119,7 +140,7 @@ class ReportEngine:
         self.case_directory = case_directory
         self.load_report()
 
-    # ---- GEP Rule 4 (Non-Repudiation) helpers --------------------------
+    # ---- GEP-7 (Non-Repudiation) helpers --------------------------
     def _chain_block_id(self, block) -> str:
         """
         Compute the next hash-chained block_id from the previous block_id +
@@ -612,7 +633,7 @@ class ReportEngine:
                 try:
                     # Check for duplicate block_id collision
                     if block.block_id in existing_ids:
-                        # GEP Rule 4: on collision, re-stamp using the hash chain
+                        # GEP-7: on collision, re-stamp using the hash chain
                         # so the new ID stays tamper-evident (no random UUID).
                         old_id = block.block_id
                         block.block_id = self._chain_block_id(block)
@@ -799,7 +820,7 @@ class ReportEngine:
                 
                 self.edit_history = state.get("edit_history", [])
 
-            # GEP Rule 4: rehydrate the hash-chain pointer from the tail of the
+            # GEP-7: rehydrate the hash-chain pointer from the tail of the
             # restored block list so newly-added blocks extend the same chain
             # rather than starting a parallel one.
             if self.blocks:

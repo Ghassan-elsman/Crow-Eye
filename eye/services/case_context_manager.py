@@ -58,6 +58,11 @@ class CaseContextManager:
         self.context_file = self.case_directory / "eye_case_context.json"
         self.log_file = self.case_directory / "eye_investigation_log.jsonl"
         self.semantic_rules_file = self.case_directory / "eye_semantic_rules.json"
+        # Per-question answer memory (v0.11.1): each answered question's
+        # summary + the data it extracted, so a related follow-up can reuse
+        # the findings instead of re-querying. Sibling to the investigation
+        # log so the existing Case Summary timeline is left untouched.
+        self.question_memory_file = self.case_directory / "eye_question_memory.jsonl"
         self.logger = logging.getLogger(self.__class__.__name__)
         
         # Load or create case context
@@ -383,6 +388,106 @@ class CaseContextManager:
             self.logger.error(f"Error reading investigation log: {e}")
             return []
     
+    def save_question_memory(
+        self,
+        question: str,
+        answer_summary: str,
+        key_findings: str = "",
+        artifacts_queried: Optional[List[str]] = None,
+        sub_questions: Optional[List[str]] = None,
+    ) -> bool:
+        """Persist one answered question's summary + extracted findings.
+
+        Appended to ``eye_question_memory.jsonl`` (cross-session, per case) so a
+        later related question can REUSE the already-extracted data instead of
+        re-running the same investigation. Each record gets a short ``id``
+        (``q1``, ``q2``, ...) the model can cite when reusing a finding.
+
+        Args:
+            question: the investigator's original question.
+            answer_summary: concise summary of the answer that was given.
+            key_findings: compact dump of the data extracted (e.g. the evidence
+                ledger) so prior results are reusable without re-querying.
+            artifacts_queried: artifacts/tools that produced the findings.
+            sub_questions: the sub-question checklist the question was split into.
+
+        Returns:
+            True if the record was written.
+        """
+        try:
+            self.case_directory.mkdir(parents=True, exist_ok=True)
+            # Sequential, human-citable id derived from the MAX existing q-number
+            # (not the record count) so a skipped corrupt line can never make a
+            # new id collide with an existing one.
+            next_num = self._next_question_id_num()
+            record = {
+                "id": f"q{next_num}",
+                "timestamp": datetime.now().isoformat(),
+                "question": question,
+                "answer_summary": answer_summary,
+                "key_findings": key_findings or "",
+                "artifacts_queried": artifacts_queried or [],
+                "sub_questions": sub_questions or [],
+            }
+            with open(self.question_memory_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + '\n')
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving question memory: {e}")
+            return False
+
+    def _next_question_id_num(self) -> int:
+        """Next ``q#`` number = max existing numeric id + 1 (1 if none).
+
+        Robust to corrupt/skipped lines: ids never collide because we key off the
+        highest number actually present, not the record count.
+        """
+        if not self.question_memory_file.exists():
+            return 1
+        max_num = 0
+        try:
+            with open(self.question_memory_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    rid = str(rec.get("id", ""))
+                    if rid.startswith("q") and rid[1:].isdigit():
+                        max_num = max(max_num, int(rid[1:]))
+        except Exception as e:
+            self.logger.error(f"Error scanning question memory ids: {e}")
+        return max_num + 1
+
+    def get_recent_question_memory(self, limit: Optional[int] = 3) -> List[Dict[str, Any]]:
+        """Return recent per-question memory records, oldest-to-newest.
+
+        Args:
+            limit: max records to return (most recent ``limit``). ``None`` returns
+                all records (used internally to assign the next sequential id).
+        """
+        if not self.question_memory_file.exists():
+            return []
+        try:
+            entries = []
+            with open(self.question_memory_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue  # skip a corrupt line, keep the rest
+            if limit is not None and limit >= 0:
+                return entries[-limit:] if limit else []
+            return entries
+        except Exception as e:
+            self.logger.error(f"Error reading question memory: {e}")
+            return []
+
     def load_case_semantic_rules(self) -> List[Dict[str, Any]]:
         """
         Load case-specific semantic rules.

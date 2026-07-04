@@ -39,10 +39,11 @@ _RUNTIME_PROBED_BACKENDS = {"ollama", "lm_studio", "vllm", "llama", "gemini_cli"
 # most-specific entries first so e.g. "gpt-4o" wins over "gpt-4".
 _MODEL_WINDOWS = [
     # --- Anthropic Claude ---------------------------------------------------
-    # Claude 4.x family and Claude 3.x family all default to a 200K window.
+    # Claude 4.x family, Fable, and Claude 3.x family all default to 200K.
     ("claude-opus-4", 200_000),
     ("claude-sonnet-4", 200_000),
     ("claude-haiku-4", 200_000),
+    ("claude-fable", 200_000),
     ("claude-3-7", 200_000),
     ("claude-3-5", 200_000),
     ("claude-3", 200_000),
@@ -117,3 +118,54 @@ def resolve_context_window(backend: Optional[str], model_name: Optional[str]) ->
             return window
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Curated model catalog
+#
+# A small, hand-maintained list of current cloud model IDs so the onboarding
+# wizard and the GUI model menu can offer a sensible selection WITHOUT a live
+# API round-trip. This is a convenience layer only — live ``list_models()``
+# (the account's real entitlements) always takes precedence and is merged on
+# top of these. We curate Anthropic/Claude here; openai/gemini are intentionally
+# left empty so we don't ship IDs that may be stale (callers fall back to live
+# detection for those).
+#
+# Order matters: most-capable first within a family. RECOMMENDED is the subset
+# the UI highlights as the suggested choices (mapped to the Eye's deployment
+# story: Opus = deep analysis, Sonnet = balanced default, Haiku = fast triage).
+# ---------------------------------------------------------------------------
+CURATED_MODELS: dict = {
+    "anthropic": [
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-fable-5",
+    ],
+    "openai": [],
+    "gemini": [],
+}
+
+RECOMMENDED_MODELS: dict = {
+    "anthropic": [
+        "claude-opus-4-8",    # deep / complex threat analysis
+        "claude-sonnet-4-6",  # balanced default
+        "claude-haiku-4-5",   # fast triage
+    ],
+}
+
+
+def curated_models(backend: Optional[str]) -> list:
+    """Return the curated model IDs for a backend (``[]`` if none/unknown).
+
+    Convenience catalog for offline selection in the wizard / GUI; live
+    discovery is merged on top by the callers."""
+    return list(CURATED_MODELS.get((backend or "").strip().lower(), []))
+
+
+def recommended_models(backend: Optional[str]) -> list:
+    """Return the subset of curated models the UI should highlight as
+    recommended (``[]`` if none/unknown)."""
+    return list(RECOMMENDED_MODELS.get((backend or "").strip().lower(), []))

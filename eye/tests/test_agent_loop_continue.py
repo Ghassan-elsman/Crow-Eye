@@ -156,6 +156,98 @@ class TestLoopContinuesOnNarration(unittest.TestCase):
         self.cm.report_engine.append_section.assert_not_called()
 
     @patch("time.sleep", return_value=None)
+    def test_text_protocol_model_runs_tools_without_native_calls(self, _s):
+        # A Gemma-style model that emits tool calls ONLY as fenced ```tool_call text
+        # (no native tool_calls) must still drive real tool execution. We route the
+        # parse through the REAL ContextManager parser so the text protocol is exercised.
+        from eye.services.context_manager import ContextManager
+        real_cm = ContextManager.__new__(ContextManager)
+        real_cm.logger = logging.getLogger("test-parse")
+        self.cm._parse_tool_calls.side_effect = real_cm._parse_tool_calls
+
+        calls = {"n": 0}
+
+        def gen(*a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Text tool call only — no native "tool_calls" key.
+                return {"content":
+                        'Checking SRUM.\n```tool_call\n'
+                        '{"name": "query_database", "parameters": '
+                        '{"database_name": "srum.db", "sql_query": "SELECT 1"}}\n```',
+                        "tools_unsupported": True}
+            return {"content": "Discord sent 4.2 MB of telemetry — confirmed.",
+                    "tools_unsupported": True}
+
+        self.cm.model_router.generate.side_effect = gen
+        self.processor.process_query("did discord send telemetry?")
+
+        self.cm._execute_tool.assert_called()  # the text tool call actually executed
+        executed = self.cm._execute_tool.call_args[0][0]
+        self.assertEqual(executed.get("name"), "query_database")
+
+    @patch("time.sleep", return_value=None)
+    def test_capable_model_gets_text_protocol_fallback_after_native_miss(self, _s):
+        # A function-calling model that narrates a next step without emitting a native
+        # call should be taught the text protocol ONCE in the follow-up nudge, then it
+        # uses it to run a tool.
+        self.cm._build_tool_call_format.return_value = "## Tool-Call Format\n```tool_call ..."
+        self.cm._get_tool_definitions.return_value = []
+
+        calls = {"n": 0}
+
+        def gen(*a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Narrates intent, no native tool_calls, NOT tools_unsupported (capable).
+                return {"content": "I will now query the SRUM database.", "tool_calls": []}
+            if calls["n"] == 2:
+                return {"content": "", "tool_calls": [
+                    {"id": "c1", "type": "function",
+                     "function": {"name": "query_database", "arguments": "{}"}}]}
+            return {"content": "Done — SRUM shows the egress.", "tool_calls": []}
+
+        self.cm.model_router.generate.side_effect = gen
+        self.processor.process_query("did discord exfiltrate?")
+
+        # The fallback format was offered exactly once.
+        self.cm._build_tool_call_format.assert_called_once()
+        # And it was injected into an outgoing nudge message.
+        outgoing = [c.kwargs.get("user_message", "") for c in self.cm.model_router.generate.call_args_list]
+        self.assertTrue(any("Tool-Call Format" in m for m in outgoing))
+
+    @patch("time.sleep", return_value=None)
+    def test_toolless_model_exits_early_without_burning_all_nudges(self, _s):
+        # A model that ONLY narrates plans and never emits a tool call (e.g. a model
+        # that cannot do function calling) must NOT spin through all MAX_CONTINUE_NUDGES
+        # (10) and must NOT execute any tool — it exits early to an honest answer.
+        def gen(*a, **k):
+            return {"content": "I will now query srum_application_usage and check persistence.",
+                    "tool_calls": []}
+
+        self.cm.model_router.generate.side_effect = gen
+        result = self.processor.process_query("hunt for telemetry and hidden tracking")
+
+        self.cm._execute_tool.assert_not_called()  # no tool ever ran
+        # Early exit (toolless bound 2 + one forced synthesis), NOT 10+ nudges.
+        self.assertLessEqual(self.cm.model_router.generate.call_count, 4)
+        self.assertIsNotNone(result)
+
+    @patch("time.sleep", return_value=None)
+    def test_tools_unsupported_response_does_not_loop(self, _s):
+        # The backend reports it dropped tools (Gemma): the loop must not keep nudging
+        # a model that physically cannot call tools.
+        def gen(*a, **k):
+            return {"content": "Here is my plan for the investigation.",
+                    "tool_calls": [], "tools_unsupported": True}
+
+        self.cm.model_router.generate.side_effect = gen
+        self.processor.process_query("hunt for telemetry")
+
+        self.cm._execute_tool.assert_not_called()
+        self.assertLessEqual(self.cm.model_router.generate.call_count, 4)
+
+    @patch("time.sleep", return_value=None)
     def test_no_autopersist_for_trivial_chat_without_tools(self, _s):
         # No tools ran -> nothing to document.
         self.cm.model_router.generate.side_effect = lambda *a, **k: {

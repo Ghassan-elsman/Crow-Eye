@@ -25,6 +25,7 @@ import {
   showCaseSummary,
   showSettings,
   openComplianceWindow,
+  openNarrativeMapWindow,
   initializeTriage,
   getBackendStatus,
   onTruncationWarning,
@@ -33,7 +34,7 @@ import {
   updateTokenBudget,
 } from './bridge';
 import type { GroupedBackendResponse } from './bridge';
-import { IconTrash, IconClipboardList, IconChartBar, IconSettings, IconLayers } from './Icons';
+import { IconTrash, IconClipboardList, IconChartBar, IconSettings, IconLayers, IconBrain } from './Icons';
 import eyeIcon from './assets/eye_icon.png';
 import './ChatInterface.css';
 
@@ -111,9 +112,10 @@ const ChatInterface: React.FC = () => {
         await initializeBridge();
         setLoadingStatus('Loading forensic context...');
         setBridgeReady(true);
-        await fetchContextStats();
-        await loadHistory();
-        
+        // Run the two independent init bridge calls in parallel so the
+        // "Loading forensic context..." wait isn't the sum of both.
+        await Promise.all([fetchContextStats(), loadHistory()]);
+
         // Set up signal listeners before triggering any queries
         unsubQC = onQueryComplete((json: string) => {
           try {
@@ -173,9 +175,11 @@ const ChatInterface: React.FC = () => {
               content: responseText || "The forensic operation was performed, but no text summary was provided by the model. Please check the reporting pane for updates.",
               timestamp: new Date().toISOString(),
               data_viewer:  data.data_viewer  || undefined,
+              data_viewers: data.data_viewers || undefined,
               action_chips: data.action_chips || undefined,
               option_menu:  data.option_menu  || undefined,
               eye_dialogue: transcript.length ? transcript : undefined,
+              tool_output: (data.tool_output && data.tool_output.length) ? data.tool_output : undefined,
             };
             setMessages(prev => {
               const updated = prev.map(m => {
@@ -485,6 +489,10 @@ const ChatInterface: React.FC = () => {
             content: (m.content || "").trim() || "No content provided.",
             timestamp: m.timestamp || new Date().toISOString(),
             metadata: m.metadata || undefined,
+            // Restore the per-message thinking transcript so the "Show the
+            // Eye's thinking" dropdown reappears for EVERY message on reopen.
+            eye_dialogue: m.metadata?.eye_dialogue || undefined,
+            tool_output: m.metadata?.tool_output || undefined,
           }));
         setMessages(hist);
       }
@@ -506,6 +514,8 @@ const ChatInterface: React.FC = () => {
             content: (m.content || "").trim() || "No content provided.",
             timestamp: m.timestamp || new Date().toISOString(),
             metadata: m.metadata || undefined,
+            eye_dialogue: m.metadata?.eye_dialogue || undefined,
+            tool_output: m.metadata?.tool_output || undefined,
           }));
         setMessages(hist);
       } else {
@@ -604,6 +614,7 @@ const ChatInterface: React.FC = () => {
             content: (d.response || '').trim() || "The forensic operation was performed, but no text summary was provided.",
             timestamp: new Date().toISOString(),
             data_viewer:  d.data_viewer  || undefined,
+            data_viewers: d.data_viewers || undefined,
             action_chips: d.action_chips || undefined,
             option_menu:  d.option_menu  || undefined,
           }]);
@@ -855,6 +866,15 @@ const ChatInterface: React.FC = () => {
               >
                 <IconLayers size={13} />
                 <span>Compliance</span>
+              </button>
+              <button
+                className="hdr-action-btn"
+                onClick={openNarrativeMapWindow}
+                title="Open the Narrative Map — the Eye's persistent case memory"
+                aria-label="Narrative Map"
+              >
+                <IconBrain size={13} />
+                <span>Narrative Map</span>
               </button>
               <button
                 className="hdr-action-btn hdr-action-btn--danger"

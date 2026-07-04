@@ -40,6 +40,13 @@ export interface EyeDialogueEntry {
   result?: string;
 }
 
+export interface ToolOutputEntry {
+  name: string;
+  parameters?: Record<string, any>;
+  success?: boolean;
+  result_text?: string;
+}
+
 export interface MessageMetadata {
   preserve_evidence?: boolean;
   evidence_patterns?: string[];
@@ -58,10 +65,12 @@ export interface Message {
   content: string;
   timestamp: string;
   data_viewer?: DataViewerProps;
+  data_viewers?: DataViewerProps[];
   action_chips?: ActionChip[];
   option_menu?: OptionMenuItem[];
   thinking_steps?: ThinkingStep[];
   eye_dialogue?: EyeDialogueEntry[];
+  tool_output?: ToolOutputEntry[];
   metadata?: MessageMetadata;
 }
 
@@ -85,9 +94,13 @@ export interface ActionChip {
 export interface DataViewerProps {
   columns: string[];
   rows: Record<string, any>[];
-  query: string;
-  database: string;
-  table: string;
+  // SQL-backed tables carry a query/database/table; model-authored tables
+  // (chat_add_table) carry a caption instead.
+  query?: string;
+  database?: string;
+  table?: string;
+  caption?: string;
+  title?: string;
 }
 
 export interface ReportBlock {
@@ -217,6 +230,8 @@ export interface EYEBridge {
   get_dialogue_history: () => Promise<string>;
   // Per-answer behavioral GEP compliance evaluations for the Compliance window
   get_gep_turns: () => Promise<string>;
+  // Per-answer reasoning traces (why each sub-question + why each conclusion) for Compliance
+  get_reasoning_turns: () => Promise<string>;
   // Chain-of-custody evidence seals (exact bytes the model saw) for Compliance
   get_payload_seals: () => Promise<string>;
   // Chain-of-custody audit events (preserve/summarize/truncate/pin/refuse)

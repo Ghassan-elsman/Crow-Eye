@@ -89,7 +89,44 @@ class GeminiBackend(LLMBackend):
                 self._client = genai.Client(api_key=api_key)
         return self._client
 
-    def generate(self, system_prompt, user_message, tools=None, history=None):
+    # Keywords the Gemini function-calling schema (an OpenAPI 3.0 subset) does
+    # NOT accept. Sending them yields 400 INVALID_ARGUMENT or, worse, a generic
+    # 500 INTERNAL. They are valid JSON-Schema for the OpenAI/Anthropic backends,
+    # so we strip them here (Gemini-only) rather than in configs/llm_config.json.
+    _GEMINI_UNSUPPORTED_SCHEMA_KEYS = frozenset({
+        "default", "additionalProperties", "$schema", "$id", "$ref", "$defs",
+        "definitions", "title", "examples", "const", "patternProperties",
+    })
+
+    def _is_gemma(self) -> bool:
+        """Gemma models on the Gemini API support NEITHER system instructions NOR
+        function calling. Detect them so we can build a request the server accepts
+        (fold the system prompt into the first user turn; omit tools)."""
+        name = (self.model_name or "").replace("models/", "").lower()
+        return name.startswith("gemma")
+
+    def _sanitize_gemini_schema(self, node):
+        """Return a copy of a JSON-schema node with Gemini-unsupported keywords
+        removed, recursing into ``properties`` and ``items``. Pure / non-mutating."""
+        if isinstance(node, list):
+            return [self._sanitize_gemini_schema(n) for n in node]
+        if not isinstance(node, dict):
+            return node
+        clean = {}
+        for k, v in node.items():
+            if k in self._GEMINI_UNSUPPORTED_SCHEMA_KEYS:
+                continue
+            if k == "properties" and isinstance(v, dict):
+                clean[k] = {pk: self._sanitize_gemini_schema(pv) for pk, pv in v.items()}
+            elif k in ("items", "if", "then", "else"):
+                clean[k] = self._sanitize_gemini_schema(v)
+            elif k in ("anyOf", "oneOf", "allOf") and isinstance(v, list):
+                clean[k] = [self._sanitize_gemini_schema(n) for n in v]
+            else:
+                clean[k] = v
+        return clean
+
+    def generate(self, system_prompt, user_message, tools=None, history=None, gen_params=None):
         """
         Translates EYE forensic state into Gemini's contents/config structure.
         
@@ -108,13 +145,39 @@ class GeminiBackend(LLMBackend):
             Gemini wants to invoke, formatted as structured objects)
         """
         try:
-            # Build the configuration - this tells Gemini how to behave
-            config = {"temperature": 0.7, "max_output_tokens": 4096, "system_instruction": system_prompt}
-            
-            if tools:
-                # Convert Eye's tool format to Gemini's function_declarations format
-                # We're teaching Gemini what forensic capabilities are available
-                decls = [{"name": t["name"], "description": t.get("description", ""), "parameters": t.get("parameters", {})} for t in tools]
+            # Build the configuration - this tells Gemini how to behave.
+            # max_output_tokens bounds the REPLY (not the context window); 4096
+            # silently clipped long forensic syntheses, so default to 8192 and
+            # surface a marker when the model still hits the cap (see below).
+            gp = gen_params or {}
+            gemma = self._is_gemma()
+            config = {
+                "temperature": gp.get("temperature", 0.7),
+                "max_output_tokens": gp.get("max_output_tokens", 8192),
+            }
+            if gp.get("top_p") is not None:
+                config["top_p"] = gp["top_p"]
+
+            # Gemma models on the Gemini API do NOT support function calling — sending
+            # `tools` is a primary cause of the recurring 500 INTERNAL. Only attach
+            # tools for non-Gemma models, and sanitize each schema to Gemini's subset.
+            # True when the orchestrator asked for tools but this model can't use them,
+            # so they were dropped. The orchestrator reads this to tell the investigator
+            # the model can't run forensic tools (instead of silently looping on a model
+            # that physically cannot emit a tool call).
+            tools_unsupported = bool(tools and gemma)
+            if tools_unsupported:
+                self.logger.warning(
+                    "Active Gemma model '%s' does not support function calling — %d tool(s) "
+                    "were dropped; it cannot execute forensic tools this turn.",
+                    self.model_name or "", len(tools or []),
+                )
+            if tools and not gemma:
+                decls = [{
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": self._sanitize_gemini_schema(t.get("parameters", {})),
+                } for t in tools]
                 config["tools"] = [{"function_declarations": decls}]
             
             # Build the raw messages array
@@ -145,7 +208,9 @@ class GeminiBackend(LLMBackend):
                 final_system += "\n\n" + "\n\n".join(extra_system_parts)
 
             # Convert sanitized messages to Gemini's contents format (skip system role,
-            # which _sanitize_messages may preserve as the first item)
+            # which _sanitize_messages may preserve as the first item).
+            # Empty-part guard: Gemini can 500 on parts:[{"text": ""}], so skip any
+            # message whose text is empty.
             contents = []
             for msg in sanitized:
                 if msg["role"] == "system":
@@ -154,18 +219,33 @@ class GeminiBackend(LLMBackend):
                     if extra and extra != system_prompt:
                         final_system += "\n\n" + extra
                 else:
+                    text = msg.get("content", "")
+                    if not text.strip():
+                        continue
                     contents.append({
                         "role": "user" if msg["role"] == "user" else "model",
-                        "parts": [{"text": msg["content"]}]
+                        "parts": [{"text": text}]
                     })
 
             # Guard: Gemini raises InvalidArgument if contents is empty.
             # This can happen when history is None/empty and all messages were stripped.
             if not contents:
-                contents = [{"role": "user", "parts": [{"text": user_message}]}]
+                contents = [{"role": "user", "parts": [{"text": user_message or final_system}]}]
 
-            # Update config with the fully merged system instruction
-            config["system_instruction"] = final_system
+            if gemma:
+                # Gemma does NOT support `system_instruction`. Fold the system prompt
+                # into the FIRST user turn instead (contents always start with a user
+                # role after _sanitize_messages), and leave system_instruction unset.
+                if final_system.strip():
+                    first = contents[0]
+                    if first.get("role") != "user":
+                        contents.insert(0, {"role": "user", "parts": [{"text": final_system}]})
+                    else:
+                        existing = (first["parts"][0].get("text", "") if first.get("parts") else "")
+                        first["parts"] = [{"text": f"{final_system}\n\n{existing}".strip()}]
+            else:
+                # Update config with the fully merged system instruction
+                config["system_instruction"] = final_system
 
             # Send the request to Gemini and get the response
             resp = self.client.models.generate_content(model=self.model_name, contents=contents, config=config)
@@ -191,10 +271,18 @@ class GeminiBackend(LLMBackend):
                         # Some Gemini responses use Pydantic models - convert to dict
                         args = args.model_dump() if hasattr(args, 'model_dump') else {}
                     tool_calls.append({
-                        "id": f"c_{id(fc)}", "type": "function", 
+                        "id": f"c_{id(fc)}", "type": "function",
                         "function": {"name": fc.name, "arguments": json.dumps(args)}
                     })
-            return {"content": content, "tool_calls": tool_calls}
+            # Surface an output-length cut instead of letting it be silent.
+            try:
+                finish = getattr((resp.candidates or [None])[0], "finish_reason", None)
+                if finish is not None and "MAX_TOKENS" in str(finish).upper() and content:
+                    content += "\n\n[⚠ Output truncated at the model's max output tokens — ask for the remainder or narrow the request.]"
+            except Exception:
+                pass
+            return {"content": content, "tool_calls": tool_calls,
+                    "tools_unsupported": tools_unsupported}
         except Exception as e:
             self.logger.error(f"Cloud (Gemini) error: {e}")
             raise

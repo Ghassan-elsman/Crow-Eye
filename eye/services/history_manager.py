@@ -18,6 +18,158 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+
+def _message_tokens(msg: Dict[str, Any], token_count_fn) -> int:
+    """Token cost of a single message — uses the pre-counted value when present,
+    otherwise counts the content with ``token_count_fn``."""
+    tc = msg.get("token_count")
+    if isinstance(tc, int) and tc > 0:
+        return tc
+    return int(token_count_fn(msg.get("content") or ""))
+
+
+def _is_evidence_protected(msg: Dict[str, Any]) -> bool:
+    """The irreducible evidence core: pinned, evidence-flagged, or a tool result.
+    These are NEVER summarized or dropped by the memory policy. Note a rolling
+    summary is deliberately NOT here — it is mergeable in Stage 1 and droppable
+    only as a last resort in Stage 2."""
+    md = msg.get("metadata") or {}
+    return bool(md.get("pinned") or md.get("preserve_evidence") or md.get("is_tool_result"))
+
+
+def reduce_messages_to_budget(
+    messages: List[Dict[str, Any]],
+    usable_tokens: int,
+    *,
+    token_count_fn,
+    base_tokens: int = 0,
+    window_turns: int = 5,
+    summarize_fn=None,
+    enable_summary_buffer: bool = True,
+    enable_drop: bool = True,
+    keep_first: bool = True,
+    archive_cb=None,
+):
+    """Two-stage conversation-memory reduction — the single implementation shared
+    by the persistent compaction (``HistoryManager.manage_history``) and the
+    per-call outgoing gate (``QueryProcessor.guarded_generate``).
+
+    Applied IN ORDER, and only while the payload exceeds ``usable_tokens``:
+
+      Stage 1 — Summarization buffer: fold every eligible non-protected message
+        OLDER than the sliding window into a SINGLE rolling summary (via
+        ``summarize_fn``). Any prior rolling summary that has aged out of the
+        window is folded back in, so summaries never proliferate.
+      Stage 2 — Sliding window: if still over budget AND ``enable_drop`` is set,
+        drop the oldest droppable (non-evidence) message FIFO until it fits —
+        sliding the window forward. The first turn is dropped only as a last
+        resort; evidence/pinned/tool-result messages are never dropped, so the
+        irreducible core may remain over budget (the caller decides whether that
+        is acceptable or a hard refusal).
+
+    Always kept verbatim: the first message (case framing, when ``keep_first``),
+    every evidence-protected message, and the last ``window_turns`` messages.
+
+    Pure: never mutates the input list or its message dicts. Returns
+    ``(reduced_messages, cut_records, summary_msg_or_None)`` where each cut record
+    is ``{"action": "SUMMARIZED"|"TRUNCATED", "msg": <message>, "summary_text": str|None}``.
+    ``archive_cb(msg)`` is invoked best-effort for each evicted RAW turn (never for
+    a derived summary) so it can be persisted to the retrievable conversation
+    archive.
+    """
+    msgs = list(messages or [])
+    window_turns = max(0, int(window_turns))
+
+    def total(ms):
+        return base_tokens + sum(_message_tokens(m, token_count_fn) for m in ms)
+
+    if total(msgs) <= usable_tokens:
+        return msgs, [], None
+
+    cut_records: List[Dict[str, Any]] = []
+    summary_msg = None
+    working = list(msgs)
+
+    # ---- Stage 1: summarization buffer ----
+    if enable_summary_buffer and summarize_fn is not None and len(msgs) > 1:
+        n = len(msgs)
+        tail_start = max(0, n - window_turns)
+        eligible_idx = [
+            i for i, m in enumerate(msgs)
+            if not (keep_first and i == 0)
+            and i < tail_start
+            and not _is_evidence_protected(m)
+        ]
+        eligible = [msgs[i] for i in eligible_idx]
+        if eligible:
+            try:
+                summary_text = summarize_fn(eligible)
+            except Exception:
+                summary_text = None
+            if summary_text:
+                summary_msg = {
+                    "role": "system",
+                    "content": summary_text,
+                    "metadata": {"is_summary": True, "is_rolling_summary": True},
+                }
+                eligible_set = set(eligible_idx)
+                rebuilt: List[Dict[str, Any]] = []
+                inserted = False
+                for i, m in enumerate(msgs):
+                    if i in eligible_set:
+                        if not inserted:
+                            rebuilt.append(summary_msg)
+                            inserted = True
+                        continue
+                    rebuilt.append(m)
+                working = rebuilt
+                for m in eligible:
+                    cut_records.append({"action": "SUMMARIZED", "msg": m, "summary_text": summary_text})
+                    if archive_cb and not (m.get("metadata") or {}).get("is_summary"):
+                        try:
+                            archive_cb(m)
+                        except Exception:
+                            pass
+
+    # ---- Stage 2: sliding window (hard drop) ----
+    if enable_drop:
+        while total(working) > usable_tokens:
+            nw = len(working)
+            tail_start_w = max(0, nw - window_turns)
+            # Priority: (1) oldest non-protected strictly BEFORE the window;
+            # (2) oldest non-protected, non-first (slide the window forward);
+            # (3) the first message, last resort. Never an evidence-protected one.
+            drop_idx = None
+            for i, m in enumerate(working):
+                if (keep_first and i == 0) or _is_evidence_protected(m) or i >= tail_start_w:
+                    continue
+                drop_idx = i
+                break
+            if drop_idx is None:
+                for i, m in enumerate(working):
+                    if (keep_first and i == 0) or _is_evidence_protected(m):
+                        continue
+                    drop_idx = i
+                    break
+            if drop_idx is None:
+                for i, m in enumerate(working):
+                    if _is_evidence_protected(m):
+                        continue
+                    drop_idx = i
+                    break
+            if drop_idx is None:
+                break  # only the irreducible evidence core remains
+            removed = working.pop(drop_idx)
+            cut_records.append({"action": "TRUNCATED", "msg": removed, "summary_text": None})
+            if archive_cb and not (removed.get("metadata") or {}).get("is_summary"):
+                try:
+                    archive_cb(removed)
+                except Exception:
+                    pass
+
+    return working, cut_records, summary_msg
+
+
 class HistoryManager:
     """
     Manages conversation history, persistence, and summarization.
@@ -28,7 +180,7 @@ class HistoryManager:
         self.logger = logging.getLogger(__name__)
         self.history: List[Dict[str, Any]] = []
         self._message_id_counter = 0   # retained for legacy fallback only
-        # GEP Rule 4 (Non-Repudiation): rolling SHA-256 chain pointer.
+        # GEP-7 (Non-Repudiation): rolling SHA-256 chain pointer.
         # Each new message_id = sha256(prev_id + content + role).hexdigest()[:16].
         # Flipping any byte of any historical message breaks the chain on next load.
         self._prev_msg_id: str = ""
@@ -48,7 +200,7 @@ class HistoryManager:
                         with self._lock:
                             # Migrate existing history if needed
                             self.history = self._migrate_existing_history(data)
-                            # GEP Rule 4: rehydrate the hash-chain pointer from the
+                            # GEP-7: rehydrate the hash-chain pointer from the
                             # tail of history so newly-appended messages extend the
                             # same chain across process restarts.
                             if self.history:
@@ -90,7 +242,7 @@ class HistoryManager:
             content: Message content
             metadata: Optional metadata dictionary
         """
-        # Generate unique message ID (GEP Rule 4 hash-chained)
+        # Generate unique message ID (GEP-7 hash-chained)
         message_id = self._generate_message_id(content, role)
 
         # Count tokens
@@ -123,7 +275,7 @@ class HistoryManager:
                     message["metadata"]["evidence_confidence"] = evidence_result["confidence"]
                     message["metadata"]["evidence_matches"] = evidence_result.get("matches", {})
 
-                    # GEP Rule 2 (Evidence Anchoring): embed raw evidence snippets
+                    # GEP-2/GEP-6 (Evidence Anchoring): embed raw evidence snippets
                     # DIRECTLY into the message content as <evidence anchor="..."> tags
                     # so the forensic markers travel with the message verbatim through
                     # context-window summarization (the summarizer sees the tags as
@@ -159,7 +311,7 @@ class HistoryManager:
                                 "source_tool": metadata.get("tool_names") or metadata.get("tool_name") if metadata else None
                             }
                         )
-                        # Pillar 7: Auto-export JSON for machine readability
+                        # GEP-8 (Machine-Readable Compliance): Auto-export JSON
                         self.cm.truncation_auditor.auto_export_json()
 
                     self.logger.info(
@@ -173,108 +325,167 @@ class HistoryManager:
 
         with self._lock:
             self.history.append(message)
-            self.manage_history()
+        # manage_history() does its own phased locking and may make a 10-60s LLM
+        # summarization call; it MUST run OUTSIDE this lock so concurrent readers
+        # (e.g. the GUI-thread get_stats / get_context_stats) don't block on it.
+        self.manage_history()
 
     def manage_history(self):
         """
-        Keep history within token budget using evidence-aware summarization.
+        Keep persistent history bounded with the shared two-stage memory policy
+        (``reduce_messages_to_budget``) — Stage 1 ONLY (the summarization buffer).
 
-        This method implements and :
-        - Separates preserved messages from summarizable messages
-        - Skips messages with preserve_evidence=true or pinned=true
-        - Reconstructs history: first + preserved + summary + last 5 messages
-        - Logs summarization events to audit trail
+        The hard sliding-window DROP (Stage 2) runs per-call in
+        ``guarded_generate`` against the OUTGOING payload; persistent history is
+        only folded — its summarizable middle is collapsed into a single rolling
+        summary so the on-disk log never balloons, while the first turn, every
+        evidence/pinned message, and the recent window stay verbatim. Each evicted
+        raw turn is archived to the retrievable conversation memory so nothing is
+        truly lost.
         """
-        # --- Phase 1: Read state under lock ---
-        with self._lock:
-            total_tokens = sum(m.get("token_count", 0) for m in self.history)
+        rc = getattr(self.cm, "reasoning_config", None)
+        rc = rc if isinstance(rc, dict) else {}
+        window_turns = int(rc.get("history_window_turns", 5))
+        enable_buf = bool(rc.get("enable_summary_buffer", True))
 
-            # Compact persistent history only when it approaches the FULL usable
-            # context window (max_total_tokens minus the output reserve) — not the
-            # smaller per-component `conversation_history` sub-budget, which would
-            # truncate history long before the window is actually full. The
-            # per-call outgoing slim in guarded_generate uses the same `usable`
-            # value, so the two layers agree. Evidence/pinned messages are
-            # preserved below and every cut is audited as SUMMARIZED.
+        # --- Phase 1: threshold check under lock ---
+        # Compact only when history approaches the FULL usable context window
+        # (max_total_tokens minus the output reserve) — the same `usable` value
+        # guarded_generate uses, so the two layers agree.
+        with self._lock:
+            total_tokens = sum(
+                _message_tokens(m, self.cm.token_counter.count_tokens) for m in self.history
+            )
             if not (total_tokens > self.cm.usable_context_tokens() and len(self.history) > 3):
                 return  # Nothing to do
+            snapshot = list(self.history)
 
-            # Identify static boundaries to prevent fragmentation
-            first_msg = self.history[0]
-            last_msgs = self.history[-5:] if len(self.history) > 6 else self.history[1:]
-            mid_msgs  = self.history[1:-5] if len(self.history) > 6 else []
+        usable = int(self.cm.usable_context_tokens())
 
-            preserved_msgs    = []
-            summarizable_msgs = []
-            for msg in mid_msgs:
-                metadata = msg.get("metadata", {})
-                if metadata.get("preserve_evidence") or metadata.get("pinned"):
-                    preserved_msgs.append(msg)
-                else:
-                    summarizable_msgs.append(msg)
-
-        # If nothing to summarize, exit early (lock already released)
-        if not summarizable_msgs:
+        # --- Phase 2: reduce OUTSIDE the lock (Stage 1 may make a 10-60s LLM call) ---
+        # _summarize_chunk() calls the model router; holding the lock here would
+        # block concurrent add_message() calls (e.g. status messages from the
+        # QueryWorker thread).
+        _reduced, cut_records, summary_msg = reduce_messages_to_budget(
+            snapshot, usable,
+            token_count_fn=self.cm.token_counter.count_tokens,
+            window_turns=window_turns,
+            summarize_fn=self._summarize_chunk,
+            enable_summary_buffer=enable_buf,
+            enable_drop=False,                 # persistent history is not hard-fit here
+            keep_first=True,
+            archive_cb=self._archive_evicted_message,
+        )
+        if not cut_records:
             return
 
-        # --- Phase 2: LLM call OUTSIDE the lock ---
-        # _summarize_chunk() calls the model router which can take 10-60s.
-        # Holding the lock here would block all concurrent add_message() calls
-        # (e.g. status callback messages from the QueryWorker thread).
-        summary_text = self._summarize_chunk(summarizable_msgs)
+        summarized_msgs = [c["msg"] for c in cut_records if c["action"] == "SUMMARIZED"]
+        summary_text = next((c["summary_text"] for c in cut_records if c.get("summary_text")), "")
 
-        # --- Phase 3: Write new history under lock ---
+        # --- Phase 3: reconcile with the LIVE history under lock (no lost update) ---
         with self._lock:
-            summary_msg = {
-                "id": self._generate_message_id(summary_text, "system"),
-                "role": "system",
-                "content": summary_text,
-                "timestamp": datetime.now().isoformat(),
-                "token_count": self.cm.token_counter.count_tokens(summary_text),
-                "metadata": {
-                    "is_summary": True,
-                    "summarized_count": len(summarizable_msgs)
-                }
-            }
+            if summary_msg is not None:
+                summary_msg["id"] = self._generate_message_id(summary_msg["content"], "system")
+                summary_msg["token_count"] = self.cm.token_counter.count_tokens(summary_msg["content"])
+                summary_msg["timestamp"] = datetime.now().isoformat()
+                summary_msg["metadata"]["summarized_count"] = len(summarized_msgs)
 
-            # Reconstruct history: first + preserved + summary + last messages
-            preserved_ids   = {m.get("id") for m in preserved_msgs}
-            deduped_last    = [m for m in last_msgs if m.get("id") not in preserved_ids]
-            self.history    = [first_msg] + preserved_msgs + [summary_msg] + deduped_last
+            # Reconstruct from the LIVE history (not the Phase-2 snapshot) so any
+            # message appended DURING the lock-free LLM call survives. Drop the
+            # summarized messages and splice the summary in at the position the
+            # first summarized message held.
+            cut_ids = {c["msg"].get("id") for c in cut_records}
+            new_history = []
+            inserted = False
+            for m in self.history:
+                if m.get("id") in cut_ids:
+                    if summary_msg is not None and not inserted:
+                        new_history.append(summary_msg)
+                        inserted = True
+                    continue
+                new_history.append(m)
+            if summary_msg is not None and not inserted:
+                new_history.insert(min(1, len(new_history)), summary_msg)
+            self.history = new_history
 
-            # Log summarization events to audit trail for each summarized message
-            if hasattr(self.cm, 'truncation_auditor') and self.cm.truncation_auditor:
-                for msg in summarizable_msgs:
-                    message_hash = self._hash_message(msg.get("content", ""))
-                    self.cm.truncation_auditor.log_event(
-                        action="SUMMARIZED",
+            # Audit every cut (SUMMARIZED / TRUNCATED) for the Compliance trail.
+            auditor = getattr(self.cm, 'truncation_auditor', None)
+            if auditor:
+                for c in cut_records:
+                    msg = c["msg"]
+                    is_sum = c["action"] == "SUMMARIZED"
+                    auditor.log_event(
+                        action=c["action"],
                         message_id=msg.get("id", "unknown"),
                         token_count=msg.get("token_count", 0),
                         reason="budget_exceeded",
-                        message_hash=message_hash,
+                        message_hash=self._hash_message(msg.get("content", "")),
                         metadata={
-                            "summary_msg_id": summary_msg["id"],
-                            "total_summarized": len(summarizable_msgs),
+                            "summary_msg_id": summary_msg["id"] if summary_msg else None,
+                            "total_summarized": len(summarized_msgs),
                             "cut_content": msg.get("content", ""),
-                            "processed_content": summary_text
-                        }
+                            "processed_content": (summary_text if is_sum else ""),
+                        },
                     )
-                # Pillar 7: Auto-export JSON for machine readability
-                self.cm.truncation_auditor.auto_export_json()
+                auditor.auto_export_json()
 
-            # Track truncation count in context manager
-            self.cm.truncation_count += len(summarizable_msgs)
-
+            self.cm.truncation_count = getattr(self.cm, "truncation_count", 0) + len(cut_records)
             self.logger.info(
-                f"Conversation history summarized due to token budget. "
-                f"Summarized: {len(summarizable_msgs)} messages, "
-                f"Preserved: {len(preserved_msgs)} messages"
+                f"Conversation history compacted (summary buffer). "
+                f"Summarized: {len(summarized_msgs)} message(s)."
             )
+
+    def _archive_evicted_message(self, msg: Dict[str, Any]):
+        """Persist an evicted raw turn to the per-case conversation archive and
+        feed it to the retrievable conversation-memory index, so a summarized /
+        slid-out turn can still be recalled on demand later (long-term memory).
+
+        Best-effort: a failure here must never block history management.
+        """
+        case_dir = getattr(self.cm, "case_directory", None)
+        if not case_dir:
+            return
+        try:
+            rec = {
+                "id": msg.get("id"),
+                "role": msg.get("role"),
+                "content": msg.get("content", "") or "",
+                "timestamp": msg.get("timestamp") or datetime.now().isoformat(),
+            }
+            logs_dir = Path(case_dir) / "EYE_Logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            with open(logs_dir / "eye_conversation_archive.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            rag = getattr(self.cm, "rag_service", None)
+            if rag is not None and hasattr(rag, "index_conversation_turn"):
+                rag.index_conversation_turn(
+                    rec["content"],
+                    {"id": rec["id"], "role": rec["role"], "timestamp": rec["timestamp"]},
+                )
+        except Exception as e:
+            self.logger.debug(f"Conversation archive failed for {msg.get('id')}: {e}")
 
 
     def _summarize_chunk(self, messages: List[Dict]) -> str:
-        """Use the LLM to summarize a block of conversation."""
-        summary_prompt = (
+        """Use the LLM to summarize a block of conversation.
+
+        The summary prompt is SIZE-BOUNDED to the model's usable context window
+        (so it can't overflow and fail on a small/local model — which would
+        silently fall back to a stub and lose the real summary), and the model
+        call is SEALED via the shared EvidenceSeal so this stays inside the
+        chain-of-custody guarantee (no un-sealed model calls).
+        """
+        tc = self.cm.token_counter
+        try:
+            usable = int(self.cm.usable_context_tokens())
+        except Exception:
+            usable = 8192
+
+        system_instruction = (
+            "You are a senior forensic investigator. Summarize discussions while ensuring "
+            "absolute preservation of technical indicators (paths, timestamps, app names)."
+        )
+        header = (
             "Summarize the following forensic investigation discussion concisely. "
             "CRITICAL: You MUST preserve all high-fidelity forensic indicators: "
             "- Application Names and Executable Paths "
@@ -283,21 +494,51 @@ class HistoryManager:
             "- Evidence detected in tool results. "
             "Maintain forensic integrity. Discussion:\n\n"
         )
-        for msg in messages:
 
-            # to ensure critical findings in large datasets aren't lost during summarization.
-            content = msg.get('content', "")
+        # Reserve room for system instruction + header + the model's reply, then
+        # fit message lines newest-first so the freshest evidence always survives.
+        reserve_out = 1024
+        base_tokens = tc.count_tokens(system_instruction) + tc.count_tokens(header) + reserve_out
+        body_budget = max(512, usable - base_tokens)
+
+        lines: List[str] = []
+        used = 0
+        dropped = 0
+        for msg in reversed(messages):
+            content = msg.get("content", "")
             if len(content) > 2000:
-                content_sample = content[:1000] + "\n... [BODY TRUNCATED FOR SUMMARY] ...\n" + content[-1000:]
-            else:
-                content_sample = content
-                
-            summary_prompt += f"[{msg['role']}]: {content_sample}\n"
+                content = content[:1000] + "\n... [BODY TRUNCATED FOR SUMMARY] ...\n" + content[-1000:]
+            line = f"[{msg.get('role', 'user')}]: {content}\n"
+            lt = tc.count_tokens(line)
+            if lines and used + lt > body_budget:
+                dropped = len(messages) - len(lines)
+                break
+            lines.append(line)
+            used += lt
+        lines.reverse()
+        body = "".join(lines)
+        if dropped > 0:
+            body = f"[Note: {dropped} older message(s) omitted to fit the summary window.]\n" + body
+        summary_prompt = header + body
+
+        # Seal the exact payload (chain of custody) before the call. Best-effort.
+        payload = f"<<SYSTEM>>\n{system_instruction}\n<<USER>>\n{summary_prompt}"
+        try:
+            seal = getattr(self.cm, "evidence_seal", None)
+            if seal is not None:
+                seal.seal(
+                    payload, phase="history_summarize", iteration=0,
+                    query="history summarization",
+                    model=self.cm.model_router.config.get("model_name", "LLM"),
+                    max_context=int(getattr(self.cm, "max_total_tokens", 8192) or 8192),
+                    token_count=tc.count_tokens(payload),
+                )
+        except Exception:
+            pass
 
         try:
-            # We use a simple generate call without tools for summarization
             res = self.cm.model_router.generate(
-                system_prompt="You are a senior forensic investigator. Summarize discussions while ensuring absolute preservation of technical indicators (paths, timestamps, app names).",
+                system_prompt=system_instruction,
                 user_message=summary_prompt,
                 tools=None
             )
@@ -331,7 +572,7 @@ class HistoryManager:
 
     def _generate_message_id(self, content: str = "", role: str = "") -> str:
         """
-        GEP Rule 4 (Non-Repudiation): generate a deterministic, hash-chained
+        GEP-7 (Non-Repudiation): generate a deterministic, hash-chained
         message ID.  The ID is the first 16 hex chars of
         sha256(previous_message_id + content + role).  Because the previous ID
         is folded into every successor, silently editing any historical

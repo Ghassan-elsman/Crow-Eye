@@ -43,11 +43,36 @@ class ForensicHandlers:
         """Execute SQL SELECT query against forensic database."""
         db = params.get("database_name")
         sql = params.get("sql_query")
-        
+
         if not db or not sql:
             return {"success": False, "error": "Missing database_name or sql_query"}
-            
+
+        # Reuse a prior identical result when available (case DBs are read-only
+        # and static, so the result is guaranteed identical). Only fully-captured
+        # results are served from cache; large results fall through to a fresh run
+        # so the TOON/map-reduce paths still govern big data.
+        cache = getattr(self.cm, "result_cache", None)
+        if cache is not None:
+            hit = cache.get(db, sql)
+            if isinstance(hit, dict) and hit.get("full"):
+                res = {
+                    "success": True,
+                    "columns": hit.get("columns", []),
+                    "data": hit.get("data", []),
+                    "row_count": hit.get("row_count", len(hit.get("data", []))),
+                    "cached": True,
+                }
+                if res["row_count"] > 200:
+                    out = self._apply_toon_compression(res)
+                    out["cached"] = True
+                    return out
+                return res
+
         res = self.cm.database_service.execute_query(db, sql)
+
+        # Persist successful results for reuse within the case.
+        if cache is not None and res.get("success"):
+            cache.put(db, sql, res)
 
         # Compress only when the result is large enough to threaten the context
         # window. Below this, the model sees EVERY row so its chat answer is
@@ -106,24 +131,47 @@ class ForensicHandlers:
         return self.cm.database_service.get_schema(db, table)
 
     def handle_search_artifacts(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Search across all forensic databases using text or regex."""
+        """Search across all forensic databases using text or regex.
+
+        ``SearchResults.results`` is ``Dict[str, List[SearchResult]]`` where
+        ``SearchResult`` is a dataclass (NOT JSON-serializable). We flatten it
+        into plain dicts using the real field names and cap by total match ROWS
+        (not by table count) so a successful search can never crash the turn or
+        blow the context window.
+        """
         from eye.services.search_service import SearchConfig
         term = params.get("search_term")
         use_regex = params.get("use_regex", False)
-        
+
+        if not term:
+            return {"success": False, "error": "Missing search_term parameter."}
+
         config = SearchConfig(search_term=term, use_regex=use_regex)
         results = self.cm.search_service.search(config)
-        matches = results.results
-        
-        # Truncate search results to protect AI context limits
-        if len(matches) > 50:
-            matches = matches[:50]
-            
+
+        MAX_ROWS = 50
+        flattened: List[Dict[str, Any]] = []
+        for table_name, table_results in (results.results or {}).items():
+            for sr in table_results:
+                if len(flattened) >= MAX_ROWS:
+                    break
+                flattened.append({
+                    "table": getattr(sr, "table_name", table_name),
+                    "row_id": getattr(sr, "row_id", None),
+                    "matched_columns": getattr(sr, "matched_columns", []),
+                    "record": getattr(sr, "record_data", {}),
+                    "relevance": getattr(sr, "relevance_score", 1.0),
+                })
+            if len(flattened) >= MAX_ROWS:
+                break
+
+        total = getattr(results, "total_matches", len(flattened))
         return {
-            "results": matches,
-            "total_matches": results.total_matches,
             "success": True,
-            "note": "Results truncated to 50 matches for context efficiency." if results.total_matches > 50 else ""
+            "results": flattened,
+            "total_matches": total,
+            "note": (f"Showing {len(flattened)} of {total} matches (capped for context efficiency)."
+                     if total > len(flattened) else ""),
         }
 
     def handle_query_correlation_results(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -148,6 +196,34 @@ class ForensicHandlers:
                 params.get("identity_value")
             )
         return {"success": False, "error": f"Unsupported correlation query type: {qtype}"}
+
+    def handle_semantic_search_artifacts(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Semantic (embedding) discovery over forensic data rows.
+
+        Returns ranked CANDIDATE rows with database/table/rowid provenance for a
+        natural-language concept ("remote access tools", "powershell download
+        cradle"). This is a DISCOVERY aid — candidates are approximate and not
+        complete; the model must confirm them with exact SQL (`query_database`).
+        """
+        svc = getattr(self.cm, "evidence_index_service", None)
+        if svc is None or not svc.available():
+            return {
+                "success": False,
+                "error": ("Semantic search is unavailable — no embedding server is configured. "
+                          "Enable it in Settings (Semantic Retrieval) or use query_database / "
+                          "search_artifacts instead."),
+            }
+        query = params.get("query") or params.get("search_term")
+        if not query:
+            return {"success": False, "error": "Missing 'query' parameter."}
+        try:
+            top_k = int(params.get("top_k", 10) or 10)
+        except (TypeError, ValueError):
+            top_k = 10
+        tables = params.get("tables")
+        if isinstance(tables, str):
+            tables = [t.strip() for t in tables.split(",") if t.strip()]
+        return svc.search(query, top_k=min(50, max(1, top_k)), tables=tables)
 
     def handle_list_case_files(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Navigate and list files in the case directory."""
@@ -261,6 +337,24 @@ class ForensicHandlers:
             return {"success": False, "error": "Missing binary_name parameter."}
 
         self._ensure_intel_fetched()
+
+        # If the feeds genuinely could not be loaded (offline / sources down),
+        # do NOT report an authoritative "no match" — that would falsely clear a
+        # potential LOLBIN. Return an explicit unavailable status so the model
+        # tells the investigator to retry instead of concluding the binary is safe.
+        if not any(self._intel_cache.get(k) for k in self._intel_urls):
+            return {
+                "success": False,
+                "intel_unavailable": True,
+                "error": (
+                    "Live Living-off-the-Land intelligence feeds (LOLBAS / LOLDrivers / "
+                    "Bootloaders / LOFL) could not be loaded — likely no network access to "
+                    f"the sources. I cannot confirm OR rule out '{binary_name}' as a LOLBIN "
+                    "right now; retry when connectivity is available."
+                ),
+                "matches": [],
+            }
+
         matches = []
 
         # 1. Search LOLBAS
@@ -316,23 +410,39 @@ class ForensicHandlers:
 
     def _ensure_intel_fetched(self):
         """
-        Fetch all intelligence feeds if not already in cache or if expired.
-        Uses a background thread to prevent blocking the main investigator loop.
+        Ensure the intelligence feeds are loaded.
+
+        On a COLD cache (no feed has any data yet) we fetch SYNCHRONOUSLY so the
+        very first lookup has real data — otherwise the handler would
+        authoritatively report a known LOLBIN as "no match" simply because the
+        async download hadn't finished (a dangerous false negative for a forensic
+        tool). When the cache is merely STALE (warm but past TTL) we refresh in a
+        background thread so the investigator isn't blocked.
         """
         import time
         import threading
-        
+
         current_time = time.time()
-        expiry_seconds = 24 * 3600 # 24 hours
-        
+        expiry_seconds = 24 * 3600  # 24 hours
+
         needs_fetch = False
         for key in self._intel_urls:
             last_fetch = self._intel_cache_time.get(key, 0)
             if key not in self._intel_cache or (current_time - last_fetch) > expiry_seconds:
                 needs_fetch = True
                 break
-        
-        if needs_fetch and (self._fetching_thread is None or not self._fetching_thread.is_alive()):
+
+        if not needs_fetch:
+            return
+
+        # Cold = not a single feed currently holds data (covers first-use and the
+        # case where every prior fetch failed and left empty lists).
+        cold = not any(self._intel_cache.get(k) for k in self._intel_urls)
+
+        if cold:
+            self.logger.info("Cold intelligence cache — fetching synchronously before lookup...")
+            self._fetch_intel_worker()
+        elif self._fetching_thread is None or not self._fetching_thread.is_alive():
             self.logger.info("Starting background intelligence refresh...")
             self._fetching_thread = threading.Thread(target=self._fetch_intel_worker, daemon=True)
             self._fetching_thread.start()

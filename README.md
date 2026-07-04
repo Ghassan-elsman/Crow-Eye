@@ -311,6 +311,132 @@ For additional resources, documentation, and updates, check out our dedicated we
 
 ## 🧩 Correlation Engine
 
+> **Version 0.12.0 — Behavioral Intelligence & Case Narrative Release** — see [RELEASE_NOTES.md](RELEASE_NOTES.md) for what's new in 0.12.0
+
+The **Crow-Eye Correlation Engine** is a production-grade forensic correlation system. It ingests Windows artifacts from any source, normalizes them, and surfaces the temporal and identity relationships that turn isolated records into a coherent narrative of what happened on a system, when, and who was involved.
+
+The engine works out of the box with built-in correlation rules (Wings) for the most common investigation questions, and lets analysts author custom rules without touching code.
+
+### 🎥 User Guide
+[![Correlation Engine User Guide](https://img.youtube.com/vi/NxuoFrZvVHE/maxresdefault.jpg)](https://youtu.be/NxuoFrZvVHE?si=VWlQgFicIqzwxQd2)
+
+**Universal Data Import**: The Correlation Engine can take output from **any forensic tool** in CSV, JSON, or SQLite format and convert it into a Feather database. This means you can correlate data from third-party tools (Plaso, Autopsy, Volatility, etc.) with Crow-Eye's native artifacts, creating a unified correlation analysis across all your forensic data sources.
+
+### 🎯 Accuracy & Evidence-Completeness Update (within 0.11.0)
+
+A focused accuracy pass after extensive end-to-end validation against a real ~700K-record Windows case, layered on top of the earlier 0.11.0 reliability work. Every fix below is locked by the 96-test pytest suite and verified by a holistic validation harness that exercises all 7 default wings against both engines.
+
+**Identity engine now captures all the evidence**
+- **Fix: identity engine was iterating only the FIRST row of every feather** when a time filter was active. Root cause: a timezone-aware vs naive datetime comparison in the filter raised `TypeError` and aborted the per-row loop. Records-seen jumped from 3,558 → **745,615** on the validation case. Symptom prior to fix: every feather reported `records_processed=1`.
+- **Fix: log records collapsed every event to its event PROVIDER as the identity.** All 33,855 SecurityLogs records were extracted as the same identity (`Microsoft-Windows-Security-Auditing`), making cross-feather correlation impossible. The per-artifact mapping now prioritises real per-row entities (`User`, `ComputerName`, `NewProcessName`, `TargetUserName`) BEFORE channel/provider metadata.
+- **Fix: artifact-aware field mapping never fired** because parsers don't stamp an `artifact` column on each row. The engine now falls back to `feather_metadata.artifact_type` for the lookup, so SecurityLogs / SystemLogs / ApplicationLogs records correctly use their artifact-specific identity priority.
+- **Fix: placeholder strings became false identities.** `'N/A'`, `'Unknown'`, `'-'`, nil-GUIDs, and similar were being treated as real identities and bundling unrelated records together. The validator now rejects 30+ placeholder variants.
+- **Net result on a single full-range correlation window**: the Execution Proof wing now surfaces **2,856 cross-feather (High) matches** in the identity engine and **643 cross-feather matches** in the time engine, with 24–118 cross-feather matches per wing across the other 6 wings. Identity-engine total matches per wing: 82K–99K (was 15–2,099).
+
+**No more "everything is Low — something is wrong"**
+- **Fix: identity engine wasn't differentiating single-feather vs multi-feather matches** — it tagged every match `High`. Now matches with `feather_count == 1` get `confidence_category="Low - single feather"` / `confidence_score=0.5`, matching the time engine's labeling. The analyst's High view now focuses on real cross-feather correlation.
+- **Fix: path-aware composite key was splitting same identity across feathers.** Each feather stores paths differently (BAM uses `/device/harddiskvolume3/...`, LNK uses `c:/users/...`, MFT uses 8.3 short paths). With path in the key, `chrome` had 10+ different composite keys and never correlated. The key is now name-only (canonical `identity_grouping.identity_key`) — same convention as the time engine. Cross-feather correlation works again.
+
+**Impersonation detection via path classification**
+- Path-based impersonation flag replaces what path-aware keying was supposed to provide. After a match is formed, the engine walks all records' path fields and classifies as TRUSTED (Program Files, Windows\\System32, WinSxS, WindowsApps, ProgramData\\Microsoft, the equivalent BAM/SRUM `/device/harddiskvolumeN/program files/...` forms, plus Mac/Linux paths) or SUSPICIOUS (Temp, Downloads, Public, AppData\\Local\\Temp, Recycle Bin, removable-drive roots, network shares, `$Recycle.Bin`).
+- A match with records in BOTH classifications gets `match.semantic_data['impersonation_alert']`. On the validation case: ~50 alerts per wing (≈0.05% rate), each a real candidate (`python.exe` in venv + Program Files, Discord's official install + AppData copy, etc.).
+
+**Engine evidence accounting**
+- Per-window drop ledger with named buckets (`no_identity_field`, `normalize_failure`, `below_threshold_skipped`, etc.), each carrying the first 3 sample identities so logs name *what* was lost.
+- Per-pipeline summary block at the end of each `correlate(...)` call: records seen, high-confidence emitted, low-confidence emitted, records-with-no-identity, drop buckets, timeless-feather records joined by identity. Every record either lands in a match or in a named drop bucket — "no evidence left over" is verifiable from the log.
+- `low_confidence_review_mode` is now ON by default. Below-threshold identity groups become Low-confidence matches instead of being silently dropped.
+
+**Timeless-feather identity enrichment**
+- Feathers without per-row timestamps (AutoStartPrograms, MUICache, SystemServices, TypedPaths) no longer get a synthetic feather-generation timestamp stamped onto every row (which used to lie about when the artifact was observed). Instead, after time-windowed matches are formed by the timed feathers, the engine walks each match's identity and pulls matching records from every timeless feather, attaching them as supplementary evidence. Identity drives the join; the time anchor comes from the timed feathers.
+
+**Consolidated identity registry**
+- New `config/standard_fields/identities.json` — single source of truth for every column the engines + EYE Agent should consult to extract or track an identity. **98 categories, 1,146 column synonyms** covering app/process, file, hash, user, host/device, network, registry, service/task, event, email, browser, cloud (AWS / Azure / GCP), Windows internals (mutex, named pipe, COM CLSID, ETW provider, WMI consumer), certificate, container, and OS objects.
+- `identity_correlation_engine.py::timestamp_field_patterns` now reads from `timestamps.json` (canonical timestamps registry) instead of a hand-maintained list, with the bookkeeping suffixes (`parsed_at` / `inserted_at` / `created_at`) filtered out so feather-generation time never gets treated as artifact observation time.
+- `identity_based_engine_adapter._path_fields()` reads its path-field list from `identities.json` categories (`file_path`, `target_path`, `source_path`, `parent_directory`, `image_path`, `command_line`, `registry_key`, `service_image_path`, `scheduled_task_path`). Adding a new path column synonym is now a JSON edit, not a code change.
+- `timestamps.json` cleaned up: real MFT activity timestamps (`si_creation_time`, `si_modification_time`, `si_mft_entry_change_time`, `fn_mft_entry_change_time`, `mft_modified_time`) moved out of the bookkeeping category where they were wrongly classified.
+
+**Semantic mapping false-positive fixes**
+- `default-data-exfiltration-pattern`: was an OR rule across 3 wildcard conditions on different feathers — fired `severity=high` on any single LNK record. Now properly gated with `_requires_multi_indicator=True, _min_indicators=2`. The previously-dead `_requires_multi_indicator` / `_min_indicators` fields are now actually honored by `SemanticRule.evaluate()`.
+- `auth_failed_then_success`: was logically impossible (AND on `EventID == 4625 AND EventID == 4624` — a single record can equal only one value, rule never fired). Rewritten as OR with clearer semantic value.
+- `af_wiper_tool_run` / `lat_remote_tool_run`: descriptions named specific tools (`sdelete.exe, cipher.exe, wevtutil.exe` etc.) but condition was a wildcard — every Prefetch entry got tagged "Wiper Tool Run" / "Remote Tool Run" at `severity=high`. Now use proper regex matching the actual tool names.
+- Severity inflation fixes on `exec_confirmed_run` / `pers_run_key` / `pers_service_install` / `pers_confirmed_runs` — baseline-activity rules (every executed app, every autostart entry) demoted from `high`/`critical` to `info`/`low`. The wing's weighted scoring layer escalates real threats via score thresholds.
+- `SemanticMappingManager.apply_to_record` candidate dedup: global mappings with `artifact_type` were being evaluated twice (once via `artifact_mappings`, once via `global_mappings`), inflating downstream counts.
+
+**Time-engine accuracy fixes (carry-over context)**
+- Method 0 schema-driven timestamp detection from `feather_schemas.json` — feathers with declared `primary_timestamp_column` + `secondary_timestamp_columns` no longer rely on auto-detection that could pick integer cycle-counters as Unix epoch timestamps.
+- Per-column WHERE-clause format binding. Heterogeneous-format feathers (amcache MM/DD/YYYY install_date + ISO parsed_at) used to silently return 0 rows because the engine used one global format. Now each column's WHERE parameters use that column's specific format.
+- Multi-column timestamp fan-out for separate-column timestamp feathers (mft_usn: si_creation_time + si_modification_time + si_access_time + 6 more). A single row with timestamps in multiple windows becomes a virtual record in each. `mft_usn` went from 2 records returned to 913,809 virtual records.
+- Year 1990–2100 plausibility filter on parsed timestamps drops NTFS / LNK placeholder dates (1601-01-01, 1980-01-01, 2000-01-01) before they spawn lonely virtual records.
+
+### 🚀 What's New in 0.11.0
+
+The 0.11.0 release is a deep reliability + extensibility pass that closes the most common "where did my evidence go?" gaps and lays the groundwork for parallel correlation.
+
+**No dropped evidence**
+- **Multi-timestamp fan-out**: Prefetch's `run_times` JSON list (up to 8 historical executions per row) is now expanded into one virtual record per timestamp. A typical case sees a 4× lift in correlatable execution events that the previous engine silently ignored.
+- **Tolerant timestamp parser**: Windows FILETIME, `YYYYMMDD` compact dates (registry InstalledSoftware), trailing annotations (`"2026-05-19 10:48:21 (Registry Key LastWrite)"`), and every parser canonical format are all classified on the first try — no fallback churn, no misclassified rows.
+- **Duplicates preserved as evidence**: The dedup signature now keys on the **raw** identity (not the normalized form). Variants like `Chrome.exe` and `Chrome.dll` no longer collapse into one row at insert time — they share the identity bucket but each row is counted.
+- **Wider identity-field coverage**: 290+ name/path synonyms now recognized across MFT (`file_name`), BAM (`process_path`), USB (`friendly_name`), BrowserHistory (`title`), Shellbags, RecycleBin, Network_list, UserProfiles, and more. Records that previously slipped through with "no identity" now form matches.
+
+**Smarter sub-identity grouping**
+- `Chrome.exe`, `chrome.exe`, `Chrome.EXE`, and `chrome.dll` collapse into one sub-identity (case + extension are noise).
+- `Chrome v1.0.exe` and `Chrome v2.0.exe` stay split (version differences are signal).
+- `Chrome (x86)` and `Chrome (x64)` stay split (architectural qualifiers are signal).
+- Each sub-identity exposes its name variants so analysts see all spellings.
+
+**One source of truth — no more drift**
+- Field name synonyms live in `config/standard_fields/*.json`. Adding a new parser column is a JSON edit, not a code change in three places.
+- Per-table feather metadata (primary timestamp column, multi-timestamp JSON columns, identity priority) lives in `correlation_engine/config/feather_schemas.json`.
+- Identity normalization unified in `correlation_engine/engine/identity_grouping.py` — the engine, both result viewers, and the identity-semantic phase all share one implementation.
+
+**Performance foundation**
+- Thread-safe feather query cache (RLock-protected). The path to true parallel correlation is unblocked.
+- `query_time_range_iter()` — streaming generator that yields records by 1000-row batches. Constant memory across feathers of any size.
+- `parallel_strategy` config field (`'none' | 'threads' | 'processes'`) ready for opt-in process-pool parallelism.
+
+**Better feather generation**
+- `FeatherWriter` — canonical write contract with WAL journal, explicit BEGIN/COMMIT transactions, `executemany()` batched inserts (5000-row batches by default). Expected 50–200× speedup over per-row inserts on large imports.
+- Schema metadata is stamped into the feather DB itself, so the engine doesn't need to sniff sample values to learn column roles.
+- Multi-timestamp JSON columns declarable via `writer.declare_multi_timestamp_json("run_times")` — engine reads it from the feather, no engine-side config edit.
+
+**Diagnostics you can trust**
+- Every correlation window emits an INFO line with `records_in / no_identity / parse_cache_hits / below_threshold / matches_emitted / min_feathers`. If matches are being dropped, the log says exactly where.
+- The `_last_window_correlation_stats` dict on the engine exposes the same data programmatically.
+- New `low_confidence_review_mode` + `min_feathers_override` config knobs let analysts dial the correlation strictness per case.
+
+**Test suite**
+- 96-test pytest regression suite covering the timestamp parser, identity normalization, multi-timestamp fan-out, feather schemas, wing loader, feather writer, identity-grouping (heavy + mild keys), Eye-Agent authoring (write-side GEP governance), and the standard-fields registry. Locks every fix above so they can't regress.
+
+### ✅ Production Status
+
+The Correlation Engine is **production-ready** and actively being used in forensic investigations:
+
+**Current Status (0.11.0)**:
+- ✅ **Time-Window Scanning Engine**: Production-ready — recommended for time-based analysis (O(N log N))
+- ✅ **Identity-Based Engine**: Production-ready — recommended for identity tracking (O(N log N))
+- ✅ **Feather Builder**: Production-ready — imports CSV/JSON/SQLite from any tool
+- ✅ **FeatherWriter**: New canonical write API — transactional batching + schema metadata
+- ✅ **Wings System**: Production-ready — create and manage correlation rules
+- ✅ **Pipeline Orchestration**: Production-ready — automate correlation workflows
+- ✅ **Identity Grouping**: Unified across engine + viewers + semantic phase
+- ✅ **Standard Fields Registry**: Centralized field synonym source of truth
+- ✅ **Multi-timestamp Fan-Out**: Every JSON-list timestamp correlated
+- 🔄 **Parallel Correlation**: Foundation in place; profiling + process-pool dispatch next
+- 🔄 **Semantic Mapping**: Active enhancements
+- 🔄 **Correlation Scoring**: Refinements in progress
+
+**Recommendations**:
+- ⭐ **Use Time-Window Scanning Engine** for time-based artifact analysis (production-ready, O(N log N))
+- ✅ **Use Identity-Based Engine** for identity tracking and filtering (production-ready, O(N log N))
+- 📊 **Feather Builder** / `FeatherWriter` are stable and ready for all data import needs
+- 🎯 **Wings and Pipelines** are production-ready
+
+**What We're Working On Next**:
+- Process-pool parallel correlation (profiling baseline, then enable by default for ≥50 windows)
+- Migrating all 8 built-in parsers onto `FeatherWriter` for the transactional-batching speedup
+- Comprehensive semantic field mapping across more artifacts
+- Finalizing correlation scoring algorithms with explainability
+
 ### Key Features
 
 - **🔄 Dual-Engine Architecture**: Choose between Time-Window Scanning (O(N log N)) and Identity-Based (O(N log N)) correlation strategies
@@ -323,7 +449,7 @@ For additional resources, documentation, and updates, check out our dedicated we
 - **⚡ Streaming + Thread-Safe**: O(1)-memory `query_time_range_iter`; lock-protected feather caches; ready for parallel correlation
 - **🔍 Flexible Rules**: Define custom correlation rules (Wings) with configurable parameters
 - **📋 Honest Diagnostics**: Per-window stats line (records_in / no_identity / parse_cache_hits / below_threshold / matches_emitted) so you always know if evidence was dropped
-- **🧪 Locked-In Quality**: 96-test regression suite covering timestamp parsing, identity normalization, fan-out, the writer contract, Eye-Agent authoring (GEP rules), and the standard-fields registry
+- **🧪 Locked-In Quality**: 96-test regression suite covering timestamp parsing, identity normalization, fan-out, the writer contract, Eye-Agent authoring (write-side GEP governance), and the standard-fields registry
 - **🎨 Professional UI**: Cyberpunk-styled interface with timeline visualization
 
 ### System Architecture
@@ -633,6 +759,30 @@ Identity: malware.exe
 
 Full architecture documentation lives in [`eye/README.md`](eye/README.md).
 
+### The Ghassan Elsman Protocol (GEP)
+
+Everything Eye does is anchored to the **Ghassan Elsman Protocol (GEP)** — a **vendor-neutral, tool-agnostic standard** that defines *how any AI should be used in digital forensics*, not a Crow-Eye feature. The GEP is **10 principles** a conforming system must uphold so AI-assisted findings stay **truthful, traceable, and court-defensible**, with the human investigator in control:
+
+| # | Principle | In one line |
+|---|---|---|
+| **GEP-1** | Evidence Primacy | Conclusions come only from artifacts actually examined — never guess or assume. |
+| **GEP-2** | Traceability | Every fact links to a specific source record (`database:table:row`, offset, event id, hash). |
+| **GEP-3** | Specificity & Chronology | Exact UTC timestamps, identifiers, and paths, ordered in time. |
+| **GEP-4** | Cross-Corroboration | Rest on multiple sources; report agreement, silence, and conflict. |
+| **GEP-5** | Premise Verification | Treat human claims as hypotheses to prove or refute — never defer. |
+| **GEP-6** | Completeness | Never silently drop or truncate evidence; disclose and segment instead. |
+| **GEP-7** | Integrity & Non-Repudiation | Never modify evidence; record what was seen and done, tamper-evidently. |
+| **GEP-8** | Transparency & Explainability | Reasoning, tools used, and data seen are visible and auditable. |
+| **GEP-9** | Human Authority | The investigator decides; durable actions are attributable and reviewable. |
+| **GEP-10** | Defensibility | Output is objective, precise, legal-grade, and court-ready. |
+
+Crow-Eye's Eye is the **reference implementation** of the GEP. The rules you see Eye follow in-product — its system-prompt behavior, tooling, and write-side governance — are **Operating Rules**: *how the Eye achieves answers*. They are distinct from, and exist to **uphold**, the GEP principles above.
+
+- 📜 **The standard:** [`eye/docs/GEP_standard.md`](eye/docs/GEP_standard.md) — the full vendor-neutral spec (rule · why · compliance · verify, per principle).
+- 🔧 **How the Eye implements it:** [`eye/docs/eye_architecture.md`](eye/docs/eye_architecture.md) §5, "How the Eye implements the GEP."
+
+> **What changed.** Earlier docs labeled assorted Eye behaviors "GEP rules" (e.g. correlation write-side "Rules 9/10/11"). The GEP is now scoped as a standalone **standard of 10 principles**; the Eye's former "rules" are reframed as **Operating Rules that uphold** specific principles (the correlation write-side controls uphold **GEP-9**, **GEP-2**, and **GEP-7** — see below).
+
 ### What Eye Is
 
 Eye turns conversational questions ("show me what executed from `C:\Temp` after 22:00") into real forensic work: it plans an approach, retrieves relevant artifact knowledge, runs SQL and cross-artifact searches against your case databases, and synthesizes a validated answer. Every answer is produced in **two places at once** — a chat reply for you, and a structured block written into a **Living Report Workspace** so the dossier builds itself as the investigation proceeds.
@@ -748,11 +898,11 @@ A **Semantic Mapping** translates a raw technical value into human-readable fore
 
 Both support `category`, `severity` (`info` → `critical`), `confidence`, and `scope` (`global` / `wing` / `pipeline`), and both require `reason` + `related_evidence`. New artifacts get IDs like `eye_mapping_*` or `eye_rule_*`.
 
-**Governance — the GEP rules.** Eye-authored correlation logic is held to the Correlation Engine's Governance / Evidence / Provenance rules:
+**Governance — write-side rules that uphold the GEP.** Eye-authored correlation logic is held to three write-side controls, each of which upholds a [GEP principle](#the-ghassan-elsman-protocol-gep):
 
-- **Rule 9 — Justification:** every create *and* edit must include a `reason`.
-- **Rule 10 — Provenance:** every create must cite at least one `database:table:rowid` evidence ref (unresolvable refs raise a soft warning but don't block creation).
-- **Rule 11 — Authorship boundary:** Eye may edit **only what Eye authored** — built-in and human-authored Wings and mappings stay **read-only**.
+- **Reason-Required** (upholds **GEP-9** Human Authority + **GEP-2** Traceability): every create *and* edit must include a forensic `reason`.
+- **Evidence-Link** (upholds **GEP-2** Traceability): every create must cite at least one `database:table:rowid` evidence ref (unresolvable refs raise a soft warning but don't block creation).
+- **Eye-Stamped / read-only on others** (upholds **GEP-7** Non-Repudiation + **GEP-9** Human Authority): every artifact Eye persists is stamped with its authorship, reason, and edit history, and Eye may edit **only what Eye authored** — built-in and human-authored Wings and mappings stay **read-only**.
 
 This keeps machine-authored correlation rules auditable and reversible: you always know which evidence prompted a rule, and analyst-authored logic can never be silently overwritten.
 
@@ -775,7 +925,7 @@ Eye is engineered for evidence that has to stand up to scrutiny. Compliance isn'
 
 - **🔗 Chain of custody (Evidence Seal).** Every payload Eye sends to an LLM is sealed: the **SHA-256 of the exact bytes** injected into the prompt, the token count, the model and its context limit, and the provenance of each evidence row (`database:table:rowid`, plus computed file offsets for MFT records). Seals are written **append-only and hash-chained** to `<case>/EYE_Logs/eye_payload_seal.jsonl` — each record folds in the previous one's hash, so a single altered or removed record breaks the chain. If an answer is ever challenged, this log proves *mathematically* which bytes the model analyzed.
 
-- **🚫 No silent truncation.** When context runs tight, Eye first [self-heals](#self-healing-context) — summarizing then dropping only non-evidence history — and reallocates token budgets in a strict priority order: **Priority 1 (Immovable): Raw Evidence AND the System Prompt (GEP Protocol Instructions)** › **Priority 2 (Sacrificial): Casual Conversation History** › **Priority 3 (Flexible): RAG Context**. If the immutable evidence core still won't fit, Eye flat-out refuses to proceed rather than quietly drop evidence or forget its protocol rules, asking you to narrow the query or use `analyze_large_dataset` (map-reduce).
+- **🚫 No silent truncation.** When context runs tight, Eye first [self-heals](#self-healing-context) — summarizing then dropping only non-evidence history — and reallocates token budgets in a strict priority order: **Priority 1 (Immovable): Raw Evidence AND the System Prompt (Operating Rules that uphold the GEP)** › **Priority 2 (Sacrificial): Casual Conversation History** › **Priority 3 (Flexible): RAG Context**. If the immutable evidence core still won't fit, Eye flat-out refuses to proceed rather than quietly drop evidence or forget its protocol rules, asking you to narrow the query or use `analyze_large_dataset` (map-reduce).
 
 - **🧾 Truncation audit trail.** Every context decision is logged to `<case>/EYE_Logs/truncation_audit.log` with one of `SUMMARIZED`, `TRUNCATED`, `PRESERVED`, `PINNED`, `UNPINNED`, or `BUDGET_REDUCED`, each with a hash. Detected evidence is auto-pinned (preserved) above a confidence threshold, and you can manually pin critical messages so they're never dropped.
 
@@ -790,7 +940,18 @@ Eye is engineered for evidence that has to stand up to scrutiny. Compliance isn'
 - **Full Eye architecture:** [`eye/README.md`](eye/README.md)
 - **Correlation Engine** (Eye can author Wings & mappings): [see above](#-correlation-engine)
 
+---
 
+## 🚀 Coming Soon Features
+
+### Crow-Eye Core Features
+- 📊 **Advanced GUI Views and Reports** - Enhanced visualization and reporting capabilities
+- 🔄 **Enhanced Search Dialog** - Advanced filtering with natural language support
+- 🤖 **AI Integration** - Query results, summarize findings, and assist non-technical users with natural language questions
+
+### Correlation Engine Features
+- 🎯 **Enhanced Semantic Mapping** - Comprehensive field mapping across all artifact types
+- 📈 **Advanced Correlation Scoring** - Refined confidence scoring algorithms with explainability
 
 ---
 

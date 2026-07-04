@@ -645,8 +645,8 @@ class OnboardingWizard(QDialog):
             self._add_backend_selector(form_layout, ["openai", "anthropic", "gemini"])
             self._add_text_input(form_layout, "api_key", "API Key:", 
                                  placeholder="sk-... or AIza...", password=True)
-            self._add_text_input(form_layout, "model_name", "Model Name:", 
-                                 placeholder="Click 'Detect Models' after entering API key")
+            self._add_text_input(form_layout, "model_name", "Model Name:",
+                                 placeholder="e.g. claude-opus-4-8 — or click Detect / Common Models")
         
         form_group.setLayout(form_layout)
         layout.addWidget(form_group)
@@ -752,6 +752,25 @@ class OnboardingWizard(QDialog):
             """)
             detect_button.clicked.connect(self._detect_models)
             form_layout.addRow("", detect_button)
+
+            # Offline quick-pick of current curated models (e.g. the latest
+            # Claude IDs) — no API key or network round-trip required.
+            common_button = QPushButton("📋 Common Models")
+            common_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #334155;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    font-size: 10pt;
+                    margin-top: 4px;
+                }
+                QPushButton:hover { background-color: #475569; }
+                QPushButton:pressed { background-color: #1E293B; }
+            """)
+            common_button.clicked.connect(self._show_common_models)
+            form_layout.addRow("", common_button)
     
     def _on_input_changed(self, key, value):
         """
@@ -829,9 +848,16 @@ class OnboardingWizard(QDialog):
                 return
 
             
+            # Merge curated IDs the API may not list yet (brand-new models) and
+            # highlight the recommended ones at the top of the dialog.
+            from eye.services.context_window_registry import curated_models, recommended_models
+            merged = list(available_models)
+            for m in curated_models(backend):
+                if m not in merged:
+                    merged.append(m)
             self._show_model_selection_dialog(
-                available_models,
-                recommended=[], # No hardcoded recommendations
+                merged,
+                recommended=recommended_models(backend),
                 title=f"Select {backend.replace('_', ' ').title()} Model"
             )
             
@@ -851,6 +877,27 @@ class OnboardingWizard(QDialog):
                 f"{error_msg}\n\n"
                 "Tip: Ensure you are using the correct key for the selected backend."
             )
+
+    def _show_common_models(self):
+        """Offline quick-pick: show the curated model catalog for the selected
+        backend (no API key/network needed). Falls back to a hint when the
+        backend has no built-in list (e.g. OpenAI/Gemini — use Detect Models)."""
+        backend = self.config.get("backend")
+        from eye.services.context_window_registry import curated_models, recommended_models
+        models = curated_models(backend)
+        if not models:
+            QMessageBox.information(
+                self,
+                "No Built-in List",
+                f"No built-in model list for {(backend or 'this backend').replace('_', ' ').title()}.\n\n"
+                "Use '🔍 Detect Available Models' to fetch the live list from the API."
+            )
+            return
+        self._show_model_selection_dialog(
+            list(models),
+            recommended=recommended_models(backend),
+            title=f"Common {backend.replace('_', ' ').title()} Models",
+        )
 
     # Remove the old specific detection methods as they are now redundant
     def _detect_gemini_models(self): pass

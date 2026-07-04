@@ -28,6 +28,8 @@ export type ReportUpdatedCallback = (reportJson: string) => void;
 export type ErrorOccurredCallback = (errorMessage: string) => void;
 export type StatusUpdatedCallback = (statusMessage: string) => void;
 export type DialogueUpdatedCallback = (entryJson: string) => void;
+export type NarrativeMapUpdatedCallback = (envelopeJson: string) => void;
+export type NarrativeInvestigationCompleteCallback = (narrativeId: string) => void;
 
 /**
  * Bridge initialization state
@@ -44,6 +46,8 @@ const signalListeners = {
   errorOccurred: [] as ErrorOccurredCallback[],
   statusUpdated: [] as StatusUpdatedCallback[],
   dialogueUpdated: [] as DialogueUpdatedCallback[],
+  narrativeMapUpdated: [] as NarrativeMapUpdatedCallback[],
+  narrativeInvestigationComplete: [] as NarrativeInvestigationCompleteCallback[],
 };
 
 /**
@@ -189,6 +193,32 @@ function connectSignalListeners(bridge: any) {
     });
   }
 
+  // Connect to narrative_map_updated signal (Eye or investigator changed the map)
+  if (bridge.narrative_map_updated && bridge.narrative_map_updated.connect) {
+    bridge.narrative_map_updated.connect((envelopeJson: string) => {
+      signalListeners.narrativeMapUpdated.forEach(callback => {
+        try {
+          callback(envelopeJson);
+        } catch (error) {
+          console.error('Error in narrative_map_updated callback:', error);
+        }
+      });
+    });
+  }
+
+  // Connect to narrativeInvestigationComplete signal (a double-click investigate finished)
+  if (bridge.narrativeInvestigationComplete && bridge.narrativeInvestigationComplete.connect) {
+    bridge.narrativeInvestigationComplete.connect((narrativeId: string) => {
+      signalListeners.narrativeInvestigationComplete.forEach(callback => {
+        try {
+          callback(narrativeId);
+        } catch (error) {
+          console.error('Error in narrativeInvestigationComplete callback:', error);
+        }
+      });
+    });
+  }
+
   // Connect to truncation_warning signal
   if (bridge.truncation_warning && bridge.truncation_warning.connect) {
     bridge.truncation_warning.connect((warningJson: string) => {
@@ -264,6 +294,77 @@ export function onDialogueUpdated(callback: DialogueUpdatedCallback): () => void
   return () => {
     signalListeners.dialogueUpdated = signalListeners.dialogueUpdated.filter(cb => cb !== callback);
   };
+}
+
+/**
+ * Register a callback for narrative_map_updated signal. The payload is a JSON
+ * envelope: { kind: 'graph'|'patch', graph?, change?, audit? }.
+ *
+ * @returns Unsubscribe function
+ */
+export function onNarrativeMapUpdated(callback: NarrativeMapUpdatedCallback): () => void {
+  signalListeners.narrativeMapUpdated.push(callback);
+  return () => {
+    signalListeners.narrativeMapUpdated = signalListeners.narrativeMapUpdated.filter(cb => cb !== callback);
+  };
+}
+
+/**
+ * Register a callback fired when a background "investigate this narrative" run
+ * finishes (payload: the narrative id). Used to clear the per-card spinner.
+ *
+ * @returns Unsubscribe function
+ */
+export function onNarrativeInvestigationComplete(callback: NarrativeInvestigationCompleteCallback): () => void {
+  signalListeners.narrativeInvestigationComplete.push(callback);
+  return () => {
+    signalListeners.narrativeInvestigationComplete = signalListeners.narrativeInvestigationComplete.filter(cb => cb !== callback);
+  };
+}
+
+/**
+ * Ask the Eye to investigate a narrative further in the background. New evidence
+ * attaches to that narrative; no chat bubble is posted. Fire-and-forget.
+ */
+export function investigateNarrative(narrativeId: string): void {
+  const b = getBridge() as any;
+  if (!b || typeof b.investigateNarrative !== 'function') return;
+  try {
+    b.investigateNarrative(narrativeId);
+  } catch (error) {
+    console.error('Error invoking investigateNarrative:', error);
+  }
+}
+
+/**
+ * Fetch the active case's Narrative Map (MapGraph + recent audit) as a JSON string.
+ * Returns null when the bridge / backend method is unavailable (standalone mode).
+ */
+export async function getNarrativeMap(): Promise<string | null> {
+  const b = getBridge() as any;
+  if (!b || typeof b.getNarrativeMap !== 'function') return null;
+  try {
+    return await b.getNarrativeMap();
+  } catch (error) {
+    console.error('Error getting narrative map:', error);
+    return null;
+  }
+}
+
+/**
+ * Commit one Narrative Map mutation through the backend (validates GEP + seals).
+ * Returns the parsed result { ok, seal_hash, ... } or null in standalone mode.
+ */
+export async function commitMapEdit(eventJson: string): Promise<any | null> {
+  const b = getBridge() as any;
+  if (!b || typeof b.commitMapEdit !== 'function') return null;
+  try {
+    const res = await b.commitMapEdit(eventJson);
+    return typeof res === 'string' ? JSON.parse(res) : res;
+  } catch (error) {
+    console.error('Error committing map edit:', error);
+    return null;
+  }
 }
 
 /**
@@ -569,6 +670,21 @@ export function openComplianceWindow(): void {
 }
 
 /**
+ * Open the Narrative Map (the Eye's working memory) in its own OS window. Falls
+ * back to the legacy URL-swap if the PyQt bridge is unavailable.
+ */
+export function openNarrativeMapWindow(): void {
+  const b = window.bridge as any;
+  if (b && b.requestNarrativeMapWindow) {
+    b.requestNarrativeMapWindow();
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set('view', 'map');
+  window.location.href = url.toString();
+}
+
+/**
  * Pin a message to prevent it from being summarized.
  * 
  * @param messageId The ID of the message to pin
@@ -642,14 +758,26 @@ export async function exportAuditTrail(outputPath: string): Promise<string> {
  * RULE_BLURB / RULE_GUIDANCE entries in ProtocolCompliancePanel.tsx.
  */
 export interface GepRuleStatus {
-  id: number;
+  id: number | string;
   name: string;
   status: 'PASS' | 'PARTIAL' | 'FAIL' | 'N-A' | string;
   detail: string;
+  /** GEP principle(s) this operating rule / Eye process upholds, e.g. ["GEP-6"]. */
+  gep?: string[];
+}
+/** A live status for one of the 10 GEP protocol principles. */
+export interface GepPrinciple {
+  id: string;           // "GEP-1" .. "GEP-10"
+  name: string;
+  status: 'PASS' | 'PARTIAL' | 'FAIL' | 'N-A' | string;
+  detail: string;
+  upheld_by: string[];  // names of the rules/processes that uphold it
+  /** Why the status is what it is: 'verified' | 'structural' | 'config' | 'per-answer'. */
+  basis?: string;
 }
 export interface GepComplianceResponse {
   success: boolean;
-  data: { rules: GepRuleStatus[] } | null;
+  data: { rules: GepRuleStatus[]; gep_principles?: GepPrinciple[] } | null;
   error: string | null;
 }
 
@@ -680,7 +808,8 @@ export type AuditEntryType =
   | 'report_added'
   | 'report_edited'
   | 'report_deleted'
-  | 'report_other';
+  | 'report_other'
+  | 'narrative_map';
 
 export interface ActivityAuditEntry {
   timestamp: string;
@@ -809,7 +938,7 @@ export async function getDialogueHistory(): Promise<DialogueHistoryResponse> {
  * followed the protocol (direct answer, dual output, timestamps, proactive
  * investigation). Shown in the Compliance window. */
 export interface GepCheck {
-  id: number;
+  id: number | string;   // turn evaluators emit "GEP-1".."GEP-10"
   name: string;
   status: 'PASS' | 'FAIL' | 'PARTIAL' | 'N-A' | string;
   detail: string;
@@ -841,6 +970,68 @@ export async function getGepTurns(): Promise<GepTurnsResponse> {
     return JSON.parse(raw) as GepTurnsResponse;
   } catch (error) {
     console.error('Error fetching GEP turns:', error);
+    return {
+      success: false,
+      data: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Reasoning trace — for a decomposed question, WHY each sub-question was created
+ * and WHY each conclusion follows from which evidence. Shown in the Compliance
+ * window (GEP-8 Transparency, GEP-2 Traceability). */
+export interface ReasoningEvidence {
+  ref: string;
+  note: string;
+}
+
+export interface ReasoningSubQuestion {
+  id: string;
+  q: string;
+  why_created: string;
+  conclusion: string;
+  why_concluded: string;
+  evidence: ReasoningEvidence[];
+  status: string;
+}
+
+export interface ReasoningPremise {
+  claim: string;
+  verdict: string;
+  why: string;
+  evidence: ReasoningEvidence[];
+}
+
+export interface ReasoningTurn {
+  query: string;
+  timestamp: string;
+  strategy: string;
+  sub_questions: ReasoningSubQuestion[];
+  premises: ReasoningPremise[];
+  consolidation: string;
+  knowledge_consulted: string[];
+}
+
+export interface ReasoningTurnsResponse {
+  success: boolean;
+  data: { turns: ReasoningTurn[]; total_turns: number } | null;
+  error: string | null;
+}
+
+export async function getReasoningTurns(): Promise<ReasoningTurnsResponse> {
+  if (!window.bridge || typeof window.bridge.get_reasoning_turns !== 'function') {
+    return {
+      success: false,
+      data: null,
+      error: 'Bridge does not expose get_reasoning_turns (rebuild required).',
+    };
+  }
+  try {
+    const raw = await window.bridge.get_reasoning_turns();
+    return JSON.parse(raw) as ReasoningTurnsResponse;
+  } catch (error) {
+    console.error('Error fetching reasoning turns:', error);
     return {
       success: false,
       data: null,

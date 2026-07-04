@@ -38,14 +38,15 @@ Forensic Value:
 - Supports both live system analysis and offline forensic image examination
 
 Author: Ghassan Elsman
-Version: 0.11.0
+Version: 0.12.0
 License: GPL-3.0
 """
 
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.11.0"
+__version__ = "0.12.0"  # Single source of truth — read by the About menu, the update
+                        # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
 
 # Short list of notable recent additions, shown in About → Correlation Engine.
@@ -1880,10 +1881,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.apply_dynamic_column_sizing(self.Shellbags_table)
             conn.close()
         except Exception as e:
+            # Clean one-liner like every other registry loader — a missing table
+            # on an unparsed case is expected, not a crash.
             print(f"[Shellbags] Error loading data: {str(e)}")
-            import traceback
-            traceback.print_exc()
-    
+
     def load_data_from_database_RunMRU(self):
         """Load RunMRU data from registry database"""
         try:
@@ -4371,15 +4372,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 table_widget.setUpdatesEnabled(was_updates_enabled)
     
     def show_database_error(self, title, db_path, error_msg=None):
-        """Helper function to show database error messages - reduces code duplication"""
+        """Log a database load error. A missing/erroring DB during a load is an
+        expected skip — log it (captured into the loading dialog's log area), but do
+        NOT pop a modal dialog, which would be trapped behind the loading screen."""
         if error_msg:
             message = f"Failed to load {title.lower()}: {error_msg}"
-            print(f"[{title} Error] {message}")
         else:
             message = f"Database file not found: {db_path}"
-            print(f"[{title} Error] {message}")
-        
-        self.show_error_message(title, message, "warning")
+        print(f"[{title} Error] {message} — skipping")
     
     def load_data_with_error_handling(self, db_path, table_name, table_widget, title):
         """Generic helper for loading data with consistent error handling"""
@@ -6037,11 +6037,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
             # Connect signals - populate widgets on main thread using QueuedConnection
             worker.loading_complete.connect(self._populate_prefetch_table, QtCore.Qt.QueuedConnection)
-            worker.loading_error.connect(lambda dtype, err: self.show_error_message(
-                "Prefetch Data",
-                f"Error loading prefetch data: {err}",
-                "critical"
-            ), QtCore.Qt.QueuedConnection)
+            # A missing/erroring DB on an unparsed case is expected — log + skip
+            # quietly like the other loaders. Do NOT pop a modal dialog: it would be
+            # trapped behind the always-on-top loading screen and freeze the load.
+            worker.loading_error.connect(
+                lambda dtype, err: print(f"[Prefetch] {err} — skipping"),
+                QtCore.Qt.QueuedConnection)
             
             # Start worker
             worker.start()
@@ -6056,12 +6057,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             return True
             
         except Exception as e:
-            print(f"[Prefetch Error] Error loading prefetch data: {str(e)}")
-            self.show_error_message(
-                "Prefetch Data",
-                f"Unexpected error loading prefetch data: {str(e)}",
-                "critical"
-            )
+            # Quiet skip — no modal dialog during the load.
+            print(f"[Prefetch Error] Error loading prefetch data: {str(e)} — skipping")
             return False
     
     def _populate_prefetch_table(self, data_type, data):
@@ -6233,11 +6230,11 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
             # Connect signals - populate widgets on main thread using QueuedConnection
             worker.loading_complete.connect(self._populate_registry_tables, QtCore.Qt.QueuedConnection)
-            worker.loading_error.connect(lambda dtype, err: self.show_error_message(
-                "Registry Data",
-                f"Error loading registry data: {err}",
-                "warning"
-            ), QtCore.Qt.QueuedConnection)
+            # Missing/erroring DB on an unparsed case → log + skip quietly (no modal
+            # dialog, which would be trapped behind the loading screen).
+            worker.loading_error.connect(
+                lambda dtype, err: print(f"[Registry] {err} — skipping"),
+                QtCore.Qt.QueuedConnection)
             
             # Start worker
             worker.start()
@@ -6528,7 +6525,20 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.timeline_search_button.setToolTip("Open timeline visualization")
         self.timeline_search_button.clicked.connect(self.open_timeline_dialog)
         self.horizontalLayout_search.addWidget(self.timeline_search_button)
-        
+
+        # User Behavior Analytics (UBA) button — manager/HR-readable activity view
+        self.uba_button = QtWidgets.QPushButton(self.search_frame)
+        self.uba_button.setStyleSheet(CrowEyeStyles.UBA_BUTTON)
+        self.uba_button.setText("User Behavior")
+        icon_uba = QtGui.QIcon()
+        icon_uba.addPixmap(QtGui.QPixmap("GUI Resources/icons/uba.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        self.uba_button.setIcon(icon_uba)
+        self.uba_button.setIconSize(QtCore.QSize(16, 16))
+        self.uba_button.setObjectName("uba_button")
+        self.uba_button.setToolTip("Open User Behavior Analytics (Ctrl+Shift+B)")
+        self.uba_button.clicked.connect(self.open_uba_dialog)
+        self.horizontalLayout_search.addWidget(self.uba_button)
+
         # Eye AI button
         self.eye_assistant_button = QtWidgets.QPushButton(self.search_frame)
         self.eye_assistant_button.setStyleSheet(CrowEyeStyles.EYE_BUTTON)
@@ -8458,6 +8468,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # Create shortcut for EYE AI Assistant (Ctrl+Shift+E)
             self.eye_assistant_shortcut = QShortcut(QKeySequence("Ctrl+Shift+E"), self.main_window)
             self.eye_assistant_shortcut.activated.connect(self._show_eye_assistant)
+
+            # Create shortcut for User Behavior Analytics (Ctrl+Shift+B)
+            self.uba_shortcut = QShortcut(QKeySequence("Ctrl+Shift+B"), self.main_window)
+            self.uba_shortcut.activated.connect(self.open_uba_dialog)
             
             # Initialize eye_tab as None (will be created on first use)
             self.eye_tab = None
@@ -8768,6 +8782,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     detected_partition = self.detect_and_set_windows_partition(offline_mode=False)
                     if detected_partition:
                         print(f"[Open Case] Windows partition detected: {detected_partition}")
+                        # Persist it so the next open reuses it instead of re-detecting.
+                        try:
+                            case_config['windows_partition'] = detected_partition
+                            with open(config_path, 'w') as f:
+                                json.dump(case_config, f, indent=4)
+                        except Exception as e:
+                            print(f"[Open Case] Could not persist windows_partition: {e}")
                     else:
                         print("[Open Case] Windows partition detection failed, defaulting to C:")
                 else:
@@ -8784,22 +8805,29 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             db_files_exist = any(os.path.exists(db_path) for db_path in case_config['databases'].values())
         
             if not db_files_exist:
-                # For new cases, just load data (which will be empty)
-                # User should explicitly run Crow_claw or parsers to collect artifacts
-                print(f"[Open Case] New case detected, loading empty case: {case_name}")
-                self.run_analysis_with_loading("Loading Case Data...", self.load_all_data)
-                
+                # New / empty case: no parsed databases exist yet, so there is
+                # nothing to load. Tables were already cleared at the top of
+                # open_case, so the UI is in a clean empty state — calling
+                # load_all_data here would only flood the console with
+                # "no such table" / "database not found" errors. Just open it
+                # empty; data loads once the user collects/parses artifacts.
+                print(f"[Open Case] New / empty case detected, opening without load: {case_name}")
+
                 # Show informational message about empty case
                 QMessageBox.information(
                     self.main_window,
                     "Empty Case",
                     f"Case '{case_name}' has been opened successfully.\n\n"
                     "This case doesn't have any collected data yet.\n\n"
+                    "Collect from a live machine or import artifacts — they'll load automatically."
                 )
             else:
-                # For existing cases, load the existing data
+                # For existing cases, load the existing data. Call load_all_data
+                # directly — it owns its own loading dialog (with working Cancel +
+                # accurate completion); routing it through run_analysis_with_loading
+                # would stack a second dialog and flash "completed" even on cancel.
                 print(f"[Open Case] Loading existing case data for: {case_name}")
-                self.run_analysis_with_loading("Loading Case Data...", self.load_all_data)
+                self.load_all_data()
         
             # Note: Eye AI Assistant initialization is deferred until manual launch
             # (Ctrl+Shift+E) to prevent UI clutter.
@@ -9126,6 +9154,21 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 except Exception:
                     pass
     
+    @staticmethod
+    def _validate_case_name(name):
+        """Validate a case folder name. Returns (ok, cleaned_name_or_error_message).
+        Rejects empty/whitespace-or-dots-only names and any character illegal in a
+        Windows path so the failure is a clear message, not a deep os.makedirs error."""
+        cleaned = (name or "").strip()
+        if not cleaned or cleaned.strip(". ") == "":
+            return False, "Please enter a non-empty case name."
+        illegal = set('<>:"/\\|?*')
+        bad = sorted({c for c in cleaned if c in illegal})
+        if bad:
+            return False, ("The case name cannot contain any of these characters:\n"
+                           f"  {' '.join(bad)}\n\nUse letters, numbers, spaces, '-' or '_'.")
+        return True, cleaned
+
     def create_directory(self):
         """Create case directory structure and store paths in class variables"""
         self.Creat_case.setEnabled(False)
@@ -9162,11 +9205,31 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             if not ok or not dir_name.strip():
                 self.Creat_case.setEnabled(True)
                 return None
-                
+
+            # Validate the case name (reject empty / illegal filesystem characters)
+            # before it reaches os.makedirs and produces a confusing failure.
+            valid, result = self._validate_case_name(dir_name)
+            if not valid:
+                QMessageBox.warning(self.main_window, "Invalid Case Name", result)
+                self.Creat_case.setEnabled(True)
+                return None
+            dir_name = result
+
             # Store paths as class variables
             artifacts_dir = os.path.join(os.path.join(directory_path, dir_name), "Target_Artifacts")
             case_root = os.path.join(directory_path, dir_name)
-            
+
+            # Refuse to reuse / overwrite an existing non-empty case folder — silently
+            # merging into another case (and clobbering its config) is a data-integrity hazard.
+            if os.path.isdir(case_root) and os.listdir(case_root):
+                QMessageBox.warning(
+                    self.main_window, "Case Already Exists",
+                    f"A non-empty folder already exists at:\n{case_root}\n\n"
+                    "Choose a different name or location."
+                )
+                self.Creat_case.setEnabled(True)
+                return None
+
             # Create live_acquisition directory directly (not using CaseConfigurationManager)
             # CaseConfigurationManager uses relative "cases" directory, but user can create cases anywhere
             live_acquisition_path = os.path.join(case_root, "live_acquisition")
@@ -9233,7 +9296,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     
                 # Update UI with case name
                 self.label.setText(f"Case: {dir_name}")
-                
+
+                # Enable Parse Offline Artifacts now that a case is active — mirrors
+                # open_case so a freshly-created case can import artifacts immediately
+                # (previously it stayed disabled until the case was closed + reopened).
+                if hasattr(self, 'ParseOfflineArtifactsButton'):
+                    self.ParseOfflineArtifactsButton.setEnabled(True)
+
                 # Add case to history
                 if hasattr(self, 'case_history_manager') and self.case_history_manager:
                     try:
@@ -9349,7 +9418,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 show_settings_dialog(
                     self.case_history_manager,
                     current_case_path,
-                    self.main_window
+                    self.main_window,
+                    clone_case_callback=self.import_case_data_into_current
                 )
             else:
                 QMessageBox.warning(
@@ -9463,8 +9533,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     # This is safer and simpler for GUI operations
                     result = function_to_run(*args, **kwargs)
                 
-                # Show completion with success style
-                loading_dialog.show_completion("OPERATION COMPLETED SUCCESSFULLY")
+                # Show completion — but don't claim success if the user cancelled
+                # (threaded workers self-cancel by polling is_cancelled()).
+                if getattr(loading_dialog, "is_cancelled", lambda: False)():
+                    loading_dialog.add_log_message("[Warning] Operation cancelled by user.")
+                else:
+                    loading_dialog.show_completion("OPERATION COMPLETED SUCCESSFULLY")
                 QtWidgets.QApplication.processEvents()
                 
                 def finalize():
@@ -10176,9 +10250,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 
                 print("[Info] Selective GUI refresh completed")
             else:
-                # No specific types, refresh all tabs
+                # No specific types, refresh all tabs. Direct call — load_all_data
+                # owns its own loading dialog; the wrapper would stack a 2nd one.
                 print("[Info] Refreshing all GUI tabs...")
-                self.run_analysis_with_loading("Loading Parsed Data...", self.load_all_data)
+                self.load_all_data()
                 print("[Info] All GUI tabs refreshed successfully")
             
             # CRITICAL: Force GUI to update all tables before returning
@@ -11535,99 +11610,77 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
             dialog.start_log_capture()
             
-            try:
-                # Step 1: Loading LNK data
-                dialog.update_step(0, "LOADING LNK AND JUMP LIST DATA")
-                self.load_data_from_database_lnkAJL()
-                
-                # Step 2: Loading Custom Jump Lists
-                dialog.update_step(1, "LOADING CUSTOM JUMP LISTS")
-                self.load_data_from_database_CJL()
-                
-                # Step 3: Loading Registry data
-                dialog.update_step(2, "LOADING REGISTRY DATA")
-                self.load_allReg_data()
-                
-                # Step 4: Loading File Activity data
-                dialog.update_step(3, "LOADING FILE ACTIVITY DATA")
-                print("[File Activity] Starting to load File Activity Data...")
-                self.load_files_activity()
-                print("[File Activity] Completed loading File Activity Data")
-                
-                # Step 5: Loading Prefetch data
-                dialog.update_step(4, "LOADING PREFETCH DATA")
-                print("[Prefetch] Starting to load Prefetch Data...")
-                self.load_data_from_Prefetch()
-                print("[Prefetch] Completed loading Prefetch Data")
-                
-                # Step 6: Loading Event Logs
-                dialog.update_step(5, "LOADING EVENT LOGS")
-                print("[Logs] Starting to load Event Logs...")
-                self.load_all_logs()
-                print("[Logs] Completed loading Event Logs")
-                
-                # Step 7: Loading ShimCache data
-                dialog.update_step(6, "LOADING SHIMCACHE DATA")
-                print("[ShimCache] Starting to load ShimCache Data...")
-                self.load_shimcache_data()
-                print("[ShimCache] Completed loading ShimCache Data")
-                
-                # Step 8: Loading Registry Database
-                dialog.update_step(7, "LOADING REGISTRY DATABASE")
-                print("[Registry] Starting to load Registry Database...")
-                self.load_registry_data_from_db()
-                print("[Registry] Completed loading Registry Database")
-                
-                # Step 9: Loading Amcache data
-                dialog.update_step(8, "LOADING AMCACHE DATA")
-                print("[Amcache] Starting to load Amcache Data...")
-                self.load_amcache_data()
-                print("[Amcache] Completed loading Amcache Data")
-                
-                # Step 10: Loading RecycleBin data
-                dialog.update_step(9, "LOADING RECYCLEBIN DATA")
-                print("[RecycleBin] Starting to load RecycleBin Data...")
-                self.load_recyclebin_data()
-                print("[RecycleBin] Completed loading RecycleBin Data")
-                
-                # Step 11: Loading SRUM data
-                dialog.update_step(10, "LOADING SRUM DATA")
-                print("[SRUM] Starting to load SRUM Data...")
-                self.load_srum_data()
-                print("[SRUM] Completed loading SRUM Data")
-                
-                # Step 12: Loading MFT data
-                dialog.update_step(11, "LOADING MFT DATA")
-                print("[MFT] Starting to load MFT Data...")
-                self.load_mft_data(dialog.add_log_message)
-                print("[MFT] Completed loading MFT Data")
-                
-                # Step 13: Loading USN data
-                dialog.update_step(12, "LOADING USN JOURNAL DATA")
-                print("[USN] Starting to load USN Journal Data...")
-                self.load_usn_data(dialog.add_log_message)
-                print("[USN] Completed loading USN Journal Data")
-                
-                # Step 14: Loading Correlated data
-                dialog.update_step(13, "LOADING CORRELATED MFT-USN DATA")
-                print("[Correlated] Starting to load Correlated MFT-USN Data...")
-                self.load_correlated_data(dialog.add_log_message)
-                print("[Correlated] Completed loading Correlated MFT-USN Data")
-                
-                # Show completion
-                dialog.show_completion("ALL DATA LOADED SUCCESSFULLY")
-                print("\033[92m\nData has been loaded into the GUI Successfully\033[0m")
-                
-                def finalize_loading():
-                    dialog.close()
-                    # Ensure main window is reactivated and maximized
-                    self.main_window.setWindowState(QtCore.Qt.WindowMaximized)
-                    self.main_window.raise_()
-                    self.main_window.activateWindow()
+            def finalize_loading():
+                dialog.close()
+                # Ensure main window is reactivated and maximized
+                self.main_window.setWindowState(QtCore.Qt.WindowMaximized)
+                self.main_window.raise_()
+                self.main_window.activateWindow()
 
-                # Keep dialog open briefly to show completion
-                QtCore.QTimer.singleShot(2000, finalize_loading)
-                
+            try:
+                # Each artifact loader is run independently so that ONE failing
+                # artifact is logged and SKIPPED instead of aborting the whole
+                # load, and so the Cancel button is honored BETWEEN steps (the
+                # loaders run on the GUI thread; processEvents lets the click
+                # register, and is_cancelled() is polled each iteration).
+                load_steps = [
+                    ("LOADING LNK AND JUMP LIST DATA",  self.load_data_from_database_lnkAJL),
+                    ("LOADING CUSTOM JUMP LISTS",       self.load_data_from_database_CJL),
+                    ("LOADING REGISTRY DATA",           self.load_allReg_data),
+                    ("LOADING FILE ACTIVITY DATA",      self.load_files_activity),
+                    ("LOADING PREFETCH DATA",           self.load_data_from_Prefetch),
+                    ("LOADING EVENT LOGS",              self.load_all_logs),
+                    ("LOADING SHIMCACHE DATA",          self.load_shimcache_data),
+                    ("LOADING REGISTRY DATABASE",       self.load_registry_data_from_db),
+                    ("LOADING AMCACHE DATA",            self.load_amcache_data),
+                    ("LOADING RECYCLEBIN DATA",         self.load_recyclebin_data),
+                    ("LOADING SRUM DATA",               self.load_srum_data),
+                    ("LOADING MFT DATA",                lambda: self.load_mft_data(dialog.add_log_message)),
+                    ("LOADING USN JOURNAL DATA",        lambda: self.load_usn_data(dialog.add_log_message)),
+                    ("LOADING CORRELATED MFT-USN DATA", lambda: self.load_correlated_data(dialog.add_log_message)),
+                ]
+
+                failed = []
+                was_cancelled = False
+                for idx, (label, loader) in enumerate(load_steps):
+                    if dialog.is_cancelled():
+                        was_cancelled = True
+                        dialog.add_log_message("[Warning] Loading cancelled by user — stopping.")
+                        print("[Cancel] Data loading cancelled by user.")
+                        break
+
+                    dialog.update_step(idx, label)
+                    # Give the event loop a tick so a Cancel click registers and
+                    # the UI repaints before the (synchronous) loader runs.
+                    QtWidgets.QApplication.processEvents()
+
+                    print(f"[{label}] Starting...")
+                    try:
+                        loader()
+                        print(f"[{label}] Completed.")
+                    except Exception as e:
+                        failed.append(label)
+                        dialog.add_log_message(f"[Error] {label} failed — skipping: {e}")
+                        print(f"[Error] {label} failed — skipping: {e}")
+                        continue
+
+                # End-state: cancelled / partial (some skipped) / full success.
+                if was_cancelled:
+                    dialog.add_log_message("[Warning] Operation cancelled — partial data loaded.")
+                    QtCore.QTimer.singleShot(1200, finalize_loading)
+                elif failed:
+                    dialog.add_log_message(
+                        f"[Warning] {len(failed)} artifact(s) skipped: {', '.join(failed)}")
+                    dialog.show_completion(
+                        f"DATA LOADED — {len(failed)} artifact(s) skipped")
+                    print(f"\033[93m\nData loaded with {len(failed)} artifact(s) skipped: "
+                          f"{', '.join(failed)}\033[0m")
+                    QtCore.QTimer.singleShot(2000, finalize_loading)
+                else:
+                    dialog.show_completion("ALL DATA LOADED SUCCESSFULLY")
+                    print("\033[92m\nData has been loaded into the GUI Successfully\033[0m")
+                    QtCore.QTimer.singleShot(2000, finalize_loading)
+
             except Exception as e:
                 error_msg = f"Error loading data: {str(e)}"
                 dialog.add_log_message(f"[Error] {error_msg}")
@@ -12155,6 +12208,166 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         except Exception as e:
             print(f"Error showing Correlation Engine About dialog: {str(e)}")
 
+    def setup_case_menu(self):
+        """Create the 'Case' menu with 'Import Case Data from Another Case…'. Same guard
+        on self.menubar as setup_correlation_engine_menu so it's safe at any init point."""
+        try:
+            if not hasattr(self, 'menubar'):
+                return
+            if not hasattr(self, 'menu_case'):
+                self.menu_case = self.menubar.addMenu("Case")
+            self.action_clone_case_data = QtWidgets.QAction(
+                "Import Case Data from Another Case…", self.main_window
+            )
+            self.action_clone_case_data.setToolTip(
+                "Copy another case's parsed + collected artifacts into THIS case and load them "
+                "into the GUI (its Eye memory / correlation results are not imported)."
+            )
+            self.action_clone_case_data.triggered.connect(self.import_case_data_into_current)
+            self.menu_case.addAction(self.action_clone_case_data)
+        except Exception as e:
+            print(f"Error setting up Case menu: {str(e)}")
+
+    def import_case_data_into_current(self):
+        """Import another case's artifact data INTO the currently-open case, then load
+        it into the GUI. Copies the source's Target_Artifacts (parsed) + live_acquisition
+        (raw collected / offline-imported) into the current case, deliberately EXCLUDING
+        EYE_Logs (the Eye's per-case memory) and the Correlation Engine output
+        (correlation_results.db / Feathers). The source case is never modified, and the
+        current case's own Eye memory / correlation are kept."""
+        import shutil
+
+        # 1. Require an open case — this is the DESTINATION.
+        if not getattr(self, 'case_paths', None) or not self.case_paths.get('case_root'):
+            QMessageBox.information(
+                self.main_window, "No Case Open",
+                "Open a case first — this imports another case's data into the current case."
+            )
+            return
+        dst_root = self.case_paths['case_root']
+        dst_artifacts = self.case_paths.get('artifacts_dir') or os.path.join(dst_root, "Target_Artifacts")
+        dst_live = self.case_paths.get('live_acquisition_dir') or os.path.join(dst_root, "live_acquisition")
+
+        # 2. Pick the SOURCE case to import from.
+        _config_dir, default_cases_dir = self.get_app_config_dir()
+        src_root = QFileDialog.getExistingDirectory(
+            self.main_window, "Select the case folder to IMPORT data FROM",
+            default_cases_dir, QFileDialog.ShowDirsOnly
+        )
+        if not src_root:
+            return
+        if os.path.normpath(src_root) == os.path.normpath(dst_root):
+            QMessageBox.warning(self.main_window, "Same Case",
+                                "The source is the current case — pick a different case folder.")
+            return
+
+        # Auto-find the source artifact + collected dirs: prefer Target_Artifacts /
+        # live_acquisition subfolders; fall back to the picked folder itself if it
+        # directly holds artifact .db files.
+        src_artifacts = os.path.join(src_root, "Target_Artifacts")
+        if not os.path.isdir(src_artifacts):
+            try:
+                has_db = any(f.lower().endswith(".db") for f in os.listdir(src_root))
+            except Exception:
+                has_db = False
+            src_artifacts = src_root if has_db else None
+        src_live = os.path.join(src_root, "live_acquisition")
+        if not os.path.isdir(src_live):
+            src_live = None
+
+        if not src_artifacts and not src_live:
+            QMessageBox.warning(
+                self.main_window, "No Case Data Found",
+                "That folder has no Target_Artifacts, live_acquisition, or artifact databases to import."
+            )
+            return
+
+        # 3. Confirm (the destination already exists; same-named DBs are overwritten).
+        resp = QMessageBox.question(
+            self.main_window, "Import Case Data?",
+            f"Import artifact data from:\n{src_root}\n\ninto the current case "
+            f"'{os.path.basename(dst_root.rstrip(os.sep))}'?\n\n"
+            "Same-named artifacts will be overwritten. The source case is not modified, and the Eye "
+            "memory / correlation results are not imported.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+        )
+        if resp != QMessageBox.Yes:
+            return
+
+        # Files/folders to skip: Correlation Engine output + any stray Eye state.
+        # (Parsed mft_usn_correlated_analysis.db is kept — it is parsed data.)
+        ENGINE_OUTPUTS = {"correlation_results.db", "correlation.db", "eye_logs"}
+        def _ignore(_dir, names):
+            skip = set()
+            for n in names:
+                low = n.lower()
+                if low in ENGINE_OUTPUTS:
+                    skip.add(n)
+                elif low.endswith(".feather.db") or low.endswith(".feather") or low in ("feathers", "feather"):
+                    skip.add(n)
+            return skip
+
+        # 4. Copy through the cancellable loading dialog. NEVER delete the destination
+        #    (it is the user's live case) — a cancel just stops.
+        from ui.Loading_dialog import LoadingDialog
+        active_window = QtWidgets.QApplication.activeWindow()
+        dialog = LoadingDialog(title="IMPORTING CASE DATA", parent=active_window or self.main_window)
+        dialog.set_steps(["Copying parsed artifacts", "Copying collected artifacts"])
+        dialog.show()
+        dialog.start_log_capture()
+
+        copied_any = False
+        cancelled = False
+        try:
+            os.makedirs(dst_artifacts, exist_ok=True)
+            os.makedirs(dst_live, exist_ok=True)
+
+            if not dialog.is_cancelled() and src_artifacts and os.path.isdir(src_artifacts):
+                dialog.update_step(0, "COPYING PARSED ARTIFACTS")
+                QtWidgets.QApplication.processEvents()
+                shutil.copytree(src_artifacts, dst_artifacts, ignore=_ignore, dirs_exist_ok=True)
+                copied_any = True
+                dialog.add_log_message("[Success] Parsed artifacts imported (correlation results excluded).")
+
+            if not dialog.is_cancelled() and src_live and os.path.isdir(src_live):
+                dialog.update_step(1, "COPYING COLLECTED ARTIFACTS")
+                QtWidgets.QApplication.processEvents()
+                shutil.copytree(src_live, dst_live, ignore=_ignore, dirs_exist_ok=True)
+                copied_any = True
+                dialog.add_log_message("[Success] Collected / imported artifacts copied.")
+
+            if dialog.is_cancelled():
+                cancelled = True
+                dialog.add_log_message("[Warning] Import cancelled — partial data may have been copied.")
+        except Exception as e:
+            print(f"[Import Case] Failed: {e}")
+            dialog.add_log_message(f"[Error] Import failed: {e}")
+            QMessageBox.critical(self.main_window, "Import Failed", f"Could not import case data:\n{e}")
+        finally:
+            dialog.stop_log_capture()
+            dialog.close()  # close immediately so load_all_data's own dialog is clean
+
+        if cancelled:
+            QMessageBox.information(self.main_window, "Import Cancelled",
+                                    "The import was cancelled. The current case was not harmed.")
+            return
+        if not copied_any:
+            QMessageBox.warning(self.main_window, "Nothing Imported",
+                                "No artifact data was found to import from the selected folder.")
+            return
+
+        # 5. Auto-load the imported data into the GUI tables of the current case.
+        try:
+            self.load_all_data()
+        except Exception as e:
+            print(f"[Import Case] Loaded with errors: {e}")
+
+        QMessageBox.information(
+            self.main_window, "Import Complete",
+            f"Imported case data from '{os.path.basename(src_root.rstrip(os.sep))}' into the current "
+            "case and loaded it into the GUI."
+        )
+
     def run_correlation_analysis(self):
         """Run correlation analysis on current case artifacts"""
         try:
@@ -12349,7 +12562,44 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 f"Failed to open timeline: {str(e)}"
             )
 
-                    
+    def open_uba_dialog(self):
+        """Open the User Behavior Analytics (UBA) window.
+
+        Mirrors open_timeline_dialog: a case must be loaded, but parsed data
+        is NOT required to open — the UBA window shows its own empty-state
+        telling the user to parse the computer's artifacts first.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QMessageBox.warning(
+                    self.main_window,
+                    "No Case Loaded",
+                    "Please load a case before opening User Behavior Analytics."
+                )
+                return
+
+            if hasattr(self, 'case_paths') and 'case_root' in self.case_paths:
+                self.main_window.case_dir = self.case_paths['case_root']
+
+            from uba.uba_dialog import UBADialog
+
+            if not hasattr(self.main_window, 'ui'):
+                self.main_window.ui = self
+
+            uba_dialog = UBADialog(self.main_window)
+            uba_dialog.exec_()
+
+        except Exception as e:
+            print(f"[UBA Error] Failed to open User Behavior Analytics: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window,
+                "User Behavior Analytics Error",
+                f"Failed to open User Behavior Analytics: {str(e)}"
+            )
+
+
     def setup_search_ui(self):
         """Set up the search UI with filtering options"""
         # Create a layout for the search filter options
@@ -12935,6 +13185,15 @@ if __name__ == "__main__":
         print("[Correlation] Analysis menu entry installed")
     except Exception as e:
         print(f"[Correlation] Menu setup failed: {e}")
+
+    # Add the 'Case' menu with 'Import Case Data from Another Case…' (copies another
+    # case's parsed + collected artifacts into THIS case and loads them to the GUI,
+    # without its Eye state / correlation results). Safe no-op if menubar isn't ready.
+    try:
+        ui.setup_case_menu()
+        print("[Case] Case menu entry installed")
+    except Exception as e:
+        print(f"[Case] Menu setup failed: {e}")
     
     # Set window state to maximized and show
     Crow_Eye.showMaximized()
@@ -13002,5 +13261,5 @@ if __name__ == "__main__":
         # No case history - show existing case creation dialog
         print("[Info] No case history found. Showing case dialog.")
         ui.show_case_dialog()
-    
+
     sys.exit(app.exec_())

@@ -6,6 +6,8 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useSortable } from '@dnd-kit/sortable';
 import { getBridge } from './bridge';
 import {
@@ -122,7 +124,9 @@ const TextBlockContent: React.FC<{ block: TextBlock, onUpdate?: any }> = ({ bloc
   return (
     <div className="text-block-view" onClick={() => setIsEditing(true)}>
       <h3 className="text-block-title" style={{ color: getCategoryColor(block.category, block.title) }}>{block.title}</h3>
-      <div className="text-block-content">{block.markdown_content.split('\n').map((l, i) => <p key={i}>{l}</p>)}</div>
+      <div className="text-block-content markdown-body">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.markdown_content}</ReactMarkdown>
+      </div>
       <div className="edit-hint">Click to edit</div>
     </div>
   );
@@ -223,26 +227,40 @@ const TableBlockContent: React.FC<{ block: TableBlock }> = ({ block }) => {
 
 const ChartBlockContent: React.FC<{ block: ChartBlock }> = ({ block }) => {
   const chartRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  // Force reflow after initial render to fix alignment issues
+  // Charts use { responsive: true, maintainAspectRatio: false }, so the canvas
+  // is sized from its container. When the report pane mounts with ~0 width (or
+  // is hidden behind a tab/split), Chart.js measures a tiny canvas. We must call
+  // .resize() — NOT .update() — to recompute the canvas from the container once
+  // it has real dimensions; .update() only redraws data and leaves the stale
+  // (tiny) pixel size, which is why charts previously only grew after the user
+  // dragged the panel.
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const resize = () => {
       if (chartRef.current) {
-        chartRef.current.update();
-      }
-    }, 300);
-
-    // Also listen for global reflow event from bridge
-    const handleReflow = () => {
-      if (chartRef.current) {
+        chartRef.current.resize();
         chartRef.current.update();
       }
     };
 
-    window.addEventListener('reflow-forensic-charts', handleReflow);
+    // Resize once after first layout settles.
+    const timer = setTimeout(resize, 200);
+
+    // Resize whenever the container's box changes (pane gains width / becomes
+    // visible / user drags the splitter) — self-corrects with no user action.
+    let observer: ResizeObserver | null = null;
+    if (containerRef.current && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => resize());
+      observer.observe(containerRef.current);
+    }
+
+    // Global reflow signal from the Python bridge (report updates / window show).
+    window.addEventListener('reflow-forensic-charts', resize);
     return () => {
       clearTimeout(timer);
-      window.removeEventListener('reflow-forensic-charts', handleReflow);
+      if (observer) observer.disconnect();
+      window.removeEventListener('reflow-forensic-charts', resize);
     };
   }, []);
 
@@ -251,7 +269,7 @@ const ChartBlockContent: React.FC<{ block: ChartBlock }> = ({ block }) => {
     const config = block.metadata.chart_config;
     return (
       <div className="chart-block-view">
-        <div className="chart-container">
+        <div className="chart-container" ref={containerRef}>
           {config.type === 'bar' && <Bar ref={chartRef} data={config.data} options={config.options} />}
           {config.type === 'line' && <Line ref={chartRef} data={config.data} options={config.options} />}
           {config.type === 'pie' && <Pie ref={chartRef} data={config.data} options={config.options} />}
@@ -316,7 +334,7 @@ const ChartBlockContent: React.FC<{ block: ChartBlock }> = ({ block }) => {
 
   return (
     <div className="chart-block-view">
-      <div className="chart-container">
+      <div className="chart-container" ref={containerRef}>
         {block.chart_type === 'bar' && <Bar ref={chartRef} data={data} options={options} />}
         {block.chart_type === 'line' && <Line ref={chartRef} data={data} options={options} />}
         {block.chart_type === 'pie' && <Pie ref={chartRef} data={data} options={options} />}
@@ -441,8 +459,8 @@ const ChatBlockContent: React.FC<{ block: ChatBlock }> = ({ block }) => (
     {block.messages.map((msg, idx) => (
       <div key={idx} className={`chat-bubble-container ${msg.role}`}>
         <div className="chat-bubble-role">{msg.role.toUpperCase()}</div>
-        <div className="chat-bubble-content">
-          {msg.content.split('\n').map((line, i) => <React.Fragment key={i}>{line}<br/></React.Fragment>)}
+        <div className="chat-bubble-content markdown-body">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
         </div>
       </div>
     ))}

@@ -6,7 +6,7 @@ enabling investigators to query databases conversationally, create semantic rule
 and receive forensic guidance while maintaining strict security controls.
 """
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 __author__ = "Crow-eye Forensics"
 
 # Package initialization

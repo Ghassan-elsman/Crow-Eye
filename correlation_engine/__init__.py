@@ -2,9 +2,10 @@
 Correlation Engine - Forensic Analysis System
 Main package for the correlation engine system.
 
-Version 0.11.0 — Reliability & Extensibility Release
-====================================================
-Highlights:
+Version 0.12.0
+==============
+Engine highlights (introduced in the 0.11.0 Reliability & Extensibility
+Release, still current):
 - Single source of truth for field synonyms (config/standard_fields/*.json)
 - Per-table feather schemas (correlation_engine/config/feather_schemas.json)
 - Unified identity normalization across engine, GUI viewers, and semantic phase
@@ -16,7 +17,7 @@ Highlights:
 - 78-test regression suite locking in the contract
 """
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 __author__ = "Crow-Eye Forensics"
 
 # Import optimization module

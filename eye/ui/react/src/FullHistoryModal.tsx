@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import './FullHistoryModal.css';
 
 interface MessageMetadata {
@@ -142,7 +143,7 @@ const FullHistoryModal: React.FC<FullHistoryModalProps> = ({ messages, onClose }
                     </div>
 
                     <div className="history-message-content">
-                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
                     </div>
 
                     {evidencePatterns.length > 0 && (

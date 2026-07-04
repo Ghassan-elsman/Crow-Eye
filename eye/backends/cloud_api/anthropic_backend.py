@@ -46,10 +46,12 @@ class AnthropicBackend(LLMBackend):
         if self._client is None:
             import anthropic
             api_key = self.credential_manager.get_credential("anthropic_api_key")
+            if not api_key:
+                raise ValueError("Anthropic API key not found. Please configure it in the Setup Wizard.")
             self._client = anthropic.Anthropic(api_key=api_key)
         return self._client
 
-    def generate(self, system_prompt, user_message, tools=None, history=None):
+    def generate(self, system_prompt, user_message, tools=None, history=None, gen_params=None):
         """Standardizes Claude's distinct message/system prompt structure."""
         try:
             # Build and sanitize the conversation history
@@ -77,15 +79,23 @@ class AnthropicBackend(LLMBackend):
                 else:
                     final_history.append(msg)
             
+            gp = gen_params or {}
             api_params = {
                 "model": self.model_name,
-                "max_tokens": 4096,
+                # Output budget for the model's REPLY (not the context window).
+                # 4096 silently clipped long forensic syntheses; 8192 is a safer
+                # default and a length-cap is now surfaced (see stop_reason below).
+                "max_tokens": gp.get("max_output_tokens", 8192),
                 "system": final_system,
                 "messages": final_history,
                 # Explicit request timeout so a hung provider cannot freeze the
                 # worker thread (parity with Ollama/LM Studio).
                 "timeout": 120,
             }
+            if gp.get("temperature") is not None:
+                api_params["temperature"] = gp["temperature"]
+            if gp.get("top_p") is not None:
+                api_params["top_p"] = gp["top_p"]
             if tools:
                 # Claude uses 'input_schema' instead of 'parameters' - we're translating
                 # from Eye's standard format to what Claude understands
@@ -114,9 +124,13 @@ class AnthropicBackend(LLMBackend):
                 elif block.type == "tool_use":
                     # Convert Claude's tool_use format to our standard format
                     tool_calls.append({
-                        "id": block.id, "type": "function", 
+                        "id": block.id, "type": "function",
                         "function": {"name": block.name, "arguments": json.dumps(block.input)}
                     })
+            # Never let an output-length cut be silent: mark it so the pipeline /
+            # investigator can see the reply was truncated by the model's budget.
+            if getattr(resp, "stop_reason", None) == "max_tokens" and content:
+                content += "\n\n[⚠ Output truncated at the model's max output tokens — ask for the remainder or narrow the request.]"
             return {"content": content, "tool_calls": tool_calls}
         except Exception as e:
             self.logger.error(f"Anthropic API failure: {e}")

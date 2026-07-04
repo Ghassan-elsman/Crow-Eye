@@ -42,11 +42,19 @@ class ForensicDatabaseService:
         logger: Logger instance for audit trail
     """
     
-    # Forbidden SQL keywords that would modify data or perform unsafe operations
+    # Forbidden SQL keywords that would modify data or perform unsafe operations.
+    # NOTE: 'REPLACE' is deliberately NOT here — it is a common read-only scalar
+    # function (e.g. SELECT REPLACE(path,'\','/')). Its dangerous statement form
+    # (REPLACE INTO) is blocked separately below, and the connection is opened
+    # read-only (mode=ro + PRAGMA query_only) which prevents writes regardless.
     FORBIDDEN_KEYWORDS = [
         'DROP', 'UPDATE', 'DELETE', 'INSERT', 'ALTER', 'CREATE',
-        'TRUNCATE', 'REPLACE', 'ATTACH', 'DETACH', 'GRANT', 'REVOKE',
+        'TRUNCATE', 'ATTACH', 'DETACH', 'GRANT', 'REVOKE',
         'LOAD_EXTENSION', 'EXECUTE', 'VACUUM', 'REINDEX'
+    ]
+    # Statement-position write patterns that aren't single keywords.
+    FORBIDDEN_PATTERNS = [
+        r'\bREPLACE\s+INTO\b',   # REPLACE INTO ... (write); REPLACE(...) is allowed
     ]
     
     def __init__(self, case_directory: Union[str, Path]):
@@ -171,6 +179,23 @@ class ForensicDatabaseService:
         finally:
             conn.close()
 
+    def _all_database_tables(self) -> Dict[str, List[str]]:
+        """Map of ``{database_name: [tables]}`` for EVERY existing case database
+        (known artifacts + correlation feathers), so a missing table/column can be
+        searched across all databases — not just the one the model named."""
+        out: Dict[str, List[str]] = {}
+        try:
+            for d in self.discover_databases():
+                name = d.get("name")
+                if not name or not d.get("exists", True):
+                    continue
+                tables = d.get("tables") or self._get_tables_safe(name)
+                if tables:
+                    out[name] = tables
+        except Exception as e:
+            self.logger.debug(f"cross-database table map skipped: {e}")
+        return out
+
     def execute_query(
         self,
         database_name: str,
@@ -219,6 +244,16 @@ class ForensicDatabaseService:
         try:
             conn = self._open_ro(database_name)
         except Exception as e:
+            # ---- Database-name self-heal: the model named a database that doesn't
+            # resolve (wrong/misspelled, e.g. "srum.db" vs "srum_data.db"). Auto-retry
+            # against an unambiguous close match, or hand back the real database list so
+            # the model corrects itself — mirroring the table/column self-heal. ----
+            if not _is_heal_retry:
+                healed = self._self_heal_missing_database(
+                    database_name, sql_query, params, timeout
+                )
+                if healed is not None:
+                    return healed
             return {
                 "success": False,
                 "data": [],
@@ -261,7 +296,8 @@ class ForensicDatabaseService:
                     return healed
             elif "no such column" in low:
                 self.logger.warning(f"Schema mismatch on {database_name}: {error_msg}")
-                return self._self_heal_missing_column(database_name, sql_query, error_msg)
+                return self._self_heal_missing_column(
+                    database_name, sql_query, error_msg, params, timeout, _is_heal_retry)
 
             self.logger.error(f"Error executing query on {database_name}: {e}")
             return {
@@ -304,6 +340,77 @@ class ForensicDatabaseService:
                 out.append(n)
         return out
 
+    @staticmethod
+    def _norm_db_name(s: str) -> str:
+        """Normalize a database name for fuzzy matching: lowercase, drop a trailing
+        ``.db``/``.sqlite`` extension (so 'srum.db' compares to 'srum_data.db')."""
+        s = (s or "").strip().lower()
+        for ext in (".sqlite3", ".sqlite", ".db3", ".db"):
+            if s.endswith(ext):
+                return s[: -len(ext)]
+        return s
+
+    def _available_db_names(self) -> List[str]:
+        """Names of the case databases that actually exist on disk."""
+        try:
+            return [d.get("name") for d in self.discover_databases()
+                    if d.get("name") and d.get("exists")]
+        except Exception:
+            return []
+
+    def _self_heal_missing_database(
+        self, database_name, sql_query, params, timeout
+    ) -> Optional[Dict[str, Any]]:
+        """Auto-recover from a database that does not resolve. Returns a result dict
+        (auto-retried rows against the closest DB, or an enriched error with the real
+        database list), or None to fall through to the bare connect error."""
+        available = self._available_db_names()
+        bad = database_name or ""
+        nbad = self._norm_db_name(bad)
+
+        # Guarded transparent auto-retry: exactly one strong match. A DB filename
+        # often differs from what the model guesses by an extension or a '_data'
+        # suffix, so match on the normalized base via prefix/containment OR a high
+        # difflib ratio — never silently swap when it's ambiguous.
+        if nbad and available:
+            strong = []
+            for name in available:
+                nn = self._norm_db_name(name)
+                if (nn == nbad or nn.startswith(nbad) or nbad.startswith(nn)
+                        or difflib.SequenceMatcher(None, nbad, nn).ratio() >= 0.8):
+                    strong.append(name)
+            if len(strong) == 1 and strong[0] != bad:
+                used = strong[0]
+                self.logger.info(
+                    f"Self-heal: database '{bad}' not found; retrying against '{used}'."
+                )
+                retry = self.execute_query(used, sql_query, params, timeout, _is_heal_retry=True)
+                if retry.get("success"):
+                    retry["self_healed"] = True
+                    retry["note"] = (
+                        f"Database '{bad}' was not found; automatically used the closest "
+                        f"match '{used}'."
+                    )
+                    return retry
+
+        suggestions = difflib.get_close_matches(bad, available, n=3, cutoff=0.3) if bad else []
+        self.logger.warning(
+            f"Database '{bad}' not found; self-heal among {len(available)} databases."
+        )
+        return {
+            "success": False,
+            "data": [],
+            "row_count": 0,
+            "error": f"Database not found: {bad}",
+            "available_databases": available,
+            "did_you_mean": suggestions,
+            "hint": (
+                f"Database '{bad}' does not exist in this case. Re-issue query_database using one "
+                f"of available_databases (see did_you_mean), or call list_case_files to browse the "
+                f"artifacts. Do not repeat the same failing query."
+            ),
+        }
+
     def _self_heal_missing_table(
         self, database_name, sql_query, error_msg, params, timeout
     ) -> Optional[Dict[str, Any]]:
@@ -344,6 +451,43 @@ class ForensicDatabaseService:
                         )
                         return retry
 
+        # ---- Cross-database search: the table may live in a DIFFERENT database.
+        # Walk every database and collect where the table actually is, then auto-retry
+        # against the right one when unambiguous. ----
+        found_in: Dict[str, List[str]] = {}
+        exact_hits, fuzzy_hits = [], []  # (db, table) / (db, table, ratio)
+        if bad:
+            for db, tbls in self._all_database_tables().items():
+                if db == database_name:
+                    continue
+                for t in tbls:
+                    if t.lower() == bad.lower():
+                        exact_hits.append((db, t))
+                        found_in.setdefault(db, []).append(t)
+                    elif difflib.SequenceMatcher(None, bad.lower(), t.lower()).ratio() >= 0.85:
+                        fuzzy_hits.append((db, t))
+                        found_in.setdefault(db, []).append(t)
+
+            target = None
+            if len(exact_hits) == 1:
+                target = exact_hits[0]
+            elif not exact_hits and len({(db, t) for db, t in fuzzy_hits}) == 1:
+                target = fuzzy_hits[0]
+            if target:
+                tdb, ttbl = target
+                healed_sql = (sql_query if ttbl.lower() == bad.lower()
+                              else re.sub(rf'\b{re.escape(bad)}\b', f'"{ttbl}"', sql_query))
+                self.logger.info(
+                    f"Self-heal: table '{bad}' not in {database_name}; retrying in database '{tdb}'.")
+                retry = self.execute_query(tdb, healed_sql, params, timeout, _is_heal_retry=True)
+                if retry.get("success"):
+                    retry["self_healed"] = True
+                    retry["note"] = (
+                        f"Table '{bad}' was not in '{database_name}'; found it in database '{tdb}'"
+                        + (f" as '{ttbl}'" if ttbl.lower() != bad.lower() else "")
+                        + " and queried there.")
+                    return retry
+
         suggestions = difflib.get_close_matches(bad, available, n=3, cutoff=0.5) if bad else []
         # Columns of the top suggestion(s) so the model can rewrite in one step.
         suggested_schema = {}
@@ -351,6 +495,8 @@ class ForensicDatabaseService:
             cols = self._get_columns_safe(database_name, t)
             if cols:
                 suggested_schema[t] = cols
+        _where = (f" It WAS found in: {found_in}. Re-issue with that database_name."
+                  if found_in else "")
         return {
             "success": False,
             "data": [],
@@ -359,36 +505,82 @@ class ForensicDatabaseService:
             "available_tables": available,
             "did_you_mean": suggestions,
             "suggested_schema": suggested_schema,
+            "found_in": found_in,
             "hint": (
-                f"Table '{bad}' does not exist in {database_name}. Re-issue query_database "
-                f"using one of available_tables (see did_you_mean / suggested_schema). "
-                f"Do not repeat the same failing query."
+                f"Table '{bad}' does not exist in {database_name}.{_where} "
+                f"Otherwise re-issue query_database using one of available_tables "
+                f"(see did_you_mean / suggested_schema). Do not repeat the same failing query."
             ),
         }
 
-    def _self_heal_missing_column(self, database_name, sql_query, error_msg) -> Dict[str, Any]:
-        """Enrich a 'no such column' error with the referenced tables' columns."""
+    def _self_heal_missing_column(self, database_name, sql_query, error_msg,
+                                  params=(), timeout=30.0, _is_heal_retry=False) -> Dict[str, Any]:
+        """Recover from a 'no such column' error. Discovers the real columns of the
+        referenced table(s) in the named DB AND walks every OTHER database that holds
+        the same table to find where the column actually lives — auto-retrying against
+        that database when unambiguous."""
         bad = self._identifier_after(error_msg, "no such column:")
-        tables = self._tables_in_query(sql_query)
-        if not tables:
-            tables = self._get_tables_safe(database_name)
-        schema, all_cols = {}, []
-        for t in tables:
-            cols = self._get_columns_safe(database_name, t)
-            if cols:
-                schema[t] = cols
-                all_cols.extend(cols)
+        referenced = self._tables_in_query(sql_query)
+        if not referenced:
+            referenced = self._get_tables_safe(database_name)
+
+        schema, all_cols = {}, []          # current-DB referenced-table columns
+        column_found_in: Dict[str, Dict[str, List[str]]] = {}  # {db: {table: [cols]}}
+        auto = None                        # (db) where a referenced table has the exact column
+        db_tables = self._all_database_tables()
+        for t in referenced:
+            for db, tbls in db_tables.items():
+                match = next((x for x in tbls if x.lower() == t.lower()), None)
+                if not match:
+                    continue
+                cols = self._get_columns_safe(db, match)
+                if not cols:
+                    continue
+                if db == database_name:
+                    schema[match] = cols
+                    all_cols.extend(cols)
+                exact = [c for c in cols if c.lower() == bad.lower()]
+                close = difflib.get_close_matches(bad, cols, n=2, cutoff=0.6)
+                if exact or close:
+                    column_found_in.setdefault(db, {})[match] = (
+                        exact + [c for c in close if c not in exact]) or cols[:8]
+                if exact and db != database_name and auto is None:
+                    auto = db
+
+        # Auto-retry: the model used the right table but the WRONG database — the
+        # column exists in that same table in another database. Switch and retry.
+        if auto and not _is_heal_retry:
+            self.logger.info(
+                f"Self-heal: column '{bad}' not in {database_name}; retrying in database '{auto}'.")
+            retry = self.execute_query(auto, sql_query, params, timeout, _is_heal_retry=True)
+            if retry.get("success"):
+                retry["self_healed"] = True
+                retry["note"] = (
+                    f"Column '{bad}' was not in '{database_name}'; the referenced table with that "
+                    f"column is in database '{auto}' — queried there.")
+                return retry
+
+        if not all_cols:  # fallback: at least the named DB's referenced tables' columns
+            for t in referenced:
+                cols = self._get_columns_safe(database_name, t)
+                if cols:
+                    schema[t] = cols
+                    all_cols.extend(cols)
         suggestions = difflib.get_close_matches(bad, all_cols, n=3, cutoff=0.5) if bad else []
+        _where = (f" The column was discovered in: {column_found_in}."
+                  if column_found_in else "")
         return {
             "success": False,
             "data": [],
             "row_count": 0,
             "error": f"Database Error: {error_msg}",
             "schema": schema,
+            "column_found_in": column_found_in,
             "did_you_mean": suggestions,
             "hint": (
-                f"Column '{bad}' does not exist. Use a real column from schema "
-                f"(see did_you_mean) and retry. Do not repeat the same failing query."
+                f"Column '{bad}' does not exist in {database_name}.{_where} Use a real column from "
+                f"schema (see did_you_mean / column_found_in) and the right database_name, then "
+                f"retry. Do not repeat the same failing query."
             ),
         }
     
@@ -553,7 +745,16 @@ class ForensicDatabaseService:
                     f"Forbidden keyword detected: {keyword} in query: {sql[:100]}..."
                 )
                 return False
-        
+
+        # Check statement-position write patterns (e.g. REPLACE INTO) that must
+        # NOT be tripped by the same-named read-only scalar function.
+        for pat in self.FORBIDDEN_PATTERNS:
+            if re.search(pat, normalized_sql):
+                self.logger.warning(
+                    f"Forbidden write pattern detected ({pat}) in query: {sql[:100]}..."
+                )
+                return False
+
         return True
     
     def discover_databases(self) -> List[Dict[str, Any]]:
@@ -572,7 +773,7 @@ class ForensicDatabaseService:
                 - error: Error message (if not accessible)
         """
         db_infos = self.db_manager.discover_databases()
-        
+
         # Convert DatabaseInfo objects to dictionaries
         result = []
         for db_info in db_infos:
@@ -586,8 +787,66 @@ class ForensicDatabaseService:
                 "tables": db_info.tables if db_info.tables else [],
                 "error": db_info.error
             })
-        
+
+        # Also surface the Correlation Engine's normalized "feather" databases (which
+        # may be imported from external tools) so the Eye can query them too. They are
+        # arbitrary SQLite files NOT in the known-artifact set, so the manager's
+        # discovery skips them — we add them by walking the feathers directory.
+        known = {r.get("name") for r in result}
+        for feather in self._discover_feather_databases():
+            if feather.get("name") not in known:
+                result.append(feather)
+                known.add(feather.get("name"))
+
         return result
+
+    def _tables_at_path(self, db_path: Path) -> List[str]:
+        """List user tables of a SQLite file by absolute path (read-only)."""
+        try:
+            conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=10.0)
+        except Exception:
+            return []
+        try:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+            return [r[0] for r in cur.fetchall()]
+        except Exception:
+            return []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _discover_feather_databases(self) -> List[Dict[str, Any]]:
+        """Walk ``<case>/Correlation/feathers/*.db`` (normalized correlation-engine
+        databases, possibly imported from external tools) and return DatabaseInfo-shaped
+        dicts with their real tables, so they appear in the schema manifest and are
+        queryable/resolvable. Returns [] when the directory is absent."""
+        out: List[Dict[str, Any]] = []
+        try:
+            feather_dir = self.case_directory / "Correlation" / "feathers"
+            if not feather_dir.is_dir():
+                return out
+            for db in sorted(feather_dir.glob("*.db")):
+                if not db.is_file():
+                    continue
+                tables = self._tables_at_path(db)
+                out.append({
+                    "name": db.name,
+                    "path": str(db),
+                    "category": "Correlation Feather",
+                    "display_name": f"Feather: {db.stem}",
+                    "exists": True,
+                    "accessible": bool(tables),
+                    "tables": tables,
+                    "error": None if tables else "no readable tables",
+                })
+        except Exception as e:
+            self.logger.debug(f"feather database discovery skipped: {e}")
+        return out
     
     def close_all(self):
         """Close all open database connections."""
