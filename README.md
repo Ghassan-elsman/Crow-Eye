@@ -10,9 +10,12 @@ Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 ![Version](https://img.shields.io/badge/version-0.12.4-brightgreen.svg)
 ![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.7.0-8a2be2.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational.svg)
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
 [![Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?logo=discord)](https://discord.gg/2vag2Udf)
+[![GitHub stars](https://img.shields.io/github/stars/Ghassan-elsman/Crow-Eye)](https://github.com/Ghassan-elsman/Crow-Eye/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/Ghassan-elsman/Crow-Eye)](https://github.com/Ghassan-elsman/Crow-Eye/issues)
+[![Last commit](https://img.shields.io/github/last-commit/Ghassan-elsman/Crow-Eye)](https://github.com/Ghassan-elsman/Crow-Eye/commits)
 
 ## Table of Contents
 - [Overview](#overview)
@@ -43,7 +46,7 @@ Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually 
 That reconstruction-first design is exactly what it takes to **hunt APT and nation-state threats**: sophisticated adversaries live inside legitimate tools (`powershell.exe`, PsExec, `certutil`) and in the *sequence* of actions — invisible to tools that clear anything that looks normal. Because Crow-Eye never clears anything and reasons over execution **artifacts** (which survive log tampering and anti-forensics), the attack can't hide. The same engine stays approachable for everyday DFIR work and for non-experts who simply want to know what happened on a computer.
 
 - 🕰️ **Reconstruct, don't just detect** — rebuild the timeline of what actually occurred.
-- 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux/macOS** (live parsers are Windows-only).
+- 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux** (live parsers are Windows-only).
 - 🔒 **Private by design** — **0 ms of data sent off-device**; the Eye AI assistant can run fully **air-gapped**.
 - 🧾 **Court-grade** — evidence is cryptographically sealed and every step is auditable.
 - 📦 **Current version:** 0.12.4 · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
@@ -51,7 +54,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 ## ✨ Highlights
 
 - **Reconstruction over detection.** Correlates every artifact into one navigable, per-entity story instead of a pile of alerts.
-- **Six integrated subsystems** — acquisition → correlation → timeline → behavioral analytics → AI → sealed case memory — that no single incumbent tool spans end to end.
+- **Integrated end to end** — acquisition → correlation → timeline → behavioral analytics → AI → sealed case memory: a full pipeline no single incumbent tool spans.
 - **Artifact-deep, not log-shallow.** Prefetch, Amcache, ShimCache, SRUM, MFT, USN, LNK/JumpLists and more survive the log clearing and "living-off-the-land" tricks that blind log-only tools.
 - **The Eye AI assistant** — natural-language forensic investigation with a court-defensible chain of custody, runnable in the cloud, on a private server, or fully offline.
 - **User Behavior Analytics (UBA)** — turns raw artifacts into a plain-English, HR/examiner-readable activity story.
@@ -107,7 +110,7 @@ python "Crow Eye.py"
 
 The main interface opens, you create a case, and all analysis output is organized under that case directory for later review and reporting.
 
-> 🖥️ **Cross-platform note:** on **Linux/macOS**, live parsers are disabled automatically and Crow-Eye runs in **offline / forensic-image** mode. Full live acquisition is Windows-only.
+> 🖥️ **Cross-platform note:** on **Linux**, live parsers are disabled automatically and Crow-Eye runs in **offline / forensic-image** mode. Full live acquisition is Windows-only.
 
 ## 📂 Supported Artifacts
 
@@ -188,7 +191,10 @@ Every investigation is a **case**: a self-contained directory that organizes art
 Correlate events across artifacts on a unified temporal grid, with **Heat Map**, **Week**, and **Day** views — an identity-threaded, court-traceable story rather than a flat super-timeline.
 
 ### 🔎 Search & Export
-Full-text search across the case database, plus export to **CSV** (spreadsheets) and **JSON** (integration with other tools).
+Full-text search across the case database, plus export to **CSV** (spreadsheets), **JSON** (integration with other tools), and **Detailed HTML reports** (full dossiers consolidating every artifact tied to a search term).
+
+### 🔗 Dynamic Linking
+Translate raw technical identifiers — SIDs, MAC addresses, hashes — into human-readable context on the fly. Dynamic Linking enriches the view using **non-destructive SQL `ATTACH` queries**, so the original evidence is never modified, and it can ingest bulk IOC threat feeds to flag known-bad indicators inline.
 
 ## 🧠 User Behavior Analytics (UBA)
 
@@ -592,6 +598,8 @@ Crow-Eye is more than software — it's an **open research platform** accelerati
 - LNK and Jump List parsing is handled by Crow-Eye's own dedicated parser.
 
 ## 📸 Screenshots
+
+A selection of Crow-Eye's interface and analysis views.
 
 ![Crow-Eye screenshot](https://github.com/user-attachments/assets/f400d4b3-e8f6-4c57-a59e-7f24107bc9e7)
 
