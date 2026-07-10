@@ -100,6 +100,14 @@ class EYEWindowManager:
 
                     cls._splash.show()
                     QtWidgets.QApplication.processEvents()
+                else:
+                    # Not configured (first run): EYEAssistantWindow.__init__ opens the onboarding
+                    # wizard as a BLOCKING modal (wizard.exec_()). That nested event loop freezes the
+                    # caller's timer-driven instant splash, leaving "Initializing Eye engine…" painted
+                    # behind the wizard forever. Nothing initializes until a backend is saved, so tear
+                    # the instant splash down NOW so the user sees a clean setup wizard.
+                    cls._destroy_external_splash(parent_splash)
+                    parent_splash = None
 
                 try:
                     if cls._instance and cls._is_window_valid():

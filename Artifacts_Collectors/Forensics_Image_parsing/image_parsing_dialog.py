@@ -82,7 +82,11 @@ except ImportError:
     from Offline_Importer.artifact_collector import CollectedArtifactInfo
     from Offline_Importer.parse_artifacts_dialog import ParseArtifactsDialog
 
-    # Use PathUtils for robust style loading
+# Load Crow-Eye styles REGARDLESS of how the Offline_Importer import above resolved.
+# (Previously this lived inside the except branch, so when the direct import succeeded --
+# e.g. in the frozen EXE where everything is bundled -- STYLES_AVAILABLE / CrowEyeStyles /
+# Colors were never defined, and the dialog crashed with NameError while building its UI.)
+try:
     from utils.path_utils import PathUtils
     styles_path = PathUtils.get_app_root()
     if str(styles_path) not in sys.path:

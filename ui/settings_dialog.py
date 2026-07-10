@@ -27,6 +27,16 @@ except Exception:
     read_eye_ai_settings = None
     write_eye_ai_settings = None
 
+# Auto-updater (EXE build only). The 'update' package ships only in the packaged
+# distribution; guard the import so running from source never fails.
+try:
+    from update import update_core as _update_core, update_ui as _update_ui
+    _UPDATER_AVAILABLE = True
+except Exception:
+    _update_core = None
+    _update_ui = None
+    _UPDATER_AVAILABLE = False
+
 # Import semantic mapping manager
 try:
     from correlation_engine.config.semantic_mapping import SemanticMappingManager, SemanticMapping
@@ -53,7 +63,7 @@ class SettingsDialog(QtWidgets.QDialog):
     """Centralized settings dialog for Crow Eye."""
     
     def __init__(self, case_history_manager, current_case_path=None, parent=None,
-                 clone_case_callback=None):
+                 clone_case_callback=None, app_version=None):
         """Initialize the settings dialog.
 
         Args:
@@ -70,6 +80,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.current_case = None
         self._clone_case_callback = clone_case_callback
         self._clone_requested = False
+        self._app_version = app_version or ""
+        self._update_check_thread = None
         
         if current_case_path:
             self.current_case = case_history_manager.get_case_by_path(current_case_path)
@@ -111,6 +123,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.semantic_mappings_panel = self.create_semantic_mappings_panel()
         self.pipeline_mgmt_panel = self.create_pipeline_management_panel()
         self.eye_ai_panel = self.create_eye_ai_panel()
+        # Updates section is EXE-only: build it only when the updater package ships
+        # (the main/portable build has no `update/` -> no auto-update UI at all).
+        self.updates_panel = self.create_updates_panel() if _UPDATER_AVAILABLE else None
 
         self.content_stack.addWidget(self.general_panel)
         self.content_stack.addWidget(self.case_mgmt_panel)
@@ -118,6 +133,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.content_stack.addWidget(self.semantic_mappings_panel)
         self.content_stack.addWidget(self.pipeline_mgmt_panel)
         self.content_stack.addWidget(self.eye_ai_panel)
+        if self.updates_panel is not None:
+            self.content_stack.addWidget(self.updates_panel)
         
         # Bottom buttons
         buttons_layout = QtWidgets.QHBoxLayout()
@@ -219,6 +236,11 @@ class SettingsDialog(QtWidgets.QDialog):
         eye_ai_btn.setIconSize(QtCore.QSize(20, 20))
         sidebar_layout.addWidget(eye_ai_btn)
         self.nav_buttons.append(eye_ai_btn)
+
+        if _UPDATER_AVAILABLE:
+            updates_btn = self.create_nav_button("⬇ Updates", 6)
+            sidebar_layout.addWidget(updates_btn)
+            self.nav_buttons.append(updates_btn)
         
         # Disable case settings and pipelines if no active case
         if not self.current_case:
@@ -276,6 +298,140 @@ class SettingsDialog(QtWidgets.QDialog):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
     
+    def create_updates_panel(self):
+        """Create the Updates settings panel (auto-check toggle + manual check).
+
+        Surfaces the existing EXE auto-updater (``update`` package) in Settings. The
+        controls reuse ``update_core``/``update_ui`` directly, so this stays consistent
+        with the Help -> "Check for Updates" flow and the startup auto-check. When the
+        updater package isn't present (running from source), the panel shows an
+        informational note instead.
+        """
+        panel = QtWidgets.QWidget()
+        panel.setStyleSheet("QWidget { background-color: #0F172A; }")
+
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+
+        title = QtWidgets.QLabel("UPDATES")
+        title.setStyleSheet("""
+            QLabel {
+                color: #00FFFF;
+                font-size: 20px;
+                font-weight: 700;
+                font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            }
+        """)
+        layout.addWidget(title)
+
+        version_text = f"Current version: v{self._app_version}" if self._app_version else "Current version: unknown"
+        version_label = QtWidgets.QLabel(version_text)
+        version_label.setStyleSheet("QLabel { color: #E2E8F0; font-size: 14px; }")
+        layout.addWidget(version_label)
+
+        if not _UPDATER_AVAILABLE:
+            note = QtWidgets.QLabel(
+                "Automatic updates are available in the installed (packaged) Crow-Eye "
+                "application. This development build does not include the updater."
+            )
+            note.setWordWrap(True)
+            note.setStyleSheet("QLabel { color: #94A3B8; font-size: 13px; }")
+            layout.addWidget(note)
+            layout.addStretch()
+            return panel
+
+        # Auto-update toggle — reads/writes the same config key the startup auto-check
+        # uses (auto_check_updates, default True). Set the state BEFORE connecting the
+        # signal so building the panel doesn't rewrite the config.
+        self.auto_update_checkbox = QtWidgets.QCheckBox("Automatically check for updates on startup")
+        self.auto_update_checkbox.setStyleSheet("""
+            QCheckBox { color: #E2E8F0; font-size: 14px; spacing: 10px; }
+            QCheckBox::indicator { width: 18px; height: 18px; }
+            QCheckBox::indicator:unchecked { border: 1px solid #475569; background: #1E293B; border-radius: 3px; }
+            QCheckBox::indicator:checked { border: 1px solid #00FFFF; background: #00FFFF; border-radius: 3px; }
+        """)
+        try:
+            self.auto_update_checkbox.setChecked(bool(_update_core.get_auto_check()))
+        except Exception as e:
+            print(f"[Settings] Could not read auto-update state: {e}")
+            self.auto_update_checkbox.setChecked(True)
+        self.auto_update_checkbox.toggled.connect(self._on_auto_update_toggled)
+        layout.addWidget(self.auto_update_checkbox)
+
+        hint = QtWidgets.QLabel("Crow-Eye checks updates.crow-eye.com shortly after launch and offers any newer release.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("QLabel { color: #94A3B8; font-size: 12px; }")
+        layout.addWidget(hint)
+
+        # Manual check row
+        check_row = QtWidgets.QHBoxLayout()
+        check_row.setSpacing(15)
+        self._update_check_btn = QtWidgets.QPushButton("Check for New Update")
+        self._update_check_btn.setFixedHeight(42)
+        self._update_check_btn.setMinimumWidth(200)
+        self._update_check_btn.setCursor(Qt.PointingHandCursor)
+        self._update_check_btn.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
+        self._update_check_btn.clicked.connect(self._on_check_for_updates)
+        check_row.addWidget(self._update_check_btn)
+
+        self._update_status_label = QtWidgets.QLabel("")
+        self._update_status_label.setWordWrap(True)
+        self._update_status_label.setStyleSheet("QLabel { color: #94A3B8; font-size: 13px; }")
+        check_row.addWidget(self._update_status_label, 1)
+        layout.addLayout(check_row)
+
+        layout.addStretch()
+        return panel
+
+    def _on_auto_update_toggled(self, checked):
+        """Persist the auto-update preference to the updater's config."""
+        if not _UPDATER_AVAILABLE:
+            return
+        try:
+            _update_core.set_auto_check(bool(checked))
+        except Exception as e:
+            print(f"[Settings] Could not save auto-update state: {e}")
+
+    def _on_check_for_updates(self):
+        """Run a manual update check off the GUI thread (reuses the updater threads)."""
+        if not _UPDATER_AVAILABLE:
+            return
+        self._update_check_btn.setEnabled(False)
+        self._update_status_label.setText("Checking…")
+        try:
+            # Manual check bypasses the 24h throttle + skipped version and surfaces errors.
+            self._update_check_thread = _update_ui.UpdateCheckThread(
+                self._app_version, is_manual=True, parent=self)
+            self._update_check_thread.result.connect(self._on_update_result)
+            self._update_check_thread.failed.connect(self._on_update_failed)
+            self._update_check_thread.start()
+        except Exception as e:
+            self._update_check_btn.setEnabled(True)
+            self._update_status_label.setText("Check failed.")
+            QMessageBox.warning(self, "Check for Updates", f"Could not start the update check:\n\n{e}")
+
+    def _on_update_result(self, decision):
+        """Handle a completed manual check: offer the update or report up-to-date."""
+        self._update_check_btn.setEnabled(True)
+        try:
+            routes = (_update_core.ROUTE_DELTA, _update_core.ROUTE_FULL)
+            if decision and decision.get("route") in routes:
+                latest = decision.get("latest_version")
+                self._update_status_label.setText(f"Update available: v{latest}")
+                _update_ui.UpdateNotificationDialog(decision, self._app_version, parent=self).exec_()
+            else:
+                self._update_status_label.setText("You are on the latest version.")
+        except Exception as e:
+            self._update_status_label.setText("Check completed with errors.")
+            print(f"[Settings] Update result handling failed: {e}")
+
+    def _on_update_failed(self, message):
+        """Handle a failed manual check."""
+        self._update_check_btn.setEnabled(True)
+        self._update_status_label.setText("Check failed.")
+        QMessageBox.warning(self, "Check for Updates", f"Could not check for updates:\n\n{message}")
+
     def create_general_settings_panel(self):
         """Create the general settings panel."""
         panel = QtWidgets.QWidget()
@@ -2934,7 +3090,7 @@ class SimpleSemanticMappingDialog(QtWidgets.QDialog):
 
 
 def show_settings_dialog(case_history_manager, current_case_path=None, parent=None,
-                         clone_case_callback=None):
+                         clone_case_callback=None, app_version=None):
     """
     Show the settings dialog.
 
@@ -2949,7 +3105,8 @@ def show_settings_dialog(case_history_manager, current_case_path=None, parent=No
         True if settings were saved, False if cancelled
     """
     dialog = SettingsDialog(case_history_manager, current_case_path, parent,
-                            clone_case_callback=clone_case_callback)
+                            clone_case_callback=clone_case_callback,
+                            app_version=app_version)
     result = dialog.exec_()
     # Run the clone flow AFTER Settings has closed so its file pickers / loading
     # dialog don't stack on top of a modal.

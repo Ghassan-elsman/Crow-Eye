@@ -88,11 +88,12 @@ class LoadingDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("Crow Eye - Processing")
         
-        # Set Crow Eye icon for the dialog window
+        # Set Crow Eye icon for the dialog window. Use QIcon(path) so Qt loads all embedded
+        # .ico sizes (16..256) and stays sharp; load from the on-disk (freshly regenerated)
+        # icon via get_resource_path rather than the stale compiled ':/Icons/CrowEye.ico'.
         try:
-            icon = QtGui.QIcon()
-            icon.addPixmap(QtGui.QPixmap(":/Icons/CrowEye.ico"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
-            self.setWindowIcon(icon)
+            from utils.path_utils import get_resource_path
+            self.setWindowIcon(QtGui.QIcon(get_resource_path("GUI Resources", "CrowEye.ico")))
         except Exception:
             pass  # Fallback if icon resource is not available
         
@@ -268,6 +269,9 @@ class LoadingDialog(QtWidgets.QDialog):
             # its largest embedded variant via QIcon to avoid the 16x13 default.
             base_dir = os.path.dirname(os.path.dirname(__file__))
             png_candidates = [
+                # Square, high-res, already-rounded master first -> crisp + correctly
+                # proportioned in the square frame (the other PNGs are landscape 2018x1614).
+                os.path.join(base_dir, "GUI Resources", "CrowEye_rounded.png"),
                 os.path.join(base_dir, "GUI Resources", "Crow-Eye.png"),
                 os.path.join(base_dir, "GUI Resources", "CrowEye.png"),
                 ":/Icons/Crow-Eye.png",
@@ -313,6 +317,14 @@ class LoadingDialog(QtWidgets.QDialog):
                         continue
 
             if icon_pixmap and not icon_pixmap.isNull():
+                # Center-crop to a SQUARE first so the logo sits correctly in the square,
+                # rounded frame. The source PNGs are landscape (2018x1614); scaling with
+                # KeepAspectRatio alone yields a non-square pixmap -> asymmetric border and a
+                # layout jump when the label is re-sized to the pixmap below.
+                _iw, _ih = icon_pixmap.width(), icon_pixmap.height()
+                if _iw != _ih:
+                    _side = min(_iw, _ih)
+                    icon_pixmap = icon_pixmap.copy((_iw - _side) // 2, (_ih - _side) // 2, _side, _side)
                 # Scale to render_size (HiDPI-aware) with smooth transform, then
                 # tag the pixmap's device pixel ratio so Qt draws it at target_size.
                 scaled_pixmap = icon_pixmap.scaled(
@@ -321,6 +333,29 @@ class LoadingDialog(QtWidgets.QDialog):
                     QtCore.Qt.SmoothTransformation,
                 )
                 dpr = render_size / target_size
+                # Round the logo's corners for a modern rounded-square look. Do the clip at
+                # DEVICE resolution while the pixmap's DPR is still 1.0 -> drawPixmap uses the
+                # full render_size pixels. (If the DPR were set first, drawPixmap would paint
+                # the pixmap at its logical/half size into the corner -> off-center, tiny logo.)
+                # The device-pixel ratio is applied ONCE, after rounding, just below.
+                try:
+                    _rw, _rh = scaled_pixmap.width(), scaled_pixmap.height()
+                    _radius = int(min(_rw, _rh) * 0.14)
+                    _rounded = QtGui.QPixmap(_rw, _rh)
+                    _rounded.fill(QtCore.Qt.transparent)
+                    _painter = QtGui.QPainter(_rounded)
+                    _painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+                    _painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+                    _path = QtGui.QPainterPath()
+                    _path.addRoundedRect(QtCore.QRectF(0, 0, _rw, _rh), _radius, _radius)
+                    _painter.setClipPath(_path)
+                    _painter.drawPixmap(0, 0, scaled_pixmap)
+                    _painter.end()
+                    scaled_pixmap = _rounded
+                except Exception:
+                    pass
+                # Tag the device pixel ratio ONCE so Qt draws the (now rounded) pixmap at
+                # target_size logical points.
                 scaled_pixmap.setDevicePixelRatio(dpr)
                 # Resize the label to the pixmap's actual logical size so the
                 # cyan border hugs the icon's true bounding box (no inner gaps).

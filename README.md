@@ -5,17 +5,16 @@
 </p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
 [![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
 
 
 ## Table of Contents
 - [Overview](#overview)
+- [📥 Download & Install](#-download--install)
 - [Created by](#created-by)
-- [💖 Support the Project](#-support-the-project)
 - [💬 Community & Support](#-community--support)
 - [Supported Artifacts](#supported-artifacts)
-- [Installation](#installation)
+- [Run from Source (Developers)](#run-from-source-developers)
 - [How to Use Crow Eye](#how-to-use-crow-eye)
 - [Analysis Types](#analysis-types)
 - [Search and Export Features](#search-and-export-features)
@@ -25,6 +24,7 @@
 - [Screenshots](#screenshots)
 - [Official Website](#-official-website)
 - [Correlation Engine](#-correlation-engine)
+- [🧠 User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)
 - [👁️ Eye — Forensics AI Assistant](#️-eye--the-forensics-ai-assistant)
 - [Coming Soon Features](#-coming-soon-features)
 - [Development Credits](#development-credits)
@@ -33,29 +33,22 @@
 
 Crow Eye is a comprehensive Windows forensics tool designed to collect, parse, and analyze various Windows artifacts through a user-friendly GUI interface. The tool focuses on extracting key forensic evidence from Windows systems to support digital investigations.
 
+## 📥 Download & Install
+
+> **Recommended:** get the packaged Windows build (**MSI installer / EXE**) from the official website — no Python setup, runs out of the box.
+
+### ▶️ [Download Crow-Eye for Windows → crow-eye.com/download](https://crow-eye.com/download)
+
+The **installed MSI/EXE build is the recommended way to run Crow-Eye**, and it is our **top priority for updates**:
+
+- 🛡️ **Fastest fixes.** When an issue is found or a bug is reported, we release an updated EXE **as soon as possible** — the packaged build is where fixes land first.
+- 🔄 **Built-in auto-update.** In the installed app, open **Settings → Updates** to **check for updates and install them automatically** — no manual reinstall.
+- 📦 **Zero setup.** No Python, Node, or dependency installation required.
+
+> Prefer to run from source? See **[Run from Source (Developers)](#run-from-source-developers)** below. The from-source build is intended for contributors and **does not include the auto-updater** — use the MSI/EXE for automatic updates.
+
 ## Created by
 Ghassan Elsman
-
-## 💖 Support the Project
-
-Crow-Eye is a free, open-source Windows Forensics Engine built and maintained solely by one person. Every parser, every correlation rule, every new artifact supported represents hours of deep research, reverse engineering raw hexadecimal binary structures, and intensive engineering work done independently.
-
-By supporting Crow-Eye, you are not just donating to a tool. You are directly funding the future of open and accessible digital forensics. Your contribution keeps the research going, accelerates the development of new artifact parsers, and ensures that professional-grade forensics remains free for every investigator, student, and curious person in the world regardless of their budget or background.
-
-Every contribution, no matter the size, makes a real difference to an independent developer who chose to build something meaningful over something profitable.
-
-[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/Ghassan-elsman)
-
-### 🚀 Sponsorship Tiers
-
-Support Crow-Eye by choosing a sponsorship tier that fits your needs:
-
-*   **💾 Bit Tracer ($10/mo)**: Official GitHub Sponsor badge and your name in `SPONSORS.md`.
-*   **🧩 Byte Parser ($25/mo)**: Your name/logo in `README.md` and "Verified Supporter" role.
-*   **🐝 Hive Master ($50/mo)**: Engineering deep-dives, strategy discussions, and early access.
-*   **⚔️ Kernel Commander ($250/mo)**: Case-specific support and strategic roadmap influence.
-
-See [SPONSORS.md](SPONSORS.md) for full details on each tier.
 
 ## 💬 Community & Support
 
@@ -99,7 +92,9 @@ The project focuses on:
 | SRUM                      | Yes  | Yes     | App resource usage, network, energy, execution                                 |
 | Disks & Partitions        | Yes  | Yes     | Physical disk tree view, partition layout, hidden/unmounted partition detection|
 
-## Installation
+## Run from Source (Developers)
+
+> For contributors and advanced users who want to run from the Python source. **This build has no auto-updater** — for automatic updates, use the [MSI/EXE download](#-download--install) above.
 
 ### Requirements
 These will be installed automatically when you run Crow Eye:
@@ -751,6 +746,22 @@ Identity: malware.exe
 
 ---
 
+## 🧠 User Behavior Analytics (UBA)
+
+> **Turn raw artifacts into a plain-English activity story** — a manager/HR-readable account of what a user and their applications actually did, with every statement traceable to the exact source evidence.
+
+**User Behavior Analytics (UBA)** reads the parsed artifact databases in your case's `Target_Artifacts/` folder (strictly **read-only**) and replays them through a declarative rule set — the **Master Behavioral Timeline Correlation Matrix** — to produce a clear, chronological **Activity Story**. Open it from the **"User Behavior"** toolbar button or with **`Ctrl+Shift+B`** (a case must be loaded).
+
+- 🧩 **40 declarative behavior detections** (`uba/config/behavior_rules.json`) — tunable without code — each classified by severity: **routine · notable · suspicious · critical**.
+- 🕵️ **Detects behavior that matters**, including: sign-in / sign-out / unlock, program launch · execution · install, file open / delete / inferred copy, USB device connection, network-share access, persistence & autostart, explicit-credential use (`runas`), account & group changes, service changes, **system-clock tampering** (suspicious), and **event-log clearing** (critical).
+- 🔗 **Every activity is evidence-backed.** Click any item to open the exact backing record (`database : table : rowid`) — nothing is asserted without a source.
+- 👤 **Honest attribution.** Actors resolve to User / Application / System (or are left empty) — UBA never guesses who did what.
+- 📉 **Coverage panel.** Missing artifacts are surfaced up front (unavailable / degraded confidence) so you always know what the picture is built on.
+
+> UBA is **rule-driven behavioral correlation and classification**, not statistical/ML anomaly scoring — every finding maps to an explicit, auditable rule.
+
+---
+
 ## 👁️ Eye — The Forensics AI Assistant
 
 > **A powerful assistant, not a replacement.** Eye automates and *verifies* an investigator's hypotheses — it never makes the call for you.
@@ -919,6 +930,15 @@ If the irreducible **evidence core** (pinned messages + tool results + the curre
 
 Whatever payload finally goes to the model is the exact one that gets [sealed](#how-compliance-works) for chain of custody — stamped with a `truncated` flag that records whether self-healing fired — so the audit trail always reflects precisely what the model saw.
 
+### 🗺️ Narrative Map — The Eye's Persistent Case Memory
+
+The Eye is **stateless between turns** — so the **Narrative Map** is where "what we know and what we've concluded" lives for a case. It is the Eye's **persistent, court-defensible working memory**, and its contents are **injected into the Eye's prompt on every turn** (the map literally *is* the memory).
+
+- 🧭 **Verdict → Narrative → Evidence.** A strict hierarchy: one case **Verdict**, the **Narratives** beneath it (themes/claims, each with a state — `proven` · `open` · `negative` · `needs` · `absolute`), and the artifact-backed **Evidence** beneath those.
+- 🪟 **Its own window.** Opens from the **"Narrative Map"** button in the Eye chat window, so you can watch the chat, the living report, and the case memory side by side; it live-refreshes as things change.
+- ↔️ **Bidirectional.** Both the Eye's edits and your own notes flow through a single **GEP-validated commit** and are sealed into a **hash-chained audit log** (`narrative_map_audit.jsonl`) for chain of custody — your notes steer the Eye's next answer, and the Eye's conclusions appear live in the map.
+- 🚫 **Never asserts the unsupported.** An Eye narrative may stay `open` with no evidence while it investigates, but it can never be `proven` without evidence; a theme the Eye checked but found empty auto-converts to **`negative`** — because a documented absence is itself a finding.
+
 ### How Compliance Works
 
 Eye is engineered for evidence that has to stand up to scrutiny. Compliance isn't a feature bolted on top — it's enforced in the pipeline.
@@ -966,6 +986,10 @@ See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.
 - How to contribute to specific components
 - Code guidelines and testing requirements
 - Documentation standards
+
+## 💖 Support
+
+Crow-Eye is free and open-source, built and maintained by one person. If it helps your work, please consider sponsoring — it directly funds new parsers and research: **[SPONSORS.md](SPONSORS.md)** · **[GitHub Sponsors](https://github.com/sponsors/Ghassan-elsman)**.
 
 ## Development Credits
 - Created and maintained by Ghassan Elsman

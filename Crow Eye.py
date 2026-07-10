@@ -45,7 +45,7 @@ License: GPL-3.0
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.12.0"  # Single source of truth — read by the About menu, the update
+__version__ = "0.12.4"  # Single source of truth — read by the About menu, the update
                         # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
 
@@ -6362,9 +6362,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         Crow_Eye.setSizeIncrement(QtCore.QSize(15, 0))
         # Apply main window style
         Crow_Eye.setStyleSheet(CrowEyeStyles.MAIN_WINDOW)
-        icon = QtGui.QIcon()
-        icon.addPixmap(QtGui.QPixmap(":/Icons/CrowEye.ico"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
-        Crow_Eye.setWindowIcon(icon)
+        # Use the QIcon(path) constructor so Qt loads ALL embedded .ico sizes and picks the
+        # sharpest for the taskbar/title bar (addPixmap(QPixmap(ico)) grabs one frame -> blurry).
+        Crow_Eye.setWindowIcon(QtGui.QIcon(":/Icons/CrowEye.ico"))
         self.centralwidget = QtWidgets.QWidget(Crow_Eye)
         self.centralwidget.setObjectName("centralwidget")
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -9419,7 +9419,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     self.case_history_manager,
                     current_case_path,
                     self.main_window,
-                    clone_case_callback=self.import_case_data_into_current
+                    clone_case_callback=self.import_case_data_into_current,
+                    app_version=__version__
                 )
             else:
                 QMessageBox.warning(
@@ -9704,8 +9705,15 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             from utils.path_utils import PathUtils
             app_root = PathUtils.get_app_root()
             
-            # Add crow_claw path to sys.path
-            crow_claw_path = app_root / 'Artifacts_Collectors' / 'crow_claw'
+            # Add crow_claw path to sys.path.
+            # `crow_claw` is written as a TOP-LEVEL package (its gui/core modules do
+            # `from crow_claw.core import ...`), so its PARENT (Artifacts_Collectors) must be
+            # on sys.path for that to resolve. In the frozen EXE this is handled by the spec's
+            # pathex; from source we add it here.
+            artifacts_root = app_root / 'Artifacts_Collectors'
+            if str(artifacts_root) not in sys.path:
+                sys.path.insert(0, str(artifacts_root))
+            crow_claw_path = artifacts_root / 'crow_claw'
             if str(crow_claw_path) not in sys.path:
                 sys.path.insert(0, str(crow_claw_path))
             
@@ -11388,6 +11396,24 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
             return
 
+        # Parsing LIVE Windows artifacts (registry hives, MFT, USN, event logs, ...) reads
+        # locked system files that require elevation. If the app isn't running as admin, ask
+        # the user to reopen it elevated rather than silently failing.
+        try:
+            _is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            _is_admin = False
+        if not _is_admin:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self.main_window,
+                "Administrator Rights Required",
+                "Parsing live Windows artifacts requires Administrator privileges.\n\n"
+                "Please close Crow-Eye and reopen it as Administrator "
+                "(right-click → Run as administrator), then try again."
+            )
+            return
+
         try:
             # Import the loading dialog and worker
             from ui.Loading_dialog import LoadingDialog
@@ -11457,10 +11483,24 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self._live_dialog = dialog
                 worker.task_error.connect(self._on_live_acquisition_error, QtCore.Qt.QueuedConnection)
                 worker.finished.connect(self._on_live_acquisition_finished, QtCore.Qt.QueuedConnection)
-                
+
+                # Wire the CANCEL button -> the parser's cancel Event so the running
+                # collection actually stops (the worker polls is_cancelled(cancel_event)).
+                # This connection was previously missing, so Cancel did nothing.
+                def _on_cancel_requested(_ce=cancel_event, _pm=self.process_manager):
+                    try:
+                        _ce.set()
+                    except Exception as _e:
+                        print(f"[Cancel] Could not set cancel event: {_e}")
+                    try:
+                        _pm.shutdown()  # terminate the worker process if it doesn't stop soon
+                    except Exception as _e:
+                        print(f"[Cancel] process_manager shutdown failed: {_e}")
+                dialog.cancelled.connect(_on_cancel_requested)
+
                 # Store worker to prevent garbage collection
                 self._live_worker = worker
-                
+
                 # Start worker (non-blocking)
                 worker.start()
                 
@@ -13129,6 +13169,38 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     
 
 if __name__ == "__main__":
+    # ---------------------------------------------------------
+    # FROZEN-EXE MULTIPROCESSING FIX (must be the FIRST thing in __main__).
+    # Live artifact collection uses multiprocessing 'spawn' (Process_Manager), which
+    # re-executes this EXE for each worker. Without freeze_support(), those re-launches
+    # run the full GUI ("another Crow-Eye instance") instead of the parser worker, so
+    # nothing parses, the cancel Event has no worker, and no data reaches the tables.
+    # freeze_support() makes a spawned child run its worker function and exit.
+    # ---------------------------------------------------------
+    import multiprocessing
+    multiprocessing.freeze_support()
+
+    # ---------------------------------------------------------
+    # ADMINISTRATOR SELF-ELEVATION (frozen EXE only)
+    # Live Windows artifact collection reads locked system files (registry hives, $MFT,
+    # $UsnJrnl, event logs, ...) that require elevation. The PyInstaller build also embeds a
+    # requireAdministrator manifest (uac_admin=True), but this runtime relaunch guarantees the
+    # app runs elevated even if that manifest is bypassed. Placed AFTER freeze_support() so
+    # multiprocessing 'spawn' workers (which never reach this line) are unaffected, and guarded
+    # to the frozen build so running from source in dev is untouched. Single attempt: if the
+    # user declines UAC we continue unelevated (parse_all_live_artifacts still warns).
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        try:
+            if not ctypes.windll.shell32.IsUserAnAdmin():
+                _params = " ".join('"%s"' % a for a in sys.argv[1:])
+                _rc = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", sys.executable, _params, None, 1)
+                if _rc > 32:          # elevated instance launched -> exit this one
+                    sys.exit(0)
+                # _rc <= 32 -> user declined UAC: continue unelevated
+        except Exception:
+            pass
+
     # ---------------------------------------------------------
     # LINUX ROOT RUNTIME FIX
     # Fixes: [ERROR:zygote_host_impl_linux.cc(90)] Running as root without --no-sandbox is not supported.
