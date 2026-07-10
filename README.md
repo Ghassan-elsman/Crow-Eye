@@ -1,37 +1,75 @@
-# Crow Eye - Windows Forensics Engine
+# Crow-Eye — Windows Forensics Engine
 
 <p align="center">
-  <img src="GUI Resources/CrowEye.png" alt="Crow Eye Logo" width="200"/>
+  <img src="GUI Resources/CrowEye.png" alt="Crow-Eye Logo" width="200"/>
 </p>
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
+<p align="center"><strong>A forensic time machine for Windows.</strong><br/>
+Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a court-defensible verdict.</p>
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+![Version](https://img.shields.io/badge/version-0.12.4-brightgreen.svg)
+![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.7.0-8a2be2.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg)
+![Python](https://img.shields.io/badge/python-3.12-blue.svg)
+[![Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?logo=discord)](https://discord.gg/2vag2Udf)
 
 ## Table of Contents
 - [Overview](#overview)
+- [✨ Highlights](#-highlights)
+- [🧭 Subsystems at a Glance](#-subsystems-at-a-glance)
 - [📥 Download & Install](#-download--install)
-- [Created by](#created-by)
-- [💬 Community & Support](#-community--support)
-- [Supported Artifacts](#supported-artifacts)
-- [Run from Source (Developers)](#run-from-source-developers)
-- [How to Use Crow Eye](#how-to-use-crow-eye)
-- [Analysis Types](#analysis-types)
-- [Search and Export Features](#search-and-export-features)
-- [Supported Artifacts and Functionality](#supported-artifacts-and-functionality)
-- [Documentation & Contribution](#documentation--contribution)
-- [Technical Notes](#technical-notes)
-- [Screenshots](#screenshots)
-- [Official Website](#-official-website)
-- [Correlation Engine](#-correlation-engine)
+- [🚀 Quick Start](#-quick-start)
+- [📂 Supported Artifacts](#-supported-artifacts)
+- [🔧 Analysis Modes](#-analysis-modes)
 - [🧠 User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)
-- [👁️ Eye — Forensics AI Assistant](#️-eye--the-forensics-ai-assistant)
-- [Coming Soon Features](#-coming-soon-features)
-- [Development Credits](#development-credits)
+- [🧩 Correlation Engine](#-correlation-engine)
+- [👁️ Eye — The Forensics AI Assistant](#️-eye--the-forensics-ai-assistant)
+- [🔬 Research Platform](#-research-platform)
+- [🛠️ Technical Notes](#️-technical-notes)
+- [📸 Screenshots](#-screenshots)
+- [🚧 Roadmap](#-roadmap)
+- [📚 Documentation](#-documentation)
+- [🤝 Contributing](#-contributing)
+- [🌐 Website & Community](#-website--community)
+- [📄 License](#-license)
+- [💖 Support](#-support)
+- [Credits](#credits)
 
 ## Overview
 
-Crow Eye is a comprehensive Windows forensics tool designed to collect, parse, and analyze various Windows artifacts through a user-friendly GUI interface. The tool focuses on extracting key forensic evidence from Windows systems to support digital investigations.
+**Crow-Eye is an open-source (GPL-3.0) Windows forensics engine that unifies acquisition, analysis, verification, intelligence, and AI.** Most security tools ask *"is this bad?"* and clear whatever looks legitimate. Crow-Eye asks a different question: **"what happened?"** It correlates **all** activity — suspicious or not — and reconstructs the actual sequence of events on a system, so the truth of an investigation is *rebuilt from evidence* rather than guessed from alerts.
+
+That reconstruction-first design is exactly what it takes to **hunt APT and nation-state threats**: sophisticated adversaries live inside legitimate tools (`powershell.exe`, PsExec, `certutil`) and in the *sequence* of actions — invisible to tools that clear anything that looks normal. Because Crow-Eye never clears anything and reasons over execution **artifacts** (which survive log tampering and anti-forensics), the attack can't hide. The same engine stays approachable for everyday DFIR work and for non-experts who simply want to know what happened on a computer.
+
+- 🕰️ **Reconstruct, don't just detect** — rebuild the timeline of what actually occurred.
+- 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux/macOS** (live parsers are Windows-only).
+- 🔒 **Private by design** — **0 ms of data sent off-device**; the Eye AI assistant can run fully **air-gapped**.
+- 🧾 **Court-grade** — evidence is cryptographically sealed and every step is auditable.
+- 📦 **Current version:** 0.12.4 · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
+
+## ✨ Highlights
+
+- **Reconstruction over detection.** Correlates every artifact into one navigable, per-entity story instead of a pile of alerts.
+- **Six integrated subsystems** — acquisition → correlation → timeline → behavioral analytics → AI → sealed case memory — that no single incumbent tool spans end to end.
+- **Artifact-deep, not log-shallow.** Prefetch, Amcache, ShimCache, SRUM, MFT, USN, LNK/JumpLists and more survive the log clearing and "living-off-the-land" tricks that blind log-only tools.
+- **The Eye AI assistant** — natural-language forensic investigation with a court-defensible chain of custody, runnable in the cloud, on a private server, or fully offline.
+- **User Behavior Analytics (UBA)** — turns raw artifacts into a plain-English, HR/examiner-readable activity story.
+- **Free & open-source (GPL-3.0)** — auditable by anyone, with an active research and documentation effort.
+
+## 🧭 Subsystems at a Glance
+
+Crow-Eye is built as an integrated loop — each stage feeds the next, from raw disk to a defensible verdict.
+
+| Subsystem | What it does | Stage |
+|---|---|---|
+| **[Crow-Claw](#-analysis-modes)** | High-speed acquisition of live systems and dead-box images. | Acquisition |
+| **[Offline Importer](#-analysis-modes)** | SCAN → COLLECT → PARSE artifacts from any source into the case database. | Acquisition |
+| **[Correlation Engine](#-correlation-engine)** | Dual-engine (Identity + Time-Window) reconstruction via Feathers · Wings · Engines · Pipelines. | Analysis |
+| **[Interactive Timeline](#-analysis-modes)** | Identity-threaded, court-traceable timeline (Heat Map / Week / Day views). | Verification |
+| **[User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)** | Rule-driven, plain-English "what did this user do" activity story. | Intelligence |
+| **[Eye — AI Assistant](#️-eye--the-forensics-ai-assistant)** | Natural-language investigation + the sealed **Narrative Map** case memory. | AI |
+| **[Storage Forensics](#-supported-artifacts)** | Physical disk & partition analysis (hidden/unmounted detection, boot warnings). | Analysis |
 
 ## 📥 Download & Install
 
@@ -45,407 +83,190 @@ The **installed MSI/EXE build is the recommended way to run Crow-Eye**, and it i
 - 🔄 **Built-in auto-update.** In the installed app, open **Settings → Updates** to **check for updates and install them automatically** — no manual reinstall.
 - 📦 **Zero setup.** No Python, Node, or dependency installation required.
 
-> Prefer to run from source? See **[Run from Source (Developers)](#run-from-source-developers)** below. The from-source build is intended for contributors and **does not include the auto-updater** — use the MSI/EXE for automatic updates.
+> Prefer to run from source? See **[Quick Start](#-quick-start)** below. The from-source build is intended for contributors and **does not include the auto-updater** — use the MSI/EXE for automatic updates.
 
-## Created by
-Ghassan Elsman
+## 🚀 Quick Start
 
-## 💬 Community & Support
+### Option A — Installed build (recommended)
+Download the **MSI/EXE** from [crow-eye.com/download](https://crow-eye.com/download), install, and launch **Crow-Eye** as Administrator. Create a case and start analyzing.
 
-Join our growing community to get faster support, share your investigation techniques, and discuss the future of Crow-eye!
+### Option B — Run from source (developers)
 
-[![Join our Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?style=for-the-badge&logo=discord)](https://discord.gg/2vag2Udf)
+> For contributors and advanced users. This path **does not include the auto-updater** — use the MSI/EXE for automatic updates.
 
-- **Faster Support**: Get direct help from the developer and experienced users.
-- **Discussions**: Share your forensic findings and discuss new artifact research.
-- **Announcements**: Stay updated on the latest releases and experimental features.
-
-### Research Platform
-
-**Advancing Windows Forensics**
-
-Crow-Eye is more than software — it's an open research platform accelerating the entire field of Windows forensics.
-
-The project focuses on:
-- Publishing detailed documentation on internal artifact structures
-- Sharing correlation logic and methodologies
-- Enabling peer review, transparency, and academic collaboration
-- Contributing to the forensics community's collective knowledge
-
-
-
-## Supported Artifacts
-
-| Artifact                  | Live | Offline | Data Extracted                                                                 |
-|---------------------------|------|---------|--------------------------------------------------------------------------------|
-| Prefetch                  | Yes  | Yes     | Execution history, run count, timestamps                                       |
-| Registry                  | Yes  | Yes     | Auto-run, UserAssist, ShimCache, BAM, networks, time zone                     |
-| Jump Lists & LNK          | Yes  | Yes     | File access, paths, timestamps, metadata                                       |
-| Event Logs                | Yes  | Yes     | System, Security, Application events                                           |
-| Amcache                   | Yes  | Yes     | App execution, install time, SHA1, file paths                                  |
-| ShimCache                 | Yes  | Yes     | Executed apps, last modified, size                                             |
-| ShellBags                 | Yes  | Yes     | Folder views, access history, timestamps                                       |
-| MRU & RecentDocs          | Yes  | Yes     | Typed paths, Open/Save history, recent files                                   |
-| MFT Parser                | Yes  | Yes     | File system metadata, deleted files, timestamps, attribute analysis           |
-| USN Journal               | Yes  | Yes     | Detailed file system changes (create/modify/delete/rename) with timestamps     |
-| Recycle Bin               | Yes  | Yes     | Deleted file names, paths, deletion time                                       |
-| SRUM                      | Yes  | Yes     | App resource usage, network, energy, execution                                 |
-| Disks & Partitions        | Yes  | Yes     | Physical disk tree view, partition layout, hidden/unmounted partition detection|
-
-## Run from Source (Developers)
-
-> For contributors and advanced users who want to run from the Python source. **This build has no auto-updater** — for automatic updates, use the [MSI/EXE download](#-download--install) above.
-
-### Requirements
-These will be installed automatically when you run Crow Eye:
+**Requirements** (installed automatically on first run):
 - Python 3.12.4
-- **Node.js & npm** (Required for **Timeline Visualization**; please ensure they are installed on your machine)
-- Required packages:
-  - PyQt5
-  - python-registry
-  - pywin32
-  - pandas
-  - streamlit
-  - altair
-  - olefile
-  - windowsprefetch
-  - sqlite3
-  - colorama
-  - setuptools
+- **Node.js & npm** — required for **Timeline Visualization**
+- Key packages: PyQt5, python-registry, pywin32, pandas, streamlit, altair, olefile, windowsprefetch, sqlite3, colorama, setuptools
 
-## How to Use Crow Eye
+**Launch** (run as Administrator so Crow-Eye can access system artifacts):
 
-1. Run Crow Eye as administrator to ensure access to all system artifacts:
-   ```bash
-   python Crow_Eye.py
-   ```
-2. The main interface will appear, showing different tabs for various forensic artifacts.
-3. Create your case and start the analysis.
+```bash
+python "Crow Eye.py"
+```
 
-## Demo
-[![Watch the video](https://img.youtube.com/vi/hbvNlBhTfdQ/maxresdefault.jpg)](https://youtu.be/hbvNlBhTfdQ)
+The main interface opens, you create a case, and all analysis output is organized under that case directory for later review and reporting.
 
-## Analysis Types
+> 🖥️ **Cross-platform note:** on **Linux/macOS**, live parsers are disabled automatically and Crow-Eye runs in **offline / forensic-image** mode. Full live acquisition is Windows-only.
 
-Crow Eye offers three primary modes of operation for forensic investigations:
+## 📂 Supported Artifacts
+
+Crow-Eye parses a broad set of Windows execution, file-system, and user-activity artifacts, both from a **live** system and from **offline** sources (collected folders or forensic images).
+
+| Artifact | Live | Offline | Data Extracted |
+|---|:---:|:---:|---|
+| Prefetch | ✅ | ✅ | Execution history, run count, per-run timestamps |
+| Registry (AutoRun, UserAssist, BAM, ShimCache, networks, time zone) | ✅ | ✅ | Persistence, program usage, background activity, network config |
+| Amcache | ✅ | ✅ | App execution, install time, SHA-1, file paths |
+| ShimCache | ✅ | ✅ | Executed apps, last modified, size |
+| MUICache | ✅ | ✅ | Program presence and display names |
+| Jump Lists & LNK | ✅ | ✅ | File access, paths, timestamps, metadata |
+| ShellBags | ✅ | ✅ | Folder access history and navigation |
+| MRU & RecentDocs / Typed Paths | ✅ | ✅ | Open/Save history, recent files, typed locations |
+| Browser / Website history | ✅ | ✅ | Visited sites and access times |
+| Event Logs (System / Security / Application) | ✅ | ✅ | Logons, process creation (4688), account & service changes, log clearing |
+| MFT | ✅ | ✅ | File metadata, deleted files, timestamps (NTFS, Win 7/10/11) |
+| USN Journal | ✅ | ✅ | File create/modify/delete/rename with full name history |
+| Recycle Bin | ✅ | ✅ | Deleted file names, paths, deletion time, size |
+| SRUM | ✅ | ✅ | App resource/network/energy usage, per-app data transferred |
+| USB & connected devices | ✅ | ✅ | Device connection and presence |
+| Network list & connections | ✅ | ✅ | Known networks and connection activity |
+| WER (Windows Error Reporting) | ✅ | ✅ | Application crash evidence |
+| AutoStart / Services & Drivers | ✅ | ✅ | Persistence, service installs and state changes |
+| Disks & Partitions (Storage Forensics) | ✅ | ✅ | Physical disk tree, partition layout, hidden/unmounted detection |
+
+**Jump Lists & LNK** are parsed by Crow-Eye's own **purpose-built LNK / Jump List parser** — not a third-party module.
+
+> **Custom registry / locked files:** Windows locks live registry hives (`NTUSER.DAT`, `SOFTWARE`, `SYSTEM`) during operation. For custom analysis of a live system, boot from external media (WinPE/Live CD), use forensic acquisition tools, or analyze a disk image.
+
+### Per-Artifact Details
+
+- **Jump Lists & LNK** — automatically parsed from standard system locations by Crow-Eye's own dedicated parser (file access, target paths, timestamps, and metadata).
+- **Registry** — automatically parses the system hives. For **custom registry analysis**, copy the hive files to `CrowEye/Artifacts Collectors/Target Artifacts` (or your case's `registry/` folder):
+  - `NTUSER.DAT` from `C:\Users\<Username>\NTUSER.DAT`
+  - `SOFTWARE` from `C:\Windows\System32\config\SOFTWARE`
+  - `SYSTEM` from `C:\Windows\System32\config\SYSTEM`
+  - Windows locks these during operation — for a live system, boot from external media (WinPE/Live CD), use forensic acquisition tools, or analyze a disk image.
+- **Prefetch** — parses `C:\Windows\Prefetch`, extracting execution history and forensic metadata (including per-run timestamps).
+- **Event Logs** — automatic parsing of System/Security/Application logs into a database for comprehensive analysis.
+- **ShellBags** — reveals folder access history and user navigation patterns.
+- **Recycle Bin** — parses `$RECYCLE.BIN` to recover deleted file names, original paths, deletion times, and sizes (live systems and disk images).
+- **MFT** — parses the Master File Table for file metadata, attributes, timestamps, and deleted-file information (NTFS, Windows 7/10/11).
+- **USN Journal** — tracks file create/modify/delete/rename events with timestamps and full name history, for timeline reconstruction.
+- **SRUM** — visualizes app resource usage (duration bars for foreground/background time) and network activity per application.
+- **Storage Forensics Analyzer** — complete tree view of every physical disk and its partitions; color-coded partition types (EFI, Linux, Recovery, Hidden/swap, …); warnings for bootable USBs, hidden Linux roots, and Intel Rapid Start; raw sector magic-scanning fallback.
+
+## 🔧 Analysis Modes
 
 ### 🦅 Crow-Claw Acquisition
-Crow-Claw is our specialized acquisition engine designed to collect and preserve Windows artifacts from live systems or mounted images.
-- **Selective Collection**: Choose specific artifact categories (Registry, Event Logs, File System) or collect everything.
-- **Deep Scanning**: Automatically walks through directories and subdirectories to identify forensic traces.
-- **Secure Preservation**: Artifacts are collected into a structured case directory, maintaining forensic integrity for later analysis.
+Crow-Claw is Crow-Eye's specialized acquisition engine for collecting and preserving artifacts from live systems or mounted images.
+- **Selective collection** — choose specific artifact categories (Registry, Event Logs, File System) or collect everything.
+- **Deep scanning** — walks directories and subdirectories to find forensic traces.
+- **Secure preservation** — artifacts land in a structured case directory that maintains forensic integrity.
 
 ### 🔍 Offline Analysis (Offline Importer)
-The Offline Importer allows investigators to analyze artifacts collected from any source without needing a live connection to the target system.
+Analyze artifacts collected from any source without a live connection to the target — three clear operations:
 
-- **Universal Input**: Input a complete directory of artifacts or select individual files for analysis.
-- **Smart Identification (SCAN)**: Hit **SCAN** to walk through the source data; Crow-Eye automatically identifies and indexes every supported artifact type using forensic signatures. This updates the case's **Scan Index** metadata without moving any files.
-- **Forensic Preservation (COLLECT)**: After scanning, you can hit **📦 Collect Artifacts** to physically copy the identified files into your Case's `live_acquisition` folder, organizing them by type (e.g., Registry, Prefetch, Event Logs).
-- **Granular Control (PARSE)**: Use the **Parse Artifact** window to review identified items. Every tab displays all files of a specific type (e.g., AMCACHE, EVTX, PREFETCH), allowing you to select specific files or the entire set for parsing into the forensic database.
+- **SCAN (discovery)** — walk the source and index every supported artifact using forensic signatures; **read-only**, nothing is moved.
+- **COLLECT (acquisition)** — physically copy the identified files into the case's `live_acquisition` folder, organized by type.
+- **PARSE (granular)** — review identified items per type (AMCACHE, EVTX, PREFETCH, …) and parse selected files (or all) into the forensic database.
 
-#### ❓ What is the difference between SCAN and COLLECT?
-
-| Feature | 🔍 SCAN | 📦 COLLECT ARTIFACTS |
-| :--- | :--- | :--- |
-| **Action** | **Discovery:** Identifies artifacts at their original location. | **Acquisition:** Copies and preserves artifacts in the Case folder. |
-| **I/O Impact** | Read-only. Does not move or copy any files. | Read + Write. Physically duplicates artifacts. |
-| **Organization** | Updates metadata in `.artifact_scan_index.json`. | Organizes files into type-specific folders (e.g., `Registry_Hives/`). |
-| **Use Case** | Fast triage to see if the source contains relevant data. | Full forensic preservation for long-term analysis or portability. |
+| | 🔍 SCAN | 📦 COLLECT |
+|---|---|---|
+| **Action** | Discovery — identifies artifacts at their original location | Acquisition — copies & preserves artifacts in the case folder |
+| **I/O impact** | Read-only; no files moved | Read + write; physically duplicates artifacts |
+| **Organization** | Updates `.artifact_scan_index.json` metadata | Organizes files into type-specific folders |
+| **Use case** | Fast triage to see if the source has relevant data | Full forensic preservation for long-term analysis |
 
 ### ⚡ Live Analysis
-- Analyzes artifacts directly from the running system.
-- Automatically extracts and parses artifacts from their standard locations.
-- Provides real-time forensic analysis of the current Windows environment.
+Analyzes artifacts directly from the running Windows system, auto-extracting from their standard locations for real-time forensic analysis.
 
-### Case Management
-- Upon launch, Crow Eye creates a case to organize and save all analysis output.
-- Each case maintains a separate directory structure for different artifact types.
-- Results are preserved for later review and reporting.
+### 🗂️ Case Management
+Every investigation is a **case**: a self-contained directory that organizes artifact databases and analysis output. Crow-Eye tracks recent cases (with favorites, tags, and status), validates a case on open, writes config atomically (crash-safe), and supports case config import/export and templates with ready-made semantic mappings.
 
-### Interactive Timeline Visualization
-- Correlate events in real time across artifacts.
-- Now fully functional with Heat Map View, Week View, and Day View for detailed analysis.
+### 🕰️ Interactive Timeline Visualization
+Correlate events across artifacts on a unified temporal grid, with **Heat Map**, **Week**, and **Day** views — an identity-threaded, court-traceable story rather than a flat super-timeline.
 
-### Advanced Search Engine
-- Full-text search across live data.
+### 🔎 Search & Export
+Full-text search across the case database, plus export to **CSV** (spreadsheets) and **JSON** (integration with other tools).
 
-## Search and Export Features
-- **Search Bar**: Quickly find specific artifacts or information within the database.
-- **Export Options**: Convert analysis results from the database into:
-  - CSV format for spreadsheet analysis.
-  - JSON format for integration with other tools.
-- These features make it easy to further process and analyze the collected forensic data.
+## 🧠 User Behavior Analytics (UBA)
 
-## Supported Artifacts and Functionality
+> **Turn raw artifacts into a plain-English activity story** — a manager/HR-readable account of what a user and their applications actually did, with every statement traceable to the exact source evidence.
 
-### Jump Lists and LNK Files Analysis
+**User Behavior Analytics (UBA)** reads the parsed artifact databases in your case's `Target_Artifacts/` folder (strictly **read-only**) and replays them through a declarative rule set to produce a clear, chronological **Activity Story**. Open it from the **"User Behavior"** toolbar button or with **`Ctrl+Shift+B`** (a case must be loaded).
 
-**Automatic Parsing:**
-- The tool automatically parses Jump Lists and LNK files from standard system locations.
+- 🧩 **40 declarative behavior detections** (`uba/config/behavior_rules.json`) — tunable without code — each classified by severity: **routine · notable · suspicious · critical**.
+- 🕵️ **Detects behavior that matters**: sign-in / sign-out / unlock, program launch · execution · install, file open / delete / inferred copy, USB device connection, network-share access, persistence & autostart, explicit-credential use (`runas`), account & group changes, service changes, **system-clock tampering** (suspicious), and **event-log clearing** (critical).
+- 🗺️ **Three views** — an **Activity Story** feed, an **Activity Map** heatmap (day × hour), and a **"What we can see"** honesty report that labels each detection *Working / Limited / No data / By design* for this case.
+- 🔗 **Every activity is evidence-backed.** Click any item to open the exact backing record (`database : table : rowid`) — nothing is asserted without a source.
+- 👤 **Honest attribution.** Actors resolve to User / Application / System (or are left empty) — UBA never guesses who did what.
 
-### Registry Analysis
-
-**Automatic Parsing:**
-- Crow Eye automatically parses registry hives from the system.
-
-**Custom Registry Analysis:**
-- Copy the following registry files to `CrowEye/Artifacts Collectors/Target Artifacts` or your case directory's `registry/` folder:
-  - `NTUSER.DAT` from `C:\Users\<Username>\NTUSER.DAT`.
-  - `SOFTWARE` from `C:\Windows\System32\config\SOFTWARE`.
-  - `SYSTEM` from `C:\Windows\System32\config\SYSTEM`.
-
-**Important Note:**
-- Windows locks these registry files during operation.
-- For custom registry analysis of a live system, you must:
-  - Boot from external media (WinPE/Live CD).
-  - Use forensic acquisition tools.
-  - Analyze a disk image.
-
-### Prefetch Files Analysis
-- Automatically parses prefetch files from `C:\Windows\Prefetch`.
-- Extracts execution history and other forensic metadata.
-
-### Event Logs Analysis
-- Automatic parsing of Windows event logs.
-- Logs are saved into a database for comprehensive analysis.
-
-### ShellBags Analysis
-- Parses ShellBags artifacts to reveal folder access history and user navigation patterns.
-
-### Recycle Bin Parser
-- Parses Recycle Bin ($RECYCLE.BIN) to recover deleted file metadata.
-- Extracts original file names, paths, deletion times, and sizes.
-- Supports recovery from live systems and disk images.
-
-### MFT Parser
-- Parses Master File Table (MFT) for file system metadata.
-- Extracts file attributes, timestamps, and deleted file information.
-- Supports NTFS file systems on Windows 7/10/11.
-
-### USN Journal Parser
-- Parses USN (Update Sequence Number) Journal for file change events.
-- Tracks file creations, deletions, modifications with timestamps.
-- Correlates with other artifacts for timeline reconstruction.
-
-### SRUM Data Visualization
-- Features support for duration bars to visualize SRUM App Usage (showing Face time and Background time).
-- Visualizes Network SRUM data to show the duration of activity for every application.
-
-  ### Storage Forensics Analyzer
-- Complete tree view of every physical disk and its partitions
-- Color-coded partition types (EFI=blue, Linux=purple, Recovery=orange, Hidden=swap/red, etc.)
-- Warnings for bootable USBs, hidden Linux roots, and Intel Rapid Start
-- Raw sector magic scanning fallback 
-
-## Documentation & Contribution
-
-### General Documentation
-
-- **[README.md](README.md)**: Project overview, vision, features, and usage guide (this document)
-- **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)**: Complete technical documentation including architecture, components, and development guide
-- **[CONTRIBUTING.md](CONTRIBUTING.md)**: Contribution guidelines, coding standards, and development workflows
-- **[timeline/ARCHITECTURE.md](timeline/ARCHITECTURE.md)**: Detailed timeline module architecture
-
-### 🔥 Correlation Engine Documentation & Contributing
-
-The Correlation Engine is our most active development area with comprehensive documentation:
-
-**Documentation** (~10,000 lines):
-- **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** - System overview with architecture diagrams
-- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** - Dual-engine architecture, engine selection guide, performance optimization
-- **[Architecture Documentation](correlation_engine/ARCHITECTURE.md)** - Component integration and data flow
-- **[Feather Documentation](correlation_engine/docs/feather/FEATHER_DOCUMENTATION.md)** - Data normalization system
-- **[Wings Documentation](correlation_engine/docs/wings/WINGS_DOCUMENTATION.md)** - Correlation rules
-- **[Pipeline Documentation](correlation_engine/docs/pipeline/PIPELINE_DOCUMENTATION.md)** - Workflow orchestration
-- **[Artifact Type Registry](correlation_engine/docs/config/ARTIFACT_TYPE_REGISTRY.md)** - Centralized artifact type definitions
-- **[Weight Precedence](correlation_engine/docs/config/WEIGHT_PRECEDENCE.md)** - Weight resolution hierarchy
-- **[Configuration Reload](correlation_engine/docs/config/CONFIGURATION_RELOAD.md)** - Live configuration updates
-- **[Integration Interfaces](correlation_engine/docs/integration/INTEGRATION_INTERFACES.md)** - Dependency injection and testing
-
-**Contributing**:
-- **[Correlation Engine Contributing Guide](correlation_engine/CONTRIBUTING.md)** - Priority areas, development status, and how to contribute
-
-**Quick Links**:
-- [Engine Selection Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) - Choose the right engine
-- [Troubleshooting Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#troubleshooting) - Common issues and solutions
-- [Performance Optimization](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#performance-and-optimization) - Optimize correlation
-
-### For Contributors
-
-For developers and contributors:
-- **General contributions**: Review the [Main Contributing Guide](CONTRIBUTING.md)
-- **Correlation Engine contributions** (priority area): See the [Correlation Engine Contributing Guide](correlation_engine/CONTRIBUTING.md)
-- Please review the technical documentation before submitting pull requests
-
-
-
-## Technical Notes
-- The tool incorporates a modified version of the JumpList_Lnk_Parser Python module.
-- Registry parsing requires complete registry hive files.
-- Some artifacts require special handling due to Windows file locking mechanisms.
-
-## Screenshots
-![Screenshot 2025-10-30 064143](https://github.com/user-attachments/assets/f400d4b3-e8f6-4c57-a59e-7f24107bc9e7)
-
-![Screenshot 2025-10-30 064155](https://github.com/user-attachments/assets/20878078-742c-4d7c-b51c-571ba6640f90)
-
-![Screenshot 2025-10-30 064205](https://github.com/user-attachments/assets/f23752e6-6a2b-4617-b665-c139a23676e8)
-
-![Screenshot 2025-10-30 064219](https://github.com/user-attachments/assets/9079a99e-bc42-4690-bec0-ee3c5bffa41c)
-
-![Screenshot 2025-10-30 064237](https://github.com/user-attachments/assets/bcdb9f14-6f13-45f4-a3d8-92871f73ab83)
-
-![Screenshot 2025-10-30 064403](https://github.com/user-attachments/assets/b3f113f5-4cd8-482d-86dd-b0b18ff650a0)
-
-## 🌐 Official Website
-Visit our official website: [https://crow-eye.com/](https://crow-eye.com/)
-
-For additional resources, documentation, and updates, check out our dedicated website.
-
----
+> UBA is **rule-driven behavioral correlation and classification**, not statistical/ML anomaly scoring — every finding maps to an explicit, auditable rule. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full detection catalogue.
 
 ## 🧩 Correlation Engine
 
-> **Version 0.12.0 — Behavioral Intelligence & Case Narrative Release** — see [RELEASE_NOTES.md](RELEASE_NOTES.md) for what's new in 0.12.0
+> **Correlation Engine v1.7.0** — the reconstruction core. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for release history.
 
-The **Crow-Eye Correlation Engine** is a production-grade forensic correlation system. It ingests Windows artifacts from any source, normalizes them, and surfaces the temporal and identity relationships that turn isolated records into a coherent narrative of what happened on a system, when, and who was involved.
-
-The engine works out of the box with built-in correlation rules (Wings) for the most common investigation questions, and lets analysts author custom rules without touching code.
+The **Crow-Eye Correlation Engine** is a production-grade forensic correlation system. It ingests Windows artifacts from any source, normalizes them, and surfaces the temporal and identity relationships that turn isolated records into a coherent narrative of what happened on a system, when, and who was involved. It works out of the box with built-in correlation rules (Wings) for the most common investigation questions, lets analysts author custom rules without touching code, and defers meaning to authorable rules and the investigator — never to a black-box score.
 
 ### 🎥 User Guide
 [![Correlation Engine User Guide](https://img.youtube.com/vi/NxuoFrZvVHE/maxresdefault.jpg)](https://youtu.be/NxuoFrZvVHE?si=VWlQgFicIqzwxQd2)
 
 **Universal Data Import**: The Correlation Engine can take output from **any forensic tool** in CSV, JSON, or SQLite format and convert it into a Feather database. This means you can correlate data from third-party tools (Plaso, Autopsy, Volatility, etc.) with Crow-Eye's native artifacts, creating a unified correlation analysis across all your forensic data sources.
 
-### 🎯 Accuracy & Evidence-Completeness Update (within 0.11.0)
+### 🎯 Accuracy & Evidence-Completeness
 
-A focused accuracy pass after extensive end-to-end validation against a real ~700K-record Windows case, layered on top of the earlier 0.11.0 reliability work. Every fix below is locked by the 96-test pytest suite and verified by a holistic validation harness that exercises all 7 default wings against both engines.
+A focused accuracy pass, validated end-to-end against a real ~700K-record Windows case, layered on top of earlier reliability work. Every fix below is locked by the pytest regression suite and verified by a holistic validation harness that exercises all 7 default wings against both engines.
 
-**Identity engine now captures all the evidence**
-- **Fix: identity engine was iterating only the FIRST row of every feather** when a time filter was active. Root cause: a timezone-aware vs naive datetime comparison in the filter raised `TypeError` and aborted the per-row loop. Records-seen jumped from 3,558 → **745,615** on the validation case. Symptom prior to fix: every feather reported `records_processed=1`.
-- **Fix: log records collapsed every event to its event PROVIDER as the identity.** All 33,855 SecurityLogs records were extracted as the same identity (`Microsoft-Windows-Security-Auditing`), making cross-feather correlation impossible. The per-artifact mapping now prioritises real per-row entities (`User`, `ComputerName`, `NewProcessName`, `TargetUserName`) BEFORE channel/provider metadata.
-- **Fix: artifact-aware field mapping never fired** because parsers don't stamp an `artifact` column on each row. The engine now falls back to `feather_metadata.artifact_type` for the lookup, so SecurityLogs / SystemLogs / ApplicationLogs records correctly use their artifact-specific identity priority.
-- **Fix: placeholder strings became false identities.** `'N/A'`, `'Unknown'`, `'-'`, nil-GUIDs, and similar were being treated as real identities and bundling unrelated records together. The validator now rejects 30+ placeholder variants.
-- **Net result on a single full-range correlation window**: the Execution Proof wing now surfaces **2,856 cross-feather (High) matches** in the identity engine and **643 cross-feather matches** in the time engine, with 24–118 cross-feather matches per wing across the other 6 wings. Identity-engine total matches per wing: 82K–99K (was 15–2,099).
+**The identity engine captures all the evidence**
+- **Fixed: the identity engine was iterating only the FIRST row of every feather** when a time filter was active (a timezone-aware vs naive datetime comparison raised `TypeError` and aborted the per-row loop). Records-seen jumped from 3,558 → **745,615** on the validation case.
+- **Fixed: log records collapsed every event to its event PROVIDER as the identity** (all 33,855 SecurityLogs records shared one identity). The per-artifact mapping now prioritises real per-row entities (`User`, `ComputerName`, `NewProcessName`, `TargetUserName`) before channel/provider metadata.
+- **Fixed: artifact-aware field mapping never fired** because parsers don't stamp an `artifact` column on each row. The engine now falls back to `feather_metadata.artifact_type`, so SecurityLogs / SystemLogs / ApplicationLogs use their artifact-specific identity priority.
+- **Fixed: placeholder strings became false identities** (`'N/A'`, `'Unknown'`, `'-'`, nil-GUIDs bundled unrelated records together). The validator now rejects 30+ placeholder variants.
+- **Net result on one full-range window**: the Execution Proof wing surfaces **2,856 cross-feather (High) matches** in the identity engine and **643 cross-feather matches** in the time engine, with 24–118 cross-feather matches per wing across the other 6 wings.
 
 **No more "everything is Low — something is wrong"**
-- **Fix: identity engine wasn't differentiating single-feather vs multi-feather matches** — it tagged every match `High`. Now matches with `feather_count == 1` get `confidence_category="Low - single feather"` / `confidence_score=0.5`, matching the time engine's labeling. The analyst's High view now focuses on real cross-feather correlation.
-- **Fix: path-aware composite key was splitting same identity across feathers.** Each feather stores paths differently (BAM uses `/device/harddiskvolume3/...`, LNK uses `c:/users/...`, MFT uses 8.3 short paths). With path in the key, `chrome` had 10+ different composite keys and never correlated. The key is now name-only (canonical `identity_grouping.identity_key`) — same convention as the time engine. Cross-feather correlation works again.
+- **Fixed: single-feather matches were tagged `High`.** Matches with `feather_count == 1` now get `confidence_category="Low - single feather"`, so the High view focuses on real cross-feather correlation.
+- **Fixed: a path-aware composite key was splitting the same identity across feathers** (each feather stores paths differently, so `chrome` had 10+ keys and never correlated). The key is now name-only — cross-feather correlation works again.
 
-**Impersonation detection via path classification**
-- Path-based impersonation flag replaces what path-aware keying was supposed to provide. After a match is formed, the engine walks all records' path fields and classifies as TRUSTED (Program Files, Windows\\System32, WinSxS, WindowsApps, ProgramData\\Microsoft, the equivalent BAM/SRUM `/device/harddiskvolumeN/program files/...` forms, plus Mac/Linux paths) or SUSPICIOUS (Temp, Downloads, Public, AppData\\Local\\Temp, Recycle Bin, removable-drive roots, network shares, `$Recycle.Bin`).
-- A match with records in BOTH classifications gets `match.semantic_data['impersonation_alert']`. On the validation case: ~50 alerts per wing (≈0.05% rate), each a real candidate (`python.exe` in venv + Program Files, Discord's official install + AppData copy, etc.).
+**Impersonation detection via path classification** — after a match is formed, the engine classifies every record's path as TRUSTED (Program Files, `System32`, WinSxS, the BAM/SRUM `/device/harddiskvolumeN/...` forms, …) or SUSPICIOUS (Temp, Downloads, Public, `AppData\Local\Temp`, Recycle Bin, removable roots, network shares). A match spanning both classifications raises `impersonation_alert` (≈0.05% rate, each a real candidate).
 
-**Engine evidence accounting**
-- Per-window drop ledger with named buckets (`no_identity_field`, `normalize_failure`, `below_threshold_skipped`, etc.), each carrying the first 3 sample identities so logs name *what* was lost.
-- Per-pipeline summary block at the end of each `correlate(...)` call: records seen, high-confidence emitted, low-confidence emitted, records-with-no-identity, drop buckets, timeless-feather records joined by identity. Every record either lands in a match or in a named drop bucket — "no evidence left over" is verifiable from the log.
-- `low_confidence_review_mode` is now ON by default. Below-threshold identity groups become Low-confidence matches instead of being silently dropped.
+**Honest evidence accounting** — a per-window drop ledger with named buckets (`no_identity_field`, `normalize_failure`, `below_threshold_skipped`, …) plus a per-pipeline summary (records seen, high/low emitted, no-identity, drop buckets, timeless-feather joins). Every record either lands in a match or in a named drop bucket — "no evidence left over" is verifiable from the log. `low_confidence_review_mode` is ON by default, so below-threshold groups become Low-confidence matches instead of silently vanishing.
 
-**Timeless-feather identity enrichment**
-- Feathers without per-row timestamps (AutoStartPrograms, MUICache, SystemServices, TypedPaths) no longer get a synthetic feather-generation timestamp stamped onto every row (which used to lie about when the artifact was observed). Instead, after time-windowed matches are formed by the timed feathers, the engine walks each match's identity and pulls matching records from every timeless feather, attaching them as supplementary evidence. Identity drives the join; the time anchor comes from the timed feathers.
+**Timeless-feather identity enrichment** — feathers without per-row timestamps (AutoStartPrograms, MUICache, SystemServices, TypedPaths) no longer get a fake generation-time stamped on every row; instead, after timed matches form, the engine joins matching records from every timeless feather by identity as supplementary evidence.
 
-**Consolidated identity registry**
-- New `config/standard_fields/identities.json` — single source of truth for every column the engines + EYE Agent should consult to extract or track an identity. **98 categories, 1,146 column synonyms** covering app/process, file, hash, user, host/device, network, registry, service/task, event, email, browser, cloud (AWS / Azure / GCP), Windows internals (mutex, named pipe, COM CLSID, ETW provider, WMI consumer), certificate, container, and OS objects.
-- `identity_correlation_engine.py::timestamp_field_patterns` now reads from `timestamps.json` (canonical timestamps registry) instead of a hand-maintained list, with the bookkeeping suffixes (`parsed_at` / `inserted_at` / `created_at`) filtered out so feather-generation time never gets treated as artifact observation time.
-- `identity_based_engine_adapter._path_fields()` reads its path-field list from `identities.json` categories (`file_path`, `target_path`, `source_path`, `parent_directory`, `image_path`, `command_line`, `registry_key`, `service_image_path`, `scheduled_task_path`). Adding a new path column synonym is now a JSON edit, not a code change.
-- `timestamps.json` cleaned up: real MFT activity timestamps (`si_creation_time`, `si_modification_time`, `si_mft_entry_change_time`, `fn_mft_entry_change_time`, `mft_modified_time`) moved out of the bookkeeping category where they were wrongly classified.
+**Consolidated identity registry** — `config/standard_fields/identities.json` is the single source of truth for every column the engines + Eye should consult: **98 categories, 1,146 column synonyms** (app/process, file, hash, user, host/device, network, registry, service/task, event, email, browser, cloud, Windows internals, certificate, container, OS objects). Adding a new column synonym is a JSON edit, not a code change.
 
-**Semantic mapping false-positive fixes**
-- `default-data-exfiltration-pattern`: was an OR rule across 3 wildcard conditions on different feathers — fired `severity=high` on any single LNK record. Now properly gated with `_requires_multi_indicator=True, _min_indicators=2`. The previously-dead `_requires_multi_indicator` / `_min_indicators` fields are now actually honored by `SemanticRule.evaluate()`.
-- `auth_failed_then_success`: was logically impossible (AND on `EventID == 4625 AND EventID == 4624` — a single record can equal only one value, rule never fired). Rewritten as OR with clearer semantic value.
-- `af_wiper_tool_run` / `lat_remote_tool_run`: descriptions named specific tools (`sdelete.exe, cipher.exe, wevtutil.exe` etc.) but condition was a wildcard — every Prefetch entry got tagged "Wiper Tool Run" / "Remote Tool Run" at `severity=high`. Now use proper regex matching the actual tool names.
-- Severity inflation fixes on `exec_confirmed_run` / `pers_run_key` / `pers_service_install` / `pers_confirmed_runs` — baseline-activity rules (every executed app, every autostart entry) demoted from `high`/`critical` to `info`/`low`. The wing's weighted scoring layer escalates real threats via score thresholds.
-- `SemanticMappingManager.apply_to_record` candidate dedup: global mappings with `artifact_type` were being evaluated twice (once via `artifact_mappings`, once via `global_mappings`), inflating downstream counts.
-
-**Time-engine accuracy fixes (carry-over context)**
-- Method 0 schema-driven timestamp detection from `feather_schemas.json` — feathers with declared `primary_timestamp_column` + `secondary_timestamp_columns` no longer rely on auto-detection that could pick integer cycle-counters as Unix epoch timestamps.
-- Per-column WHERE-clause format binding. Heterogeneous-format feathers (amcache MM/DD/YYYY install_date + ISO parsed_at) used to silently return 0 rows because the engine used one global format. Now each column's WHERE parameters use that column's specific format.
-- Multi-column timestamp fan-out for separate-column timestamp feathers (mft_usn: si_creation_time + si_modification_time + si_access_time + 6 more). A single row with timestamps in multiple windows becomes a virtual record in each. `mft_usn` went from 2 records returned to 913,809 virtual records.
-- Year 1990–2100 plausibility filter on parsed timestamps drops NTFS / LNK placeholder dates (1601-01-01, 1980-01-01, 2000-01-01) before they spawn lonely virtual records.
-
-### 🚀 What's New in 0.11.0
-
-The 0.11.0 release is a deep reliability + extensibility pass that closes the most common "where did my evidence go?" gaps and lays the groundwork for parallel correlation.
-
-**No dropped evidence**
-- **Multi-timestamp fan-out**: Prefetch's `run_times` JSON list (up to 8 historical executions per row) is now expanded into one virtual record per timestamp. A typical case sees a 4× lift in correlatable execution events that the previous engine silently ignored.
-- **Tolerant timestamp parser**: Windows FILETIME, `YYYYMMDD` compact dates (registry InstalledSoftware), trailing annotations (`"2026-05-19 10:48:21 (Registry Key LastWrite)"`), and every parser canonical format are all classified on the first try — no fallback churn, no misclassified rows.
-- **Duplicates preserved as evidence**: The dedup signature now keys on the **raw** identity (not the normalized form). Variants like `Chrome.exe` and `Chrome.dll` no longer collapse into one row at insert time — they share the identity bucket but each row is counted.
-- **Wider identity-field coverage**: 290+ name/path synonyms now recognized across MFT (`file_name`), BAM (`process_path`), USB (`friendly_name`), BrowserHistory (`title`), Shellbags, RecycleBin, Network_list, UserProfiles, and more. Records that previously slipped through with "no identity" now form matches.
-
-**Smarter sub-identity grouping**
-- `Chrome.exe`, `chrome.exe`, `Chrome.EXE`, and `chrome.dll` collapse into one sub-identity (case + extension are noise).
-- `Chrome v1.0.exe` and `Chrome v2.0.exe` stay split (version differences are signal).
-- `Chrome (x86)` and `Chrome (x64)` stay split (architectural qualifiers are signal).
-- Each sub-identity exposes its name variants so analysts see all spellings.
-
-**One source of truth — no more drift**
-- Field name synonyms live in `config/standard_fields/*.json`. Adding a new parser column is a JSON edit, not a code change in three places.
-- Per-table feather metadata (primary timestamp column, multi-timestamp JSON columns, identity priority) lives in `correlation_engine/config/feather_schemas.json`.
-- Identity normalization unified in `correlation_engine/engine/identity_grouping.py` — the engine, both result viewers, and the identity-semantic phase all share one implementation.
-
-**Performance foundation**
-- Thread-safe feather query cache (RLock-protected). The path to true parallel correlation is unblocked.
-- `query_time_range_iter()` — streaming generator that yields records by 1000-row batches. Constant memory across feathers of any size.
-- `parallel_strategy` config field (`'none' | 'threads' | 'processes'`) ready for opt-in process-pool parallelism.
-
-**Better feather generation**
-- `FeatherWriter` — canonical write contract with WAL journal, explicit BEGIN/COMMIT transactions, `executemany()` batched inserts (5000-row batches by default). Expected 50–200× speedup over per-row inserts on large imports.
-- Schema metadata is stamped into the feather DB itself, so the engine doesn't need to sniff sample values to learn column roles.
-- Multi-timestamp JSON columns declarable via `writer.declare_multi_timestamp_json("run_times")` — engine reads it from the feather, no engine-side config edit.
-
-**Diagnostics you can trust**
-- Every correlation window emits an INFO line with `records_in / no_identity / parse_cache_hits / below_threshold / matches_emitted / min_feathers`. If matches are being dropped, the log says exactly where.
-- The `_last_window_correlation_stats` dict on the engine exposes the same data programmatically.
-- New `low_confidence_review_mode` + `min_feathers_override` config knobs let analysts dial the correlation strictness per case.
-
-**Test suite**
-- 96-test pytest regression suite covering the timestamp parser, identity normalization, multi-timestamp fan-out, feather schemas, wing loader, feather writer, identity-grouping (heavy + mild keys), Eye-Agent authoring (write-side GEP governance), and the standard-fields registry. Locks every fix above so they can't regress.
+**Semantic-mapping false-positive fixes** — multi-indicator gating now actually enforced (`data-exfiltration-pattern` requires ≥2 indicators); impossible AND rules (`4625 AND 4624`) rewritten as OR; wiper/remote-tool rules use real regex instead of firing on every Prefetch entry; baseline-activity rules demoted from `high`/`critical` to `info`/`low` (the wing's weighted scoring escalates real threats).
 
 ### ✅ Production Status
 
-The Correlation Engine is **production-ready** and actively being used in forensic investigations:
+The Correlation Engine is **production-ready** and actively used in investigations (**Correlation Engine v1.7.0**):
 
-**Current Status (0.11.0)**:
-- ✅ **Time-Window Scanning Engine**: Production-ready — recommended for time-based analysis (O(N log N))
-- ✅ **Identity-Based Engine**: Production-ready — recommended for identity tracking (O(N log N))
-- ✅ **Feather Builder**: Production-ready — imports CSV/JSON/SQLite from any tool
-- ✅ **FeatherWriter**: New canonical write API — transactional batching + schema metadata
-- ✅ **Wings System**: Production-ready — create and manage correlation rules
-- ✅ **Pipeline Orchestration**: Production-ready — automate correlation workflows
-- ✅ **Identity Grouping**: Unified across engine + viewers + semantic phase
-- ✅ **Standard Fields Registry**: Centralized field synonym source of truth
-- ✅ **Multi-timestamp Fan-Out**: Every JSON-list timestamp correlated
-- 🔄 **Parallel Correlation**: Foundation in place; profiling + process-pool dispatch next
-- 🔄 **Semantic Mapping**: Active enhancements
-- 🔄 **Correlation Scoring**: Refinements in progress
-
-**Recommendations**:
-- ⭐ **Use Time-Window Scanning Engine** for time-based artifact analysis (production-ready, O(N log N))
-- ✅ **Use Identity-Based Engine** for identity tracking and filtering (production-ready, O(N log N))
-- 📊 **Feather Builder** / `FeatherWriter` are stable and ready for all data import needs
-- 🎯 **Wings and Pipelines** are production-ready
-
-**What We're Working On Next**:
-- Process-pool parallel correlation (profiling baseline, then enable by default for ≥50 windows)
-- Migrating all 8 built-in parsers onto `FeatherWriter` for the transactional-batching speedup
-- Comprehensive semantic field mapping across more artifacts
-- Finalizing correlation scoring algorithms with explainability
+- ✅ **Time-Window Scanning Engine** — production-ready, recommended for time-based analysis (O(N log N))
+- ✅ **Identity-Based Engine** — production-ready, recommended for identity tracking (O(N log N))
+- ✅ **Feather Builder / FeatherWriter** — imports CSV/JSON/SQLite from any tool; transactional batching + schema metadata
+- ✅ **Wings System & Pipeline Orchestration** — create/manage correlation rules and automate workflows
+- ✅ **Identity Grouping** — unified across engine, viewers, and the semantic phase
+- ✅ **Standard Fields Registry** — centralized field-synonym source of truth
+- ✅ **Multi-timestamp Fan-Out** — every JSON-list timestamp correlated
+- 🔄 **Parallel Correlation** — foundation in place; profiling + process-pool dispatch next
+- 🔄 **Semantic Mapping & Correlation Scoring** — active enhancements
 
 ### Key Features
 
-- **🔄 Dual-Engine Architecture**: Choose between Time-Window Scanning (O(N log N)) and Identity-Based (O(N log N)) correlation strategies
-- **📊 Multi-Artifact Support**: Correlate Prefetch, ShimCache, AmCache, Event Logs, LNK files, Jumplists, MFT, USN, SRUM, Registry, RecycleBin, and more
-- **🔌 Universal Import**: Import CSV/JSON/SQLite output from any forensic tool and convert to Feather databases
-- **🎯 Smart Identity Grouping**: Variants like `Chrome.exe`/`chrome.dll`/`Chrome.EXE` collapse to one bucket; versions and architectural qualifiers stay distinct
-- **🕒 Tolerant Timestamps**: FILETIME, ISO 8601, Unix epoch (s/ms/μs), `YYYYMMDD`, US slash, and annotated strings all parsed correctly on first try
-- **📈 Multi-Timestamp Fan-Out**: JSON timestamp lists (Prefetch `run_times`) expanded so every execution gets its own correlation event
-- **🧰 One Source of Truth**: Field synonyms in `config/standard_fields/*.json`; per-table metadata in `feather_schemas.json` — extend by editing JSON, not code
-- **⚡ Streaming + Thread-Safe**: O(1)-memory `query_time_range_iter`; lock-protected feather caches; ready for parallel correlation
-- **🔍 Flexible Rules**: Define custom correlation rules (Wings) with configurable parameters
-- **📋 Honest Diagnostics**: Per-window stats line (records_in / no_identity / parse_cache_hits / below_threshold / matches_emitted) so you always know if evidence was dropped
-- **🧪 Locked-In Quality**: 96-test regression suite covering timestamp parsing, identity normalization, fan-out, the writer contract, Eye-Agent authoring (write-side GEP governance), and the standard-fields registry
-- **🎨 Professional UI**: Cyberpunk-styled interface with timeline visualization
+- **🔄 Dual-Engine Architecture**: Choose between Time-Window Scanning (O(N log N)) and Identity-Based (O(N log N)) correlation strategies.
+- **📊 Multi-Artifact Support**: Correlate Prefetch, ShimCache, AmCache, Event Logs, LNK files, Jumplists, MFT, USN, SRUM, Registry, RecycleBin, and more.
+- **🔌 Universal Import**: Import CSV/JSON/SQLite output from any forensic tool and convert to Feather databases.
+- **🎯 Smart Identity Grouping**: Variants like `Chrome.exe`/`chrome.dll`/`Chrome.EXE` collapse to one bucket; versions and architectural qualifiers stay distinct.
+- **🕒 Tolerant Timestamps**: FILETIME, ISO 8601, Unix epoch (s/ms/μs), `YYYYMMDD`, US slash, and annotated strings all parsed correctly on the first try.
+- **📈 Multi-Timestamp Fan-Out**: JSON timestamp lists (Prefetch `run_times`) expanded so every execution gets its own correlation event.
+- **🧰 One Source of Truth**: Field synonyms in `config/standard_fields/*.json`; per-table metadata in `feather_schemas.json` — extend by editing JSON, not code.
+- **⚡ Streaming + Thread-Safe**: O(1)-memory `query_time_range_iter`; lock-protected feather caches; ready for parallel correlation.
+- **🔍 Flexible Rules**: Define custom correlation rules (Wings) with configurable parameters.
+- **📋 Honest Diagnostics**: Per-window stats line (records_in / no_identity / parse_cache_hits / below_threshold / matches_emitted) so you always know if evidence was dropped.
+- **🧪 Locked-In Quality**: A pytest regression suite covering timestamp parsing, identity normalization, fan-out, the writer contract, Eye authoring (write-side GEP governance), and the standard-fields registry.
 
 ### System Architecture
 
@@ -455,37 +276,22 @@ The Correlation Engine consists of four main components:
 
 **Purpose**: Transform raw forensic artifacts into a standardized, queryable format.
 
-**What They Are**:
-- SQLite databases containing normalized forensic artifact data
-- Each feather represents one artifact type (e.g., Prefetch, ShimCache, Event Logs)
-- Standardized schema with metadata for efficient querying
-- **Universal format** that accepts data from any forensic tool
+- SQLite databases containing normalized forensic artifact data — one feather per artifact type (Prefetch, ShimCache, Event Logs, …) with a standardized schema and metadata for efficient querying.
+- A **universal format** that accepts data from any forensic tool.
 
-**How They Work**:
 ```
 Any Tool Output → Feather Builder → Normalized Feather Database
 (CSV/JSON/SQLite)                   (SQLite with standard schema)
 
 Examples:
-- Plaso CSV → Feather Builder → timeline.db
-- Autopsy JSON → Feather Builder → autopsy_artifacts.db
-- Volatility CSV → Feather Builder → memory_artifacts.db
-- Custom Tool Output → Feather Builder → custom.db
+- Plaso CSV        → Feather Builder → timeline.db
+- Autopsy JSON     → Feather Builder → autopsy_artifacts.db
+- Volatility CSV   → Feather Builder → memory_artifacts.db
+- Custom Output    → Feather Builder → custom.db
 ```
 
-**Key Features**:
-- **Multi-source import**: SQLite databases, CSV files, JSON files from any tool
-- Automatic column mapping and data type detection
-- Timestamp normalization to ISO format
-- Data validation and error handling
-- Optimized indexes for fast correlation
+**Supported import formats:** CSV (any headered file), JSON (flat or nested), and SQLite (direct import). Automatic column mapping, data-type detection, timestamp normalization to ISO, validation, and optimized indexes.
 
-**Supported Import Formats**:
-- **CSV**: Any CSV file with headers (from Plaso, Excel exports, custom scripts, etc.)
-- **JSON**: Flat or nested JSON from any forensic tool
-- **SQLite**: Direct import from other SQLite databases
-
-**Example**:
 ```
 prefetch.db (Feather)
 ├── feather_metadata (artifact type, source, record count)
@@ -495,19 +301,10 @@ prefetch.db (Feather)
 
 #### 2. 🎯 Wings (Correlation Rules)
 
-**Purpose**: Define which artifacts to correlate and how to correlate them.
+**Purpose**: Define which artifacts to correlate and how.
 
-**What They Are**:
-- JSON/YAML configuration files that specify correlation rules
-- Define time windows, minimum matches, and feather relationships
-- Reusable across different cases and datasets
+- JSON/YAML rules specifying a **time window**, **minimum matches**, **anchor priority**, and the **feathers** (with weights) to correlate — reusable across cases. Every Wing is **authorable and sealed** (records who authored it, why, and the evidence that motivated it).
 
-**Key Components**:
-- **Correlation Rules**: Time window, minimum matches, anchor priority
-- **Feather Specifications**: Which feathers to correlate, weights, requirements
-- **Filters**: Optional time period or identity filters
-
-**Example Wing**:
 ```json
 {
   "wing_id": "execution-proof",
@@ -527,82 +324,23 @@ prefetch.db (Feather)
 
 #### 3. ⚙️ Engines (Correlation Strategies)
 
-**Purpose**: Execute correlation logic to find relationships between artifacts.
+**Purpose**: Execute correlation logic to find relationships between artifacts. Structural links come **first**; a tier-weighted score is layered on top as *interpretation/ranking*, not as the basis for a match.
 
-The Correlation Engine offers two distinct strategies:
+**Time-Window Scanning Engine** — best for time-based analysis and systematic temporal correlation. Scans through time in fixed intervals, collects records from all feathers per window, applies semantic field matching + weighted scoring, and prevents duplicates via MatchSet tracking. **O(N log N)** (indexed timestamp queries); batch processing (~2,567 windows/second).
 
-##### Time-Window Scanning Engine
+**Identity-Based Correlation Engine** — best for large datasets (>1,000 records) and identity tracking. Extracts and normalizes identities, groups records by identity, builds temporal anchors within each cluster, classifies evidence as primary/secondary/supporting, and streams for very large sets (>5,000 anchors) at constant memory. **O(N log N)**; 40+ identity field patterns per type.
 
-**Best For**: Time-based artifact analysis, systematic temporal correlation, production environments
-
-**How It Works**:
-1. Scan through time systematically from year 2000 in fixed intervals
-2. For each time window, collect records from all feathers
-3. Apply semantic field matching and weighted scoring
-4. Prevent duplicates using MatchSet tracking
-5. Return correlation matches with confidence scores
-
-**Complexity**: O(N log N) where N = number of records (indexed timestamp queries)
-
-**Key Features**:
-- Systematic temporal analysis with fixed time windows
-- Universal timestamp format support with robust indexing
-- Batch processing for high performance (2,567 windows/second)
-- Memory-efficient with intelligent caching
-- Production-ready for time-based investigations
-
-##### Identity-Based Correlation Engine
-
-**Best For**: Large datasets (> 1,000 records), production environments, identity tracking
-
-**How It Works**:
-1. Extract and normalize identity information from all records
-2. Group records by identity (application/file)
-3. Create temporal anchors within each identity cluster
-4. Classify evidence as primary, secondary, or supporting
-5. Return identity-centric correlation results
-
-**Complexity**: O(N log N) where N = number of records
-
-**Key Features**:
-- Identity extraction with 40+ field patterns per type
-- Multi-feather identity grouping
-- Temporal anchor clustering
-- Streaming mode for large datasets (> 5,000 anchors)
-- Constant memory usage with streaming
-- Identity filtering support
-
-**Engine Selection**:
-- **Time-based analysis**: Use Time-Window Scanning Engine (production-ready, O(N log N))
-- **Identity tracking**: Use Identity-Based Engine (production-ready, O(N log N))
-- Both engines are optimized for large datasets with indexed queries
+**Engine selection:** use the Time-Window engine for time-based analysis and the Identity-Based engine for identity tracking — both are production-ready and optimized for large datasets with indexed queries.
 
 #### 4. 🔄 Pipelines (Workflow Orchestration)
 
-**Purpose**: Automate complete analysis workflows from feather creation to result generation.
+**Purpose**: Automate complete analysis workflows from feather creation to result generation. A pipeline reads its config (engine type, wings, feathers), instantiates the right engine via the EngineSelector, executes each wing, aggregates matches, saves results (DB + JSON), and displays them in the GUI with filtering and visualization.
 
-**What They Are**:
-- Orchestration layer that ties everything together
-- Automate feather creation, wing execution, and report generation
-- Support for multiple wings and complex workflows
-
-**Pipeline Workflow**:
-1. **Load Configuration**: Read pipeline config with engine type, wings, feathers
-2. **Create Engine**: Use EngineSelector to instantiate appropriate engine
-3. **Execute Wings**: Run each wing against specified feathers
-4. **Collect Results**: Aggregate correlation matches from all wings
-5. **Generate Reports**: Save results to database and JSON files
-6. **Display Results**: Present in GUI with filtering and visualization
-
-**Example Pipeline**:
 ```json
 {
   "pipeline_name": "Investigation Pipeline",
   "engine_type": "identity_based",
-  "wings": [
-    {"wing_id": "execution-proof"},
-    {"wing_id": "file-access"}
-  ],
+  "wings": [{"wing_id": "execution-proof"}, {"wing_id": "file-access"}],
   "feathers": [
     {"feather_id": "prefetch", "database_path": "data/prefetch.db"},
     {"feather_id": "srum", "database_path": "data/srum.db"},
@@ -618,185 +356,77 @@ The Correlation Engine offers two distinct strategies:
 ### How It All Works Together
 
 ```
-1. Data Preparation
-   Raw Forensic Data → Feather Builder → Feather Databases
-
-2. Configuration
-   Wing Configs + Feather References → Pipeline Config
-
-3. Execution
-   Pipeline Executor → Engine Selector → Correlation Engine
-
-4. Correlation
-   Engine loads Feathers + applies Wing rules → Correlation Results
-
-5. Visualization
-   Results Database → Results Viewer GUI
+1. Data Preparation   Raw Forensic Data → Feather Builder → Feather Databases
+2. Configuration      Wing Configs + Feather References → Pipeline Config
+3. Execution          Pipeline Executor → Engine Selector → Correlation Engine
+4. Correlation        Engine loads Feathers + applies Wing rules → Correlation Results
+5. Visualization      Results Database → Results Viewer GUI
 ```
 
 ### Example Use Case: Finding Execution Proof
 
-**Scenario**: Prove that `malware.exe` was executed on a system
+**Scenario**: prove that `malware.exe` was executed on a system.
 
-**Step 1: Create Feathers**
-```bash
-# Import Prefetch, ShimCache, and AmCache data
-python -m correlation_engine.feather.feather_builder
-```
-
-**Step 2: Create Wing**
 ```json
 {
   "wing_id": "malware-execution",
-  "correlation_rules": {
-    "time_window_minutes": 5,
-    "minimum_matches": 2
-  },
+  "correlation_rules": { "time_window_minutes": 5, "minimum_matches": 2 },
   "feathers": ["prefetch", "shimcache", "amcache"]
 }
 ```
 
-**Step 3: Execute Pipeline**
 ```python
 from correlation_engine.pipeline import PipelineExecutor
-
 executor = PipelineExecutor(pipeline_config)
 results = executor.execute()
 ```
 
-**Step 4: View Results**
 ```
 Identity: malware.exe
   Anchor 1 (2024-01-15 10:30:00):
     ✓ Prefetch: malware.exe executed at 10:30:00
     ✓ ShimCache: malware.exe modified at 10:30:15
-    ✓ AmCache: malware.exe installed at 10:29:45
-  
+    ✓ AmCache:  malware.exe installed at 10:29:45
+
   Conclusion: Execution proven with 3 corroborating artifacts
 ```
 
 ### Performance Benchmarks
 
-**Time-Window Scanning Engine**:
-- 100 records: 0.1s
-- 1,000 records: 0.5s
-- 10,000 records: 5s
-- 100,000 records: 50s
-- Best for: Time-based artifact analysis (production-ready)
+| Records | Time-Window Engine | Identity-Based Engine |
+|---|---|---|
+| 1,000 | 0.5s | 2s |
+| 10,000 | 5s | 15s |
+| 100,000 | 50s | 2.5 min (streaming) |
+| 1,000,000 | — | 25 min (streaming) |
 
-**Identity-Based Engine**:
-- 1,000 records: 2s
-- 10,000 records: 15s
-- 100,000 records: 2.5 min (with streaming)
-- 1,000,000 records: 25 min (with streaming)
-- Best for: Identity tracking and filtering (production-ready)
+### Getting Started with the Correlation Engine
 
-### Documentation
-
-**Comprehensive Documentation** (~7,200 lines):
-- **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** - System overview with architecture diagrams
-- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** - Dual-engine architecture, engine selection guide, performance optimization
-- **[Architecture Documentation](correlation_engine/ARCHITECTURE.md)** - Component integration and data flow
-- **[Feather Documentation](correlation_engine/docs/feather/FEATHER_DOCUMENTATION.md)** - Data normalization system
-- **[Wings Documentation](correlation_engine/docs/wings/WINGS_DOCUMENTATION.md)** - Correlation rules
-- **[Pipeline Documentation](correlation_engine/docs/pipeline/PIPELINE_DOCUMENTATION.md)** - Workflow orchestration
-
-**Quick Links**:
-- [Engine Selection Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) - Choose the right engine
-- [Troubleshooting Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#troubleshooting) - Common issues and solutions
-- [Performance Optimization](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#performance-and-optimization) - Optimize correlation
-
-### Getting Started with Correlation Engine
-
-1. **Launch Feather Builder**:
-   ```bash
-   python -m correlation_engine.main
-   ```
-
-2. **Create Feathers**: Import your forensic artifacts (Prefetch, ShimCache, etc.)
-
-3. **Create Wings**: Define correlation rules for your investigation
-
-4. **Create Pipeline**: Configure which wings and feathers to use
-
-5. **Execute**: Run the pipeline and view correlated results
-
-6. **Analyze**: Use the Results Viewer to explore temporal relationships
-
-**Current Status**: 
-- ✅ **Production-Ready** - Core system operational and battle-tested
-- ⭐ **Time-Window Scanning Engine** - Production-ready for time-based analysis (O(N log N))
-- ✅ **Identity-Based Engine** - Production-ready for identity tracking (O(N log N))
-- 🔄 **Active Development** - Ongoing enhancements to semantic mapping, scoring, and identity extraction
+1. **Launch**: `python -m correlation_engine.main`
+2. **Create Feathers**: import your forensic artifacts (Prefetch, ShimCache, …).
+3. **Create Wings**: define correlation rules for your investigation.
+4. **Create a Pipeline**: configure which wings and feathers to use.
+5. **Execute**: run the pipeline and view correlated results.
+6. **Analyze**: use the Results Viewer to explore temporal relationships.
 
 ### 📚 Correlation Engine Documentation
 
-**Comprehensive Documentation** (~10,000 lines covering all aspects):
-- **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** - System overview with architecture diagrams
-- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** - Dual-engine architecture, engine selection guide, performance optimization
-- **[Architecture Documentation](correlation_engine/ARCHITECTURE.md)** - Component integration and data flow
-- **[Adding an Artifact](correlation_engine/docs/ADDING_AN_ARTIFACT.md)** - 9-step workflow for plugging a new parser into the engine (0.11.0)
-- **[Standard Fields Registry](config/standard_fields/)** - Canonical column-name synonyms loaded by both engines + the EYE Agent: `identities.json` (98 categories, 1,146 synonyms), `timestamps.json`, `process_identifiers.json`, `file_paths.json`, `user_identifiers.json`, `system_identifiers.json`, `event_identifiers.json`, `network_identifiers.json`. Add a new parser column synonym by editing JSON, not code.
-- **[Contribution Guide](correlation_engine/CONTRIBUTING.md)** - How to contribute to the Correlation Engine
-
-**Quick Links**:
-- [Engine Selection Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) - Choose the right engine
-- [Troubleshooting Guide](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#troubleshooting) - Common issues and solutions
-- [Performance Optimization](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#performance-and-optimization) - Optimize correlation
-
----
-
-## 🧠 User Behavior Analytics (UBA)
-
-> **Turn raw artifacts into a plain-English activity story** — a manager/HR-readable account of what a user and their applications actually did, with every statement traceable to the exact source evidence.
-
-**User Behavior Analytics (UBA)** reads the parsed artifact databases in your case's `Target_Artifacts/` folder (strictly **read-only**) and replays them through a declarative rule set — the **Master Behavioral Timeline Correlation Matrix** — to produce a clear, chronological **Activity Story**. Open it from the **"User Behavior"** toolbar button or with **`Ctrl+Shift+B`** (a case must be loaded).
-
-- 🧩 **40 declarative behavior detections** (`uba/config/behavior_rules.json`) — tunable without code — each classified by severity: **routine · notable · suspicious · critical**.
-- 🕵️ **Detects behavior that matters**, including: sign-in / sign-out / unlock, program launch · execution · install, file open / delete / inferred copy, USB device connection, network-share access, persistence & autostart, explicit-credential use (`runas`), account & group changes, service changes, **system-clock tampering** (suspicious), and **event-log clearing** (critical).
-- 🔗 **Every activity is evidence-backed.** Click any item to open the exact backing record (`database : table : rowid`) — nothing is asserted without a source.
-- 👤 **Honest attribution.** Actors resolve to User / Application / System (or are left empty) — UBA never guesses who did what.
-- 📉 **Coverage panel.** Missing artifacts are surfaced up front (unavailable / degraded confidence) so you always know what the picture is built on.
-
-> UBA is **rule-driven behavioral correlation and classification**, not statistical/ML anomaly scoring — every finding maps to an explicit, auditable rule.
-
----
+- **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** — system overview with architecture diagrams
+- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** — dual-engine architecture, engine selection, performance optimization
+- **[Architecture](correlation_engine/ARCHITECTURE.md)** — component integration and data flow
+- **[Feather Documentation](correlation_engine/docs/feather/FEATHER_DOCUMENTATION.md)** — the data-normalization system
+- **[Wings Documentation](correlation_engine/docs/wings/WINGS_DOCUMENTATION.md)** — correlation rules
+- **[Pipeline Documentation](correlation_engine/docs/pipeline/PIPELINE_DOCUMENTATION.md)** — workflow orchestration
+- **[Adding an Artifact](correlation_engine/docs/ADDING_AN_ARTIFACT.md)** — the workflow for plugging a new parser into the engine
+- **[Standard Fields Registry](config/standard_fields/)** — canonical column-name synonyms loaded by both engines and the Eye
+- **[Contribution Guide](correlation_engine/CONTRIBUTING.md)** — how to contribute to the engine
+- Quick links: [Engine Selection](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#engine-selection-guide) · [Troubleshooting](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#troubleshooting) · [Performance Optimization](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md#performance-and-optimization)
 
 ## 👁️ Eye — The Forensics AI Assistant
 
 > **A powerful assistant, not a replacement.** Eye automates and *verifies* an investigator's hypotheses — it never makes the call for you.
 
-**Eye** is Crow-Eye's built-in forensics AI assistant: a skilled forensic investigator backed by a real knowledge base of Windows artifacts. It gives you a natural-language interface to query, correlate, and document everything in a case — Prefetch, MFT, Registry, Event Logs, AmCache, ShimCache, SRUM, and more — while keeping a court-defensible record of exactly what it did. Eye can run entirely on your own hardware (including fully air-gapped), in keeping with Crow-Eye's **"0 ms data sent off-device"** privacy stance.
-
-Full architecture documentation lives in [`eye/README.md`](eye/README.md).
-
-### The Ghassan Elsman Protocol (GEP)
-
-Everything Eye does is anchored to the **Ghassan Elsman Protocol (GEP)** — a **vendor-neutral, tool-agnostic standard** that defines *how any AI should be used in digital forensics*, not a Crow-Eye feature. The GEP is **10 principles** a conforming system must uphold so AI-assisted findings stay **truthful, traceable, and court-defensible**, with the human investigator in control:
-
-| # | Principle | In one line |
-|---|---|---|
-| **GEP-1** | Evidence Primacy | Conclusions come only from artifacts actually examined — never guess or assume. |
-| **GEP-2** | Traceability | Every fact links to a specific source record (`database:table:row`, offset, event id, hash). |
-| **GEP-3** | Specificity & Chronology | Exact UTC timestamps, identifiers, and paths, ordered in time. |
-| **GEP-4** | Cross-Corroboration | Rest on multiple sources; report agreement, silence, and conflict. |
-| **GEP-5** | Premise Verification | Treat human claims as hypotheses to prove or refute — never defer. |
-| **GEP-6** | Completeness | Never silently drop or truncate evidence; disclose and segment instead. |
-| **GEP-7** | Integrity & Non-Repudiation | Never modify evidence; record what was seen and done, tamper-evidently. |
-| **GEP-8** | Transparency & Explainability | Reasoning, tools used, and data seen are visible and auditable. |
-| **GEP-9** | Human Authority | The investigator decides; durable actions are attributable and reviewable. |
-| **GEP-10** | Defensibility | Output is objective, precise, legal-grade, and court-ready. |
-
-Crow-Eye's Eye is the **reference implementation** of the GEP. The rules you see Eye follow in-product — its system-prompt behavior, tooling, and write-side governance — are **Operating Rules**: *how the Eye achieves answers*. They are distinct from, and exist to **uphold**, the GEP principles above.
-
-- 📜 **The standard:** [`eye/docs/GEP_standard.md`](eye/docs/GEP_standard.md) — the full vendor-neutral spec (rule · why · compliance · verify, per principle).
-- 🔧 **How the Eye implements it:** [`eye/docs/eye_architecture.md`](eye/docs/eye_architecture.md) §5, "How the Eye implements the GEP."
-
-> **What changed.** Earlier docs labeled assorted Eye behaviors "GEP rules" (e.g. correlation write-side "Rules 9/10/11"). The GEP is now scoped as a standalone **standard of 10 principles**; the Eye's former "rules" are reframed as **Operating Rules that uphold** specific principles (the correlation write-side controls uphold **GEP-9**, **GEP-2**, and **GEP-7** — see below).
-
-### What Eye Is
-
-Eye turns conversational questions ("show me what executed from `C:\Temp` after 22:00") into real forensic work: it plans an approach, retrieves relevant artifact knowledge, runs SQL and cross-artifact searches against your case databases, and synthesizes a validated answer. Every answer is produced in **two places at once** — a chat reply for you, and a structured block written into a **Living Report Workspace** so the dossier builds itself as the investigation proceeds.
+**Eye** is Crow-Eye's built-in forensics AI assistant: a skilled forensic investigator backed by a real knowledge base of Windows artifacts. It gives you a natural-language interface to query, correlate, and document everything in a case — Prefetch, MFT, Registry, Event Logs, AmCache, ShimCache, SRUM, and more — while keeping a court-defensible record of exactly what it did. Eye can run entirely on your own hardware (including **fully air-gapped**), in keeping with Crow-Eye's **"0 ms data sent off-device"** privacy stance. Full architecture: [`eye/README.md`](eye/README.md).
 
 | Capability | What it means for you |
 |---|---|
@@ -805,17 +435,40 @@ Eye turns conversational questions ("show me what executed from `C:\Temp` after 
 | **RAG-enhanced analysis** | Eye pulls artifact-specific forensic knowledge before answering. |
 | **Living Report Workspace** | Findings, tables, charts, and timelines are documented in real time. |
 | **Human-in-the-loop** | Critical actions (e.g. report export) require your explicit approval. |
-| **Chain of custody** | Cryptographic proof of exactly what the model analyzed (see [Compliance](#how-compliance-works)). |
+| **Chain of custody** | Cryptographic proof of exactly what the model analyzed. |
 
-### How to Work With Eye
+Eye turns conversational questions ("show me what executed from `C:\Temp` after 22:00") into real forensic work: it plans an approach, retrieves relevant artifact knowledge, runs SQL and cross-artifact searches against your case databases, and synthesizes a validated answer. Every answer is produced in **two places at once** — a chat reply for you, and a structured block written into a **Living Report Workspace** so the dossier builds itself as the investigation proceeds.
 
-Eye adapts to your exact threat model through three deployment modes:
+### The Ghassan Elsman Protocol (GEP)
+
+Everything Eye does is anchored to the **Ghassan Elsman Protocol (GEP)** — a **vendor-neutral, tool-agnostic standard** for *how any AI should be used in digital forensics*. It is **10 principles** a conforming system must uphold so AI-assisted findings stay **truthful, traceable, and court-defensible**, with the human investigator in control:
+
+| # | Principle | In one line |
+|---|---|---|
+| **GEP-1** | Evidence Primacy | Conclusions come only from artifacts actually examined. |
+| **GEP-2** | Traceability | Every fact links to a specific source record. |
+| **GEP-3** | Specificity & Chronology | Exact UTC timestamps, identifiers, and paths, ordered in time. |
+| **GEP-4** | Cross-Corroboration | Rest on multiple sources; report agreement, silence, and conflict. |
+| **GEP-5** | Premise Verification | Treat human claims as hypotheses to prove or refute. |
+| **GEP-6** | Completeness | Never silently drop or truncate evidence. |
+| **GEP-7** | Integrity & Non-Repudiation | Never modify evidence; record what was seen and done, tamper-evidently. |
+| **GEP-8** | Transparency & Explainability | Reasoning, tools used, and data seen are visible and auditable. |
+| **GEP-9** | Human Authority | The investigator decides; durable actions are attributable. |
+| **GEP-10** | Defensibility | Output is objective, precise, legal-grade, and court-ready. |
+
+Crow-Eye's Eye is the **reference implementation** of the GEP; the in-product behaviors that uphold it are **Operating Rules**. 📜 Read the standard: [`eye/docs/GEP_standard.md`](eye/docs/GEP_standard.md).
+
+### Deployment Modes
+
+Eye adapts to your threat model through three deployment modes:
 
 | Mode | Best for | Backends |
 |---|---|---|
-| ☁️ **Cloud AI Models** | Deep, complex threat analysis with maximum compute | OpenAI, Anthropic (Claude), Google Gemini |
+| ☁️ **Cloud AI Models** | Deep, complex analysis with maximum compute | OpenAI, Anthropic (Claude), Google Gemini |
 | 🔒 **Offline AI Server** (air-gapped) | Zero-exposure, on-premise investigations | Ollama, LM Studio |
-| ⚡ **CLI AI Agents** (`eye-agent`) | Lightweight, fast terminal triage | Generic CLI agents (Gemini CLI, llama.cpp, custom) |
+| ⚡ **CLI Terminal Agents** | Reuse an AI terminal agent you already have as the model | Claude Code, Gemini CLI, ChatGPT CLI, llama.cpp, … |
+
+In **CLI-agent mode**, Crow-Eye drives an **existing AI terminal/command-line agent as the model** — instead of a cloud API or a local offline server — so you can investigate with the agent you already use.
 
 **The investigation loop:**
 
@@ -829,9 +482,7 @@ You can change models at runtime with the `switch_model` tool. Switching is **re
 
 ### Tracing the LLM Thinking Process
 
-Eye is built so you can see — and later prove — *how* it reached a conclusion. Nothing is a black box.
-
-**Live reasoning trail (ThinkingStep protocol).** As Eye works, it streams structured `ThinkingStep` updates to the UI in real time. Each step carries a `step_id`, a `type`, a human-readable `label`, a `status` (`active` → `done`, or `error`), and optional `tool`, `params`, and `detail` fields. The `type` field reveals which phase of reasoning you're watching:
+Eye is built so you can see — and later prove — *how* it reached a conclusion. As Eye works, it streams structured `ThinkingStep` updates to the UI in real time; each carries a `step_id`, `type`, human-readable `label`, `status` (`active` → `done`, or `error`), and optional `tool`/`params`/`detail`.
 
 | Step type | What you're seeing |
 |---|---|
@@ -840,21 +491,17 @@ Eye is built so you can see — and later prove — *how* it reached a conclusio
 | `tool_call` | Eye executing a forensic tool (a SQL query, a search, a correlation lookup). |
 | `synthesis` | Eye validating and assembling the final, evidence-backed answer. |
 
-A typical query unfolds as `thinking → rag → thinking → tool_call → synthesis`, and the Reasoning pane shows the live Eye↔model dialogue as it happens.
-
-**Persisted trace artifacts.** Every case keeps an on-disk record you can inspect *after* the fact:
+A typical query unfolds as `thinking → rag → thinking → tool_call → synthesis`, and every case keeps on-disk trace artifacts you can inspect afterward:
 
 | File | What it records |
 |---|---|
-| `<case>/EYE_Logs/eye_payload_seal.jsonl` | The exact payloads sent to the model, hash-chained (see below). |
+| `<case>/EYE_Logs/eye_payload_seal.jsonl` | The exact payloads sent to the model, hash-chained. |
 | `<case>/EYE_Logs/truncation_audit.log` | What context was kept, summarized, dropped, or pinned — and why. |
 | `<case>/case_history.json` | The full conversation history, with per-message token counts. |
 
-Together these mean you can reconstruct the entire reasoning path — what Eye knew, what it ran, and what it concluded — long after the session ends.
-
 ### Tool Execution
 
-Eye is **tool-driven**: the model never touches evidence directly. Instead it emits tool calls, and Eye executes them against the case's databases and returns the results — so every action is explicit, logged, and reproducible. The tools are defined in `configs/llm_config.json` and dispatched through `eye/services/context_manager.py`.
+Eye is **tool-driven**: the model never touches evidence directly. It emits tool calls, and Eye executes them against the case's databases and returns the results — so every action is explicit, logged, and reproducible. Tools are defined in `configs/llm_config.json` and dispatched through `eye/services/context_manager.py`.
 
 **Investigative tools** — read and analyze evidence:
 
@@ -871,19 +518,13 @@ Eye is **tool-driven**: the model never touches evidence directly. Instead it em
 | `query_threat_intel` | VirusTotal / threat-intel lookups. |
 | `switch_model` | Change model at runtime (same backend only). |
 
-**Reporting tools** — build the Living Report Workspace: `report_append_section`, `report_add_data_table`, `report_add_chart`, `report_add_timeline`, `report_add_heatmap`, `report_add_chain_of_custody`, `report_add_chat_transcript`, `report_add_image`, `report_edit_section`, `report_delete_section`, and `export_report` (export requires human approval).
-
-**Correlation authoring tools** (governed, Eye-authored only): `correlation_create_wing`, `correlation_edit_wing`, `correlation_create_semantic_mapping`, `correlation_edit_semantic_mapping` — covered in detail in [Building Correlation Wings & Semantic Mappings](#building-correlation-wings--semantic-mappings) below.
-
-Tool calls are translated to whatever the active backend expects — native function-calling for cloud APIs and local servers (OpenAI/Anthropic/Gemini/Ollama/LM Studio), or an XML `<tool_call>` wrapper for generic CLI agents.
+**Reporting tools** build the Living Report Workspace: `report_append_section`, `report_add_data_table`, `report_add_chart`, `report_add_timeline`, `report_add_heatmap`, `report_add_chain_of_custody`, `report_add_chat_transcript`, `report_add_image`, `report_edit_section`, `report_delete_section`, and `export_report` (export requires human approval). Tool calls are translated to whatever the active backend expects — native function-calling for cloud APIs and local servers, or an XML `<tool_call>` wrapper for CLI agents.
 
 ### Building Correlation Wings & Semantic Mappings
 
-Eye doesn't just *query* the [Correlation Engine](#-correlation-engine) — it can help **extend** it. When Eye spots a cross-artifact pattern that recurs across a case, it can propose new **Wings** (correlation rules) and **Semantic Mappings** (technical-to-human translations) so future analysis is faster. This is *governed authorship*: Eye proposes, the analyst reviews the saved artifact, and every change is justified and evidence-backed.
+Eye doesn't just *query* the [Correlation Engine](#-correlation-engine) — it can help **extend** it. When Eye spots a recurring cross-artifact pattern, it can propose new **Wings** (correlation rules) and **Semantic Mappings** (technical-to-human translations). This is *governed authorship*: Eye proposes, the analyst reviews the saved artifact, and every change is justified and evidence-backed.
 
-**Building a Wing** — `correlation_create_wing` / `correlation_edit_wing`
-
-A **Wing** is a named rule that ties **feathers** (artifact databases) together within a time window and a minimum-match threshold to prove a forensic claim — execution, lateral movement, data staging, and so on.
+**A Wing** ties feathers together within a time window and a minimum-match threshold to prove a claim:
 
 | Field | Meaning |
 |---|---|
@@ -892,104 +533,121 @@ A **Wing** is a named rule that ties **feathers** (artifact databases) together 
 | `feathers[]` | Artifacts to correlate — each with `artifact_type`, optional `weight` (0–1) and `tier` (1–4). |
 | `time_window_minutes` | Correlation window (default **180** = 3 hours). |
 | `minimum_matches` | How many feathers must match within the window (default **1**). |
-| `anchor_priority`, `tags`, `case_types` | Optional anchor tuning and classification. |
 | `reason` *(required)* | Forensic justification for the rule. |
 | `related_evidence` *(required)* | One or more `database:table:rowid` refs that motivated it. |
 
-Creation returns the saved wing path and an assigned `wing_id`; Eye can later refine it with `correlation_edit_wing`.
+**A Semantic Mapping** translates a raw technical value into human-readable meaning (e.g. *EventID 4624 → "Successful Logon"*). It comes in two flavors: a simple `mapping` (single value/regex → semantic value) or a multi-condition `rule` (conditions joined by AND/OR). Both support `category`, `severity`, `confidence`, and `scope`, and both require `reason` + `related_evidence`.
 
-**Adding a Semantic Mapping** — `correlation_create_semantic_mapping` / `correlation_edit_semantic_mapping`
-
-A **Semantic Mapping** translates a raw technical value into human-readable forensic meaning (e.g. *EventID 4624 → "Successful Logon"*), feeding the result viewers and Dynamic Linking. There are two flavors, chosen with `mapping_type`:
-
-| `mapping_type` | What it does |
-|---|---|
-| `mapping` | Maps a single `source` + `field` + `technical_value` (or regex `pattern`) → `semantic_value`. |
-| `rule` | A multi-condition rule: a list of `conditions[]` (operators `equals` / `wildcard` / `contains` / `regex` / `greater_than` / `less_than`) joined by `AND` / `OR`. |
-
-Both support `category`, `severity` (`info` → `critical`), `confidence`, and `scope` (`global` / `wing` / `pipeline`), and both require `reason` + `related_evidence`. New artifacts get IDs like `eye_mapping_*` or `eye_rule_*`.
-
-**Governance — write-side rules that uphold the GEP.** Eye-authored correlation logic is held to three write-side controls, each of which upholds a [GEP principle](#the-ghassan-elsman-protocol-gep):
-
-- **Reason-Required** (upholds **GEP-9** Human Authority + **GEP-2** Traceability): every create *and* edit must include a forensic `reason`.
-- **Evidence-Link** (upholds **GEP-2** Traceability): every create must cite at least one `database:table:rowid` evidence ref (unresolvable refs raise a soft warning but don't block creation).
-- **Eye-Stamped / read-only on others** (upholds **GEP-7** Non-Repudiation + **GEP-9** Human Authority): every artifact Eye persists is stamped with its authorship, reason, and edit history, and Eye may edit **only what Eye authored** — built-in and human-authored Wings and mappings stay **read-only**.
-
-This keeps machine-authored correlation rules auditable and reversible: you always know which evidence prompted a rule, and analyst-authored logic can never be silently overwritten.
+**Governance — write-side rules that uphold the GEP:**
+- **Reason-Required** (upholds **GEP-9** + **GEP-2**): every create *and* edit must include a forensic `reason`.
+- **Evidence-Link** (upholds **GEP-2**): every create must cite at least one `database:table:rowid` reference.
+- **Eye-Stamped / read-only on others** (upholds **GEP-7** + **GEP-9**): Eye stamps its authorship + reason + edit history and may edit **only what Eye authored** — built-in and human-authored rules stay **read-only**.
 
 ### Self-Healing Context
 
-Long investigations can outgrow a model's context window — especially smaller offline models. Instead of crashing or silently dropping evidence, Eye **auto-compacts its own context** before every model call. This "self-healing" runs inside Eye's guarded generation path and is fully audited.
+Long investigations can outgrow a model's context window — especially smaller offline models. Instead of crashing or silently dropping evidence, Eye **auto-compacts its own context** before every model call (inside its guarded generation path, fully audited).
 
-Before each call, Eye measures the full payload (system prompt + conversation history + your question + tool definitions) and reserves room for the model's reply (**10%** of the window, minimum 512 tokens, never more than half). If the payload still doesn't fit, it heals in two ordered passes — and it never touches **protected** messages (anything *pinned*, *auto-detected evidence*, or a *tool result*):
+Before each call, Eye measures the full payload and reserves room for the reply (**10%** of the window, min 512 tokens, never more than half). If it still doesn't fit, it heals in two ordered passes, never touching **protected** messages (pinned, auto-detected evidence, or a tool result):
 
-1. **Summarize pass** *(runs once)* — non-protected history is collapsed into a single summary message, logged as `SUMMARIZED` in the truncation audit.
-2. **Drop pass** — if it still overflows, Eye removes the **oldest non-protected** message one at a time until it fits, logging each as `TRUNCATED`.
+1. **Summarize pass** *(once)* — non-protected history collapses into one summary, logged `SUMMARIZED`.
+2. **Drop pass** — the **oldest non-protected** message is removed one at a time until it fits, logged `TRUNCATED`.
 
-If the irreducible **evidence core** (pinned messages + tool results + the current question) *still* exceeds the window after both passes, Eye **refuses to proceed rather than truncate evidence**: it logs `REFUSED_OVERFLOW`, raises an error in the reasoning trail, and asks you to narrow the query or use `analyze_large_dataset` (map-reduce).
-
-Whatever payload finally goes to the model is the exact one that gets [sealed](#how-compliance-works) for chain of custody — stamped with a `truncated` flag that records whether self-healing fired — so the audit trail always reflects precisely what the model saw.
+If the irreducible **evidence core** (pinned + tool results + the current question) *still* overflows, Eye **refuses to proceed rather than truncate evidence** (`REFUSED_OVERFLOW`) and asks you to narrow the query or use `analyze_large_dataset`. Whatever finally goes to the model is the exact payload that gets sealed for chain of custody.
 
 ### 🗺️ Narrative Map — The Eye's Persistent Case Memory
 
 The Eye is **stateless between turns** — so the **Narrative Map** is where "what we know and what we've concluded" lives for a case. It is the Eye's **persistent, court-defensible working memory**, and its contents are **injected into the Eye's prompt on every turn** (the map literally *is* the memory).
 
-- 🧭 **Verdict → Narrative → Evidence.** A strict hierarchy: one case **Verdict**, the **Narratives** beneath it (themes/claims, each with a state — `proven` · `open` · `negative` · `needs` · `absolute`), and the artifact-backed **Evidence** beneath those.
+- 🧭 **Verdict → Narrative → Evidence.** A strict hierarchy: one case **Verdict**, the **Narratives** beneath it (claims, each with a state — `proven` · `open` · `negative` · `needs` · `absolute`), and the artifact-backed **Evidence** beneath those.
 - 🪟 **Its own window.** Opens from the **"Narrative Map"** button in the Eye chat window, so you can watch the chat, the living report, and the case memory side by side; it live-refreshes as things change.
-- ↔️ **Bidirectional.** Both the Eye's edits and your own notes flow through a single **GEP-validated commit** and are sealed into a **hash-chained audit log** (`narrative_map_audit.jsonl`) for chain of custody — your notes steer the Eye's next answer, and the Eye's conclusions appear live in the map.
+- ↔️ **Bidirectional — a memory you command.** Both the Eye's edits and your own notes flow through a single **GEP-validated commit** and are sealed into a **hash-chained audit log** (`narrative_map_audit.jsonl`). You can **add, edit, and remove** its claims and evidence, directly shaping how the Eye understands and interprets the case.
 - 🚫 **Never asserts the unsupported.** An Eye narrative may stay `open` with no evidence while it investigates, but it can never be `proven` without evidence; a theme the Eye checked but found empty auto-converts to **`negative`** — because a documented absence is itself a finding.
 
 ### How Compliance Works
 
-Eye is engineered for evidence that has to stand up to scrutiny. Compliance isn't a feature bolted on top — it's enforced in the pipeline.
+Compliance isn't a feature bolted on top — it's enforced in the pipeline.
 
-- **🔗 Chain of custody (Evidence Seal).** Every payload Eye sends to an LLM is sealed: the **SHA-256 of the exact bytes** injected into the prompt, the token count, the model and its context limit, and the provenance of each evidence row (`database:table:rowid`, plus computed file offsets for MFT records). Seals are written **append-only and hash-chained** to `<case>/EYE_Logs/eye_payload_seal.jsonl` — each record folds in the previous one's hash, so a single altered or removed record breaks the chain. If an answer is ever challenged, this log proves *mathematically* which bytes the model analyzed.
+- **🔗 Chain of custody (Evidence Seal).** Every payload Eye sends to an LLM is sealed: the **SHA-256 of the exact bytes**, the token count, the model + its context limit, and the provenance of each evidence row (`database:table:rowid`, plus computed offsets for MFT records). Seals are **append-only and hash-chained** to `<case>/EYE_Logs/eye_payload_seal.jsonl` — a single altered or removed record breaks the chain, so the log proves *mathematically* which bytes the model analyzed.
+- **🚫 No silent truncation.** When context runs tight, Eye [self-heals](#self-healing-context) and reallocates budgets in a strict order: **Priority 1 (Immovable): Raw Evidence + the System Prompt** › **Priority 2 (Sacrificial): Casual Conversation** › **Priority 3 (Flexible): RAG Context**. If the evidence core still won't fit, Eye refuses rather than quietly drop evidence.
+- **🧾 Truncation audit trail.** Every context decision is logged to `<case>/EYE_Logs/truncation_audit.log` (`SUMMARIZED`, `TRUNCATED`, `PRESERVED`, `PINNED`, `UNPINNED`, `BUDGET_REDUCED`), each with a hash. Detected evidence is auto-pinned above a confidence threshold; you can also pin messages manually.
+- **📑 Evidence-to-Report mandate.** Eye must answer in chat **and** persist the supporting evidence into the report; failing to record evidence is flagged as a protocol violation.
+- **⚖️ Correlation governance.** Any Wing or mapping Eye authors must include a forensic `reason` and `related_evidence`; rules authored outside Eye are read-only and cannot be silently rewritten.
+- **🔐 Privacy & air-gapping.** In offline modes Eye makes **zero outbound calls**; cloud API keys live in OS-native keychains — never hardcoded, never written to logs.
 
-- **🚫 No silent truncation.** When context runs tight, Eye first [self-heals](#self-healing-context) — summarizing then dropping only non-evidence history — and reallocates token budgets in a strict priority order: **Priority 1 (Immovable): Raw Evidence AND the System Prompt (Operating Rules that uphold the GEP)** › **Priority 2 (Sacrificial): Casual Conversation History** › **Priority 3 (Flexible): RAG Context**. If the immutable evidence core still won't fit, Eye flat-out refuses to proceed rather than quietly drop evidence or forget its protocol rules, asking you to narrow the query or use `analyze_large_dataset` (map-reduce).
+📖 **Full Eye architecture:** [`eye/README.md`](eye/README.md).
 
-- **🧾 Truncation audit trail.** Every context decision is logged to `<case>/EYE_Logs/truncation_audit.log` with one of `SUMMARIZED`, `TRUNCATED`, `PRESERVED`, `PINNED`, `UNPINNED`, or `BUDGET_REDUCED`, each with a hash. Detected evidence is auto-pinned (preserved) above a confidence threshold, and you can manually pin critical messages so they're never dropped.
+## 🔬 Research Platform
 
-- **📑 Evidence-to-Report mandate.** Eye is required to answer in chat **and** persist the supporting evidence into the report. Failing to record evidence is flagged as a protocol violation, so the dossier always reflects what was found.
+Crow-Eye is more than software — it's an **open research platform** accelerating the entire field of Windows forensics. The project focuses on:
 
-- **⚖️ Correlation governance.** Any Wing or semantic mapping Eye authors must include a forensic `reason` and `related_evidence` references; rules authored outside Eye are treated as read-only and cannot be silently rewritten.
+- Publishing detailed documentation on internal artifact structures.
+- Sharing correlation logic and methodologies.
+- Enabling peer review, transparency, and academic collaboration.
+- Contributing to the forensics community's collective knowledge.
 
-- **🔐 Privacy & air-gapping.** In offline modes Eye makes **zero outbound calls**. API keys (for cloud modes) live in OS-native keychains — never hardcoded, never written to logs.
+## 🛠️ Technical Notes
 
-### Learn More
+- Registry parsing requires complete registry hive files.
+- Some artifacts require special handling due to Windows file-locking mechanisms (see [Custom registry / locked files](#-supported-artifacts)).
+- LNK and Jump List parsing is handled by Crow-Eye's own dedicated parser.
 
-- **Full Eye architecture:** [`eye/README.md`](eye/README.md)
-- **Correlation Engine** (Eye can author Wings & mappings): [see above](#-correlation-engine)
+## 📸 Screenshots
 
----
+![Crow-Eye screenshot](https://github.com/user-attachments/assets/f400d4b3-e8f6-4c57-a59e-7f24107bc9e7)
 
-## 🚀 Coming Soon Features
+![Crow-Eye screenshot](https://github.com/user-attachments/assets/20878078-742c-4d7c-b51c-571ba6640f90)
 
-### Crow-Eye Core Features
-- 📊 **Advanced GUI Views and Reports** - Enhanced visualization and reporting capabilities
-- 🔄 **Enhanced Search Dialog** - Advanced filtering with natural language support
-- 🤖 **AI Integration** - Query results, summarize findings, and assist non-technical users with natural language questions
+![Crow-Eye screenshot](https://github.com/user-attachments/assets/f23752e6-6a2b-4617-b665-c139a23676e8)
 
-### Correlation Engine Features
-- 🎯 **Enhanced Semantic Mapping** - Comprehensive field mapping across all artifact types
-- 📈 **Advanced Correlation Scoring** - Refined confidence scoring algorithms with explainability
+![Crow-Eye screenshot](https://github.com/user-attachments/assets/9079a99e-bc42-4690-bec0-ee3c5bffa41c)
 
----
+![Crow-Eye screenshot](https://github.com/user-attachments/assets/bcdb9f14-6f13-45f4-a3d8-92871f73ab83)
 
-If you're interested in contributing to these features or have suggestions for additional forensic artifacts, please feel free to:
-- Open an issue with your ideas
-- Submit a pull request
-- Contact me directly at ghassanelsman@gmail.com
+![Crow-Eye screenshot](https://github.com/user-attachments/assets/b3f113f5-4cd8-482d-86dd-b0b18ff650a0)
 
-**For Correlation Engine Contributions**:
-See the [Correlation Engine Contribution Guide](correlation_engine/CONTRIBUTING.md) for detailed information on:
-- Development status and priority areas
-- How to contribute to specific components
-- Code guidelines and testing requirements
-- Documentation standards
+🎥 **Demo video:** [![Watch the demo](https://img.youtube.com/vi/hbvNlBhTfdQ/maxresdefault.jpg)](https://youtu.be/hbvNlBhTfdQ)
+
+## 🚧 Roadmap
+
+Planned and in-progress work (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for shipped changes):
+
+- 📊 **Advanced GUI views & reports** — richer visualization and reporting.
+- 🔄 **Enhanced search dialog** — advanced filtering with natural-language support.
+- 🎯 **Enhanced semantic mapping** — comprehensive field mapping across all artifact types.
+- 📈 **Advanced correlation scoring** — refined, explainable confidence scoring.
+- ⚡ **Parallel correlation** — process-pool dispatch, enabled by default for large workloads.
+
+Have an idea or want to add an artifact? [Open an issue](https://github.com/Ghassan-elsman/Crow-Eye/issues) or see [Contributing](#-contributing).
+
+## 📚 Documentation
+
+- **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)** — architecture, components, and development guide.
+- **[RELEASE_NOTES.md](RELEASE_NOTES.md)** — what's new in each release (UBA, Narrative Map, cloud Eye backends, case-management hardening, …).
+- **[Correlation Engine docs](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** — overview, engine, feathers, wings, pipelines.
+- **[Timeline architecture](timeline/ARCHITECTURE.md)** — timeline module internals.
+- **[Eye architecture](eye/README.md)** and **[GEP standard](eye/docs/GEP_standard.md)** — the AI assistant and its governing protocol.
+
+## 🤝 Contributing
+
+Crow-Eye is built as an open research platform, and contributions are welcome — new parsers, correlation rules, documentation, and artifact research.
+
+- **General contributions:** [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Correlation Engine (priority area):** [correlation_engine/CONTRIBUTING.md](correlation_engine/CONTRIBUTING.md)
+- **Contact:** [contribution@Crow-Eye.com](mailto:contribution@Crow-Eye.com) · or open an issue / pull request.
+
+## 🌐 Website & Community
+
+- 🌍 **Official website:** [crow-eye.com](https://crow-eye.com/) — resources, documentation, and downloads.
+- 💬 **Discord:** [Join the Crow-Eye Discord](https://discord.gg/2vag2Udf) — direct help, artifact research, and release announcements.
+
+## 📄 License
+
+Crow-Eye is released under the **[GNU General Public License v3.0](LICENSE)** (GPL-3.0). It is free to use, study, share, and modify under the terms of that license.
 
 ## 💖 Support
 
 Crow-Eye is free and open-source, built and maintained by one person. If it helps your work, please consider sponsoring — it directly funds new parsers and research: **[SPONSORS.md](SPONSORS.md)** · **[GitHub Sponsors](https://github.com/sponsors/Ghassan-elsman)**.
 
-## Development Credits
-- Created and maintained by Ghassan Elsman
+## Credits
+
+Created and maintained by **Ghassan Elsman**.
