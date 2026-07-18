@@ -8268,10 +8268,26 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         if not self.semantic_rule_evaluator:
             return matches
-        
+
         # Reset evaluator statistics
         self.semantic_rule_evaluator.reset_statistics()
-        
+
+        # Advanced semantic rules (absence/sequence/threshold/nested/negate/
+        # cross-feather) are Identity-engine-only: the Time-Window engine sees one
+        # representative row per feather and cannot express multi-row/ordered/
+        # absence logic. Warn once here; the per-match evaluator skips them so no
+        # spurious findings are produced.
+        try:
+            from ..config.wing_config import WingConfig
+            if WingConfig.semantic_rules_are_advanced(self.wing_semantic_rules):
+                logger.warning(
+                    "[Time-Window Engine] Wing has advanced semantic rules "
+                    "(absence/sequence/threshold/nested/negate/cross-feather); these are "
+                    "SKIPPED on the Time-Window engine. Run this wing on the Identity "
+                    "engine to evaluate them.")
+        except Exception:
+            pass
+
         enhanced_matches = []
         matches_with_results = 0
         total_rule_matches = 0

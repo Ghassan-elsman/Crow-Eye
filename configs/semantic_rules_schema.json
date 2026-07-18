@@ -17,7 +17,7 @@
     "semanticRule": {
       "type": "object",
       "description": "A semantic rule that maps technical forensic values to human-readable meanings. Rules can have multiple conditions combined with AND/OR logic.",
-      "required": ["rule_id", "name", "semantic_value", "conditions", "logic_operator"],
+      "required": ["rule_id", "name", "semantic_value"],
       "properties": {
         "rule_id": {
           "type": "string",
@@ -117,6 +117,83 @@
           "maximum": 1.0,
           "default": 1.0,
           "examples": [1.0, 0.8, 0.5, 0.2]
+        },
+        "rule_type": {
+          "type": "string",
+          "description": "Evaluation strategy. 'match' (default) is the flat AND/OR condition rule. 'absence' fires when expected evidence is present but required-absent evidence is missing. 'sequence' matches ordered steps within per-step time gaps. 'threshold' fires on >= min_count occurrences within a window.",
+          "enum": ["match", "absence", "sequence", "threshold"],
+          "default": "match"
+        },
+        "condition_groups": {
+          "type": "array",
+          "description": "Optional nested boolean groups combined with the rule's top-level logic_operator, enabling (A AND B) OR (C AND D) expressions alongside the flat conditions list.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "logic_operator": { "type": "string", "enum": ["AND", "OR"] },
+              "conditions": { "type": "array", "items": { "$ref": "#/definitions/condition" } }
+            },
+            "additionalProperties": false
+          }
+        },
+        "absence": {
+          "type": "object",
+          "description": "Spec for rule_type='absence'. Fires when every expect_present condition matches and no require_absent condition matches (optionally within within_minutes of an anchor).",
+          "properties": {
+            "expect_present": { "type": "array", "items": { "$ref": "#/definitions/condition" } },
+            "require_absent": { "type": "array", "items": { "$ref": "#/definitions/condition" } },
+            "within_minutes": { "type": "number", "minimum": 0 }
+          },
+          "required": ["require_absent"],
+          "additionalProperties": false
+        },
+        "threshold": {
+          "type": "object",
+          "description": "Spec for rule_type='threshold'. Fires when matching rows occur at least min_count times, optionally within within_minutes and grouped by group_by.",
+          "properties": {
+            "condition": { "$ref": "#/definitions/condition" },
+            "conditions": { "type": "array", "items": { "$ref": "#/definitions/condition" } },
+            "min_count": { "type": "integer", "minimum": 1 },
+            "within_minutes": { "type": "number", "minimum": 0 },
+            "group_by": { "type": "string" }
+          },
+          "required": ["min_count"],
+          "additionalProperties": false
+        },
+        "sequence": {
+          "type": "object",
+          "description": "Spec for rule_type='sequence'. Fires when the ordered steps occur in order with each consecutive gap within max_gap_minutes. Each step is a condition or {conditions:[...]} and may span different feathers. When join_fields is set, the matching records of every step must share those field values (e.g. same host/user) — a true cross-feather correlation rather than mere time-coincidence.",
+          "properties": {
+            "steps": { "type": "array", "minItems": 2, "items": { "type": "object" } },
+            "max_gap_minutes": { "type": "number", "minimum": 0 },
+            "same_identity": { "type": "boolean" },
+            "join_fields": {
+              "type": "array",
+              "description": "Field name(s) that must match across the chosen record of every step (cross-tool aliasing applies, e.g. host/Computer/hostname).",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["steps"],
+          "additionalProperties": false
+        },
+        "technique_id": {
+          "type": "array",
+          "description": "MITRE ATT&CK technique IDs this rule maps to (e.g. T1021, T1070.001).",
+          "items": { "type": "string" }
+        },
+        "tactic": {
+          "type": "array",
+          "description": "MITRE ATT&CK tactic slugs this rule maps to (e.g. lateral-movement, defense-evasion).",
+          "items": { "type": "string" }
+        },
+        "eye_authorship": {
+          "description": "Provenance populated when EYE creates/edits the rule. Null for built-in/human-authored rules.",
+          "type": ["object", "null"]
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "When true the rule is retained in configuration but skipped during evaluation.",
+          "default": false
         }
       },
       "additionalProperties": false
@@ -145,9 +222,22 @@
         },
         "operator": {
           "type": "string",
-          "description": "Match operator that determines how the value is compared. 'equals': exact match (case-insensitive). 'contains': substring match (case-insensitive). 'regex': regular expression match. 'wildcard': matches any non-empty value (use value='*').",
-          "enum": ["equals", "contains", "regex", "wildcard"],
-          "examples": ["equals", "contains", "regex", "wildcard"]
+          "description": "Match operator. 'equals'/'contains'/'regex'/'wildcard' as before, plus ordered comparisons ('greater_than','less_than','greater_equal','less_equal') and 'not_equals' (NULL-safe). Comparisons work numerically or on ISO-8601 timestamps.",
+          "enum": ["equals", "contains", "regex", "wildcard", "not_equals", "greater_than", "less_than", "greater_equal", "less_equal"],
+          "examples": ["equals", "contains", "regex", "wildcard", "not_equals", "less_than"]
+        },
+        "negate": {
+          "type": "boolean",
+          "description": "When true the condition matches only when the underlying comparison does NOT hold. Used for absence / must-not-be-present logic.",
+          "default": false
+        },
+        "compare_to_feather": {
+          "type": "string",
+          "description": "Cross-feather comparison: draw the right-hand side of the comparison from this feather's record instead of 'value'. Requires compare_to_field."
+        },
+        "compare_to_field": {
+          "type": "string",
+          "description": "Field on compare_to_feather to compare against (e.g. amcache.sha1, mft $FN time). Enables masquerade / timestomp checks."
         }
       },
       "additionalProperties": false

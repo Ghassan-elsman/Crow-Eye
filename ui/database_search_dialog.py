@@ -52,6 +52,27 @@ except ImportError as e:
 
 
 
+
+def _dbicon(name):
+    """Cached Crow-Eye QIcon by factory name (for tree/list item icons)."""
+    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+    return getattr(CrowEyeIcons, name)()
+
+
+def _svg_img_html(name, size):
+    """Return a self-contained (base64 data-URI) <img> of a Crow-Eye SVG icon,
+    for embedding in the HTML search-result view without external file deps."""
+    import base64
+    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+    try:
+        with open(CrowEyeIcons.icon_path(name), "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return (f'<img src="data:image/svg+xml;base64,{b64}" '
+                f'width="{size}" height="{size}" style="vertical-align:middle">')
+    except Exception:
+        return ""
+
+
 class TimePeriodFilterWidget(QtWidgets.QWidget):
     """
     Collapsible widget for time period filtering controls.
@@ -392,21 +413,21 @@ class TimePeriodFilterWidget(QtWidgets.QWidget):
         
         # Check if start is after end (ERROR)
         if start_dt >= end_dt:
-            return False, "⚠️ Error: Start date must be before end date"
+            return False, "Error: Start date must be before end date"
         
         # Check for dates outside valid range (ERROR)
         min_date = datetime(1970, 1, 1)
         max_date = datetime(2099, 12, 31)
         
         if start_dt < min_date or end_dt < min_date:
-            return False, "⚠️ Error: Dates must be after January 1, 1970"
+            return False, "Error: Dates must be after January 1, 1970"
         
         if start_dt > max_date or end_dt > max_date:
-            return False, "⚠️ Error: Dates must be before December 31, 2099"
+            return False, "Error: Dates must be before December 31, 2099"
         
         # Check for future dates (WARNING - still valid)
         if start_dt > now or end_dt > now:
-            return True, "⚠️ Warning: Date range includes future dates"
+            return True, "Warning: Date range includes future dates"
         
         return True, ""
     
@@ -1682,7 +1703,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             if available_count == 0:
                 self.logger.warning("No databases available in case directory")
                 self.results_info_label.setText(
-                    "⚠️ No databases available. Please load forensic data first."
+                    "No databases available. Please load forensic data first."
                 )
                 self.results_info_label.setStyleSheet(
                     f"color: {Colors.ERROR}; font-size: 11pt; font-weight: bold;"
@@ -1809,7 +1830,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 db_item.setForeground(0, QtGui.QBrush(QtGui.QColor(Colors.TEXT_MUTED)))
             
             if supports_time_filter:
-                status_parts.append("🕐 Time Filter")
+                status_parts.append("Time Filter")
             
             # Count total tables
             total_tables = sum(len(db.tables) for db in accessible_dbs)
@@ -1817,7 +1838,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             
             db_item.setCheckState(0, Qt.Checked)
         else:
-            status_parts.append("⚠️ Not Available")
+            status_parts.append("Not Available")
             db_item.setCheckState(0, Qt.Unchecked)
             db_item.setFlags(db_item.flags() & ~Qt.ItemIsEnabled)
             db_item.setForeground(0, QtGui.QBrush(QtGui.QColor(Colors.TEXT_MUTED)))
@@ -1851,7 +1872,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         
         if not has_accessible:
             tooltip_lines.append("")
-            tooltip_lines.append("⚠️ Database files not found or not accessible")
+            tooltip_lines.append("Database files not found or not accessible")
         
         tooltip_text = "\n".join(tooltip_lines)
         db_item.setToolTip(0, tooltip_text)
@@ -1884,7 +1905,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 
                 # Add timestamp indicator if table supports time filtering
                 if table_info.supports_time_filtering:
-                    table_item.setText(1, "🕐")
+                    table_item.setText(1, ""); table_item.setIcon(1, _dbicon("clock"))
                 
                 # Build table tooltip
                 table_tooltip_lines = [f"Table: {table_name}"]
@@ -2006,7 +2027,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                         db_item.setForeground(0, QtGui.QBrush(QtGui.QColor(Colors.TEXT_MUTED)))
                     
                     if supports_time_filter:
-                        status_parts.append("🕐 Time Filter")
+                        status_parts.append("Time Filter")
                     
                     # Count total tables
                     total_tables = sum(len(db.tables) for db in accessible_dbs)
@@ -2066,14 +2087,14 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         # Set status and icon with warning indicators
         if not db_info.exists:
             db_item.setCheckState(0, Qt.Unchecked)
-            db_item.setText(1, "⚠️ Missing")
+            db_item.setText(1, "Missing"); db_item.setIcon(1, _dbicon("warning"))
             db_item.setForeground(1, QtGui.QBrush(QtGui.QColor(Colors.TEXT_MUTED)))
             db_item.setToolTip(0, f"Database file not found: {db_info.name}")
             db_item.setToolTip(1, f"Database file not found: {db_info.name}")
             db_item.setFlags(db_item.flags() & ~Qt.ItemIsEnabled)
         elif not db_info.accessible:
             db_item.setCheckState(0, Qt.Unchecked)
-            db_item.setText(1, "⚠️ Error")
+            db_item.setText(1, "Error"); db_item.setIcon(1, _dbicon("warning"))
             db_item.setForeground(1, QtGui.QBrush(QtGui.QColor(Colors.ERROR)))
             error_msg = db_info.error or "Database cannot be accessed"
             db_item.setToolTip(0, f"Database error: {error_msg}")
@@ -2271,10 +2292,10 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                     if hasattr(entry, 'time_preset') and entry.time_preset and entry.time_preset != 'custom':
                         # Show preset name
                         preset_display = entry.time_preset.replace('_', ' ').title()
-                        display_text += f" [🕐 {preset_display}]"
+                        display_text += f" [{preset_display}]"
                     else:
                         # Show custom time range indicator
-                        display_text += " [🕐 Custom]"
+                        display_text += " [Custom]"
                 
                 # Add item with entry data stored in UserRole
                 self.history_combo.addItem(display_text)
@@ -3799,7 +3820,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             # Load and encode logo
             import base64
             import os
-            logo_html = '<div class="brand-icon-fallback">🦅</div>'
+            logo_html = f'<div class="brand-icon-fallback">{_svg_img_html("crow", 40)}</div>'
             logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'GUI Resources', 'CrowEye.jpg')
             try:
                 if os.path.exists(logo_path):
@@ -4293,14 +4314,14 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             for database, tables in sorted(results_by_db.items()):
                 parts.append(f"""
             <div class="db-group">
-                <div class="db-bar"><span class="db-icon">📁</span> {self._html_escape(database)}</div>
+                <div class="db-bar"><span class="db-icon">{_svg_img_html("folder", 14)}</span> {self._html_escape(database)}</div>
 """)
 
                 for table, results in sorted(tables.items()):
                     parts.append(f"""
                 <div class="tbl-group">
                     <div class="tbl-bar">
-                        <span>📊 {self._html_escape(table)}</span>
+                        <span>{_svg_img_html("chart", 13)} {self._html_escape(table)}</span>
                         <span class="badge">{len(results)} hit{"s" if len(results) != 1 else ""}</span>
                     </div>
 """)
@@ -4319,7 +4340,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                         if result.matched_timestamps:
                             parts.append("""
                         <div class="ts-box">
-                            <strong>🕐 Timestamps:</strong><br>
+                            <strong>{_svg_img_html("clock", 12)} Timestamps:</strong><br>
 """)
                             for ts_match in result.matched_timestamps:
                                 parts.append(f"""

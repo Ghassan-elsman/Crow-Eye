@@ -213,6 +213,7 @@ export interface EYEBridge {
   requestCaseContext: () => void;
   requestCaseSummary: () => void;
   requestSettings: () => void;
+  requestAddEvidence: () => void;
   requestComplianceWindow: () => void;
   report_add_evidence: (text: string, link: string, evidenceJson: string) => Promise<string>;
   // Evidence preservation methods

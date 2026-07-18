@@ -13,16 +13,19 @@ License: MIT
 # Artifact Type Icons (Task 14.1)
 # ============================================================================
 
+# NOTE: kept emoji-free (Crow-Eye "no emojis" rule). These labels reuse the
+# bracketed text tokens below; GUIs that want real iconography set a CrowEyeIcons
+# QIcon on the widget instead of using this string.
 ARTIFACT_ICONS = {
-    'Registry': '📋',  # Registry hives
-    'Prefetch': '📄',  # Prefetch files
-    'link_jumplist': '📎',  # Jump Lists
-    'MFT': '📁',  # MFT files
-    'USN': '📝',  # USN Journal
-    'RecycleBin': '🗑️',  # Recycle Bin
-    'AmCache': '💾',  # AmCache
-    'Unknown': '❓',  # Unknown artifact type
-    'All Types': '📦',  # All types
+    'Registry': '[REG]',  # Registry hives
+    'Prefetch': '[PF]',  # Prefetch files
+    'link_jumplist': '[JL]',  # Jump Lists
+    'MFT': '[MFT]',  # MFT files
+    'USN': '[USN]',  # USN Journal
+    'RecycleBin': '[RB]',  # Recycle Bin
+    'AmCache': '[AMC]',  # AmCache
+    'Unknown': '[?]',  # Unknown artifact type
+    'All Types': '[ALL]',  # All types
 }
 
 # Alternative text-based icons (for systems without emoji support)
@@ -67,7 +70,7 @@ STATUS_ICONS_TEXT = {
 # Application Icon (Task 14.2)
 # ============================================================================
 
-APP_ICON = '🔍'  # Magnifying glass for forensic investigation
+APP_ICON = '[CROW-EYE]'  # emoji-free; GUIs set a real window icon via QIcon
 APP_ICON_TEXT = '[CROW-EYE]'
 
 # ============================================================================

@@ -654,6 +654,17 @@ export function showSettings(): void {
 }
 
 /**
+ * Open the "Add new evidence" import flow in the PyQt backend. The native file
+ * picker, CSV/JSON→SQLite conversion, and case refresh all happen Python-side
+ * (a QFileDialog cannot be hosted by the bridge QObject).
+ */
+export function openAddEvidence(): void {
+  if (window.bridge && window.bridge.requestAddEvidence) {
+    window.bridge.requestAddEvidence();
+  }
+}
+
+/**
  * Open the GEP Compliance dashboard in its own OS window so the investigator
  * can view chat, report, and compliance side by side. Falls back to the
  * legacy URL-swap (in-app view replacement) if the PyQt bridge is unavailable

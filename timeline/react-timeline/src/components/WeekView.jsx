@@ -4,6 +4,7 @@
 import { memo, useMemo } from 'react';
 import { getForensicName, getPrimaryTimestamp, getForensicTimestamps, cleanForensicDate } from '../utils/formatters';
 import { heuristicFlatten } from '../utils/dataUtils';
+import { IconBarChart } from './Icons';
 
 function WeekView({ data, state }) {
   const { timeRange, setTimeRange, setViewModeOverride } = state;
@@ -173,7 +174,7 @@ function WeekView({ data, state }) {
     <div className="week-view" style={{ flex: 1, padding: '20px', overflowY: 'auto', background: 'var(--bg-app)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
-          <h2 style={{ color: 'var(--accent-cyan)', fontSize: 18, margin: 0 }}>📊 Weekly Distribution</h2>
+          <h2 style={{ color: 'var(--accent-cyan)', fontSize: 18, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}><IconBarChart size={18} color="currentColor" /> Weekly Distribution</h2>
           <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Detailed artifact density per day</div>
         </div>
         <button className="topbar__btn" onClick={() => setViewModeOverride('heatmap')}>

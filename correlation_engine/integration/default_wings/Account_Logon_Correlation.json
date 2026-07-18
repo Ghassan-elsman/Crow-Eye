@@ -118,6 +118,8 @@
     },
     {
       "rule_id": "auth_special_privileges",
+      "technique_id": ["T1078"],
+      "tactic": ["privilege-escalation"],
       "name": "Elevated Privileges Assigned (4672)",
       "semantic_value": "Privilege Elevation",
       "description": "Security event 4672 — special privileges (e.g. SeDebugPrivilege, SeTcbPrivilege) assigned to the new logon",

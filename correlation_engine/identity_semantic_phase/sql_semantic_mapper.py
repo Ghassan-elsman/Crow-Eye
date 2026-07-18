@@ -1249,7 +1249,10 @@ class SQLSemanticMapper:
                 logic_operator TEXT,
                 conditions_json TEXT NOT NULL,
                 _requires_multi_indicator INTEGER DEFAULT 0,
-                _min_indicators INTEGER DEFAULT 1
+                _min_indicators INTEGER DEFAULT 1,
+                technique_id TEXT,
+                tactic TEXT,
+                rule_type TEXT
             )
         """)
         
@@ -1287,16 +1290,19 @@ class SQLSemanticMapper:
                 rule.logic_operator,
                 json.dumps(conditions),
                 1 if getattr(rule, '_requires_multi_indicator', False) else 0,
-                getattr(rule, '_min_indicators', 1)
+                getattr(rule, '_min_indicators', 1),
+                json.dumps(list(getattr(rule, 'technique_id', []) or [])),
+                json.dumps(list(getattr(rule, 'tactic', []) or [])),
+                getattr(rule, 'rule_type', 'match') or 'match'
             ))
-        
+
         logger.info(f"[SQL Semantic] Inserting {len(rules_data):,} rules...")
-        
+
         # Insert all rules
         self.cursor.executemany("""
-            INSERT OR IGNORE INTO semantic_rules 
-            (rule_id, semantic_value, rule_name, category, severity, confidence, logic_operator, conditions_json, _requires_multi_indicator, _min_indicators)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO semantic_rules
+            (rule_id, semantic_value, rule_name, category, severity, confidence, logic_operator, conditions_json, _requires_multi_indicator, _min_indicators, technique_id, tactic, rule_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, rules_data)
         
         self.conn.commit()
@@ -1573,15 +1579,18 @@ class SQLSemanticMapper:
         
         start_time = time.time()
         
-        # Get rule metadata
+        # Get rule metadata (incl. ATT&CK tags + rule_type so advanced-rule
+        # hits carry them into the stored semantic_data for the viewers)
         self.cursor.execute("""
-            SELECT rule_id, semantic_value, rule_name, category, severity, confidence, conditions_json
+            SELECT rule_id, semantic_value, rule_name, category, severity, confidence, conditions_json,
+                   technique_id, tactic, rule_type
             FROM semantic_rules
         """)
-        
+
         rule_metadata = {}
         for row in self.cursor.fetchall():
-            rule_id, semantic_value, rule_name, category, severity, confidence, conditions_json = row
+            (rule_id, semantic_value, rule_name, category, severity, confidence, conditions_json,
+             technique_id_json, tactic_json, rule_type) = row
             
             # Extract the main pattern from conditions for display
             try:
@@ -1595,13 +1604,25 @@ class SQLSemanticMapper:
             except Exception as e:
                 technical_value = ""
             
+            try:
+                technique_id = json.loads(technique_id_json) if technique_id_json else []
+            except Exception:
+                technique_id = []
+            try:
+                tactic = json.loads(tactic_json) if tactic_json else []
+            except Exception:
+                tactic = []
+
             rule_metadata[rule_id] = {
                 'semantic_value': semantic_value,
                 'rule_name': rule_name,
                 'category': category,
                 'severity': severity,
                 'confidence': confidence,
-                'technical_value': technical_value
+                'technical_value': technical_value,
+                'technique_id': technique_id,
+                'tactic': tactic,
+                'rule_type': rule_type or 'match',
             }
         
         logger.info(f"[SQL Semantic] Loaded metadata for {len(rule_metadata):,} rules")
@@ -1648,6 +1669,9 @@ class SQLSemanticMapper:
                     semantic_data[semantic_value_key] = {
                         'identity_value': meta['technical_value'],
                         'identity_type': meta['category'] or 'unknown',
+                        'rule_type': meta.get('rule_type', 'match'),
+                        'technique_id': meta.get('technique_id', []),
+                        'tactic': meta.get('tactic', []),
                         'semantic_mappings': [{
                             'semantic_value': meta['semantic_value'],
                             'technical_value': meta['technical_value'],
@@ -1656,6 +1680,9 @@ class SQLSemanticMapper:
                             'severity': meta['severity'],
                             'confidence': meta['confidence'],
                             'rule_id': rule_id,
+                            'rule_type': meta.get('rule_type', 'match'),
+                            'technique_id': meta.get('technique_id', []),
+                            'tactic': meta.get('tactic', []),
                             'matched_feathers': ['_identity']
                         }],
                         'feather_id': '_identity'

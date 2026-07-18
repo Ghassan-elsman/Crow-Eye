@@ -15,12 +15,15 @@ data/search_engine.py to provide:
 """
 
 import re
+import time
 import logging
-from typing import Optional, List, Dict
+from pathlib import Path
+from typing import Optional, List, Dict, Union
 from dataclasses import dataclass
 
 from data.search_engine import DatabaseSearchEngine, SearchConfig, SearchResults
 from data.database_manager import DatabaseManager
+from data.base_loader import BaseDataLoader
 
 
 class ForensicSearchService:
@@ -33,67 +36,107 @@ class ForensicSearchService:
     - Intelligent parameter detection (regex, case sensitivity)
     """
     
-    def __init__(self, database_manager: DatabaseManager):
+    def __init__(self, database_manager: Union[DatabaseManager, str, Path]):
         """
         Initialize the forensic search service.
-        
+
         Args:
-            database_manager: DatabaseManager instance for database access
+            database_manager: Either the case artifacts DIRECTORY (str/Path) — the way
+                the app constructs this service — or a ready ``DatabaseManager``. Accept
+                both so existing call sites (``ForensicSearchService(artifacts_dir)``)
+                keep working while search now spans every discovered database.
         """
-        self.database_manager = database_manager
-        self.search_engine = DatabaseSearchEngine(database_manager)
+        if isinstance(database_manager, (str, Path)):
+            self.artifacts_dir = Path(database_manager)
+            self.database_manager = DatabaseManager(str(database_manager))
+        else:
+            self.database_manager = database_manager
+            self.artifacts_dir = Path(getattr(database_manager, "case_directory", "."))
         self.logger = logging.getLogger(__name__)
-    
+
     def search(self, search_config: SearchConfig) -> SearchResults:
         """
-        Execute search across forensic databases.
-        
-        Args:
-            search_config: SearchConfig with parameters:
-                - search_term: str - The term to search for
-                - tables: Optional[List[str]] - Tables to search (None for all)
-                - columns: Optional[Dict[str, List[str]]] - Columns to search per table
-                - case_sensitive: bool - Whether to perform case-sensitive search
-                - exact_match: bool - Whether to match exact term (no wildcards)
-                - use_regex: bool - Whether to interpret search_term as regex
-                - max_results: int - Maximum total results to return
-                - timeout_seconds: float - Maximum time to spend searching
-        
-        Returns:
-            SearchResults with:
-                - results: Dict[str, List[SearchResult]] - Results by table
-                - total_matches: int - Total number of matches
-                - search_time: float - Time taken for search
-                - truncated: bool - Whether results were truncated
-                - tables_searched: int - Number of tables searched
-                - tables_with_results: int - Number of tables with results
+        Execute a text search across ALL discovered forensic databases in the case.
+
+        Historically this wrapped a single-database ``DatabaseSearchEngine``, but the
+        engine expects a per-database ``BaseDataLoader`` while the service is handed the
+        case directory — so the old code searched nothing. We now enumerate every
+        accessible database (``DatabaseManager.discover_databases`` — which already
+        excludes Correlation feathers and includes imported evidence) and run the engine
+        against each, tagging every hit with its source ``database`` and merging into one
+        ``SearchResults``.
+
+        Returns a ``SearchResults`` (``results`` keyed by table; each ``SearchResult``
+        gains a ``database`` attribute for provenance).
         """
         self.logger.info(
-            f"Executing search: term='{search_config.search_term}', "
-            f"regex={search_config.use_regex}, case_sensitive={search_config.case_sensitive}"
+            f"Executing cross-database search: term='{search_config.search_term}', "
+            f"case_sensitive={search_config.case_sensitive}"
         )
-        
+        agg = SearchResults(search_term=search_config.search_term)
+        start = time.time()
+
         try:
-            results = self.search_engine.search(
-                search_term=search_config.search_term,
-                tables=search_config.tables,
-                columns=search_config.columns,
-                case_sensitive=search_config.case_sensitive,
-                exact_match=search_config.exact_match,
-                max_results=search_config.max_results,
-                timeout_seconds=search_config.timeout_seconds
-            )
-            
-            self.logger.info(
-                f"Search completed: {results.total_matches} matches in "
-                f"{results.search_time:.2f}s across {results.tables_with_results} tables"
-            )
-            
-            return results
-            
+            db_infos = self.database_manager.discover_databases()
         except Exception as e:
-            self.logger.error(f"Search failed: {e}", exc_info=True)
-            raise
+            self.logger.error(f"Search DB discovery failed: {e}", exc_info=True)
+            return agg
+
+        usable = [d for d in db_infos if getattr(d, "accessible", False) and getattr(d, "exists", False)]
+        if not usable:
+            return agg
+
+        max_total = search_config.max_results or 1000
+        per_db = max(50, max_total // len(usable))
+
+        for info in usable:
+            if agg.total_matches >= max_total:
+                agg.truncated = True
+                break
+            loader = BaseDataLoader(str(info.path))
+            try:
+                if not loader.connect(read_only=True):
+                    continue
+                engine = DatabaseSearchEngine(loader, enable_cache=False)
+                res = engine.search(
+                    search_term=search_config.search_term,
+                    tables=search_config.tables,
+                    columns=search_config.columns,
+                    case_sensitive=search_config.case_sensitive,
+                    exact_match=search_config.exact_match,
+                    max_results=per_db,
+                    timeout_seconds=search_config.timeout_seconds,
+                )
+            except Exception as e:
+                self.logger.debug(f"Search skipped for {info.name}: {e}")
+                continue
+            finally:
+                try:
+                    loader.disconnect()
+                except Exception:
+                    pass
+
+            agg.tables_searched += getattr(res, "tables_searched", 0)
+            for table_name, table_results in (res.results or {}).items():
+                for sr in table_results:
+                    try:
+                        setattr(sr, "database", info.name)
+                    except Exception:
+                        pass
+                    agg.add_result(sr)  # buckets by table + increments total_matches
+                    if agg.total_matches >= max_total:
+                        agg.truncated = True
+                        break
+                if agg.total_matches >= max_total:
+                    break
+
+        agg.tables_with_results = len(agg.results)
+        agg.search_time = time.time() - start
+        self.logger.info(
+            f"Search completed: {agg.total_matches} matches in {agg.search_time:.2f}s "
+            f"across {agg.tables_with_results} tables / {len(usable)} databases"
+        )
+        return agg
     
     def search_natural_language(self, query: str) -> SearchResults:
         """

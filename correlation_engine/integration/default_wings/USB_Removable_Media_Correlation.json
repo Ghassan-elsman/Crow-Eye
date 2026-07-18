@@ -105,6 +105,8 @@
   "semantic_rules": [
     {
       "rule_id": "usb_lnk_removable_vsn",
+      "technique_id": ["T1052.001"],
+      "tactic": ["exfiltration"],
       "name": "LNK Targets Removable Drive (VSN)",
       "semantic_value": "Removable Drive Reference",
       "description": "LNK header drive_type = Removable, with Volume Serial Number identifying the specific device",

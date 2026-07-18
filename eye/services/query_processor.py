@@ -1238,6 +1238,38 @@ class QueryProcessor:
             observations_md,
             category="Automated Triage",
         )
+
+        # --- IMPORTED EVIDENCE (external data) + cross-reference with native artifacts ---
+        # Present only when the investigator imported external evidence. Index a sample of
+        # each imported table, then run the deterministic identity/time correlation so the
+        # case-open report proactively states whether imports connect to native artifacts.
+        try:
+            imported_dbs = [d for d in self.cm.database_service.discover_databases()
+                            if d.get("category") == "Imported Evidence" and d.get("accessible")]
+        except Exception:
+            imported_dbs = []
+        imported_db_names = [d.get("name") for d in imported_dbs]
+        if imported_dbs:
+            emit_step("tool_call", "Indexing Imported Evidence & cross-referencing...", "active")
+            for _d in imported_dbs:
+                for _t in (_d.get("tables") or []):
+                    safe_add_table(_d.get("name"), f'SELECT * FROM "{_t}"',
+                                   f"Imported Evidence — {_d.get('name')} · {_t}", limit=15)
+            try:
+                _corr = self.cm.forensic_handlers.correlate_imported_evidence_core(max_values=25)
+            except Exception as _e:
+                _corr = {"success": False, "error": str(_e)}
+            if _corr.get("success"):
+                _lines = [f"**{_corr.get('summary', '')}**", ""]
+                for _m in (_corr.get("identity_matches") or [])[:15]:
+                    _hits = ", ".join(f"`{h['database']}:{h['table']}:{h['row_id']}`"
+                                      for h in _m.get("native_hits", [])[:3])
+                    _lines.append(f"- `{_m['value']}` (from {_m['imported_source']}) → {_hits}")
+                if _corr.get("note"):
+                    _lines += ["", _corr["note"]]
+                self.cm.report_engine.append_section(
+                    "Imported Evidence Correlation", "\n".join(_lines), category="Automated Triage")
+
         self.cm.report_engine.save_report()
         
         # Log this triage as a milestone in the Case Summary
@@ -1267,10 +1299,11 @@ class QueryProcessor:
         try:
             _consulted = [d for d in (reg_db, pref_db, mft_db, log_db, bin_db,
                                       am_db, shim_db, srum_db, lnk_db) if d]
+            _consulted += imported_db_names  # imported evidence was swept above
             _expected = ["registry_data.db", "prefetch_data.db",
                          "mft_usn_correlated_analysis.db", "Log_Claw.db",
                          "recyclebin_analysis.db", "amcache.db", "shimcache.db",
-                         "srum_data.db", "LnkDB.db"]
+                         "srum_data.db", "LnkDB.db"] + imported_db_names
             _blocks_added = (self.cm.report_engine.get_report_json()["metadata"]["block_count"]
                              - initial_report_state["metadata"]["block_count"])
             gep_triage = self._evaluate_gep_triage(_consulted, _expected, _blocks_added, response)

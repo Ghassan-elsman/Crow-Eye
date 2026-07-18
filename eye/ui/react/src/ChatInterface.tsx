@@ -24,6 +24,7 @@ import {
   showCaseContext,
   showCaseSummary,
   showSettings,
+  openAddEvidence,
   openComplianceWindow,
   openNarrativeMapWindow,
   initializeTriage,
@@ -34,7 +35,7 @@ import {
   updateTokenBudget,
 } from './bridge';
 import type { GroupedBackendResponse } from './bridge';
-import { IconTrash, IconClipboardList, IconChartBar, IconSettings, IconLayers, IconBrain } from './Icons';
+import { IconTrash, IconClipboardList, IconChartBar, IconSettings, IconLayers, IconBrain, IconDatabase } from './Icons';
 import eyeIcon from './assets/eye_icon.png';
 import './ChatInterface.css';
 
@@ -299,7 +300,7 @@ const ChatInterface: React.FC = () => {
             const reason = status.detail ? ` — ${status.detail}` : '';
             setMessages(prev => prev.map(m =>
               m.id === syncMsgId
-                ? { ...m, content: `❌ **EYE not connected to the AI backend**: Could not reach ${backendLabel}${reason}. Open Settings to verify your API key, network, or local model service.` }
+                ? { ...m, content: `**EYE not connected to the AI backend**: Could not reach ${backendLabel}${reason}. Open Settings to verify your API key, network, or local model service.` }
                 : m
             ));
             setIsLoading(false);
@@ -313,7 +314,7 @@ const ChatInterface: React.FC = () => {
           const errMsg = e instanceof Error ? e.message : 'Unknown error';
           setMessages(prev => prev.map(m =>
             m.id === syncMsgId
-              ? { ...m, content: `❌ **EYE not connected to the AI backend**: ${errMsg}. Open Settings to verify your API key, network, or local model service.` }
+              ? { ...m, content: `**EYE not connected to the AI backend**: ${errMsg}. Open Settings to verify your API key, network, or local model service.` }
               : m
           ));
           setIsLoading(false);
@@ -842,6 +843,15 @@ const ChatInterface: React.FC = () => {
                 <span>Settings</span>
               </button>
               <span className="hdr-rule" style={{ height: '14px', margin: '0 4px' }} aria-hidden="true" />
+              <button
+                className="hdr-action-btn"
+                onClick={openAddEvidence}
+                title="Import external forensics evidence (SQLite, CSV or JSON) into this case"
+                aria-label="Add Evidence"
+              >
+                <IconDatabase size={13} />
+                <span>Add Evidence</span>
+              </button>
               <button
                 className="hdr-action-btn"
                 onClick={showCaseContext}

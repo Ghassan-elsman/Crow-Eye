@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Message, ThinkingStep, EyeDialogueEntry } from './types';
+import { IconBrain, IconLock, IconNote } from './Icons';
 import DataViewer from './DataViewer';
 import ActionChips from './ActionChips';
 import OptionMenu from './OptionMenu';
@@ -29,7 +30,7 @@ const RetainedDialogue: React.FC<{ entries: EyeDialogueEntry[] }> = ({ entries }
   return (
     <div className="eye-dialogue-retained">
       <button className="eye-dialogue-toggle" onClick={() => setOpen(!open)}>
-        {open ? '▾' : '▸'} 🧠 {open ? 'Hide' : 'Show'} the Eye's thinking (Eye ↔ LLM conversation)
+        {open ? '▾' : '▸'} <IconBrain size={13} /> {open ? 'Hide' : 'Show'} the Eye's thinking (Eye ↔ LLM conversation)
       </button>
       {open && <EyeDialogue entries={entries} />}
     </div>
@@ -100,7 +101,7 @@ const MessageList: React.FC<MessageListProps> = ({
                   className="message-badge message-badge--evidence"
                   title={`Evidence: ${message.metadata.evidence_patterns?.join(', ') || 'detected'}`}
                 >
-                  🔒
+                  <IconLock size={11} />
                 </span>
               )}
               {message.metadata?.is_summary && (
@@ -108,7 +109,7 @@ const MessageList: React.FC<MessageListProps> = ({
                   className="message-badge message-badge--summary"
                   title={`Summary of ${message.metadata.summarized_count || 0} messages`}
                 >
-                  📝
+                  <IconNote size={11} />
                 </span>
               )}
             </div>

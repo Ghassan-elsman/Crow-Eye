@@ -192,13 +192,14 @@ class TestFeatherDiscovery(unittest.TestCase):
         self.assertEqual(f["category"], "Correlation Feather")
         self.assertIn("executions", f["tables"])
 
-    def test_feather_appears_in_discover_and_is_queryable(self):
+    def test_feather_is_skipped_from_discover(self):
+        # Auto-created Correlation feathers duplicate native artifacts the Eye already
+        # parses, so they are intentionally EXCLUDED from discover_databases() to avoid
+        # duplicate-data analysis. (The helper _discover_feather_databases still exists
+        # for reference — see test_feather_db_discovered_with_tables — but is no longer
+        # wired into discovery.)
         names = [d["name"] for d in self.svc.discover_databases()]
-        self.assertIn("Prefetch_CrowEyeFeather.db", names)
-        # Resolvable + queryable by that name (via the discover match in _resolve_db_path).
-        res = self.svc.execute_query("Prefetch_CrowEyeFeather.db", "SELECT name FROM executions")
-        self.assertTrue(res.get("success"), res.get("error"))
-        self.assertEqual(res["data"][0]["name"], "x.exe")
+        self.assertNotIn("Prefetch_CrowEyeFeather.db", names)
 
     def test_no_feather_dir_is_safe(self):
         d = tempfile.mkdtemp()

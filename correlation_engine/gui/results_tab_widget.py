@@ -26,6 +26,7 @@ from PyQt5.QtGui import QColor, QContextMenuEvent
 from ..engine.correlation_result import CorrelationResult, CorrelationMatch
 from .scoring_breakdown_widget import ScoringBreakdownWidget
 from .semantic_info_display_widget import SemanticInfoDisplayWidget
+from .crow_eye_icons import CrowEyeIcons
 
 
 # ============================================================================
@@ -605,7 +606,8 @@ class ResultTab(QWidget):
         actions_layout = QHBoxLayout()
         
         export_btn = QPushButton("Export")
-        export_btn.setMaximumWidth(60)
+        export_btn.setIcon(CrowEyeIcons.download())
+        export_btn.setMaximumWidth(80)
         export_btn.setStyleSheet("""
             QPushButton {
                 background-color: #334155;
@@ -624,7 +626,8 @@ class ResultTab(QWidget):
         actions_layout.addWidget(export_btn)
         
         refresh_btn = QPushButton("Refresh")
-        refresh_btn.setMaximumWidth(60)
+        refresh_btn.setIcon(CrowEyeIcons.refresh())
+        refresh_btn.setMaximumWidth(80)
         refresh_btn.setStyleSheet("""
             QPushButton {
                 background-color: #334155;
@@ -672,7 +675,8 @@ class ResultTab(QWidget):
         filter_layout.addWidget(self.score_min_label)
         
         reset_btn = QPushButton("Reset")
-        reset_btn.setMaximumWidth(45)
+        reset_btn.setIcon(CrowEyeIcons.refresh())
+        reset_btn.setMaximumWidth(65)
         reset_btn.clicked.connect(self._reset_filters)
         filter_layout.addWidget(reset_btn)
         

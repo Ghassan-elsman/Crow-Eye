@@ -91,6 +91,7 @@ export function useLinks(data, activeArtifacts, rangeStartIso, rangeEndIso) {
       });
     }
 
+    if (data.imported) processItems(data.imported, 'imported');
     if (activeArtifacts.prefetch && data.prefetch) processItems(data.prefetch, 'prefetch');
     if (activeArtifacts.bam && data.bam) processItems(data.bam, 'bam');
     if (activeArtifacts.bam && data.dam) processItems(data.dam, 'dam');
@@ -113,7 +114,7 @@ export function useLinks(data, activeArtifacts, rangeStartIso, rangeEndIso) {
 
     // Process "Salvaged" items for links too
     Object.keys(data).forEach(key => {
-      if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'aggregated'].includes(key)) {
+      if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'aggregated'].includes(key)) {
         processItems(data[key], `salvaged_${key}`);
       }
     });

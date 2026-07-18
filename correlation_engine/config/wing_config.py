@@ -148,6 +148,34 @@ class WingConfig:
         config = self._score_config_manager.get_configuration()
         return config.tier_weights.copy()
     
+    @staticmethod
+    def semantic_rules_are_advanced(semantic_rules: List[Dict]) -> bool:
+        """
+        True if any rule uses a capability that only the Identity-Based engine
+        supports: an advanced ``rule_type`` (absence/sequence/threshold), nested
+        ``condition_groups``, or a condition with ``negate`` / ``compare_to_feather``.
+
+        The Time-Window Scanning engine evaluates one representative row per
+        feather per match, so multi-row / ordered / absence logic cannot be
+        expressed there. Used to warn the user (and offer an engine switch)
+        before running such a wing on the Time-Window engine.
+        """
+        for rule in semantic_rules or []:
+            if not isinstance(rule, dict):
+                continue
+            if str(rule.get('rule_type', 'match')).lower() != 'match':
+                return True
+            if rule.get('condition_groups'):
+                return True
+            for cond in rule.get('conditions', []) or []:
+                if isinstance(cond, dict) and (cond.get('negate') or cond.get('compare_to_feather')):
+                    return True
+        return False
+
+    def has_advanced_rules(self) -> bool:
+        """Whether this wing contains any Identity-engine-only advanced rules."""
+        return self.semantic_rules_are_advanced(self.semantic_rules)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
         data = asdict(self)

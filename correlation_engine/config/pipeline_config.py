@@ -37,6 +37,12 @@ class PipelineConfig:
     
     # NEW: Engine selection and filtering
     engine_type: str = "time_window_scanning" # "time_window_scanning" or "identity_based"
+
+    # Runtime-only: groups the per-wing executions of one run (live GUI runs
+    # create a separate execution per wing). Set by the execution worker /
+    # PipelineExecutor per run; deliberately NOT serialized in to_dict —
+    # a saved pipeline must not pin a stale run id.
+    run_group_id: Optional[str] = None
     time_period_start: Optional[str] = field(default_factory=lambda: (datetime.now() - __import__('datetime').timedelta(days=365)).isoformat()) # ISO format datetime string
     time_period_end: Optional[str] = field(default_factory=lambda: datetime.now().isoformat()) # ISO format datetime string
     identity_filters: Optional[List[str]] = None # List of identity patterns (for identity engine)
@@ -140,6 +146,9 @@ class PipelineConfig:
                 for w in data['wing_configs']
             ]
         
+        # run_group_id is runtime-only; discard if present in serialized data
+        data.pop('run_group_id', None)
+
         # NEW: Provide defaults for backward compatibility
         if 'engine_type' not in data:
             data['engine_type'] = 'time_window_scanning'

@@ -304,6 +304,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         { items: (data.amcache || data.amcache_applications)?.application_files, type: 'amcache' },
         { items: (data.amcache || data.amcache_applications)?.applications, type: 'amcache' },
         { items: (data.amcache || data.amcache_applications)?.drivers, type: 'amcache' },
+        { items: data.imported, type: 'imported' },
         ...Object.keys(registry).map(table => ({ items: registry[table], type: table.toLowerCase() }))
       ];
     };
@@ -342,7 +343,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
           const hasManifestData = sources.some(src => hasAnyInBounds(src.items));
             
           const hasSalvaged = Object.keys(data).some(key => {
-            if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'aggregated', 'links'].includes(key)) {
+            if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'aggregated', 'links'].includes(key)) {
               return hasAnyInBounds(data[key]);
             }
             return false;

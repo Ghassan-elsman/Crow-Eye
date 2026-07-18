@@ -1,9 +1,10 @@
 import React, { useState, memo } from 'react';
 import type { ToolOutputEntry } from './types';
+import { IconWrench } from './Icons';
 import './ToolOutput.css';
 
 /**
- * ToolOutput — a dedicated, collapsed-by-default "🔧 Tool output" section under an
+ * ToolOutput — a dedicated, collapsed-by-default "Tool output" section under an
  * assistant message. It keeps the (often large) raw tool results — including the
  * text-protocol tool calls used by models without native function-calling (Gemma) —
  * out of the main chat bubble, one expand away. Each entry shows the tool name, the
@@ -51,7 +52,7 @@ const ToolOutput: React.FC<ToolOutputProps> = memo(({ entries }) => {
   return (
     <div className="tool-output">
       <button className="tool-output-toggle" onClick={() => setOpen(!open)}>
-        {open ? '▾' : '▸'} 🔧 {open ? 'Hide' : 'Show'} tool output ({entries.length} call{entries.length === 1 ? '' : 's'})
+        {open ? '▾' : '▸'} <IconWrench size={13} /> {open ? 'Hide' : 'Show'} tool output ({entries.length} call{entries.length === 1 ? '' : 's'})
       </button>
       {open && (
         <div className="tool-output-list">

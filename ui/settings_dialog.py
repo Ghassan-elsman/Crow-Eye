@@ -59,6 +59,33 @@ except ImportError:
     PipelineManagementTab = None
 
 
+
+def _ce_icon(name):
+    """Return a cached Crow-Eye QIcon by factory name (emoji-free iconography)."""
+    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+    return getattr(CrowEyeIcons, name)()
+
+
+def _mk_btn(text, icon_name=None):
+    """QPushButton with an optional Crow-Eye icon (replaces emoji-in-label buttons)."""
+    b = QtWidgets.QPushButton(text)
+    if icon_name:
+        b.setIcon(_ce_icon(icon_name))
+    return b
+
+
+def _tip_label(text):
+    """QLabel help text prefixed with the Crow-Eye 'tip' icon. Rendered as rich text
+    so multi-line help keeps its line breaks (newlines become <br>)."""
+    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+    lbl = QtWidgets.QLabel()
+    body = (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace(chr(10), "<br>"))
+    lbl.setText(f'<img src="{CrowEyeIcons.icon_path("tip")}" width="13" height="13">&nbsp;{body}')
+    lbl.setTextFormat(QtCore.Qt.RichText)
+    return lbl
+
+
 class SettingsDialog(QtWidgets.QDialog):
     """Centralized settings dialog for Crow Eye."""
     
@@ -211,23 +238,23 @@ class SettingsDialog(QtWidgets.QDialog):
         # Navigation buttons
         self.nav_buttons = []
         
-        general_btn = self.create_nav_button("⚙ General Settings", 0)
+        general_btn = self.create_nav_button("General Settings", 0, "settings")
         sidebar_layout.addWidget(general_btn)
         self.nav_buttons.append(general_btn)
         
-        case_mgmt_btn = self.create_nav_button("📁 Case Management", 1)
+        case_mgmt_btn = self.create_nav_button("Case Management", 1, "folder")
         sidebar_layout.addWidget(case_mgmt_btn)
         self.nav_buttons.append(case_mgmt_btn)
         
-        case_settings_btn = self.create_nav_button("📄 Case Settings", 2)
+        case_settings_btn = self.create_nav_button("Case Settings", 2, "file")
         sidebar_layout.addWidget(case_settings_btn)
         self.nav_buttons.append(case_settings_btn)
         
-        semantic_btn = self.create_nav_button("🔤 Semantic Mappings", 3)
+        semantic_btn = self.create_nav_button("Semantic Mappings", 3, "text")
         sidebar_layout.addWidget(semantic_btn)
         self.nav_buttons.append(semantic_btn)
         
-        pipelines_btn = self.create_nav_button("🔗 Pipelines", 4)
+        pipelines_btn = self.create_nav_button("Pipelines", 4, "link")
         sidebar_layout.addWidget(pipelines_btn)
         self.nav_buttons.append(pipelines_btn)
 
@@ -238,7 +265,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.nav_buttons.append(eye_ai_btn)
 
         if _UPDATER_AVAILABLE:
-            updates_btn = self.create_nav_button("⬇ Updates", 6)
+            updates_btn = self.create_nav_button("Updates", 6, "download")
             sidebar_layout.addWidget(updates_btn)
             self.nav_buttons.append(updates_btn)
         
@@ -258,9 +285,11 @@ class SettingsDialog(QtWidgets.QDialog):
         
         return sidebar
     
-    def create_nav_button(self, text, index):
+    def create_nav_button(self, text, index, icon_name=None):
         """Create a navigation button."""
         button = QtWidgets.QPushButton(text)
+        if icon_name:
+            button.setIcon(_ce_icon(icon_name))
         button.setFixedHeight(50)
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(lambda: self.switch_panel(index))
@@ -579,7 +608,7 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         self.recent_count_spin.setToolTip("Number of recent cases shown in startup menu (5-20)")
         
-        recent_desc = QtWidgets.QLabel("💡 Controls how many cases appear in the startup menu")
+        recent_desc = _tip_label("Controls how many cases appear in the startup menu")
         recent_desc.setStyleSheet("""
             QLabel {
                 color: #94A3B8;
@@ -668,7 +697,7 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         self.max_history_spin.setToolTip("Maximum cases stored in history (50-500)")
         
-        max_desc = QtWidgets.QLabel("💡 Total cases remembered (oldest removed when limit reached)")
+        max_desc = _tip_label("Total cases remembered (oldest removed when limit reached)")
         max_desc.setStyleSheet("""
             QLabel {
                 color: #94A3B8;
@@ -725,8 +754,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "reducing redundant processing and improving performance. Recommended for most use cases."
         )
         
-        semantic_desc = QtWidgets.QLabel(
-            "💡 Applies semantic mappings at identity-level for better performance\n"
+        semantic_desc = _tip_label("Applies semantic mappings at identity-level for better performance\n"
             "   (Recommended: Enabled for optimized correlation analysis)"
         )
         semantic_desc.setStyleSheet("""
@@ -785,8 +813,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "after correlation completes. Disable to skip semantic mapping phase."
         )
         
-        wings_semantic_desc = QtWidgets.QLabel(
-            "💡 Applies semantic rules to Wings correlation results\n"
+        wings_semantic_desc = _tip_label("Applies semantic rules to Wings correlation results\n"
             "   (Recommended: Enabled for enhanced correlation analysis)"
         )
         wings_semantic_desc.setStyleSheet("""
@@ -840,8 +867,7 @@ class SettingsDialog(QtWidgets.QDialog):
             }
         """)
 
-        cascade_desc = QtWidgets.QLabel(
-            "💡 Automatically expands all underlying levels (Identity/Anchor/Evidence) when an item is clicked\n"
+        cascade_desc = _tip_label("Automatically expands all underlying levels (Identity/Anchor/Evidence) when an item is clicked\n"
             "   (Recommended: Enabled for faster investigation)"
         )
         cascade_desc.setStyleSheet("""
@@ -947,7 +973,7 @@ class SettingsDialog(QtWidgets.QDialog):
         actions_layout.setContentsMargins(0, 15, 0, 0)
         
         # Remove Selected Case button
-        self.remove_case_btn = QtWidgets.QPushButton("🗑 Remove Selected Case")
+        self.remove_case_btn = _mk_btn("Remove Selected Case", "delete")
         self.remove_case_btn.setFixedHeight(45)
         self.remove_case_btn.setMinimumWidth(200)
         self.remove_case_btn.setStyleSheet("""
@@ -1155,7 +1181,7 @@ class SettingsDialog(QtWidgets.QDialog):
         toolbar = QtWidgets.QHBoxLayout()
         toolbar.setSpacing(10)
         
-        add_btn = QtWidgets.QPushButton("➕ Add Mapping")
+        add_btn = _mk_btn("Add Mapping", "add")
         add_btn.setFixedHeight(40)
         add_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
             QPushButton {
@@ -1165,7 +1191,7 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         add_btn.clicked.connect(self.add_semantic_mapping)
         
-        edit_btn = QtWidgets.QPushButton("✏ Edit Selected")
+        edit_btn = _mk_btn("Edit Selected", "edit")
         edit_btn.setFixedHeight(40)
         edit_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
             QPushButton {
@@ -1175,7 +1201,7 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         edit_btn.clicked.connect(self.edit_semantic_mapping)
         
-        delete_btn = QtWidgets.QPushButton("🗑 Delete Selected")
+        delete_btn = _mk_btn("Delete Selected", "delete")
         delete_btn.setFixedHeight(40)
         delete_btn.setStyleSheet("""
             QPushButton {
@@ -1193,7 +1219,7 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         delete_btn.clicked.connect(self.delete_semantic_mapping)
         
-        import_btn = QtWidgets.QPushButton("📥 Import")
+        import_btn = _mk_btn("Import", "download")
         import_btn.setFixedHeight(40)
         import_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
             QPushButton {
@@ -1203,7 +1229,7 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         import_btn.clicked.connect(self.import_semantic_mappings)
         
-        export_btn = QtWidgets.QPushButton("📤 Export")
+        export_btn = _mk_btn("Export", "upload")
         export_btn.setFixedHeight(40)
         export_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
             QPushButton {
@@ -1213,7 +1239,7 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         export_btn.clicked.connect(self.export_semantic_mappings)
         
-        reset_btn = QtWidgets.QPushButton("🔄 Reset to Defaults")
+        reset_btn = _mk_btn("Reset to Defaults", "refresh")
         reset_btn.setFixedHeight(40)
         reset_btn.setStyleSheet("""
             QPushButton {
@@ -1512,8 +1538,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_store_full_payload_checkbox = QtWidgets.QCheckBox(
             "Store the exact payload (system prompt + history + tools) per seal")
         self.eye_store_full_payload_checkbox.setStyleSheet(checkbox_style)
-        store_desc = QtWidgets.QLabel(
-            "💡 Lets the Compliance log REPRODUCE (not just verify) each turn. "
+        store_desc = _tip_label("Lets the Compliance log REPRODUCE (not just verify) each turn. "
             "Off = only the SHA-256 is kept.")
         store_desc.setWordWrap(True)
         store_desc.setStyleSheet(desc_style)
@@ -1532,8 +1557,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_recent_uncompressed_spin.setRange(0, 1000)
         self.eye_recent_uncompressed_spin.setValue(10)
         self.eye_recent_uncompressed_spin.setStyleSheet(spin_style)
-        recent_desc = QtWidgets.QLabel(
-            "💡 Keep this many recent payloads uncompressed; older ones are "
+        recent_desc = _tip_label("Keep this many recent payloads uncompressed; older ones are "
             "compressed (zstd, gzip fallback) and decompressed on demand.")
         recent_desc.setWordWrap(True)
         recent_desc.setStyleSheet(desc_style)
@@ -1554,8 +1578,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_confidence_spin.setDecimals(2)
         self.eye_confidence_spin.setValue(0.70)
         self.eye_confidence_spin.setStyleSheet(spin_style)
-        conf_desc = QtWidgets.QLabel(
-            "💡 Minimum detector confidence (0–1) to auto-preserve a message as evidence.")
+        conf_desc = _tip_label("Minimum detector confidence (0–1) to auto-preserve a message as evidence.")
         conf_desc.setWordWrap(True)
         conf_desc.setStyleSheet(desc_style)
         conf_layout.addWidget(self.eye_confidence_spin)
@@ -1577,8 +1600,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_lock_tokens_checkbox = QtWidgets.QCheckBox(
             "Lock — don't auto-resolve to the model's real window")
         self.eye_lock_tokens_checkbox.setStyleSheet(checkbox_style)
-        ctx_desc = QtWidgets.QLabel(
-            "💡 Fallback window for unknown models. Locking pins this value instead of "
+        ctx_desc = _tip_label("Fallback window for unknown models. Locking pins this value instead of "
             "auto-detecting the backend's real context window.")
         ctx_desc.setWordWrap(True)
         ctx_desc.setStyleSheet(desc_style)
@@ -1599,8 +1621,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_tool_output_spin.setSingleStep(1000)
         self.eye_tool_output_spin.setValue(100000)
         self.eye_tool_output_spin.setStyleSheet(spin_style)
-        tool_desc = QtWidgets.QLabel(
-            "💡 Floor for how much of a single tool result is kept in the model's context "
+        tool_desc = _tip_label("Floor for how much of a single tool result is kept in the model's context "
             "(scales up with the window).")
         tool_desc.setWordWrap(True)
         tool_desc.setStyleSheet(desc_style)
@@ -1623,8 +1644,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_enable_decomposition_checkbox = QtWidgets.QCheckBox(
             "Split multi-part questions into sub-questions and correlate the answers")
         self.eye_enable_decomposition_checkbox.setStyleSheet(checkbox_style)
-        decomp_desc = QtWidgets.QLabel(
-            "💡 Each part is investigated to completion, then merged into one consolidated answer.")
+        decomp_desc = _tip_label("Each part is investigated to completion, then merged into one consolidated answer.")
         decomp_desc.setWordWrap(True)
         decomp_desc.setStyleSheet(desc_style)
         decomp_layout.addWidget(self.eye_enable_decomposition_checkbox)
@@ -1642,8 +1662,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_max_subq_spin.setRange(1, 20)
         self.eye_max_subq_spin.setValue(6)
         self.eye_max_subq_spin.setStyleSheet(spin_style)
-        subq_desc = QtWidgets.QLabel(
-            "💡 Upper bound on how many sub-questions a single query is split into.")
+        subq_desc = _tip_label("Upper bound on how many sub-questions a single query is split into.")
         subq_desc.setWordWrap(True)
         subq_desc.setStyleSheet(desc_style)
         subq_layout.addWidget(self.eye_max_subq_spin)
@@ -1665,8 +1684,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_enable_hierarchy_checkbox = QtWidgets.QCheckBox(
             "Plan the case as a Verdict → Narrative → Sub-narrative claim hierarchy and prove it step by step")
         self.eye_enable_hierarchy_checkbox.setStyleSheet(checkbox_style)
-        hier_desc = QtWidgets.QLabel(
-            "💡 The Eye builds the plan up front, seeds it onto the Narrative Map, then proves one "
+        hier_desc = _tip_label("The Eye builds the plan up front, seeds it onto the Narrative Map, then proves one "
             "sub-narrative at a time with the right tools — flipping each card as evidence lands. "
             "Off = the classic flat sub-question flow.")
         hier_desc.setWordWrap(True)
@@ -1686,8 +1704,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_max_narratives_spin.setRange(1, 30)
         self.eye_max_narratives_spin.setValue(12)
         self.eye_max_narratives_spin.setStyleSheet(spin_style)
-        narr_desc = QtWidgets.QLabel(
-            "💡 Upper bound on the activities/behaviors the plan splits the verdict into.")
+        narr_desc = _tip_label("Upper bound on the activities/behaviors the plan splits the verdict into.")
         narr_desc.setWordWrap(True)
         narr_desc.setStyleSheet(desc_style)
         narr_layout.addWidget(self.eye_max_narratives_spin)
@@ -1705,8 +1722,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_max_sub_narratives_spin.setRange(1, 20)
         self.eye_max_sub_narratives_spin.setValue(8)
         self.eye_max_sub_narratives_spin.setStyleSheet(spin_style)
-        subnarr_desc = QtWidgets.QLabel(
-            "💡 Upper bound on the evidence-bearing steps inside EACH narrative.")
+        subnarr_desc = _tip_label("Upper bound on the evidence-bearing steps inside EACH narrative.")
         subnarr_desc.setWordWrap(True)
         subnarr_desc.setStyleSheet(desc_style)
         subnarr_layout.addWidget(self.eye_max_sub_narratives_spin)
@@ -1725,8 +1741,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_max_iterations_spin.setSingleStep(20)
         self.eye_max_iterations_spin.setValue(300)
         self.eye_max_iterations_spin.setStyleSheet(spin_style)
-        maxiter_desc = QtWidgets.QLabel(
-            "💡 Upper bound on the model-call steps one investigation may use (scaled to plan size, "
+        maxiter_desc = _tip_label("Upper bound on the model-call steps one investigation may use (scaled to plan size, "
             "capped here). Raise it for very large plans; each sub-narrative is still individually bounded.")
         maxiter_desc.setWordWrap(True)
         maxiter_desc.setStyleSheet(desc_style)
@@ -1744,8 +1759,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_enable_premise_checkbox = QtWidgets.QCheckBox(
             "Prove or disprove the investigator's claims against the artifacts")
         self.eye_enable_premise_checkbox.setStyleSheet(checkbox_style)
-        premise_desc = QtWidgets.QLabel(
-            "💡 Treats stated facts as hypotheses; tells you when a claim is contradicted by evidence.")
+        premise_desc = _tip_label("Treats stated facts as hypotheses; tells you when a claim is contradicted by evidence.")
         premise_desc.setWordWrap(True)
         premise_desc.setStyleSheet(desc_style)
         premise_layout.addWidget(self.eye_enable_premise_checkbox)
@@ -1762,8 +1776,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_enable_question_memory_checkbox = QtWidgets.QCheckBox(
             "Remember prior answers and reuse them on related follow-ups")
         self.eye_enable_question_memory_checkbox.setStyleSheet(checkbox_style)
-        qmem_desc = QtWidgets.QLabel(
-            "💡 Saves each answer + its findings to the case, so related questions reuse data "
+        qmem_desc = _tip_label("Saves each answer + its findings to the case, so related questions reuse data "
             "instead of re-querying.")
         qmem_desc.setWordWrap(True)
         qmem_desc.setStyleSheet(desc_style)
@@ -1782,8 +1795,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_prior_findings_spin.setRange(0, 20)
         self.eye_prior_findings_spin.setValue(3)
         self.eye_prior_findings_spin.setStyleSheet(spin_style)
-        prior_desc = QtWidgets.QLabel(
-            "💡 How many recent prior-question findings are surfaced to the model for reuse "
+        prior_desc = _tip_label("How many recent prior-question findings are surfaced to the model for reuse "
             "(0 disables reuse).")
         prior_desc.setWordWrap(True)
         prior_desc.setStyleSheet(desc_style)
@@ -1807,8 +1819,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_model_retry_spin.setRange(1, 6)
         self.eye_model_retry_spin.setValue(3)
         self.eye_model_retry_spin.setStyleSheet(spin_style)
-        retry_desc = QtWidgets.QLabel(
-            "💡 Attempts (with exponential backoff) when the provider returns a transient error "
+        retry_desc = _tip_label("Attempts (with exponential backoff) when the provider returns a transient error "
             "such as a Gemini 500/INTERNAL. 1 = no retry.")
         retry_desc.setWordWrap(True)
         retry_desc.setStyleSheet(desc_style)
@@ -1826,8 +1837,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_auto_segment_checkbox = QtWidgets.QCheckBox(
             "Let the Eye (LLM) break a big/complex question into focused logical sub-questions")
         self.eye_auto_segment_checkbox.setStyleSheet(checkbox_style)
-        seg_desc = QtWidgets.QLabel(
-            "💡 The model decides the split along logical boundaries (artifacts, time ranges, "
+        seg_desc = _tip_label("The model decides the split along logical boundaries (artifacts, time ranges, "
             "entities, claims) and works each in turn, then consolidates. Off = split only "
             "genuinely multi-part questions. (No character-length rule.)")
         seg_desc.setWordWrap(True)
@@ -1851,8 +1861,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_auto_mapreduce_rows_spin.setSingleStep(100)
         self.eye_auto_mapreduce_rows_spin.setValue(1500)
         self.eye_auto_mapreduce_rows_spin.setStyleSheet(spin_style)
-        mr_desc = QtWidgets.QLabel(
-            "💡 A query returning at least this many rows is auto-divided and analyzed in full "
+        mr_desc = _tip_label("A query returning at least this many rows is auto-divided and analyzed in full "
             "(every segment sealed in the Compliance log) instead of sampled.")
         mr_desc.setWordWrap(True)
         mr_desc.setStyleSheet(desc_style)
@@ -1876,8 +1885,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_reasoning_trace_checkbox = QtWidgets.QCheckBox(
             "Record WHY each sub-question was created and WHY each conclusion follows from its evidence")
         self.eye_reasoning_trace_checkbox.setStyleSheet(checkbox_style)
-        rtrace_desc = QtWidgets.QLabel(
-            "💡 After a decomposed question, a sealed pass captures the decomposition + per-conclusion "
+        rtrace_desc = _tip_label("After a decomposed question, a sealed pass captures the decomposition + per-conclusion "
             "rationale (with evidence refs) and shows it in the Compliance window.")
         rtrace_desc.setWordWrap(True)
         rtrace_desc.setStyleSheet(desc_style)
@@ -1897,8 +1905,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_answer_temp_spin.setSingleStep(0.1)
         self.eye_answer_temp_spin.setValue(0.2)
         self.eye_answer_temp_spin.setStyleSheet(spin_style)
-        atemp_desc = QtWidgets.QLabel(
-            "💡 Sampling temperature for investigative/synthesis answers. Lower = more deterministic, "
+        atemp_desc = _tip_label("Sampling temperature for investigative/synthesis answers. Lower = more deterministic, "
             "evidence-faithful output (0.2 recommended for forensics).")
         atemp_desc.setWordWrap(True)
         atemp_desc.setStyleSheet(desc_style)
@@ -1918,8 +1925,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_planning_temp_spin.setSingleStep(0.1)
         self.eye_planning_temp_spin.setValue(0.0)
         self.eye_planning_temp_spin.setStyleSheet(spin_style)
-        ptemp_desc = QtWidgets.QLabel(
-            "💡 Temperature for the planning + reasoning-trace passes. Near-zero for repeatable "
+        ptemp_desc = _tip_label("Temperature for the planning + reasoning-trace passes. Near-zero for repeatable "
             "decomposition.")
         ptemp_desc.setWordWrap(True)
         ptemp_desc.setStyleSheet(desc_style)
@@ -1938,8 +1944,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_rag_topk_spin.setRange(1, 20)
         self.eye_rag_topk_spin.setValue(5)
         self.eye_rag_topk_spin.setStyleSheet(spin_style)
-        ragk_desc = QtWidgets.QLabel(
-            "💡 Max ranked knowledge-base chunks retrieved per query (semantic when an embedding "
+        ragk_desc = _tip_label("Max ranked knowledge-base chunks retrieved per query (semantic when an embedding "
             "server is present, otherwise the built-in lexical ranker) beyond keyword-mapped docs.")
         ragk_desc.setWordWrap(True)
         ragk_desc.setStyleSheet(desc_style)
@@ -1957,8 +1962,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_rag_subq_checkbox = QtWidgets.QCheckBox(
             "Retrieve targeted knowledge for each sub-question (not just the main query)")
         self.eye_rag_subq_checkbox.setStyleSheet(checkbox_style)
-        ragsq_desc = QtWidgets.QLabel(
-            "💡 After decomposition, each sub-question pulls its own artifact knowledge so multi-part "
+        ragsq_desc = _tip_label("After decomposition, each sub-question pulls its own artifact knowledge so multi-part "
             "questions aren't limited to the main query's matches.")
         ragsq_desc.setWordWrap(True)
         ragsq_desc.setStyleSheet(desc_style)
@@ -1977,8 +1981,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_history_window_spin.setRange(1, 50)
         self.eye_history_window_spin.setValue(5)
         self.eye_history_window_spin.setStyleSheet(spin_style)
-        winturns_desc = QtWidgets.QLabel(
-            "💡 Most-recent turns kept VERBATIM (the sliding window). Older non-evidence turns are "
+        winturns_desc = _tip_label("Most-recent turns kept VERBATIM (the sliding window). Older non-evidence turns are "
             "folded into a rolling summary; evidence/pinned turns and the first turn are always kept.")
         winturns_desc.setWordWrap(True)
         winturns_desc.setStyleSheet(desc_style)
@@ -1996,8 +1999,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_summary_buffer_checkbox = QtWidgets.QCheckBox(
             "Summarize older turns before dropping them (Stage 1)")
         self.eye_summary_buffer_checkbox.setStyleSheet(checkbox_style)
-        sumbuf_desc = QtWidgets.QLabel(
-            "💡 When the window fills, fold older turns into a rolling summary first; the "
+        sumbuf_desc = _tip_label("When the window fills, fold older turns into a rolling summary first; the "
             "sliding-window drop (Stage 2) is the hard floor when even that won't fit.")
         sumbuf_desc.setWordWrap(True)
         sumbuf_desc.setStyleSheet(desc_style)
@@ -2026,8 +2028,7 @@ class SettingsDialog(QtWidgets.QDialog):
         recall_topk_row.addWidget(recall_topk_inner_label)
         recall_topk_row.addWidget(self.eye_conversation_recall_topk_spin)
         recall_topk_row.addStretch()
-        recall_desc = QtWidgets.QLabel(
-            "💡 Long-term memory: retrieve specific older turns by relevance and inject a "
+        recall_desc = _tip_label("Long-term memory: retrieve specific older turns by relevance and inject a "
             "'Recalled Earlier Conversation' block, so nothing is truly lost when the window fills.")
         recall_desc.setWordWrap(True)
         recall_desc.setStyleSheet(desc_style)
@@ -2071,8 +2072,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.eye_embedding_index_evidence_checkbox = QtWidgets.QCheckBox(
             "Build a per-case semantic index over forensic data (enables semantic_search_artifacts)")
         self.eye_embedding_index_evidence_checkbox.setStyleSheet(checkbox_style)
-        emb_desc = QtWidgets.QLabel(
-            "💡 Optional. When off (or the server is unreachable) the Eye uses the built-in BM25 "
+        emb_desc = _tip_label("Optional. When off (or the server is unreachable) the Eye uses the built-in BM25 "
             "lexical ranker — Cloud/CLI deployments are unaffected. Semantic search is a DISCOVERY "
             "aid; exact SQL stays authoritative for counts, timelines, and completeness.")
         emb_desc.setWordWrap(True)

@@ -227,7 +227,19 @@ class CorrelationEngineWrapper(QObject):
             
             # Set output directory
             self.pipeline_config.output_directory = self.output_dir
-            
+
+            # One run-group id per run: each wing below executes in its own
+            # PipelineExecutor/execution, and this id (carried through the
+            # per-wing deepcopy) is what links those executions in the DB
+            # for cross-wing identity reconciliation and results loading.
+            # When resuming, reuse the stored group so ALL wings of the
+            # resumed run (not just the first) rejoin the original run.
+            import uuid
+            run_group_id = None
+            if getattr(self, 'resume_execution_id', None):
+                run_group_id = self._lookup_resume_run_group(self.resume_execution_id)
+            self.pipeline_config.run_group_id = run_group_id or str(uuid.uuid4())
+
             total_wings = len(self.selected_wings)
             
             # Execute each wing sequentially
@@ -326,7 +338,9 @@ class CorrelationEngineWrapper(QObject):
                     # Include last wing's execution info for Summary tab
                     'execution_id': summary.get('execution_id'),
                     'database_path': summary.get('database_path'),
-                    'engine_type': summary.get('engine_type', 'time_window_scanning')
+                    'engine_type': summary.get('engine_type', 'time_window_scanning'),
+                    # Groups all of this run's per-wing executions in the DB
+                    'run_group_id': self.pipeline_config.run_group_id
                 }
                 
                 # DEBUG: Log final_summary contents
@@ -346,6 +360,33 @@ class CorrelationEngineWrapper(QObject):
             if self._original_stdout:
                 sys.stdout = self._original_stdout
     
+    def _lookup_resume_run_group(self, execution_id) -> str:
+        """Read the run_group_id stored on the execution being resumed so the
+        whole resumed run rejoins its original run group."""
+        try:
+            import sqlite3
+            from pathlib import Path
+            db_file = Path(self.output_dir) / "correlation_results.db"
+            if not db_file.exists():
+                return None
+            conn = sqlite3.connect(str(db_file))
+            try:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(executions)")
+                if 'run_group_id' not in {row[1] for row in cursor.fetchall()}:
+                    return None
+                cursor.execute(
+                    "SELECT run_group_id FROM executions WHERE execution_id = ?",
+                    (execution_id,)
+                )
+                row = cursor.fetchone()
+                return row[0] if row and row[0] else None
+            finally:
+                conn.close()
+        except Exception as e:
+            self.log_message.emit(f"[WARN] Could not look up run group for resume: {e}")
+            return None
+
     def cancel(self):
         """Request cancellation of execution"""
         self._cancelled = True
@@ -676,7 +717,7 @@ class ExecutionControlWidget(QWidget):
         
         # Load Last Results button
         self.load_results_btn = QPushButton("Load Last Results")
-        self.load_results_btn.setIcon(CrowEyeIcons.download())
+        self.load_results_btn.setIcon(CrowEyeIcons.history())
         self.load_results_btn.setMinimumHeight(30)
         self.load_results_btn.setStyleSheet("""
             QPushButton {
@@ -1084,11 +1125,24 @@ class ExecutionControlWidget(QWidget):
             for wing_config in pipeline_config.wing_configs:
                 wing_name = getattr(wing_config, 'wing_name', 'Unknown Wing')
                 feather_count = len(getattr(wing_config, 'feathers', []))
-                
-                item = QListWidgetItem(f"{wing_name} ({feather_count} feathers)")
+
+                # Advanced wings run on the Identity-Based engine only — badge
+                # them with the bolt icon (descriptive SVG, no emoji).
+                is_advanced = self._wing_is_advanced(wing_config)
+                label = f"{wing_name} ({feather_count} feathers)"
+                if is_advanced:
+                    label += "  —  Identity engine only"
+
+                item = QListWidgetItem(label)
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                 item.setCheckState(Qt.Checked) # Default to checked
                 item.setData(Qt.UserRole, wing_config)
+                if is_advanced:
+                    item.setIcon(CrowEyeIcons.bolt())
+                    item.setToolTip(
+                        "Uses advanced rules (absence / sequence / threshold / nested / "
+                        "cross-feather). Supported by the Identity-Based engine only."
+                    )
                 self.wing_list.addItem(item)
             
             # Enable execute button
@@ -1145,7 +1199,14 @@ class ExecutionControlWidget(QWidget):
                     "Please select at least one Wing to execute."
                 )
                 return
-            
+
+            # Guard: advanced wings (absence / sequence / threshold / nested /
+            # cross-feather) are supported by the Identity-Based engine only.
+            # Running them on the Time-Window Scanning engine would silently
+            # under-evaluate, so prompt the user to switch engines.
+            if not self._guard_advanced_wings_engine(selected_wings):
+                return  # user cancelled
+
             # Get output directory
             output_dir = self.output_dir_input.text().strip()
             # logger.info(f"[ExecutionControl] Output directory: {output_dir}")
@@ -2413,6 +2474,82 @@ class ExecutionControlWidget(QWidget):
                 wing_config = item.data(Qt.UserRole)
                 selected_wings.append(wing_config)
         return selected_wings
+
+    @staticmethod
+    def _wing_semantic_rules(wing) -> list:
+        """Extract semantic_rules from a wing that may be an object or a dict."""
+        if isinstance(wing, dict):
+            return wing.get('semantic_rules', []) or []
+        return getattr(wing, 'semantic_rules', []) or []
+
+    @classmethod
+    def _wing_is_advanced(cls, wing) -> bool:
+        """True if a wing (object or dict) contains Identity-engine-only rules."""
+        # Prefer the wing's own method when available (WingConfig).
+        checker = getattr(wing, 'has_advanced_rules', None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                pass
+        from ..config.wing_config import WingConfig
+        return WingConfig.semantic_rules_are_advanced(cls._wing_semantic_rules(wing))
+
+    @staticmethod
+    def _wing_display_name(wing) -> str:
+        """Human-readable wing name for object or dict wings."""
+        if isinstance(wing, dict):
+            return wing.get('wing_name') or wing.get('config_name') or 'Unnamed Wing'
+        return getattr(wing, 'wing_name', None) or getattr(wing, 'config_name', None) or 'Unnamed Wing'
+
+    def _guard_advanced_wings_engine(self, selected_wings) -> bool:
+        """
+        If the Time-Window engine is selected but any selected wing uses advanced
+        (Identity-engine-only) rules, warn and offer to switch to the Identity
+        engine. Returns True to proceed, False if the user cancelled.
+        """
+        if not hasattr(self, 'engine_combo'):
+            return True
+        engine_type = self.engine_combo.currentData()
+        if engine_type != 'time_window_scanning':
+            return True
+
+        advanced_names = [self._wing_display_name(w) for w in selected_wings
+                          if self._wing_is_advanced(w)]
+        if not advanced_names:
+            return True
+
+        names = '\n  • '.join(advanced_names)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Advanced Wing — Identity Engine Required")
+        box.setText(
+            "The following wing(s) use advanced rules (absence / sequence / "
+            "threshold / nested / cross-feather) that are supported by the "
+            f"Identity-Based engine only:\n\n  • {names}"
+        )
+        box.setInformativeText(
+            "The Time-Window Scanning engine evaluates one row per feather and "
+            "cannot run these rules. Switch to the Identity-Based engine to continue?"
+        )
+        switch_btn = box.addButton("Switch to Identity engine && continue",
+                                   QMessageBox.AcceptRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setDefaultButton(switch_btn)
+        box.exec_()
+
+        if box.clickedButton() is switch_btn:
+            idx = self.engine_combo.findData('identity_based')
+            if idx >= 0:
+                self.engine_combo.setCurrentIndex(idx)
+                logger.info("[ExecutionControl] Switched to Identity engine for advanced wing(s)")
+                return True
+            QMessageBox.critical(
+                self, "Identity Engine Unavailable",
+                "Could not switch to the Identity-Based engine. Please select it manually."
+            )
+            return False
+        return False
     
 
     def _handle_progress_event(self, event):

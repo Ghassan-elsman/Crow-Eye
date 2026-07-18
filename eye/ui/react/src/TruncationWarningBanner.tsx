@@ -1,4 +1,5 @@
 import React from 'react';
+import { IconAlertTriangle } from './Icons';
 import './TruncationWarningBanner.css';
 
 interface TruncationWarningData {
@@ -43,7 +44,7 @@ const TruncationWarningBanner: React.FC<TruncationWarningBannerProps> = ({
 
   return (
     <div className="truncation-warning-banner" role="alert" aria-live="polite">
-      <div className="warning-icon" aria-hidden="true">⚠️</div>
+      <div className="warning-icon" aria-hidden="true"><IconAlertTriangle size={20} /></div>
       
       <div className="warning-content">
         <div className="warning-title">

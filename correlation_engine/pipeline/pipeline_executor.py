@@ -222,7 +222,19 @@ class PipelineExecutor:
             Dictionary with execution results and statistics
         """
         start_time = time.time()
-        
+
+        # Ensure a run-group id exists. The GUI worker sets one per run
+        # (shared by all its per-wing executors); CLI/direct callers get
+        # one per executor here (one executor = one run). On resume, reuse
+        # the group stored on the resumed execution so the run stays whole.
+        if resume_execution_id and self.config.output_directory:
+            stored_group = self._lookup_run_group_id(resume_execution_id)
+            if stored_group:
+                self.config.run_group_id = stored_group
+        if not getattr(self.config, 'run_group_id', None):
+            import uuid
+            self.config.run_group_id = str(uuid.uuid4())
+
         if self.verbose:
             print(f"Executing Pipeline: {self.config.pipeline_name}")
             print("=" * 60)
@@ -378,6 +390,7 @@ class PipelineExecutor:
             'database_path': str(Path(self.config.output_directory) / "correlation_results.db") if self.config.output_directory else None,
             'output_directory': self.config.output_directory, # Include output directory for results viewer
             'engine_type': self.engine_type, # Resolved engine type that was actually instantiated
+            'run_group_id': getattr(self.config, 'run_group_id', None), # Links per-wing executions of one run
             'cancelled': self._cancelled,
             'rule_diagnostics': getattr(self, '_rule_preflight_issues', []), # Pre-flight rule validation
             'evidence_accounting': evidence_accounting,
@@ -502,6 +515,7 @@ class PipelineExecutor:
             'execution_id': execution_id,
             'database_path': str(Path(self.config.output_directory) / "correlation_results.db") if self.config.output_directory else None,
             'engine_type': self.engine_type,
+            'run_group_id': getattr(self.config, 'run_group_id', None),
             'cancelled': True
         }
     
@@ -720,7 +734,8 @@ class PipelineExecutor:
                             pipeline_config=self.config.to_dict(),
                             time_period_start=self.config.time_period_start,
                             time_period_end=self.config.time_period_end,
-                            identity_filters=self.config.identity_filters
+                            identity_filters=self.config.identity_filters,
+                            run_group_id=getattr(self.config, 'run_group_id', None)
                         )
                     
                     # Now set output directory with execution_id for streaming
@@ -734,11 +749,17 @@ class PipelineExecutor:
                 print(f"[Pipeline] DEBUG: Appending result '{result.wing_name}' with {len(result.matches)} matches")
                 
                 self.results.append(result)
-                
+
                 # Store execution_id for later use
                 if execution_id:
                     self._execution_id = execution_id
-                
+
+                    # Cross-wing identity reconciliation: merge this wing's
+                    # identities into the run-level registry so wings that run
+                    # after each other share main identities / sub-identities
+                    # with full per-wing attribution.
+                    self._reconcile_identity_wing(execution_id)
+
                 # Progress reported via events, not print
                 
                 if result.errors:
@@ -1017,6 +1038,54 @@ class PipelineExecutor:
         
         return wing
     
+    def _lookup_run_group_id(self, execution_id: int) -> Optional[str]:
+        """Read the run_group_id stored on an existing execution row
+        (used when resuming, so the resumed wing rejoins its run group)."""
+        try:
+            db_file = Path(self.config.output_directory) / "correlation_results.db"
+            if not db_file.exists():
+                return None
+            import sqlite3
+            conn = sqlite3.connect(str(db_file))
+            try:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(executions)")
+                if 'run_group_id' not in {row[1] for row in cursor.fetchall()}:
+                    return None
+                cursor.execute(
+                    "SELECT run_group_id FROM executions WHERE execution_id = ?",
+                    (execution_id,)
+                )
+                row = cursor.fetchone()
+                return row[0] if row and row[0] else None
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[Pipeline] Could not look up run_group_id for resume: {e}")
+            return None
+
+    def _reconcile_identity_wing(self, execution_id: Optional[int]) -> None:
+        """Merge a finished wing's identities into the per-run identity
+        registry (identity engine only). Non-fatal: reconciliation failures
+        become warnings, never break the run."""
+        if not execution_id or not self.config.output_directory:
+            return
+        if self.config.engine_type != 'identity_based':
+            return
+        try:
+            from ..engine.identity_run_reconciler import reconcile_wing
+            db_file = Path(self.config.output_directory) / "correlation_results.db"
+            stats = reconcile_wing(
+                str(db_file),
+                getattr(self.config, 'run_group_id', None),
+                execution_id
+            )
+            print(f"[Pipeline] Identity run registry updated: {stats}")
+        except Exception as e:
+            warning = f"Identity reconciliation failed (non-fatal): {e}"
+            self.warnings.append(warning)
+            print(f"[Pipeline] WARNING: {warning}")
+
     def _generate_report(self) -> Optional[int]:
         """
         Generate analysis report - saves to SQLite database and JSON files.
@@ -1086,9 +1155,15 @@ class PipelineExecutor:
                         pipeline_config=self.config.to_dict(),
                         time_period_start=self.config.time_period_start,
                         time_period_end=self.config.time_period_end,
-                        identity_filters=self.config.identity_filters
+                        identity_filters=self.config.identity_filters,
+                        run_group_id=getattr(self.config, 'run_group_id', None)
                     )
-            
+
+            # Cross-wing identity reconciliation (identity engine only).
+            # Streaming runs already reconciled per wing in _execute_wings;
+            # this covers the non-streaming path and is idempotent otherwise.
+            self._reconcile_identity_wing(execution_id)
+
             # Get run name from database for display
             with ResultsDatabase(str(db_file)) as db:
                 exec_metadata = db.get_execution_metadata(execution_id)

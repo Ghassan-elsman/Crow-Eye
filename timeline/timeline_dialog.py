@@ -89,6 +89,11 @@ class TimelineDialog(QDialog):
         
         # Create QWebEngineView to hold React App
         self.web_view = QWebEngineView(self)
+        # Suppress Qt's default WebEngine right-click menu ("View page source",
+        # "Save page", "Reload", …) — it doesn't work in this embedded app and isn't
+        # needed. The React app's own DOM/JS context menus (e.g. LaneDataModal's
+        # "Show in Timeline") are unaffected by this Qt widget policy.
+        self.web_view.setContextMenuPolicy(Qt.NoContextMenu)
         # Forward JS console messages to Python terminal
         self.web_view.page().javaScriptConsoleMessage = self._handle_console_message
         

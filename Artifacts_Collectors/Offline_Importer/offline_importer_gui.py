@@ -86,6 +86,28 @@ except ImportError:
 # Data Models
 # ============================================================================
 
+def _oi_icon(name):
+    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+    return getattr(CrowEyeIcons, name)()
+
+
+def _oi_lbl(text, name):
+    from PyQt5.QtWidgets import QLabel
+    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+    tail = (" " + text) if text else ""
+    return QLabel(f'<img src="{CrowEyeIcons.icon_path(name)}" width="16" height="16">{tail}')
+
+
+def _oi_pbtn(text, name):
+    from PyQt5.QtWidgets import QPushButton
+    b = QPushButton(text); b.setIcon(_oi_icon(name)); return b
+
+
+def _oi_cbox(text, name):
+    from PyQt5.QtWidgets import QCheckBox
+    c = QCheckBox(text); c.setIcon(_oi_icon(name)); return c
+
+
 @dataclass
 class GUIState:
     """Represents the current state of the GUI"""
@@ -615,7 +637,7 @@ class OfflineImporterGUI(QMainWindow):
         source_row = QHBoxLayout()
         source_row.setSpacing(12)  # Increased spacing
         
-        source_label = QLabel("📁")
+        source_label = _oi_lbl("", "folder")
         source_label.setStyleSheet(f"""
             color: {Colors.TEXT_PRIMARY}; 
             font-size: 26px; 
@@ -675,7 +697,7 @@ class OfflineImporterGUI(QMainWindow):
         controls_row.setSpacing(14)  # Increased spacing
         
         # Artifact Type Filter - ENHANCED
-        filter_label = QLabel("🔎")
+        filter_label = _oi_lbl("", "search")
         filter_label.setStyleSheet(f"""
             color: {Colors.TEXT_PRIMARY}; 
             font-size: 26px; 
@@ -726,7 +748,7 @@ class OfflineImporterGUI(QMainWindow):
         controls_row.addSpacing(10)
         
         # Checkboxes (LARGER icons)
-        self.include_subdirs_checkbox = QCheckBox("📂")
+        self.include_subdirs_checkbox = _oi_cbox("", "folder")
         self.include_subdirs_checkbox.setChecked(True)
         self.include_subdirs_checkbox.stateChanged.connect(self._on_include_subdirs_changed)
         self.include_subdirs_checkbox.setCursor(Qt.PointingHandCursor)
@@ -735,7 +757,7 @@ class OfflineImporterGUI(QMainWindow):
             self.include_subdirs_checkbox.setStyleSheet(CrowEyeStyles.CHECKBOX_STYLE)
         controls_row.addWidget(self.include_subdirs_checkbox)
         
-        self.verify_hashes_checkbox = QCheckBox("🔐")
+        self.verify_hashes_checkbox = _oi_cbox("", "lock")
         self.verify_hashes_checkbox.setChecked(True)
         self.verify_hashes_checkbox.stateChanged.connect(self._on_verify_hashes_changed)
         self.verify_hashes_checkbox.setCursor(Qt.PointingHandCursor)
@@ -744,7 +766,7 @@ class OfflineImporterGUI(QMainWindow):
             self.verify_hashes_checkbox.setStyleSheet(CrowEyeStyles.CHECKBOX_STYLE)
         controls_row.addWidget(self.verify_hashes_checkbox)
         
-        self.incremental_scan_checkbox = QCheckBox("📊")
+        self.incremental_scan_checkbox = _oi_cbox("", "chart")
         self.incremental_scan_checkbox.setChecked(False)  # Default: unchecked (clear index before scan)
         self.incremental_scan_checkbox.stateChanged.connect(self._on_incremental_scan_changed)
         self.incremental_scan_checkbox.setCursor(Qt.PointingHandCursor)
@@ -766,7 +788,7 @@ class OfflineImporterGUI(QMainWindow):
         controls_row.addSpacing(10)
         
         # Action Buttons - Aligned and sized consistently
-        self.scan_artifacts_button = QPushButton("🔍 SCAN")
+        self.scan_artifacts_button = _oi_pbtn("SCAN", "search")
         self.scan_artifacts_button.setMinimumSize(150, 48)  # Same width as collect button
         self.scan_artifacts_button.setMaximumSize(150, 48)
         self.scan_artifacts_button.setEnabled(False)
@@ -777,7 +799,7 @@ class OfflineImporterGUI(QMainWindow):
             self.scan_artifacts_button.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
         controls_row.addWidget(self.scan_artifacts_button)
         
-        self.start_collection_button = QPushButton("▶️ COLLECT")
+        self.start_collection_button = _oi_pbtn("COLLECT", "play")
         self.start_collection_button.setMinimumSize(150, 48)  # Same width as scan button
         self.start_collection_button.setMaximumSize(150, 48)
         self.start_collection_button.setEnabled(False)
@@ -788,7 +810,7 @@ class OfflineImporterGUI(QMainWindow):
             self.start_collection_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
         controls_row.addWidget(self.start_collection_button)
         
-        self.cancel_button = QPushButton("⏹️ CANCEL")
+        self.cancel_button = _oi_pbtn("CANCEL", "stop")
         self.cancel_button.setMinimumSize(150, 48)  # Bigger with text
         self.cancel_button.setMaximumSize(150, 48)
         self.cancel_button.setEnabled(False)
@@ -800,7 +822,7 @@ class OfflineImporterGUI(QMainWindow):
         controls_row.addWidget(self.cancel_button)
         
         # Task 28.3: Clear Scan Index button
-        self.clear_scan_index_button = QPushButton("🗑️ CLEAR INDEX")
+        self.clear_scan_index_button = _oi_pbtn("CLEAR INDEX", "delete")
         self.clear_scan_index_button.setMinimumSize(150, 48)
         self.clear_scan_index_button.setMaximumSize(150, 48)
         self.clear_scan_index_button.setEnabled(True)  # Always enabled
@@ -836,8 +858,8 @@ class OfflineImporterGUI(QMainWindow):
         choice_dialog.setIcon(QMessageBox.Question)
         
         # Add custom buttons
-        folder_button = choice_dialog.addButton("📁 Scan Folder", QMessageBox.ActionRole)
-        files_button = choice_dialog.addButton("📄 Select Files", QMessageBox.ActionRole)
+        folder_button = choice_dialog.addButton("Scan Folder", QMessageBox.ActionRole); folder_button.setIcon(_oi_icon("folder"))
+        files_button = choice_dialog.addButton("Select Files", QMessageBox.ActionRole); files_button.setIcon(_oi_icon("file"))
         cancel_button = choice_dialog.addButton(QMessageBox.Cancel)
         
         # Style the dialog with Crow-eye theme
@@ -1695,7 +1717,7 @@ class OfflineImporterGUI(QMainWindow):
         button_layout.setSpacing(15)
         
         # Collect Artifacts button (Task 6.1)
-        self.collect_artifacts_button = QPushButton("📦 Collect Artifacts")
+        self.collect_artifacts_button = _oi_pbtn("Collect Artifacts", "package")
         self.collect_artifacts_button.setMinimumHeight(40)
         self.collect_artifacts_button.setMinimumWidth(180)
         self.collect_artifacts_button.clicked.connect(self._on_collect_artifacts_clicked)
@@ -1709,7 +1731,7 @@ class OfflineImporterGUI(QMainWindow):
         button_layout.addWidget(self.collect_artifacts_button)
         
         # Parse Artifacts button (Task 8.1)
-        self.parse_artifacts_button = QPushButton("🔍 Parse Artifacts")
+        self.parse_artifacts_button = _oi_pbtn("Parse Artifacts", "search")
         self.parse_artifacts_button.setMinimumHeight(40)
         self.parse_artifacts_button.setMinimumWidth(180)
         self.parse_artifacts_button.clicked.connect(self._on_parse_artifacts_clicked)
@@ -1803,10 +1825,10 @@ class OfflineImporterGUI(QMainWindow):
             # Status column - show collection status
             destination_path = artifact.get('destination_path')
             if destination_path:
-                status_text = "📦 Collected"
+                status_text = "Collected"
                 status_tooltip = f"Copied to: {destination_path}"
             else:
-                status_text = "🔍 Scanned"
+                status_text = "Scanned"
                 status_tooltip = "Not yet collected to case directory"
             
             status_item = QTableWidgetItem(status_text)
@@ -2407,7 +2429,7 @@ class OfflineImporterGUI(QMainWindow):
         
         # Reset cancel button
         self.cancel_button.setEnabled(False)
-        self.cancel_button.setText("⏹️ CANCEL")
+        self.cancel_button.setText("CANCEL")
         
         # Ensure case_root is set if we're scanning from default_scan_path
         if not self.case_root and self.default_scan_path:

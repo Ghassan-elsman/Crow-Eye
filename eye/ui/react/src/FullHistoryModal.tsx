@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { IconPin, IconLock, IconNote } from './Icons';
 import './FullHistoryModal.css';
 
 interface MessageMetadata {
@@ -119,24 +120,27 @@ const FullHistoryModal: React.FC<FullHistoryModalProps> = ({ messages, onClose }
 
                       <div className="history-message-badges">
                         {isPinned && (
-                          <span className="history-badge history-badge--pinned" title="Pinned message">
-                            📌 Pinned
+                          <span className="history-badge history-badge--pinned" title="Pinned message"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <IconPin size={11} /> Pinned
                           </span>
                         )}
                         {hasEvidence && (
                           <span
                             className="history-badge history-badge--evidence"
                             title={`Evidence detected: ${evidencePatterns.join(', ')}`}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
                           >
-                            🔒 Evidence
+                            <IconLock size={11} /> Evidence
                           </span>
                         )}
                         {isSummary && (
                           <span
                             className="history-badge history-badge--summary"
                             title={`Summary of ${message.metadata?.summarized_count || 0} messages`}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
                           >
-                            📝 Summary ({message.metadata?.summarized_count || 0})
+                            <IconNote size={11} /> Summary ({message.metadata?.summarized_count || 0})
                           </span>
                         )}
                       </div>

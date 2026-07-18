@@ -240,7 +240,14 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 wing_name = getattr(wing_config, 'wing_name', 'Unknown')
                 logger.info(f"[Identity Engine] Wing {wing_idx}/{len(wing_configs)}: {wing_name}")
                 wing_matches, wing_identity_count, wing_feather_stats = self._process_wing(wing_config, 0, 1)
-                
+
+                # Tag every match with the wing that produced it so attribution
+                # survives even when multiple wings run in one execute() call
+                wing_id = getattr(wing_config, 'wing_id', None)
+                for m in wing_matches:
+                    m.wing_id = wing_id
+                    m.wing_name = wing_name
+
                 # Merge feather stats from this wing
                 for feather_id, stats in wing_feather_stats.items():
                     if feather_id not in all_feather_stats:
@@ -316,10 +323,26 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             
             # Note: Identity Semantic Phase will extract identities from CorrelationResult
             # No need to manually build identities_list here
-            
+
+            # A single CorrelationResult can only carry one wing label. In
+            # production execute_wing() always passes exactly one wing; if a
+            # caller passes several, label the collapsed result honestly
+            # instead of falsely attributing everything to the first wing.
+            if len(wing_configs) > 1:
+                logger.warning(
+                    f"[Identity Engine] execute() called with {len(wing_configs)} wings; "
+                    f"results are collapsed into one CorrelationResult labeled 'Multi-Wing'. "
+                    f"Per-wing attribution is preserved on each match (wing_id/wing_name)."
+                )
+                result_wing_id = "multi_wing"
+                result_wing_name = f"Multi-Wing ({len(wing_configs)})"
+            else:
+                result_wing_id = wing_configs[0].wing_id if wing_configs else "unknown"
+                result_wing_name = wing_configs[0].wing_name if wing_configs else "unknown"
+
             self.last_results = CorrelationResult(
-                wing_id=wing_configs[0].wing_id if wing_configs else "unknown",
-                wing_name=wing_configs[0].wing_name if wing_configs else "unknown",
+                wing_id=result_wing_id,
+                wing_name=result_wing_name,
                 matches=scored_matches,
                 total_matches=total_match_count, # Use tracked count (works for both streaming and non-streaming)
                 execution_duration_seconds=execution_time,

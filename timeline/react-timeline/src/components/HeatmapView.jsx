@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from 'react';
 import { cleanForensicDate } from '../utils/formatters';
+import { IconGrid } from './Icons';
 
 /**
  * HeatmapView — Calendar grid showing per-day forensic artifact density.
@@ -298,8 +299,8 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
       </div>
 
       <div style={{ flex: 1, padding: '24px', overflowY: 'auto' }}>
-        <h2 style={{ fontSize: 18, marginBottom: 4, color: 'var(--accent-cyan)' }}>
-          🦅 Global Case Overview
+        <h2 style={{ fontSize: 18, marginBottom: 4, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <IconGrid size={18} color="currentColor" /> Global Case Overview
         </h2>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 15 }}>
           Select a highlighted day to load full forensic lane details for that day and surrounding week.

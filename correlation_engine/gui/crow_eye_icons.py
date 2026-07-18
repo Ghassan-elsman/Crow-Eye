@@ -33,12 +33,19 @@ ICON_NAMES = (
     "success", "warning", "error", "info", "fail",
     # Action
     "add", "edit", "delete", "copy", "star",
-    "refresh", "download", "save",
+    "refresh", "download", "save", "history",
     # Navigation
     "prev", "next", "expand", "collapse", "up", "down",
     # Decoration
     "folder", "file", "chart", "search", "settings",
-    "tip", "clock", "target", "link", "play", "stop", "close",
+    "tip", "clock", "target", "link", "play", "stop", "close", "subarrow",
+    "upload", "hourglass", "lock", "disk", "calendar", "text", "crow", "clipboard", "package",
+    # Badges
+    "bolt", "tag",
+    # Result-tree hierarchy levels
+    "identity", "sub_identity", "anchor", "evidence",
+    # Tree relation guides + expand-state indicators (used via QSS url())
+    "branch_vline", "branch_more", "branch_end", "branch_closed", "branch_open",
 )
 
 
@@ -92,6 +99,8 @@ class CrowEyeIcons:
     def download(cls) -> QIcon: return cls._load("download")
     @classmethod
     def save(cls) -> QIcon: return cls._load("save")
+    @classmethod
+    def history(cls) -> QIcon: return cls._load("history") # load previous/last results
 
     # ── Navigation ───────────────────────────────────────────
     @classmethod
@@ -132,6 +141,66 @@ class CrowEyeIcons:
     def stop(cls) -> QIcon: return cls._load("stop")
     @classmethod
     def close(cls) -> QIcon: return cls._load("close")
+    @classmethod
+    def subarrow(cls) -> QIcon: return cls._load("subarrow") # ↳ corner arrow, subordinate metric
+
+    # ── Badges ───────────────────────────────────────────────
+    @classmethod
+    def bolt(cls) -> QIcon: return cls._load("bolt") # advanced wing / Identity engine only
+    @classmethod
+    def tag(cls) -> QIcon: return cls._load("tag") # semantic annotation marker
+
+    # ── Result-tree hierarchy levels ─────────────────────────
+    # Identity (WHO/WHAT acted) → Sub-identity (WHICH variant) →
+    # Anchor (WHEN evidence co-occurred) → Evidence (WHAT proves it)
+    @classmethod
+    def identity(cls) -> QIcon: return cls._load("identity") # fingerprint, blue
+    @classmethod
+    def sub_identity(cls) -> QIcon: return cls._load("sub_identity") # branch to variant node, orange
+    @classmethod
+    def anchor(cls) -> QIcon: return cls._load("anchor") # pin moored to a timeline node, amber
+    @classmethod
+    def evidence(cls) -> QIcon: return cls._load("evidence") # record + magnifier, green
+
+    # ── Tree relation guides + expand indicators ─────────────
+    # Primarily consumed via icon_path() in QTreeWidget::branch QSS rules;
+    # QIcon factories provided for manifest consistency.
+    @classmethod
+    def branch_vline(cls) -> QIcon: return cls._load("branch_vline")
+    @classmethod
+    def branch_more(cls) -> QIcon: return cls._load("branch_more")
+    @classmethod
+    def branch_end(cls) -> QIcon: return cls._load("branch_end")
+    @classmethod
+    def branch_closed(cls) -> QIcon: return cls._load("branch_closed")
+    @classmethod
+    def branch_open(cls) -> QIcon: return cls._load("branch_open")
+
+    # ── Additional decoration (emoji→icon sweep, 2026-07-18) ─────
+    @classmethod
+    def upload(cls) -> QIcon: return cls._load("upload")
+    @classmethod
+    def hourglass(cls) -> QIcon: return cls._load("hourglass")
+    @classmethod
+    def lock(cls) -> QIcon: return cls._load("lock")
+    @classmethod
+    def disk(cls) -> QIcon: return cls._load("disk")
+    @classmethod
+    def calendar(cls) -> QIcon: return cls._load("calendar")
+    @classmethod
+    def text(cls) -> QIcon: return cls._load("text")
+    @classmethod
+    def crow(cls) -> QIcon: return cls._load("crow")  # Crow-Eye brand mark
+    @classmethod
+    def clipboard(cls) -> QIcon: return cls._load("clipboard")
+    @classmethod
+    def package(cls) -> QIcon: return cls._load("package")
+
+    @classmethod
+    def icon_path(cls, name: str) -> str:
+        """Posix-style absolute path of an icon SVG, for QSS url() usage
+        (e.g. QTreeWidget::branch guide lines and expand indicators)."""
+        return (_ICONS_DIR / f"{name}.svg").as_posix()
 
 
 # Mapping from bracketed status tags used throughout the GUI to the
@@ -151,6 +220,8 @@ _TAG_TO_ICON_NAME: Dict[str, str] = {
     "fail": "fail",
     "info": "info",
     "tip": "tip",
+    "bolt": "bolt",
+    "tag": "tag",
 }
 
 

@@ -147,6 +147,9 @@ class ContextManager:
         # Cache for the always-injected database manifest (built lazily in
         # _build_database_manifest; the case's DB set is fixed for our lifetime).
         self._db_manifest_cache = None
+        # Set alongside the manifest: True when the case has imported-evidence DBs
+        # (category "Imported Evidence") so the prompt can add cross-reference guidance.
+        self._has_imported_evidence = False
         # TTL cache for the pre-flight connectivity ping (see _validate_connectivity_cached).
         self._connectivity_cache = None
         self.search_service = search_service
@@ -542,6 +545,7 @@ class ContextManager:
             "search_artifacts": f.handle_search_artifacts,
             "semantic_search_artifacts": f.handle_semantic_search_artifacts,
             "query_correlation_results": f.handle_query_correlation_results,
+            "correlate_imported_evidence": f.handle_correlate_imported_evidence,
             "list_case_files": f.handle_list_case_files,
             "internet_search": f.handle_internet_search,
             "fetch_web_content": f.handle_fetch_web_content,
@@ -773,6 +777,12 @@ class ContextManager:
             if self.database_service:
                 dbs = self.database_service.discover_databases()
                 accessible = [d for d in dbs if d.get("accessible") and d.get("exists")]
+                # Remember whether external evidence was imported so _build_system_prompt
+                # can steer the model to cross-reference it (computed here to reuse this
+                # single discovery scan; persists with the cached manifest).
+                self._has_imported_evidence = any(
+                    (d.get("category") == "Imported Evidence") for d in accessible
+                )
                 if accessible:
                     lines = [
                         "## Available Case Databases (real schema)",
@@ -832,6 +842,24 @@ class ContextManager:
 
         self._db_manifest_cache = manifest
         return manifest
+
+    def refresh_database_manifest(self) -> None:
+        """Invalidate the cached DB schema manifest so newly-imported evidence is seen.
+
+        The manifest is normally cached for the ContextManager's lifetime because a
+        case's database set does not change mid-session. When the investigator imports
+        an external database (see the evidence-import feature), that assumption breaks:
+        the file now exists under the case tree and ``discover_databases`` (which
+        re-globs on every call) will find it, but the cached manifest string would hide
+        it from the model. Clearing both caches forces the next ``_build_system_prompt``
+        to re-run discovery + get_schema and surface the new tables/columns.
+        """
+        self._db_manifest_cache = None
+        try:
+            if self.database_service and hasattr(self.database_service, "_schema_cache"):
+                self.database_service._schema_cache.clear()
+        except Exception as e:
+            self.logger.debug(f"Could not clear database schema cache: {e}")
 
     # Column names whose values are enumerable/identifier-ish — the ones where a
     # real example value most helps a model write a correct WHERE clause.
@@ -1043,6 +1071,23 @@ class ContextManager:
         )
         if db_manifest:
             core_str += "\n\n" + db_manifest
+
+        # 2b-i. IMPORTED EVIDENCE (external data) — cross-reference directive.
+        # Present only when the investigator imported external evidence into the case
+        # (databases under category "Imported Evidence"). Flag is set during the manifest
+        # build above (reuses that single discovery scan).
+        if getattr(self, "_has_imported_evidence", False):
+            core_str += (
+                "\n\n## Imported Evidence — EXTERNAL data present\n"
+                "This case contains EXTERNAL evidence the investigator imported (databases marked "
+                "**(Imported Evidence)** above). Treat it as first-class evidence, NOT as background. "
+                "You MUST CROSS-REFERENCE it against the native artifacts: call "
+                "**`correlate_imported_evidence`** to check whether the imported data shares identities "
+                "(filenames, users, IPs, hashes) or timestamps with native artifacts. If correlations "
+                "are found, USE them in your analysis — state where imported and native evidence "
+                "CORROBORATE, CONFLICT, or where one is SILENT (per the cross-source rule) — and cite "
+                "both sides as `database:table:rowid`. Do not report imported evidence in isolation."
+            )
 
         # 2c. CORRELATION ENGINE AVAILABILITY (Priority 1: MUST KEEP)
         # Checked fresh each build (not cached in the manifest) so a Correlation

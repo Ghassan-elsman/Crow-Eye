@@ -3,6 +3,7 @@
  */
 import { memo, useEffect, useState } from 'react';
 import { formatTime } from '../utils/formatters';
+import { IconTag } from './Icons';
 
 function EventDetailModal({ event, onClose, callBridge }) {
   const [fullData, setFullData] = useState(null);
@@ -33,8 +34,8 @@ function EventDetailModal({ event, onClose, callBridge }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal__header">
-          <div className="modal__badge" style={{ background: 'var(--accent-blue)' }}>
-            🏷️ Event Record
+          <div className="modal__badge" style={{ background: 'var(--accent-blue)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <IconTag size={14} color="currentColor" /> Event Record
           </div>
           <button className="modal__close" onClick={onClose}>×</button>
         </div>

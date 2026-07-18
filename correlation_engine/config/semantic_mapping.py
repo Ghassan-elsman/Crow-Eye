@@ -615,7 +615,19 @@ class SemanticCondition:
     field_name: str
     value: str
     operator: str = "equals"
-    
+
+    # --- Advanced condition extensions (all optional, backward compatible) ---
+    # Condition-level negation: the condition matches when the underlying
+    # comparison does NOT hold. Enables absence / "must-not-be-present" logic.
+    negate: bool = False
+    # Cross-feather / field-to-field comparison. When both are set the
+    # right-hand side of the comparison is drawn from another feather's
+    # record (resolved from the full record set) instead of ``value``.
+    # Enables masquerade / timestomp style checks
+    # (e.g. prefetch.sha1 != amcache.sha1, mft.si_time < mft.fn_time).
+    compare_to_feather: Optional[str] = None
+    compare_to_field: Optional[str] = None
+
     # Compiled pattern cache (not serialized)
     _compiled_pattern: Optional[re.Pattern] = field(default=None, init=False, repr=False, compare=False)
     
@@ -636,51 +648,128 @@ class SemanticCondition:
             # Use global compile_pattern_cached function
             self._compiled_pattern = compile_pattern_cached(self.value)
     
-    def matches(self, record: Dict[str, Any]) -> bool:
+    def matches(self, record: Dict[str, Any],
+                all_records: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
         """
         Check if this condition matches the record with SMART field name matching.
-        
+
         Smart matching handles field name variations from different forensic tools:
         - Case-insensitive field names (EventID, eventid, event_id)
         - Underscore/CamelCase variations (target_path, TargetPath, targetpath)
         - Common abbreviations and synonyms
-        
+
         Args:
             record: Dictionary containing field values to match against
-            
+            all_records: Full record set keyed by feather_id. Required only for
+                cross-feather comparison (``compare_to_feather``); ignored for
+                ordinary field-vs-literal conditions.
+
         Returns:
-            True if the condition matches, False otherwise
+            True if the condition matches, False otherwise. When ``negate`` is
+            set the boolean result of the underlying comparison is inverted.
         """
+        result = self._evaluate_core(record, all_records)
+        return (not result) if self.negate else result
+
+    def _resolve_rhs(self, all_records: Optional[Dict[str, Dict[str, Any]]]) -> Optional[str]:
+        """
+        Resolve the right-hand side of the comparison.
+
+        Returns ``self.value`` for ordinary conditions, or the value of the
+        referenced field in another feather's record for cross-feather
+        comparisons. Returns ``None`` when a cross-feather target cannot be
+        resolved (missing feather / field), which callers treat as "no match".
+        """
+        if self.compare_to_feather and self.compare_to_field:
+            if not all_records:
+                return None
+            other = all_records.get(self.compare_to_feather, {})
+            if not isinstance(other, dict):
+                return None
+            rhs = self._smart_field_lookup(other, self.compare_to_field)
+            return None if rhs is None else str(rhs)
+        return self.value
+
+    def _evaluate_core(self, record: Dict[str, Any],
+                       all_records: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+        """Operator dispatch (pre-negation). Mirrors QueryBuilder operators."""
         # Smart field name lookup - find the actual field in the record
         field_value = self._smart_field_lookup(record, self.field_name)
-        
+
+        operator = self.operator
+
+        # Wildcard matching: any non-empty value present
+        if operator == "wildcard" or (self.value == "*" and not self.compare_to_feather):
+            return field_value is not None and bool(str(field_value).strip())
+
+        # not_equals is NULL-safe (parity with QueryBuilder): a missing field
+        # is considered "not equal" so analysts' "field is not X" includes
+        # rows where the field is unset.
+        if operator == "not_equals":
+            if field_value is None:
+                return True
+            rhs = self._resolve_rhs(all_records)
+            if rhs is None:
+                return True
+            return str(field_value).lower() != rhs.lower()
+
         if field_value is None:
             return False
-        
         field_value_str = str(field_value)
-        
-        # Wildcard matching
-        if self.value == "*" or self.operator == "wildcard":
-            return bool(field_value_str.strip())
-        
-        # Equals matching (case-insensitive)
-        if self.operator == "equals":
-            return field_value_str.lower() == self.value.lower()
-        
-        # Contains matching (case-insensitive)
-        if self.operator == "contains":
-            return self.value.lower() in field_value_str.lower()
-        
-        # Regex matching
-        if self.operator == "regex":
+
+        # Regex matching (literal pattern only; not used for cross-feather)
+        if operator == "regex":
             if not self._compiled_pattern:
                 self._compile_pattern()
             if self._compiled_pattern:
                 return bool(self._compiled_pattern.search(field_value_str))
             return False
-        
+
+        rhs = self._resolve_rhs(all_records)
+        if rhs is None:
+            return False
+
+        if operator == "equals":
+            return field_value_str.lower() == rhs.lower()
+        if operator == "contains":
+            return rhs.lower() in field_value_str.lower()
+        if operator in ("greater_than", "less_than", "greater_equal", "less_equal"):
+            return self._numeric_or_time_compare(field_value_str, rhs, operator)
+
         # Default to equals
-        return field_value_str.lower() == self.value.lower()
+        return field_value_str.lower() == rhs.lower()
+
+    @staticmethod
+    def _numeric_or_time_compare(lhs: str, rhs: str, operator: str) -> bool:
+        """
+        Ordered comparison for numeric or timestamp-like values.
+
+        Tries numeric comparison first, then falls back to a lexicographic
+        comparison (ISO-8601 timestamps order correctly as strings). Returns
+        False if the two sides are not comparable.
+        """
+        def _to_num(v):
+            try:
+                return float(str(v).strip())
+            except (ValueError, TypeError):
+                return None
+
+        ln, rn = _to_num(lhs), _to_num(rhs)
+        if ln is not None and rn is not None:
+            left, right = ln, rn
+        else:
+            # Lexicographic fallback (works for ISO-8601 / sortable strings)
+            left, right = str(lhs), str(rhs)
+
+        if operator == "greater_than":
+            return left > right
+        if operator == "less_than":
+            return left < right
+        if operator == "greater_equal":
+            return left >= right
+        if operator == "less_equal":
+            return left <= right
+        return False
     
     @staticmethod
     @lru_cache(maxsize=256)
@@ -812,14 +901,25 @@ class SemanticCondition:
         return SemanticCondition._normalize_field_name_cached(name)
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
+        """Convert to dictionary for JSON serialization.
+
+        Advanced fields are emitted only when set to a non-default value so
+        that existing rules round-trip byte-for-byte and stay readable.
+        """
+        data = {
             'feather_id': self.feather_id,
             'field_name': self.field_name,
             'value': self.value,
             'operator': self.operator
         }
-    
+        if self.negate:
+            data['negate'] = True
+        if self.compare_to_feather:
+            data['compare_to_feather'] = self.compare_to_feather
+        if self.compare_to_field:
+            data['compare_to_field'] = self.compare_to_field
+        return data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SemanticCondition':
         """Create SemanticCondition from dictionary."""
@@ -827,12 +927,15 @@ class SemanticCondition:
         missing_fields = [f for f in required_fields if f not in data]
         if missing_fields:
             raise ValueError(f"Missing required fields: {missing_fields}")
-        
+
         return cls(
             feather_id=data['feather_id'],
             field_name=data['field_name'],
             value=data['value'],
-            operator=data.get('operator', 'equals')
+            operator=data.get('operator', 'equals'),
+            negate=bool(data.get('negate', False)),
+            compare_to_feather=data.get('compare_to_feather'),
+            compare_to_field=data.get('compare_to_field'),
         )
     
     def __str__(self) -> str:
@@ -890,7 +993,26 @@ class SemanticRule:
     category: str = ""
     severity: str = "info"
     confidence: float = 1.0
-    
+
+    # --- Advanced rule extensions (all optional, backward compatible) ---
+    # Discriminator selecting the evaluation strategy. "match" is the
+    # historical flat AND/OR behaviour; the others opt into new evaluators
+    # in SemanticRuleEvaluator. Unknown values fall back to "match".
+    rule_type: str = "match"
+    # Nested boolean logic: each group is {"logic_operator", "conditions":[...]}
+    # combined with the rule's top-level ``logic_operator`` alongside the flat
+    # ``conditions`` list. Empty = plain flat logic (unchanged).
+    condition_groups: List[Dict] = field(default_factory=list)
+    # Ordered kill-chain spec: {"steps":[...], "max_gap_minutes", "same_identity"...}
+    sequence: Optional[Dict] = None
+    # Missing-evidence spec: {"expect_present":[...], "require_absent":[...], "within_minutes"}
+    absence: Optional[Dict] = None
+    # Occurrence-count spec: {"condition"|"group", "min_count", "within_minutes", "group_by"}
+    threshold: Optional[Dict] = None
+    # Structured MITRE ATT&CK mapping (free-text category/severity kept).
+    technique_id: List[str] = field(default_factory=list)
+    tactic: List[str] = field(default_factory=list)
+
     # Optimization fields (Requirements 9.1, 9.2, 9.3)
     _requires_multi_indicator: bool = False
     _min_indicators: int = 1
@@ -906,10 +1028,21 @@ class SemanticRule:
         if self.logic_operator not in ("AND", "OR"):
             logger.warning(f"Invalid logic operator '{self.logic_operator}', defaulting to AND")
             self.logic_operator = "AND"
-        
+
         if not 0.0 <= self.confidence <= 1.0:
             logger.warning(f"Confidence {self.confidence} out of range, clamping to [0.0, 1.0]")
             self.confidence = max(0.0, min(1.0, self.confidence))
+
+        # Normalize advanced rule extensions
+        self.rule_type = (self.rule_type or "match").lower()
+        if self.rule_type not in ("match", "sequence", "absence", "threshold"):
+            logger.warning(f"Unknown rule_type '{self.rule_type}', defaulting to 'match'")
+            self.rule_type = "match"
+        # Accept a single technique/tactic string as well as a list
+        if isinstance(self.technique_id, str):
+            self.technique_id = [self.technique_id] if self.technique_id else []
+        if isinstance(self.tactic, str):
+            self.tactic = [self.tactic] if self.tactic else []
     
     def evaluate(self, records: Dict[str, Dict[str, Any]]) -> Tuple[bool, List[str]]:
         """
@@ -921,35 +1054,76 @@ class SemanticRule:
         Returns:
             Tuple of (matches: bool, matched_conditions: List[str])
         """
-        if not self.conditions:
+        if not self.conditions and not self.condition_groups:
             return True, []
 
         matched_conditions = []
+        # Each "term" is either a flat condition or a nested condition group.
+        # The rule's top-level logic_operator combines the term results, giving
+        # (A AND B) OR (C AND D) style expressions without breaking flat rules
+        # (a flat rule is just N single-condition terms — identical behaviour).
+        term_results = []
 
         for condition in self.conditions:
             record = records.get(condition.feather_id, {})
-            if condition.matches(record):
+            # Pass the full record set so cross-feather comparison conditions
+            # (compare_to_feather/field) can resolve their right-hand side.
+            ok = condition.matches(record, records)
+            term_results.append(ok)
+            if ok:
                 matched_conditions.append(f"{condition.feather_id}.{condition.field_name}")
 
+        for group in (self.condition_groups or []):
+            grp_ok, grp_labels = self._evaluate_group(group, records)
+            term_results.append(grp_ok)
+            if grp_ok:
+                matched_conditions.extend(grp_labels)
+
         if self.logic_operator == "AND":
-            matches = len(matched_conditions) == len(self.conditions)
+            matches = all(term_results)
         else:
-            matches = len(matched_conditions) > 0
+            matches = any(term_results)
 
         # Multi-indicator gating: an OR rule may declare it needs at least
-        # N of its conditions to fire (defends against over-broad rules
-        # like "Data Exfiltration Pattern" that should require multiple
-        # weak indicators, not a single one). When _requires_multi_indicator
-        # is True we additionally require len(matched) >= _min_indicators.
+        # N of its terms to fire (defends against over-broad rules like
+        # "Data Exfiltration Pattern" that should require multiple weak
+        # indicators, not a single one).
         if matches and self._requires_multi_indicator:
-            if len(matched_conditions) < max(1, int(self._min_indicators)):
+            if sum(1 for t in term_results if t) < max(1, int(self._min_indicators)):
                 matches = False
 
         return matches, matched_conditions
+
+    def _evaluate_group(self, group: Dict[str, Any],
+                        records: Dict[str, Dict[str, Any]]) -> Tuple[bool, List[str]]:
+        """
+        Evaluate one nested condition group with its own AND/OR operator.
+
+        Returns (group_matched, matched_condition_labels).
+        """
+        raw_conditions = group.get('conditions', []) if isinstance(group, dict) else []
+        op = str(group.get('logic_operator', 'AND')).upper() if isinstance(group, dict) else 'AND'
+        if op not in ('AND', 'OR'):
+            op = 'AND'
+
+        results = []
+        labels = []
+        for cd in raw_conditions:
+            cond = cd if isinstance(cd, SemanticCondition) else SemanticCondition.from_dict(cd)
+            record = records.get(cond.feather_id, {})
+            ok = cond.matches(record, records)
+            results.append(ok)
+            if ok:
+                labels.append(f"{cond.feather_id}.{cond.field_name}")
+
+        if not results:
+            return True, labels
+        group_matched = all(results) if op == 'AND' else any(results)
+        return group_matched, labels
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        data = {
             'rule_id': self.rule_id,
             'name': self.name,
             'semantic_value': self.semantic_value,
@@ -967,11 +1141,30 @@ class SemanticRule:
             '_pattern_specificity': self._pattern_specificity,
             'eye_authorship': self.eye_authorship.to_dict() if self.eye_authorship else None,
         }
+        # Advanced extensions — emit only when non-default so legacy rules
+        # round-trip unchanged.
+        if self.rule_type and self.rule_type != "match":
+            data['rule_type'] = self.rule_type
+        if self.condition_groups:
+            data['condition_groups'] = self.condition_groups
+        if self.sequence is not None:
+            data['sequence'] = self.sequence
+        if self.absence is not None:
+            data['absence'] = self.absence
+        if self.threshold is not None:
+            data['threshold'] = self.threshold
+        if self.technique_id:
+            data['technique_id'] = list(self.technique_id)
+        if self.tactic:
+            data['tactic'] = list(self.tactic)
+        return data
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SemanticRule':
         """Create SemanticRule from dictionary."""
-        required_fields = ['rule_id', 'semantic_value', 'conditions']
+        # ``conditions`` is optional: advanced rule types (absence / sequence /
+        # threshold) carry their logic in dedicated spec blocks instead.
+        required_fields = ['rule_id', 'semantic_value']
         missing_fields = [f for f in required_fields if f not in data]
         if missing_fields:
             raise ValueError(f"Missing required fields: {missing_fields}")
@@ -1008,6 +1201,13 @@ class SemanticRule:
             _min_indicators=data.get('_min_indicators', 1),
             _pattern_specificity=data.get('_pattern_specificity', 1.0),
             eye_authorship=eye_auth,
+            rule_type=data.get('rule_type', 'match'),
+            condition_groups=data.get('condition_groups', []) or [],
+            sequence=data.get('sequence'),
+            absence=data.get('absence'),
+            threshold=data.get('threshold'),
+            technique_id=data.get('technique_id', []) or [],
+            tactic=data.get('tactic', []) or [],
         )
     
     def to_json(self, indent: int = 2) -> str:

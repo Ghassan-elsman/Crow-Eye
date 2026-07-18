@@ -685,32 +685,24 @@ class IdentityAggregator:
             
             # Query matches for this execution via results table
             try:
-                # First get result_id(s) for this execution
-                cursor.execute("""
-                    SELECT result_id
-                    FROM results
-                    WHERE execution_id = ?
-                """, (execution_id,))
-                
-                result_rows = cursor.fetchall()
-                if not result_rows:
-                    warning_msg = f"No results found for execution_id={execution_id}"
-                    logger.warning(f"[Identity Aggregator] {warning_msg}")
-                    self.statistics.warnings.append(warning_msg)
-                    return registry
-                
-                result_ids = [row[0] for row in result_rows]
-                
-                # Now get all matches for these results
-                placeholders = ','.join('?' * len(result_ids))
+                # Legacy DBs may predate the compressed column, so probe first
+                cursor.execute("PRAGMA table_info(matches)")
+                match_columns = {row[1] for row in cursor.fetchall()}
+                compressed_col = "m.compressed" if 'compressed' in match_columns else "0 AS compressed"
+
+                # JOIN results so each match carries its wing attribution
+                # (results.wing_id/wing_name), which is threaded into every
+                # RecordReference below
                 cursor.execute(f"""
-                    SELECT match_id, feather_records, matched_application, matched_file_path
-                    FROM matches
-                    WHERE result_id IN ({placeholders})
-                """, result_ids)
-                
+                    SELECT m.match_id, m.feather_records, m.matched_application,
+                           m.matched_file_path, r.wing_id, r.wing_name, {compressed_col}
+                    FROM matches m
+                    JOIN results r ON m.result_id = r.result_id
+                    WHERE r.execution_id = ?
+                """, (execution_id,))
+
                 rows = cursor.fetchall()
-                
+
             except sqlite3.Error as e:
                 error_msg = f"Failed to query matches: {e}"
                 logger.error(f"[Identity Aggregator] {error_msg}")
@@ -730,21 +722,32 @@ class IdentityAggregator:
             self.statistics.total_identities_found = len(rows)
             
             # Aggregate identities from each match
-            for idx, (match_id, feather_records_json, matched_application, matched_file_path) in enumerate(rows):
+            import gzip
+            for idx, (match_id, feather_records_json, matched_application, matched_file_path,
+                      wing_id, wing_name, compressed) in enumerate(rows):
                 try:
                     # Create identity from match data
                     # Use matched_application or matched_file_path as identity value
                     identity_value = matched_application or matched_file_path or match_id
-                    
+
                     if not identity_value:
                         self.statistics.skipped_identities += 1
                         continue
-                    
+
                     # Parse feather_records to get record references
                     record_refs = []
                     if feather_records_json:
                         try:
-                            feather_records = json.loads(feather_records_json)
+                            # Rows > 1MB are stored gzip'd with compressed=1;
+                            # without this decode step they were silently
+                            # dropped from the semantic phase
+                            if compressed:
+                                raw = feather_records_json
+                                if isinstance(raw, str):
+                                    raw = raw.encode('latin1')
+                                feather_records = json.loads(gzip.decompress(raw).decode('utf-8'))
+                            else:
+                                feather_records = json.loads(feather_records_json)
                             if isinstance(feather_records, dict):
                                 for feather_id, record_data in feather_records.items():
                                     if isinstance(record_data, dict):
@@ -752,10 +755,16 @@ class IdentityAggregator:
                                             match_id=match_id,
                                             feather_id=feather_id,
                                             record_index=record_data.get('_rowid', 0),
-                                            original_record=record_data
+                                            original_record=record_data,
+                                            wing_id=wing_id,
+                                            wing_name=wing_name
                                         ))
-                        except json.JSONDecodeError:
-                            pass # Skip if JSON is malformed
+                        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+                            # Skip if JSON is malformed or decompression fails,
+                            # but record it instead of failing silently
+                            warning_msg = f"Could not parse feather_records for match {match_id}: {e}"
+                            logger.warning(f"[Identity Aggregator] {warning_msg}")
+                            self.statistics.warnings.append(warning_msg)
                     
                     # Create identity record
                     identity_record = IdentityRecord(

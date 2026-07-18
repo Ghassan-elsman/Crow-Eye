@@ -1,0 +1,148 @@
+{
+  "config_name": "execution_without_trace_correlation",
+  "wing_name": "Execution Without Trace Correlation",
+  "wing_id": "default_wing_exec_no_trace_001",
+  "description": "Detects stealthy program execution that deliberately left no Prefetch trace, and evidence-timestamp tampering. Uses Crow-Eye's advanced rule types: an ABSENCE rule fires when execution is proven by AmCache/ShimCache but the matching Prefetch entry is missing (Prefetch disabled or scrubbed), and a cross-feather timestomp rule flags $STANDARD_INFORMATION times that predate $FILE_NAME times. Complements Execution Proof (which proves execution happened) by proving traces were removed.",
+  "proves": "A program executed but its expected execution trace was suppressed or tampered",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-07-12T00:00:00Z",
+  "last_modified": "2026-07-12T00:00:00Z",
+  "version": "1.0",
+
+  "feathers": [
+    {
+      "feather_config_name": "AmCache_CrowEyeFeather",
+      "feather_database_path": "feathers/AmCache_CrowEyeFeather.db",
+      "artifact_type": "AmCache",
+      "feather_id": "amcache",
+      "weight": 0.30,
+      "tier": 1,
+      "tier_name": "Execution evidence (AmCache)"
+    },
+    {
+      "feather_config_name": "ShimCache_CrowEyeFeather",
+      "feather_database_path": "feathers/ShimCache_CrowEyeFeather.db",
+      "artifact_type": "ShimCache",
+      "feather_id": "shimcache",
+      "weight": 0.20,
+      "tier": 1,
+      "tier_name": "Execution evidence (ShimCache)"
+    },
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.20,
+      "tier": 1,
+      "tier_name": "Expected execution trace"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.20,
+      "tier": 2,
+      "tier_name": "Timestamp tampering evidence"
+    },
+    {
+      "feather_config_name": "SecurityLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SecurityLogs_CrowEyeFeather.db",
+      "artifact_type": "SecurityLogs",
+      "feather_id": "security_logs",
+      "weight": 0.10,
+      "tier": 3,
+      "tier_name": "Audit-log context"
+    }
+  ],
+
+  "time_window_minutes": 180,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": ["AmCache", "ShimCache", "Prefetch", "MFT", "SecurityLogs"],
+  "use_weighted_scoring": true,
+
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed":  { "min": 0.70, "label": "Confirmed Trace Suppression" },
+      "probable":   { "min": 0.40, "label": "Probable Trace Suppression" },
+      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
+      "not_proven": { "min": 0.00, "label": "Not Proven" }
+    }
+  },
+
+  "semantic_rules": [
+    {
+      "rule_id": "ewt_exec_no_prefetch",
+      "name": "Execution With No Prefetch Trace (Absence)",
+      "semantic_value": "Prefetch Trace Suppressed",
+      "description": "AmCache proves a program executed, but no matching Prefetch entry exists — consistent with Prefetch being disabled or the .pf files scrubbed.",
+      "rule_type": "absence",
+      "absence": {
+        "expect_present": [
+          { "feather_id": "amcache", "field_name": "executable_name", "operator": "wildcard", "value": "*" }
+        ],
+        "require_absent": [
+          { "feather_id": "prefetch", "field_name": "executable_name", "operator": "wildcard", "value": "*" }
+        ]
+      },
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "high",
+      "technique_id": ["T1070.004", "T1562.001"],
+      "tactic": ["defense-evasion"]
+    },
+    {
+      "rule_id": "ewt_timestomp",
+      "name": "Timestomp: $SI Older Than $FN (Cross-Feather)",
+      "semantic_value": "File Timestamp Tampering",
+      "description": "A file's $STANDARD_INFORMATION creation time predates its $FILE_NAME creation time — a classic timestomping signature (fields compared within the same MFT record).",
+      "rule_type": "match",
+      "conditions": [
+        {
+          "feather_id": "mft_usn",
+          "field_name": "si_created",
+          "operator": "less_than",
+          "value": "",
+          "compare_to_feather": "mft_usn",
+          "compare_to_field": "fn_created"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "high",
+      "technique_id": ["T1070.006"],
+      "tactic": ["defense-evasion"]
+    },
+    {
+      "rule_id": "ewt_confirmed_stealth_exec",
+      "name": "Confirmed Stealth Execution (Absence + Corroboration)",
+      "semantic_value": "Confirmed Stealth Execution",
+      "description": "Execution proven by both AmCache and ShimCache but with no Prefetch trace — strong corroborated evidence that the execution trace was suppressed.",
+      "rule_type": "absence",
+      "absence": {
+        "expect_present": [
+          { "feather_id": "amcache",   "field_name": "executable_name", "operator": "wildcard", "value": "*" },
+          { "feather_id": "shimcache", "field_name": "path",            "operator": "wildcard", "value": "*" }
+        ],
+        "require_absent": [
+          { "feather_id": "prefetch", "field_name": "executable_name", "operator": "wildcard", "value": "*" }
+        ]
+      },
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "critical",
+      "technique_id": ["T1070", "T1562.001"],
+      "tactic": ["defense-evasion"]
+    }
+  ],
+
+  "tags": ["defense_evasion", "anti_forensics", "absence", "timestomp", "default", "weighted", "apt"],
+  "case_types": ["intrusion", "apt", "insider_threat", "disputed_evidence"]
+}

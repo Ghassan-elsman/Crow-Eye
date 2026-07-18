@@ -988,7 +988,20 @@ class ResultsExporter:
                     match_data['scoring_information'] = self._extract_scoring_info(match)
                 
                 tab_data['matches'].append(match_data)
-            
+
+            # ATT&CK coverage rollup for this wing (annotation only — computed
+            # from advanced/semantic rule hits; does not affect scoring).
+            try:
+                from ..config.attack_catalog import compute_attack_coverage
+                rule_results = []
+                for match in matches:
+                    sd = match.get('semantic_data') or {}
+                    rule_results.extend(sd.get('semantic_rule_results', []) or [])
+                if rule_results:
+                    tab_data['attack_coverage'] = compute_attack_coverage(rule_results)
+            except Exception:
+                pass
+
             export_data['tabs'][tab_id] = tab_data
         
         export_data['summary_statistics'] = self._generate_summary_statistics(tab_states)

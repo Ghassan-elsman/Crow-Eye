@@ -4,6 +4,7 @@
 import { memo, useMemo } from 'react';
 import { ARTIFACT_CONFIG, formatCount, getForensicTimestamps, getArtifactSources } from '../utils/formatters';
 import { heuristicFlatten } from '../utils/dataUtils';
+import { LaneIcon } from './Icons';
 
 function PillBar({ state, data }) {
   const { activeArtifacts, toggleArtifact } = state;
@@ -60,7 +61,9 @@ function PillBar({ state, data }) {
           onClick={() => toggleArtifact(key)}
         >
           <span className="pill__dot" />
-          <span>{cfg.icon} {cfg.label}</span>
+          <span className="pill__label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <LaneIcon name={cfg.icon} size={13} color={cfg.color} />{cfg.label}
+          </span>
           {counts[key] > 0 && (
             <span className="pill__count">{formatCount(counts[key])}</span>
           )}

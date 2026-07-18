@@ -109,6 +109,28 @@ except ImportError:
 # Background Collection Worker Thread
 # ============================================================================
 
+
+def _ip_icon(name):
+    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+    return getattr(CrowEyeIcons, name)()
+
+
+def _ip_lbl(text, name):
+    from PyQt5.QtWidgets import QLabel
+    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+    return QLabel(f'<img src="{CrowEyeIcons.icon_path(name)}" width="13" height="13"> {text}')
+
+
+def _ip_pbtn(text, name):
+    from PyQt5.QtWidgets import QPushButton
+    b = QPushButton(text); b.setIcon(_ip_icon(name)); return b
+
+
+def _ip_cbox(text, name):
+    from PyQt5.QtWidgets import QCheckBox
+    c = QCheckBox(text); c.setIcon(_ip_icon(name)); return c
+
+
 class CollectionWorker(QThread):
     """
     Background worker thread for artifact extraction from forensic images.
@@ -290,7 +312,7 @@ class ImageParsingDialog(QMainWindow):
         self.image_parser = ImageParser()
         
         # Configure main window
-        self.setWindowTitle("🔍 Forensic Image Parsing - Crow-eye")
+        self.setWindowTitle("Forensic Image Parsing - Crow-eye"); self.setWindowIcon(_ip_icon("search"))
         self.resize(1400, 900)
         self.setMinimumSize(1100, 800)
         
@@ -444,7 +466,7 @@ class ImageParsingDialog(QMainWindow):
         source_layout = QHBoxLayout(source_group)
         source_layout.setSpacing(12)
         
-        image_label = QLabel("💿 File:")
+        image_label = _ip_lbl("File:", "disk")
         image_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-weight: bold; font-size: 11px;")
         source_layout.addWidget(image_label)
         
@@ -482,7 +504,7 @@ class ImageParsingDialog(QMainWindow):
         partitions_layout.setSpacing(10)
         
         format_row = QHBoxLayout()
-        format_label = QLabel("📋 Detected Format:")
+        format_label = _ip_lbl("Detected Format:", "clipboard")
         format_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-weight: bold; font-size: 11px;")
         format_row.addWidget(format_label)
         
@@ -594,7 +616,7 @@ class ImageParsingDialog(QMainWindow):
         settings_layout.setSpacing(12)
         
         type_row = QHBoxLayout()
-        filter_label = QLabel("🔎 Type:")
+        filter_label = _ip_lbl("Type:", "search")
         filter_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-weight: bold; font-size: 11px;")
         type_row.addWidget(filter_label)
         
@@ -624,12 +646,12 @@ class ImageParsingDialog(QMainWindow):
         type_row.addWidget(self.artifact_type_combo, 1)
         settings_layout.addLayout(type_row)
         
-        self.calculate_hashes_checkbox = QCheckBox("🔐 Calculate Hashes")
+        self.calculate_hashes_checkbox = _ip_cbox("Calculate Hashes", "lock")
         self.calculate_hashes_checkbox.setChecked(True)
         self.calculate_hashes_checkbox.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 11px;")
         settings_layout.addWidget(self.calculate_hashes_checkbox)
         
-        self.auto_parse_checkbox = QCheckBox("⚡ Auto-parse after extraction")
+        self.auto_parse_checkbox = _ip_cbox("Auto-parse after extraction", "bolt")
         self.auto_parse_checkbox.setChecked(True)
         self.auto_parse_checkbox.setStyleSheet(f"color: {Colors.ACCENT_BLUE}; font-size: 11px; font-weight: bold;")
         self.auto_parse_checkbox.setToolTip("Automatically run artifact parsers after extraction completes")
@@ -639,7 +661,7 @@ class ImageParsingDialog(QMainWindow):
         
         # Action Buttons
         btn_layout = QHBoxLayout()
-        self.start_extraction_button = QPushButton("▶️ Start Analysis")
+        self.start_extraction_button = _ip_pbtn("Start Analysis", "play")
         self.start_extraction_button.setMinimumHeight(36)
         self.start_extraction_button.setEnabled(False)
         self.start_extraction_button.clicked.connect(self._on_start_extraction)
@@ -647,7 +669,7 @@ class ImageParsingDialog(QMainWindow):
             self.start_extraction_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON + " QPushButton { font-size: 12px; font-weight: bold; }")
         btn_layout.addWidget(self.start_extraction_button, 2)
         
-        self.cancel_button = QPushButton("⏹️ Cancel")
+        self.cancel_button = _ip_pbtn("Cancel", "stop")
         self.cancel_button.setMinimumHeight(36)
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self._on_cancel)
@@ -954,7 +976,7 @@ class ImageParsingDialog(QMainWindow):
         button_layout = QHBoxLayout()
         button_layout.setSpacing(15)
         
-        self.parse_artifacts_button = QPushButton("🔍 Parse Artifacts")
+        self.parse_artifacts_button = _ip_pbtn("Parse Artifacts", "search")
         self.parse_artifacts_button.setMinimumHeight(40)
         self.parse_artifacts_button.setMinimumWidth(180)
         self.parse_artifacts_button.clicked.connect(self._on_parse_artifacts)
@@ -963,7 +985,7 @@ class ImageParsingDialog(QMainWindow):
             self.parse_artifacts_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON + " QPushButton { font-size: 14px; }")
         button_layout.addWidget(self.parse_artifacts_button)
         
-        self.export_results_button = QPushButton("📤 Export Results")
+        self.export_results_button = _ip_pbtn("Export Results", "upload")
         self.export_results_button.setMinimumHeight(40)
         self.export_results_button.clicked.connect(self._on_export_results)
         self.export_results_button.setEnabled(False)
@@ -1015,12 +1037,12 @@ class ImageParsingDialog(QMainWindow):
             self.image_path_display.setToolTip("\n".join(file_paths))
             
             # --- Show loading indication ---
-            self.format_display.setText("⏳ Scanning image.")
+            self.format_display.setText("Scanning image.")
             if STYLES_AVAILABLE:
                 self.format_display.setStyleSheet(f"color: #F59E0B; font-weight: bold; font-size: 12px;") # Yellow/Warning color
             
             self.partition_list.clear()
-            loading_item = QListWidgetItem("⏳ Loading partitions, please wait...")
+            loading_item = QListWidgetItem(_ip_icon("hourglass"), "Loading partitions, please wait...")
             loading_item.setFlags(Qt.NoItemFlags) # Make it unselectable
             self.partition_list.addItem(loading_item)
             
@@ -1044,7 +1066,7 @@ class ImageParsingDialog(QMainWindow):
         """Update the scanning animation dots."""
         self.scan_dots = (self.scan_dots % 3) + 1
         dots = "." * self.scan_dots
-        self.format_display.setText(f"⏳ Scanning image{dots}")
+        self.format_display.setText(f"Scanning image{dots}")
 
     def _on_scan_complete(self, image_info, detected_format):
         """Handle successful completion of the background scan."""

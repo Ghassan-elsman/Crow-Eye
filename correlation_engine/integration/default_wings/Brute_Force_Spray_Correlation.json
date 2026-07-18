@@ -1,0 +1,120 @@
+{
+  "config_name": "brute_force_spray_correlation",
+  "wing_name": "Brute Force & Password Spray Correlation",
+  "wing_id": "default_wing_bruteforce_001",
+  "description": "Detects credential brute-forcing and password spraying. Uses Crow-Eye's advanced rule types: a THRESHOLD rule fires on a burst of failed logons (Security 4625) within a short window (grouped by target account), and a SEQUENCE rule fires when a burst of failures is followed by a success (4625… → 4624) — the classic 'guessed it' signature. Identity-Based engine only.",
+  "proves": "An account was subjected to brute-force / password-spray authentication attempts",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-07-12T00:00:00Z",
+  "last_modified": "2026-07-12T00:00:00Z",
+  "version": "1.0",
+
+  "feathers": [
+    {
+      "feather_config_name": "SecurityLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SecurityLogs_CrowEyeFeather.db",
+      "artifact_type": "SecurityLogs",
+      "feather_id": "security_logs",
+      "weight": 0.55,
+      "tier": 1,
+      "tier_name": "Authentication failure / success evidence"
+    },
+    {
+      "feather_config_name": "SystemLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemLogs_CrowEyeFeather.db",
+      "artifact_type": "SystemLogs",
+      "feather_id": "system_logs",
+      "weight": 0.25,
+      "tier": 2,
+      "tier_name": "Account lockout / service context"
+    },
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.20,
+      "tier": 2,
+      "tier_name": "Brute-force tool execution"
+    }
+  ],
+
+  "time_window_minutes": 60,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "4625,4624,4740",
+  "apply_to": "all",
+  "anchor_priority": ["SecurityLogs", "SystemLogs", "Prefetch"],
+  "use_weighted_scoring": true,
+
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed":  { "min": 0.70, "label": "Confirmed Brute Force" },
+      "probable":   { "min": 0.40, "label": "Probable Brute Force" },
+      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
+      "not_proven": { "min": 0.00, "label": "Not Proven" }
+    }
+  },
+
+  "semantic_rules": [
+    {
+      "rule_id": "bf_failed_logon_burst",
+      "name": "Failed Logon Burst (Threshold)",
+      "semantic_value": "Brute Force Attempt",
+      "description": "20+ failed logons (Security 4625) within 5 minutes, grouped by target account — a genuine burst rather than an isolated typo.",
+      "rule_type": "threshold",
+      "threshold": {
+        "condition": { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4625" },
+        "min_count": 20,
+        "within_minutes": 5,
+        "group_by": "account_name"
+      },
+      "scope": "wing",
+      "category": "credential_access",
+      "severity": "high",
+      "technique_id": ["T1110"],
+      "tactic": ["credential-access"]
+    },
+    {
+      "rule_id": "bf_spray_low_and_slow",
+      "name": "Password Spray (Threshold, low & slow)",
+      "semantic_value": "Password Spray",
+      "description": "10+ failed logons across the window with no per-account grouping — characteristic of spraying one/two passwords across many accounts.",
+      "rule_type": "threshold",
+      "threshold": {
+        "condition": { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4625" },
+        "min_count": 10,
+        "within_minutes": 30
+      },
+      "scope": "wing",
+      "category": "credential_access",
+      "severity": "medium",
+      "technique_id": ["T1110.003"],
+      "tactic": ["credential-access"]
+    },
+    {
+      "rule_id": "bf_guessed_it",
+      "name": "Failures Then Success (Sequence)",
+      "semantic_value": "Successful Brute Force",
+      "description": "A failed-logon (4625) followed by a successful logon (4624) within the window — the attacker likely guessed the credential.",
+      "rule_type": "sequence",
+      "sequence": {
+        "max_gap_minutes": 10,
+        "steps": [
+          { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4625" },
+          { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4624" }
+        ]
+      },
+      "scope": "wing",
+      "category": "credential_access",
+      "severity": "critical",
+      "technique_id": ["T1110"],
+      "tactic": ["credential-access"]
+    }
+  ],
+
+  "tags": ["credential_access", "brute_force", "password_spray", "threshold", "sequence", "default", "weighted", "apt"],
+  "case_types": ["intrusion", "apt", "account_compromise"]
+}

@@ -31,7 +31,119 @@ class Colors:
 
 class CrowEyeStyles:
     """Centralized style definitions for the Crow Eye application."""
-    
+
+    # Marker so the global popup stylesheet is appended to the app stylesheet at most
+    # once (idempotent), even if apply_global_dark_theme is called more than once.
+    _GLOBAL_THEME_MARKER = "/* CROWEYE_GLOBAL_POPUP_THEME */"
+
+    # Type-selector-only stylesheet for the popup/dialog widgets that otherwise fall
+    # back to Qt's default black text (unreadable on our dark chrome). Deliberately
+    # scoped to message/input dialogs, menus and tooltips — general QDialog/QLabel
+    # defaults are handled by the dark QPalette below (which any explicit per-widget
+    # QSS still overrides, so already-styled dialogs are unaffected).
+    POPUP_STYLESHEET = f"""
+{_GLOBAL_THEME_MARKER}
+QMessageBox, QInputDialog {{
+    background-color: {Colors.BG_TABLES};
+    color: {Colors.TEXT_PRIMARY};
+}}
+QMessageBox QLabel, QInputDialog QLabel {{
+    color: {Colors.TEXT_PRIMARY};
+    background: transparent;
+    font-size: 10pt;
+}}
+QMessageBox QPushButton, QInputDialog QPushButton {{
+    background-color: {Colors.BG_PANELS};
+    color: {Colors.TEXT_PRIMARY};
+    border: 1px solid {Colors.BORDER_SUBTLE};
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 10pt;
+    font-weight: bold;
+    min-width: 80px;
+    min-height: 28px;
+}}
+QMessageBox QPushButton:hover, QInputDialog QPushButton:hover {{
+    background-color: {Colors.BORDER_SUBTLE};
+    border: 1px solid {Colors.ACCENT_CYAN};
+}}
+QMessageBox QPushButton:pressed, QInputDialog QPushButton:pressed {{
+    background-color: {Colors.BORDER_ACCENT};
+}}
+QInputDialog QLineEdit, QInputDialog QComboBox, QInputDialog QSpinBox,
+QInputDialog QDoubleSpinBox, QMessageBox QTextEdit {{
+    background-color: {Colors.BG_PANELS};
+    color: {Colors.TEXT_PRIMARY};
+    border: 1px solid {Colors.BORDER_SUBTLE};
+    border-radius: 4px;
+    padding: 4px;
+}}
+QMenu {{
+    background-color: {Colors.BG_PANELS};
+    color: {Colors.TEXT_PRIMARY};
+    border: 1px solid {Colors.BORDER_SUBTLE};
+}}
+QMenu::item:selected {{
+    background-color: {Colors.ACCENT_BLUE};
+    color: #FFFFFF;
+}}
+QToolTip {{
+    background-color: {Colors.BG_PANELS};
+    color: {Colors.TEXT_PRIMARY};
+    border: 1px solid {Colors.BORDER_SUBTLE};
+}}
+"""
+
+    @staticmethod
+    def apply_global_dark_theme(app):
+        """Apply the app-wide dark theme once, right after the QApplication is created.
+
+        Fixes the "black text on a dark background / unstyled black-by-default" problem
+        in popups and dialogs that don't set their own colors. Two parts:
+
+        1. A dark QPalette — makes the DEFAULT text of any unstyled widget (QLabel,
+           QLineEdit, QComboBox, custom QDialogs, native color/font/input dialogs) light
+           on dark. A palette is a fallback that any explicit per-widget QSS overrides,
+           so already-styled dialogs are not regressed.
+        2. A type-selector-only popup stylesheet (POPUP_STYLESHEET), appended once, for
+           the static-method popups (QMessageBox/QInputDialog) + menus/tooltips that
+           Qt's native style may render with a light chrome regardless of the palette.
+
+        Safe to call once; guarded so a theming error never blocks startup.
+        """
+        from PyQt5.QtGui import QPalette, QColor
+
+        c = Colors
+        pal = QPalette()
+        pal.setColor(QPalette.Window, QColor(c.BG_PRIMARY))
+        pal.setColor(QPalette.WindowText, QColor(c.TEXT_PRIMARY))
+        pal.setColor(QPalette.Base, QColor(c.BG_TABLES))
+        pal.setColor(QPalette.AlternateBase, QColor(c.BG_PANELS))
+        pal.setColor(QPalette.Text, QColor(c.TEXT_PRIMARY))
+        pal.setColor(QPalette.Button, QColor(c.BG_PANELS))
+        pal.setColor(QPalette.ButtonText, QColor(c.TEXT_PRIMARY))
+        pal.setColor(QPalette.BrightText, QColor("#FFFFFF"))
+        pal.setColor(QPalette.ToolTipBase, QColor(c.BG_PANELS))
+        pal.setColor(QPalette.ToolTipText, QColor(c.TEXT_PRIMARY))
+        pal.setColor(QPalette.Highlight, QColor(c.ACCENT_BLUE))
+        pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+        pal.setColor(QPalette.Link, QColor(c.ACCENT_CYAN))
+        pal.setColor(QPalette.LinkVisited, QColor(c.ACCENT_PURPLE))
+        # PlaceholderText role only exists on Qt >= 5.12 — guard for safety.
+        try:
+            pal.setColor(QPalette.PlaceholderText, QColor(c.TEXT_MUTED))
+        except AttributeError:
+            pass
+        # Disabled group so greyed-out text stays legible on dark.
+        for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+            pal.setColor(QPalette.Disabled, role, QColor(c.TEXT_MUTED))
+        app.setPalette(pal)
+
+        # Append the popup stylesheet once (don't clobber existing app QSS).
+        existing = app.styleSheet() or ""
+        if CrowEyeStyles._GLOBAL_THEME_MARKER not in existing:
+            app.setStyleSheet((existing + "\n" + CrowEyeStyles.POPUP_STYLESHEET).strip())
+
     @staticmethod
     def apply_table_styles(table_widget):
         """Apply consistent table styles to a QTableWidget.

@@ -128,7 +128,10 @@ class CaseCardWidget(QtWidgets.QWidget):
         timestamps_layout.setSpacing(15)
         
         # Created date (brighter, more visible)
-        created_label = QtWidgets.QLabel(f"📅 Created: {self._format_datetime(self.case_metadata.created_date)}")
+        from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+        created_label = QtWidgets.QLabel(
+            f'<img src="{CrowEyeIcons.icon_path("calendar")}" width="12" height="12"> '
+            f'Created: {self._format_datetime(self.case_metadata.created_date)}')
         created_label.setStyleSheet("""
             QLabel {
                 color: #94A3B8;
@@ -141,7 +144,9 @@ class CaseCardWidget(QtWidgets.QWidget):
         timestamps_layout.addWidget(created_label)
         
         # Last opened date (brighter, more visible)
-        last_opened_label = QtWidgets.QLabel(f"🕒 Last Opened: {self._format_datetime(self.case_metadata.last_opened)}")
+        last_opened_label = QtWidgets.QLabel(
+            f'<img src="{CrowEyeIcons.icon_path("clock")}" width="12" height="12"> '
+            f'Last Opened: {self._format_datetime(self.case_metadata.last_opened)}')
         last_opened_label.setStyleSheet("""
             QLabel {
                 color: #94A3B8;

@@ -37,7 +37,7 @@ export default function App() {
   const [data, setData] = useState({
     sessions: null, srum_app: null, srum_net: null, mft_usn: null,
     prefetch: null, lnk: null, bam: null, dam: null, registry: null,
-    amcache: null, shimcache: null, recyclebin: null, aggregated: null,
+    amcache: null, shimcache: null, recyclebin: null, imported: null, aggregated: null,
   });
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState('Initializing forensic engine...');
@@ -262,7 +262,7 @@ export default function App() {
         setData({
           sessions: null, srum_app: null, srum_net: null, mft_usn: null,
           prefetch: null, lnk: null, bam: null, dam: null, registry: null,
-          amcache: null, shimcache: null, recyclebin: null, aggregated: data.aggregated,
+          amcache: null, shimcache: null, recyclebin: null, imported: null, aggregated: data.aggregated,
         });
       }
     }
@@ -328,6 +328,7 @@ export default function App() {
         callBridge('getAmcacheData', start, end),
         callBridge('getShimcacheData', start, end),
         callBridge('getRecyclebinData', start, end),
+        callBridge('getImportedData', start, end),
       ]);
 
       if (currentFetchId !== lastFetchId.current) return;
@@ -348,6 +349,7 @@ export default function App() {
       const rawAmcache = val(8);
       const rawShimcache = val(9);
       const rawRecycleBin = val(10);
+      const rawImported = val(11);
 
       // DIAGNOSTIC LOGGING: Backend Response
       console.log('[DIAG] Bridge Responses:', {
@@ -389,6 +391,7 @@ export default function App() {
         } : null,
         shimcache: heuristicFlatten(rawShimcache),
         recyclebin: heuristicFlatten(rawRecycleBin),
+        imported: heuristicFlatten(rawImported),
       };
 
       // Registry table normalization (case-insensitive keys for easier discovery)

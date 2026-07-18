@@ -45,7 +45,7 @@ License: GPL-3.0
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.12.4"  # Single source of truth — read by the About menu, the update
+__version__ = "0.12.5"  # Single source of truth — read by the About menu, the update
                         # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
 
@@ -13223,7 +13223,18 @@ if __name__ == "__main__":
         print(f"[Warning] Failed to set AA_ShareOpenGLContexts: {e}")
 
     app = QtWidgets.QApplication(sys.argv)
-    
+
+    # Apply the app-wide dark theme (palette + popup stylesheet) so dialogs and popups
+    # render readable light-on-dark text instead of Qt's default black-on-dark. Must run
+    # right after the QApplication is created; guarded so a theming error never blocks
+    # startup. See CrowEyeStyles.apply_global_dark_theme.
+    try:
+        from styles import CrowEyeStyles as _CES
+        _CES.apply_global_dark_theme(app)
+        print("[GUI] Applied global dark theme for dialogs/popups")
+    except Exception as _theme_err:
+        print(f"[Warning] Failed to apply global dark theme: {_theme_err}")
+
     # Note: Qt message handler removed - all threading issues have been fixed at the source
     # - load_all_data_internal() now runs in main thread after worker completes
     # - Stylesheet parsing fixed by not applying table styles to headers separately

@@ -476,7 +476,8 @@ class ResultsDatabase:
                 time_period_start TEXT,
                 time_period_end TEXT,
                 identity_filters_json TEXT,
-                run_number INTEGER DEFAULT 1
+                run_number INTEGER DEFAULT 1,
+                run_group_id TEXT
             )
         """)
         
@@ -547,6 +548,55 @@ class ResultsDatabase:
                 FOREIGN KEY (result_id) REFERENCES results(result_id)
             )
         """)
+
+        # Cross-wing identity registry — maintained incrementally by
+        # identity_run_reconciler as each identity wing of a run finishes.
+        # A main identity is unique per run group; sub-identities (variants)
+        # hang off it; wing links record which wing(s) discovered each.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS run_identities (
+                identity_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_group_id TEXT NOT NULL,
+                identity_key TEXT NOT NULL,
+                display_name TEXT,
+                identity_type TEXT DEFAULT 'name',
+                first_wing_name TEXT,
+                first_execution_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(run_group_id, identity_key)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS run_sub_identities (
+                sub_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                identity_pk INTEGER NOT NULL,
+                sub_key TEXT NOT NULL,
+                display_name TEXT,
+                first_wing_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(identity_pk, sub_key),
+                FOREIGN KEY (identity_pk) REFERENCES run_identities(identity_pk)
+            )
+        """)
+        # NOTE: no SQL UNIQUE across (identity_pk, sub_pk, wing_name,
+        # execution_id) — SQLite treats NULL sub_pk values as distinct, so
+        # main-level links would never dedupe. The reconciler dedupes in
+        # Python (SELECT with "sub_pk IS ?" then INSERT/UPDATE).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS identity_wing_links (
+                link_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identity_pk INTEGER NOT NULL,
+                sub_pk INTEGER,
+                wing_id TEXT,
+                wing_name TEXT NOT NULL,
+                execution_id INTEGER,
+                match_count INTEGER DEFAULT 0,
+                FOREIGN KEY (identity_pk) REFERENCES run_identities(identity_pk),
+                FOREIGN KEY (sub_pk) REFERENCES run_sub_identities(sub_pk)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_run_identities_group ON run_identities(run_group_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_iwl_identity ON identity_wing_links(identity_pk)")
         
         # Create indexes for faster queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_results_execution ON results(execution_id)")
@@ -631,6 +681,20 @@ class ResultsDatabase:
         # Check if run_name and run_number columns exist in executions table
         cursor.execute("PRAGMA table_info(executions)")
         exec_columns = {row[1] for row in cursor.fetchall()}
+
+        # Add run_group_id if missing (links per-wing executions of one run).
+        # The index lives here (not _create_schema's index block) because on
+        # legacy DBs the column only exists after this ALTER runs.
+        if 'run_group_id' not in exec_columns:
+            try:
+                cursor.execute("ALTER TABLE executions ADD COLUMN run_group_id TEXT")
+                print("[Database] Migration: Added run_group_id column to executions table")
+            except Exception as e:
+                pass
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_executions_run_group ON executions(run_group_id)")
+        except Exception as e:
+            pass
         
         # Add run_name if missing
         if 'run_name' not in exec_columns:
@@ -722,18 +786,19 @@ class ResultsDatabase:
                                     pipeline_config: Dict[str, Any] = None,
                                     time_period_start: str = None,
                                     time_period_end: str = None,
-                                    identity_filters: List[str] = None) -> int:
+                                    identity_filters: List[str] = None,
+                                    run_group_id: str = None) -> int:
         """
         Create execution record placeholder before wing execution for streaming support.
-        
+
         Returns:
             execution_id: Database ID for this execution
         """
         cursor = self.conn.cursor()
-        
+
         # Generate unique run name
         run_name, run_number = self._generate_run_name(engine_type, pipeline_name)
-        
+
         # Insert execution record with placeholder values
         cursor.execute("""
             INSERT INTO executions (
@@ -741,8 +806,9 @@ class ResultsDatabase:
                 total_matches, total_records_scanned, output_directory,
                 case_name, investigator, errors, warnings,
                 engine_type, wing_config_json, pipeline_config_json,
-                time_period_start, time_period_end, identity_filters_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                time_period_start, time_period_end, identity_filters_json,
+                run_group_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_name,
             run_number,
@@ -761,7 +827,8 @@ class ResultsDatabase:
             json.dumps(pipeline_config) if pipeline_config else None,
             time_period_start,
             time_period_end,
-            json.dumps(identity_filters) if identity_filters else None
+            json.dumps(identity_filters) if identity_filters else None,
+            run_group_id
         ))
         
         execution_id = cursor.lastrowid
@@ -813,7 +880,8 @@ class ResultsDatabase:
                       pipeline_config: Dict[str, Any] = None,
                       time_period_start: str = None,
                       time_period_end: str = None,
-                      identity_filters: List[str] = None) -> int:
+                      identity_filters: List[str] = None,
+                      run_group_id: str = None) -> int:
         """
         Save pipeline execution and all results to database.
         
@@ -888,8 +956,9 @@ class ResultsDatabase:
                     total_matches, total_records_scanned, output_directory,
                     case_name, investigator, errors, warnings,
                     engine_type, wing_config_json, pipeline_config_json,
-                    time_period_start, time_period_end, identity_filters_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    time_period_start, time_period_end, identity_filters_json,
+                    run_group_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 run_name,
                 run_number,
@@ -908,7 +977,8 @@ class ResultsDatabase:
                 json.dumps(pipeline_config) if pipeline_config else None,
                 time_period_start,
                 time_period_end,
-                json.dumps(identity_filters) if identity_filters else None
+                json.dumps(identity_filters) if identity_filters else None,
+                run_group_id
             ))
             
             execution_id = cursor.lastrowid

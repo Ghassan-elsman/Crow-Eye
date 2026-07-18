@@ -67,6 +67,39 @@ _RE_PARENTHESES = re.compile(r'\s*\(.*?\)')
 _RE_BRACKETS = re.compile(r'\s*\[.*?\]')
 _RE_NON_ALPHA = re.compile(r'[^a-z\s]')
 
+# --------------------------------------------------------------------- #
+# Display grouping (shared by GUI unified view and the run-level
+# identity reconciler). Deliberately SEPARATE from _EXTENSIONS /
+# identity_key: this is the richer normalization the results view has
+# always used (Prefetch hashes, ~-truncation, copy markers, digit
+# stripping). Keep engine correlation grouping (identity_key) untouched.
+# --------------------------------------------------------------------- #
+
+_DISPLAY_GROUP_EXTENSIONS = [
+    '.exe', '.lnk', '.dll', '.msi', '.bat', '.cmd', '.ps1', '.vbs', '.js',
+    '.com', '.scr', '.pif', '.application', '.gadget', '.msp', '.hta',
+    '.cpl', '.msc', '.jar', '.py', '.pyc', '.pyw'
+]
+
+_RE_PREFETCH_NAME = re.compile(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', re.IGNORECASE)
+_RE_COPY_NUMBER = re.compile(r'[\s_]*\(\d+\)\s*$')
+_RE_COPY_WORD = re.compile(r'[\s_]*[-_]?\s*[Cc]opy\s*\d*\s*$')
+_RE_COPY_PAREN = re.compile(r'[\s_]*\([Cc]opy\s*\d*\)\s*$')
+_RE_TRAILING_VERSION_SEP = re.compile(r'[\s_]+[vV]?\d+(\.\d+)*\s*$')
+_RE_TRAILING_VERSION_V = re.compile(r'[vV]\d+(\.\d+)*\s*$')
+_RE_SEPARATORS = re.compile(r'[\s\-_\.\(\)\[\]]+')
+_RE_NON_ALNUM = re.compile(r'[^a-z0-9]')
+_RE_DIGITS = re.compile(r'\d+')
+
+# Field priority lists for extract_original_name (mirrors the GUI's
+# historical evidence-name extraction).
+_ORIGINAL_NAME_FIELDS = [
+    'name', 'filename', 'file_name', 'fn_filename', 'executable_name',
+    'Source_Name', 'original_filename', 'app_name', 'value', 'Value',
+    'FileName', 'Name'
+]
+_ORIGINAL_PATH_FIELDS = ['path', 'file_path', 'Local_Path', 'app_path', 'full_path']
+
 
 # --------------------------------------------------------------------- #
 # Public API
@@ -176,4 +209,107 @@ def raw_identity(record: Dict[str, Any], field_priority=None) -> Optional[str]:
     return None
 
 
-__all__ = ["identity_key", "sub_identity_key", "raw_identity"]
+def display_grouping_key(name: Optional[str]) -> str:
+    """Aggressive display-level grouping key for MAIN identities.
+
+    Canonical implementation of the normalization the results GUI has
+    always used to fold matches into one main identity
+    ("chrome.exe", "CHROME~1.EXE", "chrome123.exe" → "chrome").
+    Shared by ``IdentityResultsView._normalize_for_grouping`` and the
+    cross-wing run reconciler so the persisted registry and the rendered
+    tree group identically.
+
+    LIMITATION: only ASCII alphanumerics survive; Unicode letters are
+    removed (acceptable for Windows forensics artifact names).
+    """
+    if not name:
+        return "Unknown"
+
+    result = str(name).strip()
+
+    # Step -1: Prefetch filenames "APPNAME.EXE HASH.pf" → "APPNAME.EXE"
+    if result.lower().endswith('.pf'):
+        match = _RE_PREFETCH_NAME.match(result)
+        if match:
+            result = match.group(1)
+
+    # Step 0: remove ~ and everything after (8.3 short names: CHROME~1.EXE)
+    if '~' in result:
+        result = result.split('~')[0]
+
+    # Step 1: strip one known extension (case-insensitive)
+    lower_result = result.lower()
+    for ext in _DISPLAY_GROUP_EXTENSIONS:
+        if lower_result.endswith(ext):
+            result = result[:-len(ext)]
+            break
+
+    # Steps 2-3: copy indicators — "(1)", " - Copy", "(copy 2)"
+    result = _RE_COPY_NUMBER.sub('', result)
+    result = _RE_COPY_WORD.sub('', result)
+    result = _RE_COPY_PAREN.sub('', result)
+
+    # Step 4: trailing versions — requires separator or explicit v prefix
+    # so digits that are part of the name survive ("chrome1")
+    result = _RE_TRAILING_VERSION_SEP.sub('', result)
+    result = _RE_TRAILING_VERSION_V.sub('', result)
+
+    # Step 5: aggressive collapse — lowercase, drop separators/specials
+    result = result.lower()
+    result = _RE_SEPARATORS.sub('', result)
+    result = _RE_NON_ALNUM.sub('', result)
+
+    # Step 6: drop ALL digits ("chrome1"/"chrome2" → "chrome")
+    result = _RE_DIGITS.sub('', result)
+
+    # Fallback: milder pass keeping digits, so pure-numeric names survive
+    if not result:
+        result = str(name).strip().lower()
+        if '~' in result:
+            result = result.split('~')[0]
+        result = _RE_SEPARATORS.sub('', result)
+        result = _RE_NON_ALNUM.sub('', result)
+
+    return result.strip() if result else "Unknown"
+
+
+def extract_original_name(raw_app: str, feather_records: Dict[str, Any]) -> str:
+    """Pick the most representative original name for a match's evidence.
+
+    Mirrors the results GUI's historical extraction: prefer an explicit
+    name field from any evidence record, then a filename pulled from a
+    path field, falling back to ``raw_app``. Shared by the GUI sub-identity
+    bucketing and the cross-wing run reconciler.
+    """
+    original_name = raw_app
+    if not isinstance(feather_records, dict):
+        return original_name
+
+    from pathlib import Path
+
+    for _fid, data in feather_records.items():
+        if not isinstance(data, dict):
+            continue
+        for field in _ORIGINAL_NAME_FIELDS:
+            if field in data and data[field]:
+                original_name = str(data[field])
+                break
+        if original_name != raw_app:
+            break
+        for field in _ORIGINAL_PATH_FIELDS:
+            if field in data and data[field]:
+                path_val = str(data[field])
+                if '\\' in path_val or '/' in path_val:
+                    extracted_name = Path(path_val.replace('\\', '/')).name
+                    if extracted_name:
+                        original_name = extracted_name
+                        break
+        if original_name != raw_app:
+            break
+    return original_name
+
+
+__all__ = [
+    "identity_key", "sub_identity_key", "raw_identity",
+    "display_grouping_key", "extract_original_name",
+]

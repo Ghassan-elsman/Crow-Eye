@@ -522,7 +522,9 @@ class WingsCreatorWindow(QMainWindow):
             }
         """)
         
-        self.reset_levels_btn = QPushButton("↺ Reset to Defaults")
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.reset_levels_btn = QPushButton("Reset to Defaults")
+        self.reset_levels_btn.setIcon(CrowEyeIcons.refresh())
         self.reset_levels_btn.clicked.connect(self.reset_interpretation_levels)
         self.reset_levels_btn.setEnabled(False)
         self.reset_levels_btn.setStyleSheet("""
@@ -586,7 +588,34 @@ class WingsCreatorWindow(QMainWindow):
         help_text.setWordWrap(True)
         help_text.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
         layout.addWidget(help_text)
-        
+
+        # Opt-in: advanced rule capabilities. New wings default to Simple.
+        # Enabling this unlocks rule types (absence / sequence / threshold),
+        # nested groups, cross-feather and negation in the rule editor
+        # (SemanticMappingDialog). These run on the Identity engine only.
+        from PyQt5.QtWidgets import QCheckBox
+        self.advanced_rules_checkbox = QCheckBox(
+            "Enable advanced rules (absence / sequence / threshold / nested / cross-feather)"
+        )
+        self.advanced_rules_checkbox.setChecked(False)
+        self.advanced_rules_checkbox.setStyleSheet("color: #F8FAFC; font-weight: bold;")
+        self.advanced_rules_checkbox.toggled.connect(self._toggle_advanced_rules)
+        layout.addWidget(self.advanced_rules_checkbox)
+
+        from ...gui.crow_eye_icons import status_label_html
+        self.advanced_rules_note = QLabel()
+        self.advanced_rules_note.setTextFormat(Qt.RichText)
+        self.advanced_rules_note.setText(status_label_html(
+            "bolt",
+            "Advanced rules are supported by the Identity-Based engine only. Running a wing "
+            "that contains them on the Time-Window engine will prompt you to switch engines.",
+            size_px=12,
+        ))
+        self.advanced_rules_note.setWordWrap(True)
+        self.advanced_rules_note.setStyleSheet("color: #FBBF24; font-size: 9pt; margin: 2px 0 6px 0;")
+        self.advanced_rules_note.setVisible(False)
+        layout.addWidget(self.advanced_rules_note)
+
         # Semantic mappings table - unified table showing both Simple and Advanced rules
         table_label = QLabel("All Semantic Rules (Simple + Advanced):")
         table_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #00d9ff;")
@@ -671,11 +700,11 @@ class WingsCreatorWindow(QMainWindow):
     
     def create_advanced_semantic_rules_section(self):
         """Create advanced semantic rules configuration section with AND/OR logic and wildcards"""
-        from PyQt5.QtWidgets import QListWidget, QListWidgetItem
-        
+        from PyQt5.QtWidgets import QListWidget, QListWidgetItem, QCheckBox
+
         group = QGroupBox("Advanced Semantic Rules")
         layout = QVBoxLayout()
-        
+
         # Help text
         help_text = QLabel(
             "Define advanced semantic rules with multi-value conditions, AND/OR logic, and wildcard (*) support. "
@@ -684,6 +713,32 @@ class WingsCreatorWindow(QMainWindow):
         help_text.setWordWrap(True)
         help_text.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
         layout.addWidget(help_text)
+
+        # Opt-in: advanced rule capabilities. New wings default to Simple —
+        # exactly the historical behaviour. Enabling this unlocks rule types
+        # (absence / sequence / threshold), nested groups, cross-feather and
+        # negation in the rule editor. These run on the Identity engine only.
+        self.advanced_rules_checkbox = QCheckBox(
+            "Enable advanced rules (absence / sequence / threshold / nested / cross-feather)"
+        )
+        self.advanced_rules_checkbox.setChecked(False)
+        self.advanced_rules_checkbox.setStyleSheet("color: #F8FAFC; font-weight: bold;")
+        self.advanced_rules_checkbox.toggled.connect(self._toggle_advanced_rules)
+        layout.addWidget(self.advanced_rules_checkbox)
+
+        from ...gui.crow_eye_icons import status_label_html
+        self.advanced_rules_note = QLabel()
+        self.advanced_rules_note.setTextFormat(Qt.RichText)
+        self.advanced_rules_note.setText(status_label_html(
+            "bolt",
+            "Advanced rules are supported by the Identity-Based engine only. Running a wing "
+            "that contains them on the Time-Window engine will prompt you to switch engines.",
+            size_px=12,
+        ))
+        self.advanced_rules_note.setWordWrap(True)
+        self.advanced_rules_note.setStyleSheet("color: #FBBF24; font-size: 9pt; margin: 2px 0 6px 0;")
+        self.advanced_rules_note.setVisible(False)
+        layout.addWidget(self.advanced_rules_note)
         
         # Semantic rules list
         rules_label = QLabel("Wing Semantic Rules:")
@@ -740,6 +795,16 @@ class WingsCreatorWindow(QMainWindow):
         has_selection = self.semantic_rules_list.currentItem() is not None
         self.edit_semantic_rule_btn.setEnabled(has_selection)
         self.remove_semantic_rule_btn.setEnabled(has_selection)
+
+    def _toggle_advanced_rules(self, checked):
+        """Show/hide the Identity-engine-only note when advanced rules are opted in."""
+        if hasattr(self, 'advanced_rules_note'):
+            self.advanced_rules_note.setVisible(bool(checked))
+
+    def _advanced_rules_allowed(self) -> bool:
+        """Whether the wing has opted into advanced rule authoring."""
+        return bool(getattr(self, 'advanced_rules_checkbox', None)
+                    and self.advanced_rules_checkbox.isChecked())
     
     def _add_semantic_rule(self):
         """Add a new advanced semantic rule to the wing"""
@@ -759,7 +824,8 @@ class WingsCreatorWindow(QMainWindow):
                 scope='wing',
                 wing_id=self.wing.wing_id,
                 available_feathers=available_feathers,
-                mode='advanced'
+                mode='advanced',
+                allow_advanced=self._advanced_rules_allowed()
             )
             
             if dialog.exec_():
@@ -812,7 +878,8 @@ class WingsCreatorWindow(QMainWindow):
                 scope='wing',
                 wing_id=self.wing.wing_id,
                 available_feathers=available_feathers,
-                mode='advanced'
+                mode='advanced',
+                allow_advanced=self._advanced_rules_allowed()
             )
             
             if dialog.exec_():
@@ -902,6 +969,16 @@ class WingsCreatorWindow(QMainWindow):
             item.setData(Qt.UserRole, rule_data)
             item.setToolTip(self._format_rule_tooltip(rule_data))
             self.semantic_rules_list.addItem(item)
+
+        # Auto opt-in to advanced authoring when the loaded wing already
+        # contains advanced rules, so they remain fully editable.
+        if hasattr(self, 'advanced_rules_checkbox'):
+            try:
+                from ...config.wing_config import WingConfig
+                if WingConfig.semantic_rules_are_advanced(self.wing_semantic_rules):
+                    self.advanced_rules_checkbox.setChecked(True)
+            except Exception:
+                pass
     
     def _load_scoring_to_ui(self):
         """Load weighted scoring configuration from wing to UI"""
@@ -1453,12 +1530,15 @@ class WingsCreatorWindow(QMainWindow):
         """Add a new semantic mapping (Simple or Advanced)"""
         from .semantic_mapping_dialog import SemanticMappingDialog
         
-        # Pass wing_id to enable wing-specific scope selection
+        # Pass wing_id to enable wing-specific scope selection.
+        # allow_advanced surfaces the advanced rule-type editors (absence /
+        # sequence / threshold / nested / cross-feather) when opted in.
         dialog = SemanticMappingDialog(
             parent=self,
             mapping=None,
             scope='wing', # Default to wing scope when opened from Wings Creator
-            wing_id=self.wing.wing_id
+            wing_id=self.wing.wing_id,
+            allow_advanced=self._advanced_rules_allowed()
         )
         if dialog.exec_() == QDialog.Accepted:
             mapping = dialog.get_mapping()
@@ -1511,31 +1591,27 @@ class WingsCreatorWindow(QMainWindow):
             # Editing an advanced rule
             rule_index = current_row - num_mappings
             mapping = self.wing_semantic_rules[rule_index]
-            # Convert SemanticRule object to dict if needed
-            if hasattr(mapping, 'name'):
-                mapping = {
-                    'rule_id': mapping.rule_id,
-                    'name': mapping.name,
-                    'semantic_value': mapping.semantic_value,
-                    'description': mapping.description if hasattr(mapping, 'description') else '',
-                    'conditions': [{'feather_id': c.feather_id, 'field_name': c.field_name, 'value': c.value, 'operator': c.operator} for c in mapping.conditions],
-                    'logic_operator': mapping.logic_operator,
-                    'scope': mapping.scope if hasattr(mapping, 'scope') else 'global',
-                    'category': mapping.category if hasattr(mapping, 'category') else '',
-                    'severity': mapping.severity if hasattr(mapping, 'severity') else 'info',
-                    'confidence': mapping.confidence if hasattr(mapping, 'confidence') else 1.0,
-                    'mode': 'advanced'
-                }
-            else:
+            # Convert SemanticRule object to dict via its OWN serializer so
+            # every advanced field survives (rule_type, condition_groups,
+            # sequence/absence/threshold specs, technique_id/tactic, and
+            # per-condition negate/compare_to_*). The old hand-built dict
+            # dropped them, silently downgrading advanced rules to flat match.
+            if hasattr(mapping, 'to_dict'):
+                mapping = mapping.to_dict()
+                mapping['mode'] = 'advanced'
+            elif isinstance(mapping, dict):
                 mapping['mode'] = 'advanced' # Ensure mode is set
             print(f"[Wing Creator] Editing advanced rule at row {current_row} (rule index {rule_index})")
         
-        # Pass wing_id to enable wing-specific scope selection
+        # Pass wing_id to enable wing-specific scope selection.
+        # allow_advanced surfaces the advanced rule-type editors when opted in
+        # (editing an already-advanced rule auto-enables them regardless).
         dialog = SemanticMappingDialog(
             parent=self,
             mapping=mapping,
             scope=mapping.get('scope', 'wing'),
-            wing_id=self.wing.wing_id
+            wing_id=self.wing.wing_id,
+            allow_advanced=self._advanced_rules_allowed()
         )
         if dialog.exec_() == QDialog.Accepted:
             updated_mapping = dialog.get_mapping()
@@ -1869,6 +1945,130 @@ class WingsCreatorWindow(QMainWindow):
             import traceback
             traceback.print_exc()
     
+    # Operator → compact symbol for the Conditions column (full advanced set).
+    _OP_SYMBOL = {
+        "equals": "=", "not_equals": "≠", "contains": "~", "wildcard": "*",
+        "regex": "≈", "greater_than": ">", "less_than": "<",
+        "greater_equal": "≥", "less_equal": "≤", "in": "∈",
+    }
+    _RULE_TYPE_LABEL = {
+        "match": "Advanced", "absence": "Absence",
+        "threshold": "Threshold", "sequence": "Sequence",
+    }
+
+    @classmethod
+    def _advanced_type_label(cls, rule_type: str) -> str:
+        """Display label for the Type column of an advanced rule."""
+        return cls._RULE_TYPE_LABEL.get(rule_type or "match", "Advanced")
+
+    def _fmt_condition(self, c: dict, feathers: set) -> str:
+        """Render one condition: NOT-prefix, operator symbol, and a
+        cross-feather RHS (feather.field) when set. Collects feather ids."""
+        fid = c.get('feather_id', '')
+        fld = c.get('field_name', '')
+        op = self._OP_SYMBOL.get(c.get('operator', 'equals'), '=')
+        neg = 'NOT ' if c.get('negate') else ''
+        if fid:
+            feathers.add(fid)
+        cf, cfld = c.get('compare_to_feather'), c.get('compare_to_field')
+        if cf and cfld:
+            rhs = f"{cf}.{cfld}"
+            feathers.add(cf)
+        else:
+            rhs = str(c.get('value', ''))
+        return f"{neg}{fid}.{fld}{op}{rhs}"
+
+    def _describe_advanced_rule(self, rd: dict):
+        """Return (conditions_str, tooltip, feathers_set) describing an
+        advanced rule dict — renders the absence/threshold/sequence spec and
+        nested condition_groups, not just flat match conditions."""
+        feathers = set()
+        rule_type = rd.get('rule_type', 'match')
+        tip = []
+
+        def render_conds(conds, logic):
+            return f" {logic} ".join(self._fmt_condition(c, feathers) for c in (conds or []))
+
+        if rule_type == 'absence':
+            spec = rd.get('absence') or {}
+            exp = render_conds(spec.get('expect_present'), 'AND')
+            ab = render_conds(spec.get('require_absent'), 'AND')
+            within = spec.get('within_minutes', 0)
+            parts = []
+            if exp:
+                parts.append(f"expect: {exp}")
+            parts.append(f"absent: {ab or '(any)'}")
+            if within:
+                parts.append(f"within {within} min")
+            conditions_str = " | ".join(parts)
+            tip = ["Absence rule", f"Expect present: {exp or '(none)'}",
+                   f"Require absent: {ab or '(any)'}", f"Within: {within or 0} min"]
+
+        elif rule_type == 'threshold':
+            spec = rd.get('threshold') or {}
+            cond = spec.get('condition') or (spec.get('conditions') or [{}])[0]
+            cond_str = self._fmt_condition(cond, feathers) if cond else ''
+            n = spec.get('min_count', 0)
+            within = spec.get('within_minutes', 0)
+            gb = spec.get('group_by')
+            conditions_str = f"≥{n} × {cond_str}"
+            if within:
+                conditions_str += f" within {within} min"
+            if gb:
+                conditions_str += f" group_by {gb}"
+            tip = ["Threshold rule", f"Min count: {n}", f"Condition: {cond_str}",
+                   f"Within: {within or 0} min", f"Group by: {gb or '(none)'}"]
+
+        elif rule_type == 'sequence':
+            spec = rd.get('sequence') or {}
+            steps = spec.get('steps') or []
+            labels = []
+            for s in steps:
+                if isinstance(s, dict):
+                    labels.append(self._fmt_condition(s, feathers) if 'field_name' in s
+                                  else str(s.get('ref', s.get('name', 'step'))))
+                else:
+                    labels.append(str(s))
+            gap = spec.get('max_gap_minutes')
+            conditions_str = " → ".join(labels)
+            if gap:
+                conditions_str += f"  (gap ≤ {gap} min)"
+            tip = ["Sequence rule", "Steps: " + (" → ".join(labels) or "(none)"),
+                   f"Max gap: {gap or '(none)'} min"]
+
+        else:  # match (+ nested groups)
+            logic = rd.get('logic_operator', 'AND')
+            flat = render_conds(rd.get('conditions'), logic)
+            group_strs = []
+            for g in rd.get('condition_groups') or []:
+                gl = g.get('logic_operator', 'AND')
+                inner = render_conds(g.get('conditions'), gl)
+                if inner:
+                    group_strs.append(f"({inner})")
+            top = rd.get('logic_operator', 'AND')
+            all_parts = ([flat] if flat else []) + group_strs
+            conditions_str = f" {top} ".join(all_parts)
+            tip = [f"Match rule ({logic})"] + [f"• {self._fmt_condition(c, feathers)}"
+                                               for c in (rd.get('conditions') or [])]
+            for g in rd.get('condition_groups') or []:
+                tip.append(f"Group ({g.get('logic_operator', 'AND')}): "
+                           + render_conds(g.get('conditions'), g.get('logic_operator', 'AND')))
+
+        return conditions_str, "\n".join(tip), feathers
+
+    @staticmethod
+    def _attack_suffix(rd: dict) -> str:
+        """Compact MITRE ATT&CK label for the Description column, e.g.
+        ' [ATT&CK: T1070.004 / defense-evasion]'. Empty when no tags."""
+        techs = rd.get('technique_id') or []
+        tacs = rd.get('tactic') or []
+        if not techs and not tacs:
+            return ""
+        left = ", ".join(techs[:2]) + (f" +{len(techs) - 2}" if len(techs) > 2 else "")
+        right = ", ".join(tacs[:2]) if tacs else ""
+        inner = " / ".join(p for p in (left, right) if p)
+        return f"  [ATT&CK: {inner}]"
+
     def update_semantic_mappings_table(self):
         """Update the semantic mappings table to show both simple mappings and advanced rules with detailed columns"""
         self.semantic_mappings_table.blockSignals(True)
@@ -1932,96 +2132,91 @@ class WingsCreatorWindow(QMainWindow):
             for rule in self.wing_semantic_rules:
                 row = self.semantic_mappings_table.rowCount()
                 self.semantic_mappings_table.insertRow(row)
-                
-                # Handle both SemanticRule objects and dicts
-                is_dict = isinstance(rule, dict)
-                
-                # Type (Advanced - cyan bold)
-                type_item = QTableWidgetItem("Advanced")
+
+                # Normalize to a dict via the model's own serializer so every
+                # advanced field (rule_type, specs, groups, negate/compare,
+                # ATT&CK) is available regardless of object-vs-dict storage.
+                if isinstance(rule, dict):
+                    rd = rule
+                elif hasattr(rule, 'to_dict'):
+                    rd = rule.to_dict()
+                else:
+                    rd = {'name': getattr(rule, 'name', 'Unnamed')}
+
+                rule_type = rd.get('rule_type', 'match')
+
+                # Type — shows the actual rule type (Absence/Threshold/Sequence)
+                type_item = QTableWidgetItem(self._advanced_type_label(rule_type))
                 type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
                 type_item.setForeground(QColor("#00FFFF"))
                 font = type_item.font()
                 font.setBold(True)
                 type_item.setFont(font)
                 self.semantic_mappings_table.setItem(row, 0, type_item)
-                
+
                 # Name (rule name - bold)
-                rule_name = rule.get('name', 'Unnamed') if is_dict else rule.name
-                name_item = QTableWidgetItem(rule_name)
+                name_item = QTableWidgetItem(rd.get('name', 'Unnamed'))
                 name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
                 name_item.setFont(font)
                 self.semantic_mappings_table.setItem(row, 1, name_item)
-                
-                # Logic (AND/OR with color)
-                logic_op = rule.get('logic_operator', 'AND') if is_dict else rule.logic_operator
+
+                # Logic (AND/OR with color) — for spec rules show the type
+                if rule_type == 'match':
+                    logic_op = rd.get('logic_operator', 'AND')
+                    logic_color = "#10B981" if logic_op == "AND" else "#F59E0B"
+                else:
+                    logic_op = rule_type.upper()
+                    logic_color = "#00FFFF"
                 logic_item = QTableWidgetItem(logic_op)
                 logic_item.setFlags(logic_item.flags() & ~Qt.ItemIsEditable)
-                logic_color = "#10B981" if logic_op == "AND" else "#F59E0B"
                 logic_item.setForeground(QColor(logic_color))
                 logic_item.setFont(font)
                 self.semantic_mappings_table.setItem(row, 2, logic_item)
-                
-                # Conditions (detailed format with tooltip)
-                conditions = rule.get('conditions', []) if is_dict else rule.conditions
-                conditions_parts = []
-                tooltip_parts = []
-                for c in conditions:
-                    if is_dict:
-                        feather_id = c.get('feather_id', '')
-                        field_name = c.get('field_name', '')
-                        value = c.get('value', '')
-                        operator = c.get('operator', 'equals')
-                    else:
-                        feather_id = c.feather_id
-                        field_name = c.field_name
-                        value = c.value
-                        operator = c.operator
-                    op_symbol = {"equals": "=", "contains": "~", "wildcard": "*", "regex": "≈"}.get(operator, "=")
-                    conditions_parts.append(f"{feather_id}.{field_name}{op_symbol}{value}")
-                    tooltip_parts.append(f"• {feather_id}.{field_name} {operator} '{value}'")
-                conditions_str = f" {logic_op} ".join(conditions_parts)
+
+                # Conditions/Value — renders the absence/threshold/sequence spec
+                # and nested groups, incl. negate / cross-feather / all operators
+                conditions_str, cond_tooltip, feathers = self._describe_advanced_rule(rd)
                 conditions_item = QTableWidgetItem(conditions_str)
                 conditions_item.setFlags(conditions_item.flags() & ~Qt.ItemIsEditable)
-                conditions_item.setToolTip(f"Conditions ({len(conditions)}):\n" + "\n".join(tooltip_parts))
+                conditions_item.setToolTip(cond_tooltip)
                 self.semantic_mappings_table.setItem(row, 3, conditions_item)
-                
+
                 # Semantic Value (cyan bold)
-                semantic_value = rule.get('semantic_value', '') if is_dict else rule.semantic_value
-                semantic_item = QTableWidgetItem(semantic_value)
+                semantic_item = QTableWidgetItem(rd.get('semantic_value', ''))
                 semantic_item.setFlags(semantic_item.flags() & ~Qt.ItemIsEditable)
                 semantic_item.setForeground(QColor("#00FFFF"))
                 semantic_item.setFont(font)
                 self.semantic_mappings_table.setItem(row, 4, semantic_item)
-                
+
                 # Severity (color-coded)
-                if is_dict:
-                    severity = rule.get('severity', 'info')
-                else:
-                    severity = rule.severity if hasattr(rule, 'severity') else 'info'
+                severity = rd.get('severity', 'info')
                 severity_item = QTableWidgetItem(severity)
                 severity_item.setFlags(severity_item.flags() & ~Qt.ItemIsEditable)
                 severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
                 severity_item.setForeground(QColor(severity_colors.get(severity, "#64748B")))
                 severity_item.setFont(font)
                 self.semantic_mappings_table.setItem(row, 5, severity_item)
-                
-                # Feathers (unique list)
-                if is_dict:
-                    feathers = set([c.get('feather_id', '') for c in conditions])
-                else:
-                    feathers = set([c.feather_id for c in conditions])
-                feathers_str = ", ".join(sorted(feathers))
+
+                # Feathers (unique list — collected across flat + spec + groups)
+                feathers_str = ", ".join(sorted(f for f in feathers if f))
                 feather_item = QTableWidgetItem(feathers_str)
                 feather_item.setFlags(feather_item.flags() & ~Qt.ItemIsEditable)
                 self.semantic_mappings_table.setItem(row, 6, feather_item)
-                
-                # Description
-                if is_dict:
-                    description = rule.get('description', '')
-                else:
-                    description = rule.description if hasattr(rule, 'description') else ''
-                desc_item = QTableWidgetItem(description)
+
+                # Description (+ MITRE ATT&CK tags, full list in tooltip)
+                description = rd.get('description', '')
+                attack = self._attack_suffix(rd)
+                desc_item = QTableWidgetItem(f"{description}{attack}")
                 desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)
+                if attack:
+                    techs = rd.get('technique_id') or []
+                    tacs = rd.get('tactic') or []
+                    desc_item.setToolTip(
+                        (f"{description}\n\n" if description else "")
+                        + "MITRE ATT&CK\n"
+                        + (f"Techniques: {', '.join(techs)}\n" if techs else "")
+                        + (f"Tactics: {', '.join(tacs)}" if tacs else "")
+                    )
                 self.semantic_mappings_table.setItem(row, 7, desc_item)
         
         self.semantic_mappings_table.blockSignals(False)
@@ -2332,10 +2527,20 @@ class WingsCreatorWindow(QMainWindow):
                 print(f"[Wing Creator] Added wing-specific rule: {rule_name}")
         
         print(f"[Wing Creator] Total: {len(self.wing_semantic_mappings)} mappings + {len(self.wing_semantic_rules)} rules")
-        
+
         # Update the table with all rules
         self.update_semantic_mappings_table()
-        
+
+        # Auto opt-in to advanced authoring when the loaded wing already
+        # contains advanced rules, so they stay fully editable.
+        if hasattr(self, 'advanced_rules_checkbox'):
+            try:
+                from ...config.wing_config import WingConfig
+                if WingConfig.semantic_rules_are_advanced(self.wing_semantic_rules):
+                    self.advanced_rules_checkbox.setChecked(True)
+            except Exception:
+                pass
+
         # Load weighted scoring configuration
         self._load_scoring_to_ui()
     

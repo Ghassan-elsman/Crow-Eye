@@ -218,6 +218,8 @@
     },
     {
       "rule_id": "exec_user_launched",
+      "technique_id": ["T1204"],
+      "tactic": ["execution"],
       "name": "User-Launched Application (AND)",
       "semantic_value": "User Launched Application",
       "description": "LNK file AND Prefetch together indicate user-initiated execution",

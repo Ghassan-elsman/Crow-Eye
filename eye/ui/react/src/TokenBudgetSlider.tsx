@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { IconAlertTriangle } from './Icons';
 import './TokenBudgetSlider.css';
 
 interface TokenBudgetAllocation {
@@ -91,7 +92,7 @@ const TokenBudgetSlider: React.FC<TokenBudgetSliderProps> = ({
             </div>
             {isOverBudget && (
               <div className="budget-warning">
-                ⚠️ Total allocation exceeds maximum budget by {(totalAllocated - budget.max_total).toLocaleString()} tokens
+                <IconAlertTriangle size={13} /> Total allocation exceeds maximum budget by {(totalAllocated - budget.max_total).toLocaleString()} tokens
               </div>
             )}
           </div>

@@ -78,7 +78,12 @@ class SemanticRuleValidator:
     
     # Valid enum values
     VALID_LOGIC_OPERATORS = ["AND", "OR"]
-    VALID_OPERATORS = ["equals", "contains", "regex", "wildcard"]
+    VALID_OPERATORS = [
+        "equals", "contains", "regex", "wildcard",
+        # Comparison / negation operators supported by both the SQL QueryBuilder
+        # and the in-memory SemanticCondition evaluator.
+        "not_equals", "greater_than", "less_than", "greater_equal", "less_equal",
+    ]
     VALID_SEVERITIES = ["info", "low", "medium", "high", "critical"]
     VALID_SCOPES = ["global", "wing", "pipeline"]
     
@@ -244,9 +249,68 @@ class SemanticRuleValidator:
             return errors
         
         rule_id = rule.get("rule_id")
-        
+
+        # Advanced rule types (absence / sequence / threshold) carry their logic
+        # in a dedicated spec block rather than a flat conditions/logic_operator
+        # pair, so those two fields are only required for ordinary match rules.
+        rule_type = str(rule.get("rule_type", "match")).lower()
+        advanced_spec = {"absence": "absence", "sequence": "sequence", "threshold": "threshold"}
+
         # Check required fields
-        required_fields = ["rule_id", "name", "semantic_value", "conditions", "logic_operator"]
+        required_fields = ["rule_id", "name", "semantic_value"]
+        if rule_type not in advanced_spec:
+            required_fields += ["conditions", "logic_operator"]
+        else:
+            # The matching spec block is required for advanced rules.
+            spec_key = advanced_spec[rule_type]
+            spec_val = rule.get(spec_key)
+            if not isinstance(spec_val, dict):
+                errors.append(ValidationError(
+                    rule_id=rule_id,
+                    rule_index=rule_index,
+                    field=spec_key,
+                    message=f"{rule_type} rule requires a '{spec_key}' object",
+                    severity="error",
+                    suggestion=f"Add a '{spec_key}' spec block for this {rule_type} rule."
+                ))
+            elif rule_type == "sequence":
+                # Ordered multi-step / multi-feather chain validation.
+                steps = spec_val.get("steps")
+                if not isinstance(steps, list) or len(steps) < 2:
+                    errors.append(ValidationError(
+                        rule_id=rule_id, rule_index=rule_index, field="sequence.steps",
+                        message="sequence rule requires 'steps' to be a list of at least 2 steps",
+                        severity="error",
+                        suggestion="Add at least two ordered steps to the sequence."
+                    ))
+                else:
+                    for si, st in enumerate(steps):
+                        ok = isinstance(st, dict) and (
+                            "conditions" in st or ("feather_id" in st and "field_name" in st)
+                        )
+                        if not ok:
+                            errors.append(ValidationError(
+                                rule_id=rule_id, rule_index=rule_index,
+                                field=f"sequence.steps[{si}]",
+                                message="each step must be a condition or a {conditions:[...]} object",
+                                severity="error",
+                                suggestion="Give the step a feather_id+field_name (or a conditions list)."
+                            ))
+                mg = spec_val.get("max_gap_minutes")
+                if mg is not None and (not isinstance(mg, (int, float)) or mg < 0):
+                    errors.append(ValidationError(
+                        rule_id=rule_id, rule_index=rule_index, field="sequence.max_gap_minutes",
+                        message="max_gap_minutes must be a number >= 0",
+                        severity="error", suggestion="Use a non-negative number of minutes."
+                    ))
+                jf = spec_val.get("join_fields")
+                if jf is not None and (not isinstance(jf, list) or not all(isinstance(x, str) for x in jf)):
+                    errors.append(ValidationError(
+                        rule_id=rule_id, rule_index=rule_index, field="sequence.join_fields",
+                        message="join_fields must be a list of field-name strings",
+                        severity="error",
+                        suggestion="e.g. [\"host\"] to require the same host across steps."
+                    ))
         for field_name in required_fields:
             if field_name not in rule:
                 errors.append(ValidationError(

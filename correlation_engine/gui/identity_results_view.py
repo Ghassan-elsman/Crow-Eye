@@ -25,11 +25,298 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 
-# Sub-identity bucketing — canonical implementation lives in
-# correlation_engine.engine.identity_grouping. Aliased here so call sites
-# in this module keep working unchanged.
-from correlation_engine.engine.identity_grouping import sub_identity_key as _sub_identity_key # noqa: F401
+# Identity grouping — canonical implementations live in
+# correlation_engine.engine.identity_grouping (shared with the engine's
+# cross-wing run reconciler). Aliased here so call sites keep working.
+from correlation_engine.engine.identity_grouping import ( # noqa: F401
+    sub_identity_key as _sub_identity_key,
+    display_grouping_key,
+    extract_original_name,
+)
 from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
+
+
+# Record-level timestamp fields, in priority order (mirrors the engine's
+# timestamp_field_patterns). ONLY the record's own fields count — a record
+# without its own timestamp shows no time (never the anchor/match time:
+# no info is better than wrong info).
+_RECORD_TIME_FIELDS = [
+    'timestamp', 'Timestamp', 'timestamp_utc', 'event_time', 'EventTime',
+    'event_timestamp', 'TimeCreated', 'logged',
+    'last_executed', 'last_run', 'run_time', 'first_run', 'run_count_time',
+    'last_modified', 'modified_time', 'created_time', 'creation_time',
+    'access_time', 'last_access',
+    'last_write_time', 'LastWriteTime', 'key_last_write', 'write_time',
+    'SourceCreated', 'datetime', 'DateTime', 'date', 'Date', 'time', 'Time',
+]
+
+
+def _extract_record_own_time(data: dict) -> tuple:
+    """Extract a record's OWN timestamp from its raw fields.
+
+    Returns (display_str, full_str_or_None). display_str is "" when the
+    record carries no time of its own — deliberately never falls back to
+    the anchor/match central time.
+    """
+    raw = None
+    if isinstance(data, dict):
+        for field in _RECORD_TIME_FIELDS:
+            value = data.get(field)
+            if value:
+                raw = str(value)
+                break
+        if raw is None:
+            # Generic sweep: any column whose name mentions time/date
+            for key, value in data.items():
+                if value and isinstance(key, str) and not key.startswith('_') \
+                        and ('time' in key.lower() or 'date' in key.lower()):
+                    raw = str(value)
+                    break
+    if not raw:
+        return "", None
+    display = raw.replace('T', ' ')[:19]
+    return display, (raw if raw != display else None)
+
+
+def _extract_evidence_display_time(evidence: dict) -> tuple:
+    """Display time for a record row (role-aware).
+
+    The PRIMARY (anchor) record is the one the anchor's central time is
+    derived from, so for it the anchor/match timestamp genuinely IS its own
+    time and is shown. SECONDARY records show only their own field time; if
+    they carry none the cell stays EMPTY (never the anchor's time — a
+    secondary must not look like it happened at the anchor's moment).
+    Returns (display_str, full_str_or_None).
+    """
+    own = _extract_record_own_time(evidence.get('data', {}))
+    if own[0]:
+        return own
+    if evidence.get('role') == 'primary':
+        ts = evidence.get('timestamp')
+        if ts:
+            raw = str(ts)
+            display = raw.replace('T', ' ')[:19]
+            return display, (raw if raw != display else None)
+    return own
+
+
+def _make_evidence_row(fid: str, match, data: dict) -> dict:
+    """Build an evidence-row dict and PRECOMPUTE its display time once.
+
+    The role-aware time scan (~30 field probes + a full-key sweep) is otherwise
+    re-run for every record during tree building on the UI thread; doing it here
+    (during the off-thread convert) keeps the row-build cheap.
+    """
+    row = {
+        'feather_id': fid,
+        'artifact': match.anchor_artifact_type,
+        'timestamp': match.timestamp,
+        'data': data,
+        'role': 'primary' if fid == match.anchor_feather_id else 'secondary',
+    }
+    disp, full = _extract_evidence_display_time(row)
+    row['_display_time'] = disp
+    row['_display_time_full'] = full
+    return row
+
+
+def _iter_record_dicts(ev: dict):
+    """Yield the record dict(s) held by an evidence row's polymorphic ``data``.
+
+    ``data`` may be a single record dict, a list of record dicts (the identity
+    adapter flattens ``feather_records[fid]`` to a list), or a non-dict (a
+    double-encoded string). Non-dicts yield a single empty dict so the row still
+    renders its identity / feather / time / role columns.
+    """
+    if not isinstance(ev, dict):
+        return
+    d = ev.get('data')
+    if isinstance(d, dict):
+        yield d
+    elif isinstance(d, list):
+        found = False
+        for x in d:
+            if isinstance(x, dict):
+                found = True
+                yield x
+        if not found:
+            yield {}
+    else:
+        yield {}
+
+
+def _record_display_time(ev: dict, rec_data: dict) -> str:
+    """Non-empty per-record display time: the record's own time, else the row's
+    role-aware ``_display_time``, else the anchor/match ``timestamp``."""
+    if isinstance(rec_data, dict):
+        own, _ = _extract_record_own_time(rec_data)
+        if own:
+            return own
+    disp = ev.get('_display_time') if isinstance(ev, dict) else None
+    if disp:
+        return disp
+    ts = ev.get('timestamp') if isinstance(ev, dict) else None
+    if ts:
+        return str(ts).replace('T', ' ')[:19]
+    return ''
+
+
+def _feather_base_name(feather_id) -> str:
+    """The real artifact/feather name for display — strips any path prefix and a
+    trailing numeric shard suffix (``prefetch_0`` -> ``prefetch``)."""
+    fid = str(feather_id or '')
+    name = fid.split('/')[-1] if '/' in fid else fid
+    if '_' in name and name.rsplit('_', 1)[-1].isdigit():
+        name = name.rsplit('_', 1)[0]
+    return name
+
+
+def convert_matches_to_identities(matches, normalize_for_grouping, display_name_for_gui,
+                                  progress=None, progress_cb=None, is_canceled=None) -> List[Dict]:
+    """Convert correlation matches into the identity hierarchy (PURE DATA — no
+    Qt widgets), so it can run on a background load thread.
+
+    ``normalize_for_grouping`` / ``display_name_for_gui`` are the two pure name
+    helpers (IdentityResultsView static methods). Optional hooks:
+      - ``progress``: a QProgressDialog to drive on the UI-thread path (existing behavior).
+      - ``progress_cb``: callable(done, total) for a worker to report progress off-thread.
+      - ``is_canceled``: callable() -> bool to abort early.
+    """
+    identity_map = {}
+
+    if not matches:
+        logger.info(f"[IdentityResultsView] convert_matches: No matches provided (matches is {type(matches)})")
+        return []
+
+    total_matches = len(matches)
+    match_count = 0
+    for match in matches:
+        match_count += 1
+
+        if match_count % 100 == 0:
+            if progress is not None:
+                percentage = int((match_count / total_matches) * 80)  # 0-80% for processing
+                progress.setValue(percentage)
+                progress.setLabelText(f"Loading identity data: {match_count}/{total_matches} identities...")
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    return []
+            if progress_cb is not None:
+                progress_cb(match_count, total_matches)
+            if is_canceled is not None and is_canceled():
+                return []
+
+        # Normalize the application name for grouping so trivial variants collapse.
+        raw_app = match.matched_application or "Unknown"
+        main_app = normalize_for_grouping(raw_app)
+
+        if main_app not in identity_map:
+            display_name = display_name_for_gui(raw_app)
+            identity_map[main_app] = {
+                'identity_id': main_app,
+                'identity_type': 'name',
+                'primary_name': display_name,
+                'sub_identities': {},
+                'feathers_found': set(),
+                'wings_found': set(),
+            }
+
+        identity_map[main_app]['feathers_found'].update(match.feather_records.keys())
+        match_wing_name = getattr(match, 'wing_name', None) or 'Unknown Wing'
+        identity_map[main_app]['wings_found'].add(match_wing_name)
+
+        original_name = extract_original_name(raw_app, match.feather_records)
+        sub_key = _sub_identity_key(original_name) or original_name.strip().lower()
+        if sub_key not in identity_map[main_app]['sub_identities']:
+            identity_map[main_app]['sub_identities'][sub_key] = {
+                'original_name': original_name,
+                'sub_key': sub_key,
+                'name_variants': set(),
+                'anchors': [],
+                'feathers_found': set(),
+                'wings_found': set(),
+            }
+
+        sub_identity = identity_map[main_app]['sub_identities'][sub_key]
+        sub_identity['name_variants'].add(original_name)
+        sub_identity['feathers_found'].update(match.feather_records.keys())
+        sub_identity['wings_found'].add(match_wing_name)
+
+        anchor_start_time = getattr(match, 'anchor_start_time', match.timestamp)
+        anchor_end_time = getattr(match, 'anchor_end_time', match.timestamp)
+        anchor_record_count = getattr(match, 'anchor_record_count', len(match.feather_records))
+
+        anchor = {
+            'anchor_id': match.match_id,
+            'wing_name': getattr(match, 'wing_name', None),
+            'start_time': anchor_start_time,
+            'end_time': anchor_end_time,
+            'record_count': anchor_record_count,
+            'feathers': list(match.feather_records.keys()),
+            'primary_artifact': match.anchor_artifact_type,
+            'evidence_count': match.feather_count,
+            'weighted_score': getattr(match, 'weighted_score', None),
+            'score_breakdown': getattr(match, 'score_breakdown', None),
+            'confidence_score': getattr(match, 'confidence_score', None),
+            'confidence_category': getattr(match, 'confidence_category', None),
+            'semantic_data': getattr(match, 'semantic_data', None),
+            'evidence_rows': [
+                _make_evidence_row(fid, match, data)
+                for fid, data in match.feather_records.items()
+            ],
+        }
+        sub_identity['anchors'].append(anchor)
+
+    # Finalize: dict -> list, set -> sorted list, compute identity overall score.
+    result = []
+    for identity in identity_map.values():
+        identity['feathers_found'] = list(identity['feathers_found'])
+        if isinstance(identity.get('wings_found'), set):
+            identity['wings_found'] = sorted(identity['wings_found'])
+        sub_list = []
+        for sub in identity['sub_identities'].values():
+            sub['feathers_found'] = list(sub['feathers_found'])
+            if isinstance(sub.get('name_variants'), set):
+                sub['name_variants'] = sorted(sub['name_variants'])
+            if isinstance(sub.get('wings_found'), set):
+                sub['wings_found'] = sorted(sub['wings_found'])
+            sub_list.append(sub)
+        identity['sub_identities'] = sub_list
+
+        all_scores = []
+        for sub in sub_list:
+            for anchor in sub.get('anchors', []):
+                ws = anchor.get('weighted_score')
+                if isinstance(ws, dict) and 'score' in ws:
+                    s = ws['score']
+                    if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                        all_scores.append(s)
+        if not all_scores:
+            for anchor in identity.get('anchors', []):
+                ws = anchor.get('weighted_score')
+                if isinstance(ws, dict) and 'score' in ws:
+                    s = ws['score']
+                    if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
+                        all_scores.append(s)
+
+        avg = sum(all_scores) / len(all_scores) if all_scores else 0.0
+        mx = max(all_scores) if all_scores else 0.0
+        if avg >= 0.7:
+            interp = "High"
+        elif avg >= 0.4:
+            interp = "Medium"
+        elif avg > 0:
+            interp = "Low"
+        else:
+            interp = "None"
+        identity['overall_score'] = {
+            'average': avg, 'max': mx,
+            'evidence_count': len(all_scores), 'interpretation': interp,
+        }
+        result.append(identity)
+
+    logger.info(f"[IdentityResultsView] convert_matches: {match_count} matches -> {len(result)} identities")
+    return result
 
 
 def _search_semantic_data(semantic_data: dict, search_term: str) -> bool:
@@ -154,7 +441,7 @@ class IdentityResultsView(QWidget):
         self.anchors_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.anchors_lbl)
         
-        self.evidence_lbl = QLabel("Evidence: 0")
+        self.evidence_lbl = QLabel("Records: 0")
         self.evidence_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.evidence_lbl)
         
@@ -166,7 +453,14 @@ class IdentityResultsView(QWidget):
         self.scoring_lbl = QLabel("Scoring: Off")
         self.scoring_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
         top_layout.addWidget(self.scoring_lbl)
-        
+
+        # MITRE ATT&CK coverage rollup (from advanced/semantic rule hits).
+        # Annotation only — hidden until at least one technique is covered.
+        self.attack_lbl = QLabel("ATT&CK: —")
+        self.attack_lbl.setStyleSheet("font-size: 8pt; color: #9C27B0; font-weight: bold;")
+        self.attack_lbl.setVisible(False)
+        top_layout.addWidget(self.attack_lbl)
+
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
@@ -352,9 +646,9 @@ class IdentityResultsView(QWidget):
         bottom_stats = QHBoxLayout()
         bottom_stats.setSpacing(12)
         
-        # Identity Types
-        self.type_table = self._create_compact_table(["Type", "#"])
-        bottom_stats.addWidget(self._wrap_table("Types", self.type_table), stretch=1)
+        # Correlation results per wing
+        self.type_table = self._create_compact_table(["Wing", "Results"])
+        bottom_stats.addWidget(self._wrap_table("Wings", self.type_table), stretch=1)
         
         # Evidence Roles
         self.role_table = self._create_compact_table(["Role", "#"])
@@ -370,52 +664,71 @@ class IdentityResultsView(QWidget):
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and score column."""
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Identity / Anchor / Evidence", "Feathers", "Score", "Semantic", "Ev", "Artifact"])
-        
+        tree.setHeaderLabels(["Identity / Anchor / Record", "Time", "Feathers", "Score", "Semantic", "Rec", "Anchor Number", "Wings"])
+
         tree.setColumnWidth(0, 280)
-        tree.setColumnWidth(1, 150)
-        tree.setColumnWidth(2, 60) # Score column
-        tree.setColumnWidth(3, 350) # Semantic column - WIDER: Increased to 350 for better readability
-        tree.setColumnWidth(4, 40) # Evidence count
-        tree.setColumnWidth(5, 80) # Artifact
+        tree.setColumnWidth(1, 150) # Time: anchor range / record's own time
+        tree.setColumnWidth(2, 150) # Feathers
+        tree.setColumnWidth(3, 60) # Score column
+        tree.setColumnWidth(4, 350) # Semantic column - WIDER: Increased to 350 for better readability
+        tree.setColumnWidth(5, 40) # Record count
+        tree.setColumnWidth(6, 100) # Anchor Number: count on identity/sub rows, ordinal on anchor rows
+        tree.setColumnWidth(7, 130) # Wings that found this identity
         
         tree.setAlternatingRowColors(True)
+        tree.setIndentation(22)
         tree.itemDoubleClicked.connect(self._on_double_click)
         tree.itemClicked.connect(self._on_item_clicked)
         tree.itemExpanded.connect(self._on_item_expanded)
         tree.itemCollapsed.connect(self._on_item_collapsed)
-        
-        # Match app background - dark theme with expand/collapse indicators
-        tree.setStyleSheet("""
-            QTreeWidget {
+
+        # Dark theme + hierarchy visualization: slate guide lines show which
+        # row nests under which, and cyan chevrons show expanded/collapsed
+        # state on every row that has children.
+        vline = CrowEyeIcons.icon_path("branch_vline")
+        more = CrowEyeIcons.icon_path("branch_more")
+        end = CrowEyeIcons.icon_path("branch_end")
+        closed = CrowEyeIcons.icon_path("branch_closed")
+        opened = CrowEyeIcons.icon_path("branch_open")
+        tree.setStyleSheet(f"""
+            QTreeWidget {{
                 font-size: 8pt;
                 background-color: #0B1220;
                 alternate-background-color: #1E293B;
                 border: 1px solid #334155;
                 color: #E2E8F0;
-            }
-            QTreeWidget::item { 
+            }}
+            QTreeWidget::item {{
                 padding: 4px 2px;
                 min-height: 24px;
-            }
-            QTreeWidget::item:selected { 
-                background-color: #334155; 
+            }}
+            QTreeWidget::item:selected {{
+                background-color: #334155;
                 color: #00FFFF;
-            }
-            QTreeWidget::branch {
+            }}
+            QTreeWidget::branch {{
                 background-color: transparent;
-            }
+            }}
+            QTreeWidget::branch:has-siblings:!adjoins-item {{
+                border-image: url({vline}) 0;
+            }}
+            QTreeWidget::branch:has-siblings:adjoins-item {{
+                border-image: url({more}) 0;
+            }}
+            QTreeWidget::branch:!has-children:!has-siblings:adjoins-item {{
+                border-image: url({end}) 0;
+            }}
             QTreeWidget::branch:has-children:!has-siblings:closed,
-            QTreeWidget::branch:closed:has-children:has-siblings {
+            QTreeWidget::branch:closed:has-children:has-siblings {{
                 border-image: none;
-                image: none;
-            }
+                image: url({closed});
+            }}
             QTreeWidget::branch:open:has-children:!has-siblings,
-            QTreeWidget::branch:open:has-children:has-siblings {
+            QTreeWidget::branch:open:has-children:has-siblings {{
                 border-image: none;
-                image: none;
-            }
-            QHeaderView::section {
+                image: url({opened});
+            }}
+            QHeaderView::section {{
                 background-color: #1E293B;
                 color: #00FFFF;
                 padding: 6px 4px;
@@ -424,7 +737,7 @@ class IdentityResultsView(QWidget):
                 border: none;
                 border-bottom: 2px solid #00FFFF;
                 min-height: 26px;
-            }
+            }}
         """)
         return tree
     
@@ -507,12 +820,15 @@ class IdentityResultsView(QWidget):
         self._populate_current_page()
         self._update_stats(results)
     
-    def load_from_correlation_result(self, result, show_progress=True):
+    def load_from_correlation_result(self, result, show_progress=True, identities=None):
         """Load from CorrelationResult object with progress indicator.
-        
+
         Args:
             result: CorrelationResult object
             show_progress: If False, suppresses the progress dialog (useful when parent already shows progress)
+            identities: Optionally the already-converted identity list (produced
+                off the UI thread by a background load worker). When provided the
+                UI thread skips the heavy `_convert_matches` step entirely.
         """
         logger.info(f"[IdentityResultsView] load_from_correlation_result called with {result.total_matches} matches")
         
@@ -531,8 +847,11 @@ class IdentityResultsView(QWidget):
             QApplication.processEvents()
         
         try:
-            identities = self._convert_matches(result.matches, progress)
-            
+            # Use the pre-converted list (from a background worker) when given;
+            # otherwise convert on this (UI) thread as before.
+            if identities is None:
+                identities = self._convert_matches(result.matches, progress)
+
             if progress and progress.wasCanceled():
                 logger.info("[IdentityResultsView] Loading cancelled by user")
                 return
@@ -607,200 +926,17 @@ class IdentityResultsView(QWidget):
             QMessageBox.critical(self, "Load Error", f"Failed to load results:\n{str(e)}")
     
     def _convert_matches(self, matches, progress=None) -> List[Dict]:
-        """Convert matches to identity format with sub-identities."""
-        identity_map = {}
-        
-        # Debug: Check if matches is iterable and has items
-        if not matches:
-            logger.info(f"[IdentityResultsView] _convert_matches: No matches provided (matches is {type(matches)})")
-            return []
-        
-        total_matches = len(matches)
-        
-        match_count = 0
-        for match in matches:
-            match_count += 1
-            
-            # Update progress every 100 matches
-            if progress and match_count % 100 == 0:
-                percentage = int((match_count / total_matches) * 80) # 0-80% for processing
-                progress.setValue(percentage)
-                progress.setLabelText(f"Loading identity data: {match_count}/{total_matches} identities...")
-                QApplication.processEvents()
-                
-                if progress.wasCanceled():
-                    return []
-            
-            # Debug first few matches
-            if match_count <= 3:
-                logger.info(f"[IdentityResultsView] Match {match_count}: app={getattr(match, 'matched_application', 'N/A')}, "
-                      f"path={getattr(match, 'matched_file_path', 'N/A')}, "
-                      f"records={len(getattr(match, 'feather_records', {}))}")
-            
-            # FIXED: Normalize the application name for grouping
-            # This ensures "chrome.exe", "CHROME~1.EXE", "chrome123.exe" all group together
-            raw_app = match.matched_application or "Unknown"
-            main_app = self._normalize_for_grouping(raw_app)
-            
-            if main_app not in identity_map:
-                # Use a clean display name (not fully normalized) for primary_name
-                display_name = self._get_display_name_for_gui(raw_app)
-                
-                identity_map[main_app] = {
-                    'identity_id': main_app,
-                    'identity_type': 'name',
-                    'primary_name': display_name, # Clean, readable display name
-                    'sub_identities': {}, # original_name -> sub_identity data
-                    'feathers_found': set()
-                }
-            
-            identity_map[main_app]['feathers_found'].update(match.feather_records.keys())
-            
-            # Extract original name from the first evidence row
-            # FIXED: Start with raw_app (not normalized main_app) as fallback
-            # 
-            # NAME EXTRACTION PRIORITY:
-            # 1. First, try to find a 'name' field in evidence data
-            # 2. If name field matches raw_app, also check path fields (may have different case)
-            # 3. If no suitable name found, fall back to raw_app
-            # 
-            # This ensures we get the most representative original name while preserving
-            # case variations (e.g., "CHROME.EXE" from path vs "chrome.exe" from name field)
-            original_name = raw_app
-            for fid, data in match.feather_records.items():
-                if isinstance(data, dict):
-                    # Try to get original filename from name fields
-                    for field in ['name', 'filename', 'file_name', 'fn_filename', 'executable_name',
-                                  'Source_Name', 'original_filename', 'app_name', 'value', 'Value',
-                                  'FileName', 'Name']:
-                        if field in data and data[field]:
-                            original_name = str(data[field])
-                            break
-                    if original_name != raw_app:
-                        break
-                    # Try path extraction with validation
-                    for field in ['path', 'file_path', 'Local_Path', 'app_path', 'full_path']:
-                        if field in data and data[field]:
-                            from pathlib import Path
-                            path_val = str(data[field])
-                            if '\\' in path_val or '/' in path_val:
-                                extracted_name = Path(path_val.replace('\\', '/')).name
-                                # FIXED: Validate that extracted name is not empty
-                                if extracted_name:
-                                    original_name = extracted_name
-                                    break
-                    if original_name != raw_app:
-                        break
-            
-            # Bucket by a normalized sub-identity key so trivial variants
-            # collapse: "Chrome.exe", "chrome.exe", "Chrome.EXE" all bucket
-            # into one sub-identity, while distinct names / versions /
-            # qualifiers keep separate buckets.
-            sub_key = _sub_identity_key(original_name) or original_name.strip().lower()
-            if sub_key not in identity_map[main_app]['sub_identities']:
-                identity_map[main_app]['sub_identities'][sub_key] = {
-                    'original_name': original_name,
-                    'sub_key': sub_key,
-                    'name_variants': set(),
-                    'anchors': [],
-                    'feathers_found': set()
-                }
-
-            sub_identity = identity_map[main_app]['sub_identities'][sub_key]
-            sub_identity['name_variants'].add(original_name)
-            sub_identity['feathers_found'].update(match.feather_records.keys())
-            
-            # Get anchor metadata if available (from streaming mode)
-            anchor_start_time = getattr(match, 'anchor_start_time', match.timestamp)
-            anchor_end_time = getattr(match, 'anchor_end_time', match.timestamp)
-            anchor_record_count = getattr(match, 'anchor_record_count', len(match.feather_records))
-            
-            # Get scoring data
-            weighted_score = getattr(match, 'weighted_score', None)
-            score_breakdown = getattr(match, 'score_breakdown', None)
-            confidence_score = getattr(match, 'confidence_score', None)
-            confidence_category = getattr(match, 'confidence_category', None)
-            
-            # Get semantic data
-            semantic_data = getattr(match, 'semantic_data', None)
-            
-            anchor = {
-                'anchor_id': match.match_id,
-                'start_time': anchor_start_time,
-                'end_time': anchor_end_time,
-                'record_count': anchor_record_count,
-                'feathers': list(match.feather_records.keys()),
-                'primary_artifact': match.anchor_artifact_type,
-                'evidence_count': match.feather_count,
-                'weighted_score': weighted_score,
-                'score_breakdown': score_breakdown,
-                'confidence_score': confidence_score,
-                'confidence_category': confidence_category,
-                'semantic_data': semantic_data,
-                'evidence_rows': [
-                    {'feather_id': fid, 'artifact': match.anchor_artifact_type, 
-                     'timestamp': match.timestamp, 'data': data,
-                     'role': 'primary' if fid == match.anchor_feather_id else 'secondary'}
-                    for fid, data in match.feather_records.items()
-                ]
-            }
-            sub_identity['anchors'].append(anchor)
-        
-        # Convert to list format and compute identity-level overall scores
-        result = []
-        for identity in identity_map.values():
-            identity['feathers_found'] = list(identity['feathers_found'])
-            # Convert sub_identities dict to list and finalize set-typed fields
-            sub_list = []
-            for sub in identity['sub_identities'].values():
-                sub['feathers_found'] = list(sub['feathers_found'])
-                if 'name_variants' in sub and isinstance(sub['name_variants'], set):
-                    sub['name_variants'] = sorted(sub['name_variants'])
-                sub_list.append(sub)
-            identity['sub_identities'] = sub_list
-
-            # Aggregate overall score across all evidence (all anchors in all sub-identities)
-            all_scores = []
-            for sub in sub_list:
-                for anchor in sub.get('anchors', []):
-                    ws = anchor.get('weighted_score')
-                    if isinstance(ws, dict) and 'score' in ws:
-                        s = ws['score']
-                        if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
-                            all_scores.append(s)
-            if not all_scores:
-                for anchor in identity.get('anchors', []):
-                    ws = anchor.get('weighted_score')
-                    if isinstance(ws, dict) and 'score' in ws:
-                        s = ws['score']
-                        if isinstance(s, (int, float)) and 0.0 <= s <= 1.0:
-                            all_scores.append(s)
-
-            avg = sum(all_scores) / len(all_scores) if all_scores else 0.0
-            mx = max(all_scores) if all_scores else 0.0
-            if avg >= 0.7:
-                interp = "High"
-            elif avg >= 0.4:
-                interp = "Medium"
-            elif avg > 0:
-                interp = "Low"
-            else:
-                interp = "None"
-            identity['overall_score'] = {
-                'average': avg,
-                'max': mx,
-                'evidence_count': len(all_scores),
-                'interpretation': interp
-            }
-
-            result.append(identity)
-        
-        # Debug: Show conversion summary
-        logger.info(f"[IdentityResultsView] _convert_matches: Processed {match_count} matches -> {len(result)} identities")
-        
-        return result
+        """Convert matches to identity format (delegates to the module-level
+        pure function so the SAME logic can run on a background load thread)."""
+        return convert_matches_to_identities(
+            matches,
+            self._normalize_for_grouping,
+            self._get_display_name_for_gui,
+            progress=progress,
+        )
     
-    def _normalize_for_grouping(self, name: str) -> str:
+    @staticmethod
+    def _normalize_for_grouping(name: str) -> str:
         """
         Normalize application name for identity grouping.
         
@@ -826,82 +962,12 @@ class IdentityResultsView(QWidget):
         Returns:
             Aggressively normalized name for grouping (ASCII alphanumeric only)
         """
-        if not name:
-            return "Unknown"
-        
-        import re
-        
-        result = name.strip()
-        
-        # Step -1: Handle Prefetch filenames (APPNAME.EXE HASH.pf)
-        # Extract just the APPNAME.EXE part before the hash
-        # Pattern: ends with space + 8 hex chars + .pf
-        # Examples: "BRAVE.EXE 3118B3E3.pf" → "BRAVE.EXE"
-        # "chrome.exe AF43252D.pf" → "chrome.exe"
-        if result.lower().endswith('.pf'):
-            # Check if there's a space followed by hex hash before .pf
-            match = re.match(r'^(.+?)\s+[0-9A-Fa-f]{8}\.pf$', result, re.IGNORECASE)
-            if match:
-                result = match.group(1) # Extract just the app name part
-        
-        # Step 0: Remove ~ and everything after it (FIRST - before any other processing)
-        # This handles cases like "CHROME~1.EXE", "file~123.txt"
-        if '~' in result:
-            result = result.split('~')[0]
-        
-        # Step 1: Remove common file extensions (case-insensitive)
-        extensions = [
-            '.exe', '.lnk', '.dll', '.msi', '.bat', '.cmd', '.ps1', '.vbs', '.js',
-            '.com', '.scr', '.pif', '.application', '.gadget', '.msp', '.hta',
-            '.cpl', '.msc', '.jar', '.py', '.pyc', '.pyw'
-        ]
-        lower_result = result.lower()
-        for ext in extensions:
-            if lower_result.endswith(ext):
-                result = result[:-len(ext)]
-                lower_result = result.lower()
-                break
-        
-        # Step 2: Remove copy indicators like (1), (2), (3), etc.
-        result = re.sub(r'[\s_]*\(\d+\)\s*$', '', result)
-        
-        # Step 3: Remove " - Copy", "_copy", " copy" at the end
-        result = re.sub(r'[\s_]*[-_]?\s*[Cc]opy\s*\d*\s*$', '', result)
-        result = re.sub(r'[\s_]*\([Cc]opy\s*\d*\)\s*$', '', result)
-        
-        # Step 4: Remove version patterns like v1, v2, v1.0, 1.0.0 at the end
-        # FIXED: More specific pattern - requires space/underscore OR 'v' prefix
-        # This prevents removing numbers that are part of the name (e.g., "chrome1")
-        result = re.sub(r'[\s_]+[vV]?\d+(\.\d+)*\s*$', '', result) # Requires space/underscore
-        result = re.sub(r'[vV]\d+(\.\d+)*\s*$', '', result) # OR explicit v prefix without space
-        
-        # Step 5: AGGRESSIVE NORMALIZATION for grouping
-        # Convert to lowercase first
-        result = result.lower()
-        
-        # Remove ALL spaces, hyphens, underscores, dots, parentheses, brackets
-        result = re.sub(r'[\s\-_\.\(\)\[\]]+', '', result)
-        
-        # Remove any remaining special characters except alphanumeric
-        result = re.sub(r'[^a-z0-9]', '', result)
-        
-        # Step 6: Remove ALL numbers for better grouping
-        # This ensures "chrome1", "chrome2", "chrome123" all become "chrome"
-        result = re.sub(r'\d+', '', result)
-        
-        # If result is empty after all processing, fall back to original
-        if not result:
-            # Fall back to simpler normalization (keep some characters)
-            result = name.strip().lower()
-            if '~' in result:
-                result = result.split('~')[0]
-            result = re.sub(r'[\s\-_\.\(\)\[\]]+', '', result)
-            result = re.sub(r'[^a-z0-9]', '', result)
-            # Don't remove numbers in fallback to avoid empty result
-        
-        return result.strip() if result else "Unknown"
+        # Canonical implementation now lives in engine.identity_grouping so
+        # the engine-side cross-wing reconciler groups EXACTLY like this view.
+        return display_grouping_key(name)
     
-    def _get_display_name_for_gui(self, raw_name: str) -> str:
+    @staticmethod
+    def _get_display_name_for_gui(raw_name: str) -> str:
         """
         Get a clean, readable display name from the raw name for GUI display.
         
@@ -1004,7 +1070,7 @@ class IdentityResultsView(QWidget):
             self.identities_lbl.setToolTip("")
         
         self.anchors_lbl.setText(f"Anchors: {stats.get('total_anchors', 0):,}")
-        self.evidence_lbl.setText(f"Evidence: {stats.get('total_evidence', 0):,}")
+        self.evidence_lbl.setText(f"Records: {stats.get('total_evidence', 0):,}")
         
         # Show feathers used with details
         feather_metadata = results.get('feather_metadata', {})
@@ -1053,23 +1119,32 @@ class IdentityResultsView(QWidget):
     
     def _populate_tree(self, identities: List[Dict]):
         """Populate tree with given identities (used internally)."""
-        self.results_tree.clear()
-        
-        if not identities:
-            # Show a message when there are no results (6 columns - removed Time)
-            empty_item = QTreeWidgetItem(["No correlation matches found", "", "", "", "", ""])
-            empty_item.setForeground(0, QBrush(QColor("#64748B")))
-            empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
-            self.results_tree.addTopLevelItem(empty_item)
-            return
-        
-        for identity in identities:
-            item = self._create_identity_item(identity)
-            self.results_tree.addTopLevelItem(item)
-        
-        # Expand first 3
-        for i in range(min(3, self.results_tree.topLevelItemCount())):
-            self.results_tree.topLevelItem(i).setExpanded(True)
+        # Suppress per-insert repaints/signals while bulk-building the tree — a
+        # page of identities is thousands of items and each addChild otherwise
+        # triggers layout/paint work, freezing the window.
+        self.results_tree.setUpdatesEnabled(False)
+        self.results_tree.blockSignals(True)
+        try:
+            self.results_tree.clear()
+
+            if not identities:
+                # Show a message when there are no results (8 columns)
+                empty_item = QTreeWidgetItem(["No correlation matches found", "", "", "", "", "", "", ""])
+                empty_item.setForeground(0, QBrush(QColor("#64748B")))
+                empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
+                self.results_tree.addTopLevelItem(empty_item)
+                return
+
+            for identity in identities:
+                item = self._create_identity_item(identity)
+                self.results_tree.addTopLevelItem(item)
+
+            # Expand first 3
+            for i in range(min(3, self.results_tree.topLevelItemCount())):
+                self.results_tree.topLevelItem(i).setExpanded(True)
+        finally:
+            self.results_tree.blockSignals(False)
+            self.results_tree.setUpdatesEnabled(True)
     
     def _populate_current_page(self):
         """Populate tree with current page of identities."""
@@ -1148,48 +1223,56 @@ class IdentityResultsView(QWidget):
             logger.error(f"Error getting identity semantic value: {e}")
             semantic_value, semantic_tooltip = "Error", "Error retrieving semantic data"
         
-        # Task 6.2: Check if identity has semantic data for [S] indicator with error handling
+        # Task 6.2: Check if identity has semantic data (tag icon on the
+        # Semantic column instead of the old "[S] " text marker)
         try:
             has_semantic = semantic_value not in ["-", "Error", "Fallback", None, ""]
-            semantic_indicator = "[S] " if has_semantic else ""
         except Exception as e:
             logger.warning(f"Error checking semantic indicator: {e}")
-            semantic_indicator = ""
+            has_semantic = False
 
-        # Main identity item (6 columns - removed Time). Per-row icon comes
-        # from CrowEyeIcons; Qt draws its own expand chevron when children exist.
+        wings = identity.get('wings_found', []) or []
+
+        # Main identity item (7 columns - removed Time, added Wings). Per-row icon
+        # comes from CrowEyeIcons; Qt draws its own expand chevron when children exist.
         item = QTreeWidgetItem([
-            f"{semantic_indicator}{name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
+            f"{name}" + (f" ({sub_count} variants)" if sub_count > 1 else ""),
+            "", # Time: shown on anchor/record rows
             feather_str,
             score_str,
             semantic_value, # Semantic column with aggregated value
             str(total_evidence),
-            f"{total_anchors} anchors"
+            f"{total_anchors} anchors",
+            self._format_wings(wings)
         ])
-        item.setIcon(0, CrowEyeIcons.target())
+        item.setIcon(0, CrowEyeIcons.identity()) # fingerprint: the tracked actor/app
+        if has_semantic:
+            # Descriptive tag icon on the Semantic column (replaces "[S] ")
+            item.setIcon(4, CrowEyeIcons.tag())
         item.setFont(0, QFont("Segoe UI", 9, QFont.Bold))
         item.setForeground(0, QBrush(QColor("#2196F3")))
-        
+        self._decorate_wings_column(item, wings)
+
         # Color score based on value
         if avg_score >= 0.7:
-            item.setForeground(2, QBrush(QColor("#4CAF50"))) # Green - high score
+            item.setForeground(3, QBrush(QColor("#4CAF50"))) # Green - high score
         elif avg_score >= 0.4:
-            item.setForeground(2, QBrush(QColor("#FF9800"))) # Orange - medium score
+            item.setForeground(3, QBrush(QColor("#FF9800"))) # Orange - medium score
         elif avg_score > 0:
-            item.setForeground(2, QBrush(QColor("#F44336"))) # Red - low score
-        
+            item.setForeground(3, QBrush(QColor("#F44336"))) # Red - low score
+
         # Task 6.2: Color semantic column with error handling
         try:
             if semantic_value == "Error":
-                item.setForeground(3, QBrush(QColor("#F44336"))) # Red for errors
-                item.setToolTip(3, "Error retrieving semantic data")
+                item.setForeground(4, QBrush(QColor("#F44336"))) # Red for errors
+                item.setToolTip(4, "Error retrieving semantic data")
             elif semantic_value == "Fallback":
-                item.setForeground(3, QBrush(QColor("#FF9800"))) # Orange for fallback
-                item.setToolTip(3, "Using fallback semantic data")
+                item.setForeground(4, QBrush(QColor("#FF9800"))) # Orange for fallback
+                item.setToolTip(4, "Using fallback semantic data")
             elif semantic_value != "-":
-                item.setForeground(3, QBrush(QColor("#9C27B0"))) # Purple for semantic values
+                item.setForeground(4, QBrush(QColor("#9C27B0"))) # Purple for semantic values
                 if semantic_tooltip:
-                    item.setToolTip(3, semantic_tooltip)
+                    item.setToolTip(4, semantic_tooltip)
         except Exception as e:
             logger.warning(f"Error setting semantic column color: {e}")
         
@@ -1201,12 +1284,36 @@ class IdentityResultsView(QWidget):
                 sub_item = self._create_sub_identity_item(sub)
                 item.addChild(sub_item)
         else:
-            # Old format - add anchors directly
-            for anchor in identity.get('anchors', []):
-                item.addChild(self._create_anchor_item(anchor))
-        
+            # Old format - add anchors directly (numbered per identity)
+            for anchor_number, anchor in enumerate(identity.get('anchors', []), 1):
+                item.addChild(self._create_anchor_item(anchor, anchor_number))
+
         return item
     
+    @staticmethod
+    def _format_wings(wings) -> str:
+        """Format the list of wings that found an identity for the Wings column.
+
+        Shows up to two wing names, then "+N" for the rest (full list goes in
+        the tooltip via _decorate_wings_column).
+        """
+        wings = sorted(wings) if wings else []
+        if not wings:
+            return "-"
+        if len(wings) <= 2:
+            return ", ".join(wings)
+        return ", ".join(wings[:2]) + f" +{len(wings) - 2}"
+
+    def _decorate_wings_column(self, item: QTreeWidgetItem, wings):
+        """Attach full wing list tooltip and multi-wing accent to column 6."""
+        wings = sorted(wings) if wings else []
+        if not wings:
+            return
+        item.setToolTip(7, "Found by:\n" + "\n".join(f"- {w}" for w in wings))
+        if len(wings) > 1:
+            # Cyan accent highlights identities corroborated by multiple wings
+            item.setForeground(7, QBrush(QColor("#00BCD4")))
+
     def _calculate_identity_score(self, identity: Dict) -> float:
         """Calculate average weighted score for an identity across all evidence."""
         scores = []
@@ -1240,6 +1347,7 @@ class IdentityResultsView(QWidget):
             - tooltip_text: Detailed tooltip with all semantic values
         """
         semantic_values = []
+        seen_vals = set()  # O(1) dedup instead of rebuilding [v[0] ...] each check
         sub_identities = identity.get('sub_identities', [])
         
         # Collect semantic data from all anchors
@@ -1265,19 +1373,22 @@ class IdentityResultsView(QWidget):
                             if isinstance(first_mapping, dict) and 'semantic_value' in first_mapping:
                                 sem_val = str(first_mapping['semantic_value'])
                                 rule_name = first_mapping.get('rule_name', key)
-                                if sem_val and sem_val not in [v[0] for v in semantic_values]:
+                                if sem_val and sem_val not in seen_vals:
+                                    seen_vals.add(sem_val)
                                     semantic_values.append((sem_val, rule_name))
-                    
+
                     # LEGACY: Direct semantic_value in value dict
                     elif isinstance(value, dict) and 'semantic_value' in value:
                         sem_val = str(value['semantic_value'])
                         rule_name = value.get('rule_name', key)
-                        if sem_val and sem_val not in [v[0] for v in semantic_values]:
+                        if sem_val and sem_val not in seen_vals:
+                            seen_vals.add(sem_val)
                             semantic_values.append((sem_val, rule_name))
-                    
+
                     # LEGACY: String value
                     elif isinstance(value, str) and value:
-                        if value not in [v[0] for v in semantic_values]:
+                        if value not in seen_vals:
+                            seen_vals.add(value)
                             semantic_values.append((value, key))
         
         if not semantic_values:
@@ -1445,38 +1556,46 @@ class IdentityResultsView(QWidget):
         avg_score = sum(scores) / len(scores) if scores else 0.0
         score_str = f"{avg_score:.2f}" if avg_score > 0 else "-"
         
-        # Sub-identity item (6 columns - removed Time). Crow-Eye link icon
-        # marks relational sub-grouping; Qt's expand chevron handles children.
+        # Sub-identity item. Crow-Eye branch-to-variant icon marks relational
+        # sub-grouping; Qt's expand chevron handles children.
+        sub_wings = sub_identity.get('wings_found', []) or []
         item = QTreeWidgetItem([
             original_name,
+            "", # Time: shown on anchor/record rows
             feather_str,
             score_str,
             "-", # Semantic column (sub-identities don't have semantic values)
             str(evidence),
-            f"{len(anchors)} anchors"
+            f"{len(anchors)} anchors",
+            self._format_wings(sub_wings)
         ])
-        item.setIcon(0, CrowEyeIcons.link())
+        item.setIcon(0, CrowEyeIcons.sub_identity()) # branch-to-variant: name/version variant
         item.setFont(0, QFont("Segoe UI", 8))
         item.setForeground(0, QBrush(QColor("#FF9800"))) # Orange for sub-identity
-        
+        self._decorate_wings_column(item, sub_wings)
+
         # Color score
         if avg_score >= 0.7:
-            item.setForeground(2, QBrush(QColor("#4CAF50")))
+            item.setForeground(3, QBrush(QColor("#4CAF50")))
         elif avg_score >= 0.4:
-            item.setForeground(2, QBrush(QColor("#FF9800")))
+            item.setForeground(3, QBrush(QColor("#FF9800")))
         elif avg_score > 0:
-            item.setForeground(2, QBrush(QColor("#F44336")))
+            item.setForeground(3, QBrush(QColor("#F44336")))
         
         item.setData(0, Qt.UserRole, {'type': 'sub_identity', 'data': sub_identity})
         
-        # Add anchors under sub-identity
-        for anchor in anchors:
-            item.addChild(self._create_anchor_item(anchor))
-        
+        # Add anchors under sub-identity (numbered 1..N within this sub-identity)
+        for anchor_number, anchor in enumerate(anchors, 1):
+            item.addChild(self._create_anchor_item(anchor, anchor_number))
+
         return item
-    
-    def _create_anchor_item(self, anchor: Dict) -> QTreeWidgetItem:
-        """Create anchor tree item with score and time range."""
+
+    def _create_anchor_item(self, anchor: Dict, anchor_number: int = 1) -> QTreeWidgetItem:
+        """Create anchor tree item with score and time range.
+
+        anchor_number is the anchor's ordinal within its parent identity /
+        sub-identity — shown in the "Anchor Number" column.
+        """
         start_time = anchor.get('start_time', '')
         end_time = anchor.get('end_time', start_time)
         record_count = anchor.get('record_count', 0)
@@ -1518,33 +1637,47 @@ class IdentityResultsView(QWidget):
         # Get semantic value for display using the dedicated method
         semantic_value = self._get_semantic_value(anchor)
         
-        # 7 columns now - added Semantic column
+        # Primary artifact/record-count info (moved off the row into the
+        # Anchor Number tooltip now that column 6 shows the ordinal)
         artifact_info = anchor.get('primary_artifact', '-')
         if record_count > 0:
             artifact_info = f"{artifact_info} ({record_count} rec)"
-        
+
         feather_display = ", ".join(sorted(base_feathers)[:2]) + ("..." if len(base_feathers) > 2 else "")
 
-        # Anchor row — Crow-Eye star icon marks "pinned/significant" anchor;
+        # Anchor row — anchor+clock icon marks the temporal evidence cluster;
         # Qt's native chevron handles expand state for evidence children.
         item = QTreeWidgetItem([
-            "Anchor",
+            f"Anchor {anchor_number}",
+            time_display or "-", # Time: the anchor's temporal range
             feather_display,
             score_str,
             semantic_value, # New semantic column
             str(count),
-            artifact_info
+            f"#{anchor_number}", # Anchor Number: this anchor's ordinal
+            anchor.get('wing_name') or "-" # Wing that produced this anchor's match
         ])
-        item.setIcon(0, CrowEyeIcons.star())
+        item.setIcon(0, CrowEyeIcons.anchor()) # anchor+clock: temporal evidence cluster
         item.setForeground(0, QBrush(QColor("#FFC107")))
-        
+        item.setForeground(1, QBrush(QColor("#94A3B8")))
+        # Primary artifact type shown in the Anchor Number tooltip
+        if artifact_info and artifact_info != '-':
+            item.setToolTip(6, f"Primary artifact: {artifact_info}")
+        if anchor.get('wing_name'):
+            item.setToolTip(7, f"Found by: {anchor['wing_name']}")
+        if start_time:
+            time_tooltip = f"Start: {start_time}"
+            if end_time and end_time != start_time:
+                time_tooltip += f"\nEnd:   {end_time}"
+            item.setToolTip(1, time_tooltip)
+
         # Color score and add tooltip
         if score >= 0.7:
-            item.setForeground(2, QBrush(QColor("#4CAF50"))) # Green
+            item.setForeground(3, QBrush(QColor("#4CAF50"))) # Green
         elif score >= 0.4:
-            item.setForeground(2, QBrush(QColor("#FF9800"))) # Orange
+            item.setForeground(3, QBrush(QColor("#FF9800"))) # Orange
         elif score > 0:
-            item.setForeground(2, QBrush(QColor("#F44336"))) # Red
+            item.setForeground(3, QBrush(QColor("#F44336"))) # Red
         
         # Build comprehensive tooltip
         tooltip_lines = []
@@ -1580,18 +1713,37 @@ class IdentityResultsView(QWidget):
             item.setToolTip(0, "\n".join(tooltip_lines))
         
         item.setData(0, Qt.UserRole, {'type': 'anchor', 'data': anchor})
-        
+
+        # Records carry their parent anchor's number so the Anchor Number
+        # column stays meaningful at the record level too
         for ev in anchor.get('evidence_rows', []):
-            item.addChild(self._create_evidence_item(ev))
-        
+            item.addChild(self._create_evidence_item(ev, anchor_number))
+
         return item
     
-    def _create_evidence_item(self, evidence: Dict) -> QTreeWidgetItem:
-        """Create evidence tree item showing original filename."""
-        ts = evidence.get('timestamp', '')
-        if isinstance(ts, str) and len(ts) > 11:
-            ts = ts[11:19]
-        
+    def _extract_evidence_time(self, evidence: Dict) -> tuple:
+        """Pick the display time for a record: the record's OWN timestamp.
+
+        The PRIMARY (anchor) record is the one the anchor's central time is
+        derived from — so for it, the anchor/match timestamp genuinely IS the
+        record's own time and is shown. For every SECONDARY record the time
+        comes only from that record's own fields; if it carries none the cell
+        stays EMPTY (never the anchor's time — a secondary must not be
+        presented as if it happened at the anchor's moment). Returns
+        (display_str, full_str_or_None).
+        """
+        # Prefer the value precomputed once in _convert_matches (avoids the
+        # per-row field scan during tree building).
+        if '_display_time' in evidence:
+            return evidence.get('_display_time', ''), evidence.get('_display_time_full')
+        return _extract_evidence_display_time(evidence)
+
+    def _create_evidence_item(self, evidence: Dict, anchor_number: int = 1) -> QTreeWidgetItem:
+        """Create a record (evidence) tree item.
+
+        anchor_number is the parent anchor's ordinal, echoed in the
+        "Anchor Number" column so a record shows which anchor it belongs to.
+        """
         # Extract original filename from evidence data
         data = evidence.get('data', {})
         original_name = ""
@@ -1634,24 +1786,40 @@ class IdentityResultsView(QWidget):
                     semantic_value = str(value)
                     break
         
-        # 6 columns - removed Time column. Evidence rows are leaves: no
-        # expand chevron, but the Crow-Eye info icon marks them as detail rows.
+        # Record row — labeled "Record" (NOT the identity's name: repeating
+        # the app name here made raw records look like identities). The
+        # record's specifics live in the other columns; its source name goes
+        # in the tooltip. Wings column blank (record inherits the parent
+        # anchor's wing); Time column shows the record's OWN timestamp only.
+        evidence_time, evidence_time_full = self._extract_evidence_time(evidence)
+        artifact_type = evidence.get('artifact', '-')
         item = QTreeWidgetItem([
-            f"{original_name}" + (" " if has_semantic else ""),
+            "Record",
+            evidence_time, # Time: record's own timestamp, empty when it has none
             evidence.get('feather_id', ''),
-            "-", # Score column (evidence doesn't have individual scores)
+            "-", # Score column (records don't have individual scores)
             semantic_value, # New semantic column
             "1",
-            evidence.get('artifact', '-')
+            f"#{anchor_number}", # Anchor Number: the parent anchor this record belongs to
+            "" # Wings: record inherits the parent anchor's wing
         ])
-        item.setIcon(0, CrowEyeIcons.info())
+        item.setIcon(0, CrowEyeIcons.evidence()) # record+magnifier: raw artifact record
         item.setForeground(0, QBrush(QColor("#4CAF50")))
-        
-        # Add semantic tooltip if available
+        item.setForeground(1, QBrush(QColor("#94A3B8")))
+        if evidence_time_full:
+            item.setToolTip(1, evidence_time_full)
+
+        # Tooltip: record source name + artifact type + any semantic info
+        tooltip_lines = []
+        if original_name and original_name != '-':
+            tooltip_lines.append(f"Source: {original_name}")
+        if artifact_type and artifact_type != '-':
+            tooltip_lines.append(f"Artifact: {artifact_type}")
         if has_semantic:
-            tooltip_lines = ["Semantic Information:"]
+            tooltip_lines.append("Semantic Information:")
             for field, value in semantic_info.items():
                 tooltip_lines.append(f" {field}: {value}")
+        if tooltip_lines:
             item.setToolTip(0, "\n".join(tooltip_lines))
         
         item.setData(0, Qt.UserRole, {'type': 'evidence', 'data': evidence})
@@ -1736,18 +1904,112 @@ class IdentityResultsView(QWidget):
         """No-op: Qt rotates the native expand chevron automatically."""
         return
     
+    @staticmethod
+    def _collect_rule_results(semantic_data) -> list:
+        """Pull rule-result dicts (carrying technique_id/severity) out of an
+        anchor's semantic_data, handling every shape the engines write:
+        keyed `{value_ruleid: {..., semantic_mappings:[...]}}`, and the
+        `semantic_rule_results` / `identity_semantic_results` lists."""
+        out = []
+        if not isinstance(semantic_data, dict):
+            return out
+        for key in ('semantic_rule_results', 'identity_semantic_results'):
+            lst = semantic_data.get(key)
+            if isinstance(lst, list):
+                out.extend(r for r in lst if isinstance(r, dict))
+        for k, v in semantic_data.items():
+            if k in ('semantic_rule_results', 'identity_semantic_results'):
+                continue
+            if isinstance(v, dict):
+                # Top-level entry may carry tags directly
+                if v.get('technique_id'):
+                    out.append(v)
+                for m in v.get('semantic_mappings', []) or []:
+                    if isinstance(m, dict) and m.get('technique_id'):
+                        out.append(m)
+        return out
+
+    def _update_attack_coverage(self):
+        """Compute the MITRE ATT&CK coverage across all loaded hits and show
+        it in the compact stats-bar label (with a tactic→technique tooltip)."""
+        try:
+            from ..config.attack_catalog import compute_attack_coverage
+            rule_results = []
+            seen = set()
+            for identity in getattr(self, 'identities', []) or []:
+                subs = identity.get('sub_identities', []) or []
+                anchor_lists = [s.get('anchors', []) for s in subs] if subs else [identity.get('anchors', [])]
+                for anchors in anchor_lists:
+                    for anchor in anchors or []:
+                        for r in self._collect_rule_results(anchor.get('semantic_data')):
+                            # Dedup identical (rule_id, technique_id) contributions
+                            key = (r.get('rule_id'), tuple(r.get('technique_id') or []))
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            rule_results.append(r)
+
+            if not rule_results:
+                self.attack_lbl.setVisible(False)
+                return
+
+            cov = compute_attack_coverage(rule_results)
+            n_tech, n_tac = cov['technique_count'], cov['tactic_count']
+            if n_tech == 0:
+                self.attack_lbl.setVisible(False)
+                return
+
+            top = ", ".join(t['technique_id'] for t in cov['techniques'][:3])
+            more = f" +{n_tech - 3}" if n_tech > 3 else ""
+            self.attack_lbl.setText(f"ATT&CK: {n_tech} tech / {n_tac} tactics — {top}{more}")
+
+            tip = ["MITRE ATT&CK coverage (annotation only)"]
+            for tac in cov['tactics']:
+                techs = ", ".join(tac['technique_ids'])
+                tip.append(f"• {tac['tactic']} [{tac['max_severity']}]: {techs}")
+            self.attack_lbl.setToolTip("\n".join(tip))
+            self.attack_lbl.setVisible(True)
+        except Exception as e:
+            logger.warning(f"[IdentityResultsView] ATT&CK coverage failed: {e}")
+            try:
+                self.attack_lbl.setVisible(False)
+            except Exception:
+                pass
+
     def _update_stats(self, results: Dict):
         """Update statistics tables (Types, Roles, Scores only - feather stats are in Summary)."""
-        # Identity types
-        types = {}
+        # MITRE ATT&CK coverage rollup (annotation only)
+        self._update_attack_coverage()
+
+        # Correlation results (anchors/matches) per wing — counts every wing
+        # represented in the viewer (both engine types tag anchors with wing_name).
+        wing_counts = {}
+
+        def _count_anchor(anchor, fallback_wings):
+            name = anchor.get('wing_name')
+            if not name:
+                # Anchor lacks a wing name → attribute to the identity's wing(s).
+                fw = fallback_wings or []
+                name = fw[0] if len(fw) == 1 else 'Unknown Wing'
+            wing_counts[name] = wing_counts.get(name, 0) + 1
+
         for i in self.identities:
-            t = i.get('identity_type', 'unknown')
-            types[t] = types.get(t, 0) + 1
-        
-        self.type_table.setRowCount(len(types))
-        for row, (t, c) in enumerate(sorted(types.items())):
-            self.type_table.setItem(row, 0, QTableWidgetItem(t.capitalize()))
-            self.type_table.setItem(row, 1, QTableWidgetItem(str(c)))
+            fallback_wings = i.get('wings_found') or []
+            sub_identities = i.get('sub_identities', [])
+            if sub_identities:
+                for sub in sub_identities:
+                    for a in sub.get('anchors', []):
+                        _count_anchor(a, sub.get('wings_found') or fallback_wings)
+            else:
+                for a in i.get('anchors', []):
+                    _count_anchor(a, fallback_wings)
+
+        # Sort by result count desc, then wing name.
+        ordered = sorted(wing_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        self.type_table.setRowCount(len(ordered))
+        for row, (wing_name, count) in enumerate(ordered):
+            self.type_table.setItem(row, 0, QTableWidgetItem(str(wing_name)))
+            self.type_table.setItem(row, 1, QTableWidgetItem(str(count)))
         
         # Evidence roles
         roles = {'Primary': 0, 'Secondary': 0}
@@ -1920,11 +2182,19 @@ class IdentityResultsView(QWidget):
         self._populate_current_page()
     
     def _on_double_click(self, item: QTreeWidgetItem, column: int):
-        """Handle double-click."""
+        """Handle double-click — open the detail dialog for the row, never
+        letting a data-shape issue surface as an unhandled exception."""
         data = item.data(0, Qt.UserRole)
-        if data:
+        if not data:
+            return
+        try:
             dialog = IdentityDetailDialog(data.get('type'), data.get('data', {}), self)
             dialog.exec_()
+        except Exception as e:
+            logger.exception("[IdentityResultsView] detail dialog failed to open")
+            QMessageBox.warning(
+                self, "Detail Unavailable",
+                f"Could not open details for this {data.get('type', 'item')}:\n{e}")
 
 
 class IdentityDetailDialog(QDialog):
@@ -1936,9 +2206,19 @@ class IdentityDetailDialog(QDialog):
         self.data = data
         self.setup_ui()
     
+    # Display names for tree levels — the deepest level is a raw artifact
+    # RECORD (internally typed 'evidence' for backward compatibility)
+    _TYPE_DISPLAY = {
+        'identity': 'Identity',
+        'sub_identity': 'Sub-Identity',
+        'anchor': 'Anchor',
+        'evidence': 'Record',
+    }
+
     def setup_ui(self):
         """Setup dialog."""
-        self.setWindowTitle(f"{self.item_type.capitalize()} Details")
+        display = self._TYPE_DISPLAY.get(self.item_type, self.item_type.capitalize())
+        self.setWindowTitle(f"{display} Details")
         self.setMinimumSize(900, 600)
         
         # Get screen size and set maximum to 90%
@@ -1955,15 +2235,17 @@ class IdentityDetailDialog(QDialog):
         layout.setSpacing(8)
         layout.setContentsMargins(10, 10, 10, 10)
         
-        # Only add header for anchor and evidence types
-        # For identity type, the Summary tab contains all header info
-        if self.item_type not in ['identity']:
+        # Only add the generic header for anchor and evidence types. Identity
+        # and sub-identity build their own header inside their content.
+        if self.item_type not in ['identity', 'sub_identity']:
             header = self._create_header()
             layout.addWidget(header)
-        
+
         # Content
         if self.item_type == 'identity':
             content = self._create_identity_content()
+        elif self.item_type == 'sub_identity':
+            content = self._create_sub_identity_tab(self.data)
         elif self.item_type == 'anchor':
             content = self._create_anchor_content()
         else:
@@ -2003,78 +2285,148 @@ class IdentityDetailDialog(QDialog):
         return frame
     
     def _create_identity_content(self) -> QWidget:
-        """Create identity content with Summary tab + per-feather tabs."""
-        tabs = QTabWidget()
-        # Tabs matching the main app tab style - dark background, smaller text
-        tabs.setStyleSheet("""
-            QTabWidget::pane { 
-                border: 1px solid #333; 
-                background-color: #1a1a2e;
-            }
-            QTabBar::tab { 
-                font-size: 7pt; 
-                padding: 4px 12px; 
-                min-width: 80px;
-                background-color: #1a1a2e;
-                color: #888;
-                border: 1px solid #333;
-                border-bottom: none;
-                margin-right: 1px;
-            }
-            QTabBar::tab:selected { 
-                background-color: #2a3a5e; 
-                color: #fff;
-                border-top: 2px solid #2196F3;
-            }
-            QTabBar::tab:hover:!selected { 
-                background-color: #252540;
-                color: #aaa;
-            }
-        """)
-        
-        # Collect all evidence rows grouped by feather
-        feather_records = {} # feather_id -> list of evidence rows
-        all_anchors = []
-        timestamps = []
-        
-        sub_identities = self.data.get('sub_identities', [])
+        """Identity content: a SINGLE table of every record across ALL
+        sub-identities (no per-feather tabs). Each row is tagged with its
+        sub-identity name in the Identity column."""
+        sub_identities = self.data.get('sub_identities', []) or []
+        specs, timestamps, anchor_count = [], [], 0
+
         if sub_identities:
             for sub in sub_identities:
-                for anchor in sub.get('anchors', []):
-                    all_anchors.append(anchor)
-                    if anchor.get('start_time'):
-                        timestamps.append(anchor.get('start_time'))
-                    for ev in anchor.get('evidence_rows', []):
-                        fid = ev.get('feather_id', 'Unknown')
-                        if fid not in feather_records:
-                            feather_records[fid] = []
-                        feather_records[fid].append(ev)
+                name = sub.get('original_name') or self.data.get('primary_name', 'Unknown')
+                anchors = sub.get('anchors', []) or []
+                anchor_count += len(anchors)
+                timestamps += [a.get('start_time') for a in anchors
+                               if isinstance(a, dict) and a.get('start_time')]
+                specs.extend(self._row_specs_from_anchors(anchors, name))
         else:
-            for anchor in self.data.get('anchors', []):
-                all_anchors.append(anchor)
-                if anchor.get('start_time'):
-                    timestamps.append(anchor.get('start_time'))
-                for ev in anchor.get('evidence_rows', []):
-                    fid = ev.get('feather_id', 'Unknown')
-                    if fid not in feather_records:
-                        feather_records[fid] = []
-                    feather_records[fid].append(ev)
-        
-        # Tab 1: Summary - REMOVED per user request
-        # summary_tab = self._create_summary_tab(sub_identities, all_anchors, timestamps, feather_records)
-        # tabs.addTab(summary_tab, "Summary")
-        
-        # Per-feather tabs (now the only tabs)
-        for fid in sorted(feather_records.keys()):
-            records = feather_records[fid]
-            tab = self._create_feather_tab(fid, records)
-            tab_label = f"{fid} ({len(records)})"
-            if len(tab_label) > 20:
-                tab_label = f"{fid[:15]}... ({len(records)})"
-            tabs.addTab(tab, tab_label)
-        
-        return tabs
-    
+            name = self.data.get('primary_name', 'Unknown')
+            anchors = self.data.get('anchors', []) or []
+            anchor_count += len(anchors)
+            timestamps += [a.get('start_time') for a in anchors
+                           if isinstance(a, dict) and a.get('start_time')]
+            specs = self._row_specs_from_anchors(anchors, name)
+
+        feathers = sorted({s['feather'] for s in specs if s.get('feather')})
+        container = QWidget()
+        v = QVBoxLayout(container)
+        v.setContentsMargins(4, 4, 4, 4)
+        v.setSpacing(6)
+        v.addWidget(self._records_header(
+            self.data.get('primary_name', 'Unknown'),
+            len(sub_identities), anchor_count, len(feathers), timestamps, len(specs)))
+        v.addWidget(self._records_table(specs, show_identity=True), stretch=10)
+        return container
+
+    @staticmethod
+    def _row_specs_from_anchors(anchors, identity_name):
+        """Flatten anchors -> evidence rows -> record dicts into flat row specs.
+        Handles polymorphic record ``data`` (dict / list-of-dicts / non-dict)."""
+        specs = []
+        for anchor in anchors or []:
+            if not isinstance(anchor, dict):
+                continue
+            for ev in anchor.get('evidence_rows', []) or []:
+                if not isinstance(ev, dict):
+                    continue
+                feather = _feather_base_name(ev.get('feather_id', ''))
+                role = ev.get('role', 'secondary')
+                for rec_data in _iter_record_dicts(ev):
+                    specs.append({
+                        'identity': identity_name,
+                        'feather': feather,       # the real artifact (feather name)
+                        'role': role,
+                        'time': _record_display_time(ev, rec_data),
+                        'data': rec_data if isinstance(rec_data, dict) else {},
+                    })
+        return specs
+
+    @staticmethod
+    def _records_header(name, variants, anchors, feathers, timestamps, records):
+        parts = [f"<b style='color:#2196F3;'>{name}</b>"]
+        if variants:
+            parts.append(f"Variants: {variants}")
+        parts.append(f"Anchors: {anchors}")
+        parts.append(f"Feathers: {feathers}")
+        parts.append(f"Records: {records}")
+        ts = sorted([str(t)[:19] for t in timestamps if t])
+        if ts:
+            parts.append(f"Time: {ts[0]} → {ts[-1]}")
+        lbl = QLabel(" &nbsp;|&nbsp; ".join(parts))
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setStyleSheet("font-size: 8pt; color: #aaa; padding: 6px; "
+                          "background-color: #1a1a2e; border: 1px solid #333;")
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _records_table(self, specs, show_identity=True) -> QWidget:
+        """Build ONE flat records table from row specs (identity/feather/role/
+        time/data), with a live search box. `Artifact` shows the feather (the
+        real artifact); `Time` is guaranteed non-empty when the anchor has one."""
+        from PyQt5.QtWidgets import QSizePolicy
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        search_box = QLineEdit()
+        search_box.setPlaceholderText("Search records...")
+        search_box.setStyleSheet("padding: 4px; font-size: 8pt;")
+        search_box.setMaximumHeight(30)
+        layout.addWidget(search_box)
+
+        # Union of record data fields (skip private/underscore keys).
+        all_keys = set()
+        for rs in specs:
+            d = rs.get('data')
+            if isinstance(d, dict):
+                all_keys.update(k for k in d.keys() if not str(k).startswith('_'))
+        data_cols = sorted(all_keys)
+        cols = (['Identity'] if show_identity else []) + ['Artifact', 'Time', 'Role'] + data_cols
+
+        table = QTableWidget()
+        table.setColumnCount(len(cols))
+        table.setHorizontalHeaderLabels(cols)
+        table.setRowCount(len(specs))
+        table.setAlternatingRowColors(True)
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+
+        for row, rs in enumerate(specs):
+            c = 0
+            if show_identity:
+                table.setItem(row, c, QTableWidgetItem(str(rs.get('identity', '')))); c += 1
+            table.setItem(row, c, QTableWidgetItem(str(rs.get('feather', '')))); c += 1
+            table.setItem(row, c, QTableWidgetItem(str(rs.get('time', '')))); c += 1
+            table.setItem(row, c, QTableWidgetItem(str(rs.get('role', 'secondary')).capitalize())); c += 1
+            d = rs.get('data') if isinstance(rs.get('data'), dict) else {}
+            for key in data_cols:
+                val = str(d.get(key, ''))
+                item = QTableWidgetItem(val[:80] + '...' if len(val) > 80 else val)
+                item.setToolTip(val)
+                table.setItem(row, c, item); c += 1
+
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        table.horizontalHeader().setStretchLastSection(True)
+
+        def filter_table(text):
+            text = (text or '').lower()
+            for r in range(table.rowCount()):
+                if not text:
+                    table.setRowHidden(r, False)
+                    continue
+                shown = False
+                for cc in range(table.columnCount()):
+                    it = table.item(r, cc)
+                    if it and text in it.text().lower():
+                        shown = True
+                        break
+                table.setRowHidden(r, not shown)
+        search_box.textChanged.connect(filter_table)
+
+        layout.addWidget(table, stretch=10)
+        return widget
+
     def _create_summary_tab(self, sub_identities: list, all_anchors: list, 
                             timestamps: list, feather_records: dict) -> QWidget:
         """Create Summary tab with identity overview."""
@@ -2219,7 +2571,9 @@ class IdentityDetailDialog(QDialog):
         table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         for row, rec in enumerate(records):
-            table.setItem(row, 0, QTableWidgetItem(str(rec.get('timestamp', ''))[:19]))
+            # Record's OWN timestamp only — never the anchor/match time
+            rec_time, _ = _extract_record_own_time(rec.get('data', {}))
+            table.setItem(row, 0, QTableWidgetItem(rec_time))
             table.setItem(row, 1, QTableWidgetItem(rec.get('artifact', '')))
             table.setItem(row, 2, QTableWidgetItem(rec.get('role', 'secondary').capitalize()))
             
@@ -2263,87 +2617,306 @@ class IdentityDetailDialog(QDialog):
         return widget
     
     def _create_sub_identity_tab(self, sub_identity: Dict) -> QWidget:
-        """Create tab content for a sub-identity."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(4, 4, 4, 4)
-        
-        # Header with sub-identity info
-        header = QLabel(f"<b>Original Name:</b> {sub_identity.get('original_name', 'Unknown')} | "
-                       f"<b>Anchors:</b> {len(sub_identity.get('anchors', []))} | "
-                       f"<b>Feathers:</b> {', '.join(sub_identity.get('feathers_found', []))}")
-        header.setStyleSheet("font-size: 8pt; color: #aaa; padding: 4px;")
-        layout.addWidget(header)
-        
-        # Create inner tabs for anchors
-        anchor_tabs = QTabWidget()
-        anchor_tabs.setStyleSheet("""
-            QTabBar::tab { 
-                font-size: 6pt; 
-                padding: 2px 8px; 
-                background-color: #1a1a2e;
-                color: #777;
-                border: 1px solid #333;
-            }
-            QTabBar::tab:selected { 
-                background-color: #2a3a5e; 
-                color: #ccc;
-            }
-        """)
-        
-        for i, anchor in enumerate(sub_identity.get('anchors', []), 1):
-            tab = self._create_anchor_table(anchor)
-            time = anchor.get('start_time', f'Anchor {i}')
-            if isinstance(time, str) and len(time) > 12:
-                time = time[11:19] if len(time) > 11 else time[:12]
-            anchor_tabs.addTab(tab, f"{time}")
-        
-        layout.addWidget(anchor_tabs)
-        return widget
-    
+        """Sub-identity content: a SINGLE table of every record across all its
+        anchors (no per-anchor inner tabs). Same layout as the identity view."""
+        name = sub_identity.get('original_name', 'Unknown')
+        anchors = sub_identity.get('anchors', []) or []
+        specs = self._row_specs_from_anchors(anchors, name)
+        timestamps = [a.get('start_time') for a in anchors
+                      if isinstance(a, dict) and a.get('start_time')]
+        feathers = sorted({s['feather'] for s in specs if s.get('feather')})
+
+        container = QWidget()
+        v = QVBoxLayout(container)
+        v.setContentsMargins(4, 4, 4, 4)
+        v.setSpacing(6)
+        v.addWidget(self._records_header(name, 0, len(anchors), len(feathers), timestamps, len(specs)))
+        v.addWidget(self._records_table(specs, show_identity=True), stretch=10)
+        return container
+
     def _create_anchor_table(self, anchor: Dict) -> QWidget:
-        """Create anchor evidence table."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        table = QTableWidget()
-        rows = anchor.get('evidence_rows', [])
-        
-        if rows:
-            all_keys = set()
-            for r in rows:
-                if 'data' in r and isinstance(r['data'], dict):
-                    all_keys.update(r['data'].keys())
-            
-            cols = ['Feather', 'Artifact', 'Time', 'Role'] + sorted(list(all_keys))[:6]
-            table.setColumnCount(len(cols))
-            table.setHorizontalHeaderLabels(cols)
-            table.setRowCount(len(rows))
-            
-            for row, ev in enumerate(rows):
-                table.setItem(row, 0, QTableWidgetItem(ev.get('feather_id', '')))
-                table.setItem(row, 1, QTableWidgetItem(ev.get('artifact', '')))
-                table.setItem(row, 2, QTableWidgetItem(str(ev.get('timestamp', ''))[:19]))
-                table.setItem(row, 3, QTableWidgetItem(ev.get('role', 'secondary').capitalize()))
-                
-                data = ev.get('data', {})
-                for col, key in enumerate(sorted(list(all_keys))[:6], 4):
-                    val = str(data.get(key, ''))[:60]
-                    item = QTableWidgetItem(val)
-                    item.setToolTip(str(data.get(key, '')))
-                    table.setItem(row, col, item)
-            
-            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-            table.horizontalHeader().setStretchLastSection(True)
-        
-        table.setAlternatingRowColors(True)
-        layout.addWidget(table)
-        return widget
+        """Anchor evidence table — one row per record. Reuses the shared records
+        table so it handles polymorphic `data` (dict/list/str) and a filled Time
+        column, and shows the feather as the Artifact."""
+        specs = []
+        for ev in (anchor.get('evidence_rows', []) or []):
+            if not isinstance(ev, dict):
+                continue
+            feather = _feather_base_name(ev.get('feather_id', ''))
+            role = ev.get('role', 'secondary')
+            for rec_data in _iter_record_dicts(ev):
+                specs.append({
+                    'feather': feather, 'role': role,
+                    'time': _record_display_time(ev, rec_data),
+                    'data': rec_data if isinstance(rec_data, dict) else {},
+                })
+        return self._records_table(specs, show_identity=False)
     
     def _create_anchor_content(self) -> QWidget:
-        """Create anchor content."""
-        return self._create_anchor_table(self.data)
-    
+        """Anchor content: the records inside the anchor, plus each record's
+        semantic mapping and which rule(s) it matched (and how)."""
+        from PyQt5.QtWidgets import QScrollArea
+
+        container = QWidget()
+        vlayout = QVBoxLayout(container)
+        vlayout.setSpacing(10)
+        vlayout.setContentsMargins(4, 4, 4, 4)
+
+        # 1) Records in this anchor (existing raw-record table)
+        records_group = QGroupBox("Records in this Anchor")
+        records_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 9pt; font-weight: bold; color: #aaa;
+                padding-top: 12px; margin-top: 8px;
+                border: 1px solid #333; background-color: #1a1a2e;
+            }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
+        """)
+        rg_layout = QVBoxLayout(records_group)
+        try:
+            rg_layout.addWidget(self._create_anchor_table(self.data))
+        except Exception as e:
+            logger.exception("[IdentityDetailDialog] anchor records table failed")
+            rg_layout.addWidget(QLabel(f"Could not render records: {e}"))
+        vlayout.addWidget(records_group)
+
+        # 2) Semantic mapping of the records + which rule(s) they matched
+        try:
+            vlayout.addWidget(self._create_rule_provenance_section(
+                self.data.get('semantic_data', {}),
+                self.data.get('evidence_rows', []),
+            ))
+        except Exception as e:
+            logger.exception("[IdentityDetailDialog] rule provenance section failed")
+            vlayout.addWidget(QLabel(f"Could not render semantic mapping / rules: {e}"))
+        vlayout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(container)
+        scroll.setStyleSheet("QScrollArea { border: none; background-color: #1a1a2e; }")
+        return scroll
+
+    @staticmethod
+    def _format_rule_conditions(rule: Dict) -> str:
+        """Render a matched rule's conditions in plain English:
+        IF a.b equals 'x' AND c.d contains 'y' THEN → "Semantic Value"."""
+        conds = [str(c) for c in (rule.get('conditions') or []) if c]
+        sv = rule.get('semantic_value', '')
+        if conds:
+            logic = rule.get('logic_operator', 'AND') or 'AND'
+            joined = f" {logic} ".join(conds)
+            return f'IF {joined} THEN → "{sv}"'
+        return f'→ "{sv}"'
+
+    @staticmethod
+    def _extract_semantic_mappings(semantic_data) -> list:
+        """Pull the anchor's display-level semantic mappings out of semantic_data,
+        handling every shape the engine writes: {field: {semantic_mappings:[...]}},
+        {field: {semantic_value: ...}}, and {field: 'value'}. These usually carry
+        NO technique_id, so `_collect_rule_results` (rules only) misses them — this
+        is what made the dialog say "no semantic mappings" when there were some."""
+        out = []
+        if not isinstance(semantic_data, dict):
+            return out
+        for field_name, field_info in semantic_data.items():
+            if not isinstance(field_name, str) or field_name.startswith('_'):
+                continue
+            if field_name in ('semantic_rule_results', 'identity_semantic_results'):
+                continue  # rule-result lists are rendered as "Matched rules"
+            if isinstance(field_info, dict) and isinstance(field_info.get('semantic_mappings'), list):
+                label = field_info.get('identity_type') or field_name
+                for m in field_info['semantic_mappings']:
+                    if isinstance(m, dict) and m.get('semantic_value'):
+                        out.append({
+                            'field': str(label),
+                            'semantic_value': str(m.get('semantic_value', '')),
+                            'rule_name': str(m.get('rule_name', '')),
+                            'category': str(m.get('category', '') or ''),
+                            'severity': str(m.get('severity', 'info') or 'info'),
+                            'confidence': m.get('confidence', ''),
+                        })
+            elif isinstance(field_info, dict) and field_info.get('semantic_value'):
+                out.append({
+                    'field': str(field_name),
+                    'semantic_value': str(field_info.get('semantic_value', '')),
+                    'rule_name': str(field_info.get('rule_name', '')),
+                    'category': str(field_info.get('category', '') or ''),
+                    'severity': str(field_info.get('severity', 'info') or 'info'),
+                    'confidence': field_info.get('confidence', ''),
+                })
+            elif isinstance(field_info, str) and field_info:
+                out.append({'field': str(field_name), 'semantic_value': field_info,
+                            'rule_name': '', 'category': '', 'severity': 'info', 'confidence': ''})
+        # dedup by (field, semantic_value, rule)
+        seen, uniq = set(), []
+        for m in out:
+            k = (m['field'], m['semantic_value'], m['rule_name'])
+            if k in seen:
+                continue
+            seen.add(k)
+            uniq.append(m)
+        return uniq
+
+    def _create_rule_provenance_section(self, semantic_data, evidence_rows=None) -> QWidget:
+        """Build the "Semantic Mapping & Matched Rules" group: the records'
+        field-level semantic mappings and the rule(s) that matched, with each
+        rule's conditions/logic shown in plain English."""
+        from PyQt5.QtWidgets import QTextEdit
+
+        group = QGroupBox("Semantic Mapping & Matched Rules")
+        group.setStyleSheet("""
+            QGroupBox {
+                font-size: 9pt; font-weight: bold; color: #2196F3;
+                padding-top: 12px; margin-top: 8px;
+                border: 2px solid #2196F3; background-color: #1a1a2e;
+            }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
+        """)
+        layout = QVBoxLayout(group)
+
+        # (0) Anchor-level semantic mappings — the primary "there IS a mapping"
+        # source, written onto anchor.semantic_data without a technique_id.
+        anchor_mappings = self._extract_semantic_mappings(semantic_data)
+        if anchor_mappings:
+            layout.addWidget(QLabel("<b>Semantic mappings</b>"))
+            amt = QTableWidget()
+            amt.setColumnCount(6)
+            amt.setHorizontalHeaderLabels(
+                ['Field', 'Semantic Value', 'Rule', 'Category', 'Severity', 'Confidence'])
+            amt.setRowCount(len(anchor_mappings))
+            for r, m in enumerate(anchor_mappings):
+                amt.setItem(r, 0, QTableWidgetItem(str(m.get('field', ''))))
+                amt.setItem(r, 1, QTableWidgetItem(str(m.get('semantic_value', ''))))
+                amt.setItem(r, 2, QTableWidgetItem(str(m.get('rule_name', ''))))
+                amt.setItem(r, 3, QTableWidgetItem(str(m.get('category', ''))))
+                sev = str(m.get('severity', 'info') or 'info')
+                sev_item = QTableWidgetItem(sev.upper())
+                if sev == 'high':
+                    sev_item.setForeground(QColor('#ff5252'))
+                elif sev == 'medium':
+                    sev_item.setForeground(QColor('#ffa726'))
+                else:
+                    sev_item.setForeground(QColor('#66bb6a'))
+                amt.setItem(r, 4, sev_item)
+                conf = m.get('confidence', '')
+                try:
+                    conf_str = f"{float(conf):.0%}"
+                except (TypeError, ValueError):
+                    conf_str = str(conf)
+                amt.setItem(r, 5, QTableWidgetItem(conf_str))
+            amt.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+            amt.horizontalHeader().setStretchLastSection(True)
+            amt.setAlternatingRowColors(True)
+            amt.setMaximumHeight(200)
+            layout.addWidget(amt)
+
+        # (a) Per-record field-level semantic mappings (the record's own mapping).
+        # A record's `data` may be a dict, a list of dicts, or a non-dict — never
+        # call .get() on it directly (that raised "'str'/'list' has no attribute
+        # 'get'"); expand it via _iter_record_dicts first.
+        field_rows = []  # (feather, field, raw, semantic)
+        for ev in (evidence_rows or []):
+            if not isinstance(ev, dict):
+                continue
+            feather = ev.get('feather_id', '')
+            for data in _iter_record_dicts(ev):
+                sm = data.get('_semantic_mappings') if isinstance(data, dict) else None
+                if isinstance(sm, dict):
+                    for field_name, info in sm.items():
+                        if isinstance(info, dict) and info.get('semantic_value'):
+                            raw = info.get('technical_value', data.get(field_name, ''))
+                            field_rows.append((
+                                feather, str(field_name),
+                                str(raw), str(info.get('semantic_value', '')),
+                            ))
+
+        if field_rows:
+            layout.addWidget(QLabel("<b>Record field mappings</b>"))
+            fmap = QTableWidget()
+            fmap.setColumnCount(4)
+            fmap.setHorizontalHeaderLabels(['Feather', 'Field', 'Raw Value', 'Semantic Value'])
+            fmap.setRowCount(len(field_rows))
+            for r, (feather, fld, raw, sem) in enumerate(field_rows):
+                fmap.setItem(r, 0, QTableWidgetItem(feather))
+                fmap.setItem(r, 1, QTableWidgetItem(fld))
+                fmap.setItem(r, 2, QTableWidgetItem(raw))
+                fmap.setItem(r, 3, QTableWidgetItem(sem))
+            fmap.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+            fmap.horizontalHeader().setStretchLastSection(True)
+            fmap.setAlternatingRowColors(True)
+            fmap.setMaximumHeight(180)
+            layout.addWidget(fmap)
+
+        # (b) Matched rules — dedup across the shapes _collect_rule_results returns
+        rules = []
+        seen = set()
+        for r in IdentityResultsView._collect_rule_results(semantic_data):
+            # Stringify conditions: some semantic-mapping shapes carry conditions
+            # as dicts, which are unhashable and would blow up the set membership.
+            key = (r.get('rule_id'), r.get('semantic_value'),
+                   tuple(str(c) for c in (r.get('conditions') or [])))
+            if key in seen:
+                continue
+            seen.add(key)
+            rules.append(r)
+
+        if rules:
+            layout.addWidget(QLabel("<b>Matched rules</b>"))
+            rtable = QTableWidget()
+            rtable.setColumnCount(6)
+            rtable.setHorizontalHeaderLabels([
+                'Rule', 'Semantic Value', 'Category', 'Severity', 'Confidence', 'MITRE'
+            ])
+            rtable.setRowCount(len(rules))
+            for r, rule in enumerate(rules):
+                rtable.setItem(r, 0, QTableWidgetItem(str(rule.get('rule_name', ''))))
+                rtable.setItem(r, 1, QTableWidgetItem(str(rule.get('semantic_value', ''))))
+                rtable.setItem(r, 2, QTableWidgetItem(str(rule.get('category', ''))))
+
+                severity = str(rule.get('severity', 'info') or 'info')
+                sev_item = QTableWidgetItem(severity.upper())
+                if severity == 'high':
+                    sev_item.setForeground(QColor('#ff5252'))
+                elif severity == 'medium':
+                    sev_item.setForeground(QColor('#ffa726'))
+                else:
+                    sev_item.setForeground(QColor('#66bb6a'))
+                rtable.setItem(r, 3, sev_item)
+
+                conf = rule.get('confidence', 0)
+                try:
+                    conf_str = f"{float(conf):.0%}"
+                except (TypeError, ValueError):
+                    conf_str = str(conf)
+                rtable.setItem(r, 4, QTableWidgetItem(conf_str))
+
+                mitre = ", ".join(str(t) for t in (rule.get('technique_id') or []))
+                rtable.setItem(r, 5, QTableWidgetItem(mitre))
+            rtable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+            rtable.horizontalHeader().setStretchLastSection(True)
+            rtable.setAlternatingRowColors(True)
+            rtable.setMaximumHeight(180)
+            layout.addWidget(rtable)
+
+            # How each rule matched — conditions in plain English
+            layout.addWidget(QLabel("<b>How it matched</b>"))
+            explain = QTextEdit()
+            explain.setReadOnly(True)
+            explain.setMaximumHeight(150)
+            explain.setPlainText("\n".join(
+                f"• {rule.get('rule_name', '(rule)')}: {self._format_rule_conditions(rule)}"
+                for rule in rules
+            ))
+            layout.addWidget(explain)
+
+        if not anchor_mappings and not field_rows and not rules:
+            layout.addWidget(QLabel(
+                "No semantic mappings or rule matches were recorded for this anchor."
+            ))
+
+        return group
+
     def _create_evidence_content(self) -> QWidget:
         """Create evidence content with semantic mappings and feather records in table format."""
         widget = QWidget()
@@ -2356,26 +2929,33 @@ class IdentityDetailDialog(QDialog):
         # Expected format: {'feather_records': {'X': {...}}, 'semantic_data': {...}}
         
         feather_id = self.data.get('feather_id', 'Unknown')
-        feather_data = self.data.get('data', {})
-        semantic_info = self.data.get('semantic_info', {})
-        
+        feather_data = self.data.get('data', {}) or {}
+
         # Build feather_records dict
         feather_records = {feather_id: feather_data} if feather_data else {}
-        
-        # Build semantic_data dict (transform semantic_info to semantic_data structure)
+
+        # Build semantic_data from the record's OWN field-level mappings, which
+        # the engine stores under data['_semantic_mappings'] (field -> {semantic_value,
+        # technical_value, category, severity, confidence, ...}). The old code read a
+        # non-existent 'semantic_info' key, so this section never rendered for records.
         semantic_data = {}
-        if semantic_info:
-            # semantic_info is a flat dict, wrap it in the expected structure
-            semantic_data[feather_id] = {
-                'identity_type': feather_id,
-                'semantic_mappings': [{
-                    'semantic_value': str(v),
-                    'rule_name': k,
-                    'category': 'Unknown',
-                    'confidence': 1.0,
-                    'severity': 'info'
-                } for k, v in semantic_info.items() if v]
-            }
+        record_mappings = feather_data.get('_semantic_mappings') if isinstance(feather_data, dict) else None
+        if isinstance(record_mappings, dict) and record_mappings:
+            mapping_rows = []
+            for field_name, info in record_mappings.items():
+                if isinstance(info, dict) and info.get('semantic_value'):
+                    mapping_rows.append({
+                        'semantic_value': str(info.get('semantic_value', '')),
+                        'rule_name': str(info.get('rule_name', field_name)),
+                        'category': str(info.get('category', 'Unknown') or 'Unknown'),
+                        'confidence': info.get('confidence', 1.0),
+                        'severity': str(info.get('severity', 'info') or 'info'),
+                    })
+            if mapping_rows:
+                semantic_data[feather_id] = {
+                    'identity_type': feather_id,
+                    'semantic_mappings': mapping_rows,
+                }
         
         # Determine if we have semantic data and feather records to display
         has_semantic_data = bool(semantic_data and isinstance(semantic_data, dict))
@@ -2424,7 +3004,11 @@ class IdentityDetailDialog(QDialog):
                         semantic_table.setItem(row, 3, QTableWidgetItem(mapping.get('category', '')))
                         
                         confidence = mapping.get('confidence', 0)
-                        conf_item = QTableWidgetItem(f"{confidence:.0%}")
+                        try:
+                            conf_str = f"{float(confidence):.0%}"
+                        except (TypeError, ValueError):
+                            conf_str = str(confidence)
+                        conf_item = QTableWidgetItem(conf_str)
                         semantic_table.setItem(row, 4, conf_item)
                         
                         severity = mapping.get('severity', 'info')

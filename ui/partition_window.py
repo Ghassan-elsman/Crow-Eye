@@ -147,7 +147,10 @@ class PartitionVisualizationWidget(QWidget):
         # Disk header
         header_layout = QHBoxLayout()
         
-        disk_label = QLabel(f"💾 Disk {self.disk.disk_index}: {self.disk.model}")
+        from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+        disk_label = QLabel(
+            f'<img src="{CrowEyeIcons.icon_path("disk")}" width="14" height="14"> '
+            f'Disk {self.disk.disk_index}: {self.disk.model}')
         disk_label.setStyleSheet("""
             QLabel {
                 color: #00FFFF;
@@ -460,7 +463,9 @@ class PartitionWindow(QDialog):
         main_layout.addWidget(self.disk_viz_scroll, 1)
         
         # Partition details table
-        table_label = QLabel("📊 Partition Details")
+        from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+        table_label = QLabel(
+            f'<img src="{CrowEyeIcons.icon_path("chart")}" width="14" height="14"> Partition Details')
         table_label.setStyleSheet("""
             QLabel {
                 color: #00FFFF;
@@ -728,7 +733,9 @@ class PartitionWindow(QDialog):
             self.loading_label.deleteLater()
             self.loading_label = None
 
-        error_label = QLabel(f"❌ Error loading partition data: {error_msg}")
+        from correlation_engine.gui.crow_eye_icons import apply_status_to_label
+        error_label = QLabel()
+        apply_status_to_label(error_label, "ERROR", f"Error loading partition data: {error_msg}")
         error_label.setStyleSheet("""
             QLabel {
                 color: #EF4444;

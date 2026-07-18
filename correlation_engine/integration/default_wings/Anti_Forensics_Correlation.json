@@ -124,7 +124,9 @@
       "logic_operator": "AND",
       "scope": "wing",
       "category": "anti_forensics",
-      "severity": "critical"
+      "severity": "critical",
+      "technique_id": ["T1070.001"],
+      "tactic": ["defense-evasion"]
     },
     {
       "rule_id": "af_system_log_cleared",
@@ -168,16 +170,20 @@
     },
     {
       "rule_id": "af_mass_delete",
-      "name": "Mass Delete in USN Journal",
+      "name": "Mass Delete Burst in USN Journal (Threshold)",
       "semantic_value": "Mass File Deletion",
-      "description": "Burst of FILE_DELETE | CLOSE entries in USN — characteristic of cleanup activity",
-      "conditions": [
-        { "feather_id": "mft_usn", "field_name": "reason", "operator": "contains", "value": "FILE_DELETE" }
-      ],
-      "logic_operator": "AND",
+      "description": "A genuine burst of >=20 FILE_DELETE entries in USN within 5 minutes — characteristic of cleanup activity. Uses a threshold rule so a single deletion no longer trips the signal.",
+      "rule_type": "threshold",
+      "threshold": {
+        "condition": { "feather_id": "mft_usn", "field_name": "reason", "operator": "contains", "value": "FILE_DELETE" },
+        "min_count": 20,
+        "within_minutes": 5
+      },
       "scope": "wing",
       "category": "anti_forensics",
-      "severity": "high"
+      "severity": "high",
+      "technique_id": ["T1070.004", "T1485"],
+      "tactic": ["defense-evasion", "impact"]
     },
     {
       "rule_id": "af_defender_tamper",

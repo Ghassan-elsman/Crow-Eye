@@ -80,8 +80,10 @@ class CloudAPIWarningDialog(QDialog):
         layout.setSpacing(20)
         
         # Warning icon
-        warning_icon = QLabel("⚠️")
-        warning_icon.setStyleSheet("font-size: 48px; background: transparent;")
+        from correlation_engine.gui.crow_eye_icons import apply_status_to_label
+        warning_icon = QLabel()
+        apply_status_to_label(warning_icon, "warning", "", size_px=48)
+        warning_icon.setStyleSheet("background: transparent;")
         warning_icon.setAlignment(Qt.AlignCenter)
         layout.addWidget(warning_icon)
         
@@ -245,7 +247,32 @@ class OnboardingWizard(QDialog):
         """)
         self.diag_button.clicked.connect(self._on_run_diagnostics)
         nav_layout.addWidget(self.diag_button)
-        
+
+        # Import external evidence (SQLite / CSV / JSON) — second entry point for
+        # the same import flow exposed on the Eye's top bar. Reuses the parent
+        # EyeWindow handler so there is a single implementation.
+        self.import_evidence_button = QPushButton("Import Evidence")
+        self.import_evidence_button.setFixedHeight(40)
+        self.import_evidence_button.setMinimumWidth(140)
+        self.import_evidence_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4B5563;
+                color: #E5E7EB;
+                border: 1px solid #6B7280;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #374151;
+                border-color: #9CA3AF;
+            }
+        """)
+        self.import_evidence_button.setToolTip(
+            "Import external forensics evidence (SQLite, CSV or JSON) into the open case")
+        self.import_evidence_button.clicked.connect(self._on_import_evidence)
+        nav_layout.addWidget(self.import_evidence_button)
+
         nav_layout.addStretch()
         
         self.back_button = QPushButton("Back")
@@ -490,7 +517,7 @@ class OnboardingWizard(QDialog):
             "Public Cloud APIs",
             "Use cloud-based AI services. Requires internet connection and API keys.",
             "Supports: OpenAI, Anthropic, Google Gemini",
-            warning="⚠️ Using Cloud APIs means transmitting case data over the internet. Organizational approval may be required."
+            warning="Using Cloud APIs means transmitting case data over the internet. Organizational approval may be required."
         )
         layout.addWidget(cloud_group)
         
@@ -732,7 +759,9 @@ class OnboardingWizard(QDialog):
         
         # Add "Detect Models" button for cloud API model name field
         if key == "model_name" and self.config.get("integration_type") == "cloud_api":
-            detect_button = QPushButton("🔍 Detect Available Models")
+            from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+            detect_button = QPushButton("Detect Available Models")
+            detect_button.setIcon(CrowEyeIcons.search())
             detect_button.setStyleSheet("""
                 QPushButton {
                     background-color: #0EA5E9;
@@ -755,7 +784,8 @@ class OnboardingWizard(QDialog):
 
             # Offline quick-pick of current curated models (e.g. the latest
             # Claude IDs) — no API key or network round-trip required.
-            common_button = QPushButton("📋 Common Models")
+            common_button = QPushButton("Common Models")
+            common_button.setIcon(CrowEyeIcons.clipboard())
             common_button.setStyleSheet("""
                 QPushButton {
                     background-color: #334155;
@@ -890,7 +920,7 @@ class OnboardingWizard(QDialog):
                 self,
                 "No Built-in List",
                 f"No built-in model list for {(backend or 'this backend').replace('_', ' ').title()}.\n\n"
-                "Use '🔍 Detect Available Models' to fetch the live list from the API."
+                "Use 'Detect Available Models' to fetch the live list from the API."
             )
             return
         self._show_model_selection_dialog(
@@ -986,9 +1016,11 @@ class OnboardingWizard(QDialog):
         
         # Add recommended models first
         if recommended:
+            from PyQt5.QtWidgets import QListWidgetItem
+            from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
             for model in recommended:
                 if model in models:
-                    model_list.addItem(f"⭐ {model} (Recommended)")
+                    model_list.addItem(QListWidgetItem(CrowEyeIcons.star(), f"{model} (Recommended)"))
                     models.remove(model)
         
         # Add remaining models
@@ -1007,8 +1039,8 @@ class OnboardingWizard(QDialog):
             selected_items = model_list.selectedItems()
             if selected_items:
                 selected_model = selected_items[0].text()
-                # Remove "⭐ " and " (Recommended)" if present
-                selected_model = selected_model.replace("⭐ ", "").replace(" (Recommended)", "")
+                # Strip the " (Recommended)" suffix if present
+                selected_model = selected_model.replace(" (Recommended)", "")
                 
                 # Update model name input field
                 if "model_name" in self.input_widgets:
@@ -1075,6 +1107,17 @@ class OnboardingWizard(QDialog):
             )
             return False
     
+    def _on_import_evidence(self):
+        """Delegate to the main Eye window's evidence-import flow (single shared path)."""
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_on_add_evidence"):
+            parent._on_add_evidence()
+        else:
+            QMessageBox.information(
+                self, "Import Evidence",
+                "Open a case in the Eye first, then import external evidence."
+            )
+
     def _on_run_diagnostics(self):
         """Perform system diagnostics and show results."""
         from eye.services.diagnostics import SystemDiagnostics

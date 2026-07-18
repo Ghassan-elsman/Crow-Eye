@@ -104,7 +104,9 @@
       "logic_operator": "AND",
       "scope": "wing",
       "category": "lateral_movement",
-      "severity": "high"
+      "severity": "high",
+      "technique_id": ["T1021"],
+      "tactic": ["lateral-movement"]
     },
     {
       "rule_id": "lat_remote_tool_run",
@@ -146,7 +148,9 @@
       "logic_operator": "AND",
       "scope": "wing",
       "category": "lateral_movement",
-      "severity": "critical"
+      "severity": "critical",
+      "technique_id": ["T1021.002", "T1570"],
+      "tactic": ["lateral-movement"]
     },
     {
       "rule_id": "lat_admin_share_drop",
@@ -160,6 +164,26 @@
       "scope": "wing",
       "category": "lateral_movement",
       "severity": "high"
+    },
+    {
+      "rule_id": "lat_ordered_chain",
+      "name": "Ordered Lateral Chain (Sequence)",
+      "semantic_value": "Ordered Lateral Movement",
+      "description": "Network/RDP logon (4624) → remote-admin tool execution (prefetch) → admin-share file drop (MFT/USN), in that order and within the gap — a full lateral-movement kill-chain. Identity engine only.",
+      "rule_type": "sequence",
+      "sequence": {
+        "max_gap_minutes": 60,
+        "steps": [
+          { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4624" },
+          { "feather_id": "prefetch", "field_name": "executable_name", "operator": "regex", "value": "\\b(?:psexec|paexec|wmic|winrs|winrm|mstsc|smbexec|wmiexec|atexec)\\b" },
+          { "feather_id": "mft_usn", "field_name": "path", "operator": "contains", "value": "$" }
+        ]
+      },
+      "scope": "wing",
+      "category": "lateral_movement",
+      "severity": "critical",
+      "technique_id": ["T1021", "T1570"],
+      "tactic": ["lateral-movement"]
     }
   ],
 

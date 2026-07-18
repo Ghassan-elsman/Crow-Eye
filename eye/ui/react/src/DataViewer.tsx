@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { DataViewerProps } from './types';
+import { IconBucket } from './Icons';
 import './DataViewer.css';
 
 const DataViewer: React.FC<DataViewerProps> = ({
@@ -234,8 +235,9 @@ const DataViewer: React.FC<DataViewerProps> = ({
         <button className="export-button" onClick={exportToCSV}>
           Export CSV
         </button>
-        <button className="bucket-button" onClick={addAllToReport} title="Add all results to the report bucket">
-          🪣 Add All to Report
+        <button className="bucket-button" onClick={addAllToReport} title="Add all results to the report bucket"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <IconBucket size={14} /> Add All to Report
         </button>
       </div>
 
@@ -267,7 +269,7 @@ const DataViewer: React.FC<DataViewerProps> = ({
                     onClick={() => addToReport(row)}
                     title="Add this row to report bucket"
                   >
-                    🪣
+                    <IconBucket size={14} />
                   </button>
                 </td>
                 {columns.map(column => {

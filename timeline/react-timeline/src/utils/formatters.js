@@ -125,19 +125,21 @@ export function xToTime(x, rangeStart, pxPerHour) {
   return new Date(s + ms).toISOString();
 }
 
-/** Artifact type display configuration */
+/** Artifact type display configuration. `icon` is a name resolved by
+ *  components/Icons.jsx `LaneIcon` (inline SVG), not an emoji. */
 export const ARTIFACT_CONFIG = {
-  sessions:   { label: 'Sessions / Power', color: '#06b6d4', icon: '⚡' },
-  srum_app:   { label: 'SRUM App Usage',   color: '#3b82f6', icon: '📊' },
-  srum_net:   { label: 'SRUM Network',     color: '#8b5cf6', icon: '🌐' },
-  mft_usn:    { label: 'MFT / USN',        color: '#ec4899', icon: '📁' },
-  prefetch:   { label: 'Prefetch',         color: '#f59e0b', icon: '🔄' },
-  lnk:        { label: 'LNK / Jump Lists', color: '#2ecc71', icon: '🔗' },
-  bam:        { label: 'BAM',             color: '#e67e22', icon: '⚙️' },
-  registry:   { label: 'Registry',         color: '#9b59b6', icon: '🔑' },
-  amcache:    { label: 'AmCache',          color: '#10b981', icon: '📋' },
-  shimcache:  { label: 'ShimCache',        color: '#14b8a6', icon: '🗂️' },
-  recyclebin: { label: 'Recycle Bin',      color: '#ef4444', icon: '🗑️' },
+  sessions:   { label: 'Sessions / Power', color: '#06b6d4', icon: 'power' },
+  srum_app:   { label: 'SRUM App Usage',   color: '#3b82f6', icon: 'barChart' },
+  srum_net:   { label: 'SRUM Network',     color: '#8b5cf6', icon: 'globe' },
+  mft_usn:    { label: 'MFT / USN',        color: '#ec4899', icon: 'files' },
+  prefetch:   { label: 'Prefetch',         color: '#f59e0b', icon: 'refresh' },
+  lnk:        { label: 'LNK / Jump Lists', color: '#2ecc71', icon: 'link' },
+  bam:        { label: 'BAM',             color: '#e67e22', icon: 'gear' },
+  registry:   { label: 'Registry',         color: '#9b59b6', icon: 'key' },
+  amcache:    { label: 'AmCache',          color: '#10b981', icon: 'clipboard' },
+  shimcache:  { label: 'ShimCache',        color: '#14b8a6', icon: 'archive' },
+  recyclebin: { label: 'Recycle Bin',      color: '#ef4444', icon: 'trash' },
+  imported:   { label: 'Imported Evidence', color: '#64748b', icon: 'inbox' },
 };
 
 /**

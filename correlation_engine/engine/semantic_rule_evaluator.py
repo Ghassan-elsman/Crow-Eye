@@ -17,6 +17,8 @@ import logging
 import sqlite3
 import re
 import os
+from datetime import datetime, timedelta
+from collections import defaultdict
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,7 +41,12 @@ class SemanticMatchResult:
     category: str
     severity: str
     scope: str # global, wing, pipeline
-    
+    # Evaluation strategy that produced this match (match/absence/threshold/sequence)
+    rule_type: str = "match"
+    # Structured MITRE ATT&CK mapping carried through from the rule
+    technique_id: List[str] = field(default_factory=list)
+    tactic: List[str] = field(default_factory=list)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -52,7 +59,10 @@ class SemanticMatchResult:
             'confidence': self.confidence,
             'category': self.category,
             'severity': self.severity,
-            'scope': self.scope
+            'scope': self.scope,
+            'rule_type': self.rule_type,
+            'technique_id': list(self.technique_id),
+            'tactic': list(self.tactic),
         }
 
 
@@ -297,15 +307,33 @@ class QueryBuilder:
         if not rule.conditions:
             logger.debug(f"Rule '{rule.rule_id}' has no conditions - cannot translate")
             return False
-        
+
+        # Advanced rule types (sequence / absence / threshold) and nested
+        # condition groups are handled by dedicated in-memory evaluators, not
+        # by the flat single-table SQL builder. Force the in-memory path.
+        if getattr(rule, 'rule_type', 'match') != 'match':
+            logger.debug(f"Rule '{rule.rule_id}' has rule_type '{rule.rule_type}' - cannot translate")
+            return False
+        if getattr(rule, 'condition_groups', None):
+            logger.debug(f"Rule '{rule.rule_id}' has condition_groups - cannot translate")
+            return False
+
         # Check logic operator is supported (only AND/OR at single level)
         logic_operator = rule.logic_operator.upper()
         if logic_operator not in ['AND', 'OR']:
             logger.debug(f"Rule '{rule.rule_id}' has unsupported logic operator '{logic_operator}' - cannot translate")
             return False
-        
+
         # Check each condition
         for condition in rule.conditions:
+            # Advanced conditions are only fully supported in-memory:
+            # cross-feather comparison spans separate SQLite feather files, and
+            # condition-level negation needs NULL-aware inversion. Fall back to
+            # keep SQL and in-memory results identical (operator parity).
+            if getattr(condition, 'negate', False) or getattr(condition, 'compare_to_feather', None):
+                logger.debug(f"Rule '{rule.rule_id}' has advanced condition (negate/cross-feather) - cannot translate")
+                return False
+
             # Check if operator is supported
             if condition.operator not in self.operator_map and condition.operator != 'wildcard':
                 logger.debug(f"Rule '{rule.rule_id}' has unsupported operator '{condition.operator}' - cannot translate")
@@ -827,7 +855,10 @@ class ParallelFeatherProcessor:
                         confidence=rule.confidence,
                         category=rule.category,
                         severity=rule.severity,
-                        scope=rule.scope
+                        scope=rule.scope,
+                        rule_type=getattr(rule, 'rule_type', 'match'),
+                        technique_id=list(getattr(rule, 'technique_id', []) or []),
+                        tactic=list(getattr(rule, 'tactic', []) or []),
                     )
                     
                     matched_results.append(result)
@@ -984,10 +1015,28 @@ class SemanticRuleEvaluator:
         
         return rules
     
+    @staticmethod
+    def _rule_is_advanced(rule: Any) -> bool:
+        """True if a rule needs Identity-engine-only capability: an advanced
+        ``rule_type`` (absence/sequence/threshold), nested ``condition_groups``,
+        or a condition using ``negate`` / cross-feather compare. Mirrors
+        ``WingConfig.semantic_rules_are_advanced`` but for SemanticRule objects.
+        The Time-Window engine evaluates one representative row per feather and
+        cannot express multi-row / ordered / absence logic."""
+        if getattr(rule, 'rule_type', 'match') != 'match':
+            return True
+        if getattr(rule, 'condition_groups', None):
+            return True
+        for cond in getattr(rule, 'conditions', []) or []:
+            if getattr(cond, 'negate', False) or getattr(cond, 'compare_to_feather', None):
+                return True
+        return False
+
     def evaluate_identity(self, identity_data: Dict[str, Any],
                          wing_id: Optional[str] = None,
                          pipeline_id: Optional[str] = None,
-                         wing_rules: Optional[List[Dict]] = None) -> List[SemanticMatchResult]:
+                         wing_rules: Optional[List[Dict]] = None,
+                         allow_advanced: bool = True) -> List[SemanticMatchResult]:
         """
         Evaluate all semantic rules against an identity's data using two-tier evaluation strategy.
         
@@ -1031,13 +1080,43 @@ class SemanticRuleEvaluator:
         if not rules:
             logger.debug("No rules found for evaluation context")
             return []
-        
+
         logger.debug(f"Evaluating {len(rules)} rules for identity")
-        
+
+        # Time-Window engine guard: advanced rules (absence/sequence/threshold,
+        # nested condition_groups, negate / cross-feather conditions) need the
+        # full multi-row window that only the Identity engine assembles. On the
+        # match-based path they would see one representative row per feather and
+        # misfire — e.g. an absence rule reporting evidence "missing" merely
+        # because a single match didn't include that feather. Skip them here so
+        # the Time-Window engine never produces spurious advanced-rule findings.
+        if not allow_advanced:
+            advanced_skipped = [r for r in rules if self._rule_is_advanced(r)]
+            if advanced_skipped:
+                logger.debug(
+                    f"Skipping {len(advanced_skipped)} advanced semantic rule(s) on the "
+                    f"match-based (Time-Window) path; these are Identity-engine-only.")
+                rules = [r for r in rules if not self._rule_is_advanced(r)]
+
+        # Step 1b: Peel off advanced rules (sequence/absence/threshold). These
+        # use dedicated window-scoped evaluators rather than the match split.
+        advanced_rules = [r for r in rules if getattr(r, 'rule_type', 'match') != 'match']
+        rules = [r for r in rules if getattr(r, 'rule_type', 'match') == 'match']
+
+        advanced_results: List[SemanticMatchResult] = []
+        for rule in advanced_rules:
+            res = self._evaluate_advanced_rule(identity_data, rule)
+            if res:
+                advanced_results.append(res)
+        if advanced_rules:
+            logger.debug(
+                f"Advanced rule evaluation: {len(advanced_results)} matched "
+                f"out of {len(advanced_rules)} ({len(rules)} match-rules remain)")
+
         # Step 2: Separate rules into identity-level and feather-level
         identity_level_rules = []
         feather_level_rules = []
-        
+
         for rule in rules:
             if not rule.conditions:
                 logger.debug(f"Rule '{rule.rule_id}' has no conditions, skipping")
@@ -1100,12 +1179,12 @@ class SemanticRuleEvaluator:
                 )
                 logger.debug(f"Feather-level fallback evaluation: {len(feather_results)} rules matched")
         
-        # Step 5: Combine results from both evaluation tiers
-        matched_results = identity_results + feather_results
-        
+        # Step 5: Combine results from all evaluation tiers
+        matched_results = identity_results + feather_results + advanced_results
+
         # Step 6: Update statistics
-        # Count total rules evaluated (both tiers)
-        total_evaluated = len(identity_level_rules) + len(feather_level_rules)
+        # Count total rules evaluated (all tiers)
+        total_evaluated = len(identity_level_rules) + len(feather_level_rules) + len(advanced_rules)
         self.statistics.total_rules_evaluated += total_evaluated
         
         # Count matched rules
@@ -1686,7 +1765,10 @@ class SemanticRuleEvaluator:
                         confidence=rule.confidence,
                         category=rule.category,
                         severity=rule.severity,
-                        scope=rule.scope
+                        scope=rule.scope,
+                        rule_type=getattr(rule, 'rule_type', 'match'),
+                        technique_id=list(getattr(rule, 'technique_id', []) or []),
+                        tactic=list(getattr(rule, 'tactic', []) or []),
                     )
                     matched_results.append(result)
                     
@@ -1711,7 +1793,406 @@ class SemanticRuleEvaluator:
         
         return matched_results
     
-    def _evaluate_identity_level_rules(self, identity_data: Dict[str, Any], 
+    # =========================================================================
+    # ADVANCED RULE EVALUATION (absence / threshold / sequence)
+    #
+    # These evaluators operate over the *window-scoped rows* already attached
+    # to an identity (anchors + evidence_rows), so they respect the time window
+    # the correlation engine grouped by, need no extra DB round-trips, and carry
+    # per-row timestamps for ordering/counting. They are dispatched from
+    # evaluate_identity ahead of the ordinary match split.
+    # =========================================================================
+
+    # Field names commonly carrying an event/artifact timestamp, in priority order.
+    _TS_FIELD_CANDIDATES = (
+        'timestamp', 'time_utc', 'event_time', 'event_time_utc', 'event_timestamp',
+        'time_created', 'datetime', 'date_time', 'created', 'created_time', 'creation_time',
+        'run_time', 'last_run', 'last_run_time', 'last_executed', 'first_run',
+        'run_count_time', 'execution_time', 'exec_time', 'logged',
+        'access_time', 'last_access', 'write_time', 'last_write_time', 'key_last_write',
+        'modified_time', 'last_modified', 'source_created', 'date', 'time',
+    )
+    _TS_FORMATS = (
+        '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f',
+        '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M', '%m/%d/%Y %H:%M:%S',
+        '%Y-%m-%d',
+    )
+
+    @classmethod
+    def _parse_ts(cls, value: Any) -> Optional[datetime]:
+        """Best-effort parse of a timestamp value into a naive datetime."""
+        if value is None or value == '':
+            return None
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None)
+        s = str(value).strip()
+        # Numeric epoch (seconds or milliseconds)
+        try:
+            num = float(s)
+            if num > 1e12:  # milliseconds
+                num /= 1000.0
+            if num > 1e8:   # plausible epoch seconds
+                return datetime.utcfromtimestamp(num)
+        except (ValueError, TypeError, OSError, OverflowError):
+            pass
+        cleaned = s.replace('Z', '').replace('T', ' ').strip()
+        # ISO first
+        try:
+            return datetime.fromisoformat(cleaned)
+        except (ValueError, TypeError):
+            pass
+        for fmt in cls._TS_FORMATS:
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except (ValueError, TypeError):
+                continue
+        return None
+
+    def _row_ts(self, row: Dict[str, Any]) -> Optional[datetime]:
+        """Extract a comparable timestamp from a record, trying common fields."""
+        if not isinstance(row, dict):
+            return None
+        for field_name in self._TS_FIELD_CANDIDATES:
+            val = SemanticCondition._smart_field_lookup(row, field_name)
+            ts = self._parse_ts(val)
+            if ts is not None:
+                return ts
+        return None
+
+    def _build_rows_from_identity(self, identity_data: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Build a multi-row record set (feather_id -> [row, ...]) from identity data.
+
+        Unlike _build_records_from_identity (one representative row per feather),
+        this keeps *every* evidence row so absence/threshold/sequence rules can
+        count and order occurrences within the identity's window.
+        """
+        rows: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+        def add(fid: str, data: Any):
+            if fid and isinstance(data, dict):
+                rows[fid].append(data)
+
+        def walk_anchor(anchor: Dict[str, Any]):
+            if not isinstance(anchor, dict):
+                return
+            fid = anchor.get('feather_id', '')
+            add(fid, anchor)
+            for ev in anchor.get('evidence_rows', []) or []:
+                if isinstance(ev, dict):
+                    add(ev.get('feather_id', fid), ev.get('data', ev))
+
+        for anchor in identity_data.get('anchors', []) or []:
+            walk_anchor(anchor)
+        for sub in identity_data.get('sub_identities', []) or []:
+            if isinstance(sub, dict):
+                for anchor in sub.get('anchors', []) or []:
+                    walk_anchor(anchor)
+        for ev in identity_data.get('evidence', []) or []:
+            if isinstance(ev, dict):
+                add(ev.get('feather_id', ''), ev.get('data', ev))
+        for fid, rec in (identity_data.get('feather_records', {}) or {}).items():
+            if isinstance(rec, dict):
+                add(fid, rec)
+
+        return dict(rows)
+
+    @staticmethod
+    def _cond(spec: Dict[str, Any]) -> SemanticCondition:
+        """Parse a condition spec dict into a SemanticCondition."""
+        return SemanticCondition.from_dict(spec)
+
+    @staticmethod
+    def _step_conditions(step: Dict[str, Any]) -> List[SemanticCondition]:
+        """A sequence step is either a single condition or {conditions:[...]}."""
+        if not isinstance(step, dict):
+            return []
+        if 'conditions' in step:
+            return [SemanticCondition.from_dict(c) for c in step.get('conditions', [])]
+        if 'feather_id' in step and 'field_name' in step:
+            return [SemanticCondition.from_dict(step)]
+        return []
+
+    def _rows_matching(self, cond: SemanticCondition,
+                       rows: Dict[str, List[Dict[str, Any]]],
+                       first: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """All rows in cond's feather that satisfy the condition."""
+        return [r for r in rows.get(cond.feather_id, []) if cond.matches(r, first)]
+
+    @staticmethod
+    def _first_records(rows: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+        """One representative row per feather (for cross-feather RHS resolution)."""
+        return {fid: (lst[0] if lst else {}) for fid, lst in rows.items()}
+
+    def _make_advanced_result(self, rule: SemanticRule,
+                              matched_feathers: List[str],
+                              condition_strs: List[str]) -> SemanticMatchResult:
+        """Build a SemanticMatchResult for an advanced rule match."""
+        return SemanticMatchResult(
+            rule_id=rule.rule_id,
+            rule_name=rule.name,
+            semantic_value=rule.semantic_value,
+            logic_operator=rule.logic_operator,
+            matched_feathers=list(dict.fromkeys(matched_feathers)),
+            conditions=condition_strs,
+            confidence=rule.confidence,
+            category=rule.category,
+            severity=rule.severity,
+            scope=rule.scope,
+            rule_type=rule.rule_type,
+            technique_id=list(getattr(rule, 'technique_id', []) or []),
+            tactic=list(getattr(rule, 'tactic', []) or []),
+        )
+
+    def _count_within_window(self, rows: List[Dict[str, Any]],
+                             within_minutes: Optional[float]) -> int:
+        """
+        Maximum number of rows falling inside any within_minutes window.
+
+        If no window is given, or timestamps are unavailable, the raw count is
+        used (degrade gracefully rather than under-report).
+        """
+        if not within_minutes:
+            return len(rows)
+        times = sorted(t for t in (self._row_ts(r) for r in rows) if t is not None)
+        if len(times) < 2:
+            return len(rows)  # not enough timing info to window
+        window = timedelta(minutes=float(within_minutes))
+        best = 1
+        start = 0
+        for end in range(len(times)):
+            while times[end] - times[start] > window:
+                start += 1
+            best = max(best, end - start + 1)
+        return best
+
+    def _evaluate_absence_rule(self, identity_data: Dict[str, Any],
+                               rule: SemanticRule) -> Optional[SemanticMatchResult]:
+        """
+        Fire when expected evidence is present but required-absent evidence is
+        missing within the window — the core stealth primitive
+        (e.g. execution recorded in AmCache/EventLog but no Prefetch entry).
+        """
+        spec = rule.absence or {}
+        rows = self._build_rows_from_identity(identity_data)
+        first = self._first_records(rows)
+        try:
+            expect = [self._cond(s) for s in spec.get('expect_present', [])]
+            absent = [self._cond(s) for s in spec.get('require_absent', [])]
+        except ValueError as e:
+            logger.warning(f"Absence rule '{rule.rule_id}' has an invalid condition: {e}")
+            return None
+        if not absent:
+            return None  # nothing to assert absent
+
+        within = spec.get('within_minutes')
+        present_feathers = []
+        anchor_times: List[datetime] = []
+        for c in expect:
+            hits = self._rows_matching(c, rows, first)
+            if not hits:
+                return None  # an expected anchor is missing → rule does not apply
+            present_feathers.append(c.feather_id)
+            anchor_times.extend(t for t in (self._row_ts(r) for r in hits) if t)
+
+        for c in absent:
+            hits = self._rows_matching(c, rows, first)
+            if within and anchor_times and hits:
+                w = timedelta(minutes=float(within))
+                hits = [
+                    r for r in hits
+                    if (self._row_ts(r) is None)
+                    or any(abs(self._row_ts(r) - at) <= w for at in anchor_times)
+                ]
+            if hits:
+                return None  # required-absent evidence is actually present
+
+        cond_strs = ([f"present: {c}" for c in expect] +
+                     [f"absent: {c}" for c in absent])
+        return self._make_advanced_result(
+            rule, present_feathers + [c.feather_id for c in absent], cond_strs)
+
+    def _evaluate_threshold_rule(self, identity_data: Dict[str, Any],
+                                 rule: SemanticRule) -> Optional[SemanticMatchResult]:
+        """
+        Fire only when a condition occurs at least ``min_count`` times (optionally
+        within ``within_minutes`` and grouped by ``group_by``) — e.g. a real
+        mass-delete burst, or >=N failed logons (password spray).
+        """
+        spec = rule.threshold or {}
+        rows = self._build_rows_from_identity(identity_data)
+        first = self._first_records(rows)
+        try:
+            if spec.get('condition'):
+                conds = [self._cond(spec['condition'])]
+            else:
+                conds = [self._cond(s) for s in spec.get('conditions', [])]
+        except ValueError as e:
+            logger.warning(f"Threshold rule '{rule.rule_id}' has an invalid condition: {e}")
+            return None
+        if not conds:
+            return None
+
+        min_count = int(spec.get('min_count', 2))
+        within = spec.get('within_minutes')
+        group_by = spec.get('group_by')
+
+        matched: List[Dict[str, Any]] = []
+        for c in conds:
+            matched.extend(self._rows_matching(c, rows, first))
+        if not matched:
+            return None
+
+        groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for r in matched:
+            key = '_all'
+            if group_by:
+                val = SemanticCondition._smart_field_lookup(r, group_by)
+                key = str(val) if val is not None else '_none'
+            groups[key].append(r)
+
+        for key, grp in groups.items():
+            if self._count_within_window(grp, within) >= min_count:
+                cond_strs = [f"{c} (>= {min_count}x)" for c in conds]
+                return self._make_advanced_result(
+                    rule, [c.feather_id for c in conds], cond_strs)
+        return None
+
+    @staticmethod
+    def _seq_join_key(row: Dict[str, Any], join_fields: List[str]) -> Optional[tuple]:
+        """Resolve a row's join key over ``join_fields`` (cross-tool field
+        aliasing via smart lookup). Returns None if any join field is missing on
+        the row — such a row cannot participate in a joined chain."""
+        key = []
+        for f in join_fields:
+            val = SemanticCondition._smart_field_lookup(row, f)
+            if val is None or str(val) == '':
+                return None
+            key.append(str(val).strip().lower())
+        return tuple(key)
+
+    def _evaluate_sequence_rule(self, identity_data: Dict[str, Any],
+                                rule: SemanticRule) -> Optional[SemanticMatchResult]:
+        """
+        Fire when the ordered steps occur in order, each consecutive gap within
+        ``max_gap_minutes`` — ordered kill-chains (logon -> tool exec -> drop).
+
+        Steps may span different feathers (multi-feather). The chain is validated
+        on the actual matching RECORDS, not bare timestamps: each step is bound to
+        a DISTINCT physical record, and when ``join_fields`` is set the chosen
+        records must agree on those fields (e.g. same host/user), giving a true
+        cross-feather correlation rather than mere time-coincidence. Records with
+        no recognizable timestamp cannot be ordered.
+        """
+        spec = rule.sequence or {}
+        steps = spec.get('steps', [])
+        if len(steps) < 2:
+            return None
+        max_gap = spec.get('max_gap_minutes')
+        # NOTE: distinguish "no gap constraint" (None) from an explicit 0-minute
+        # gap — `if max_gap` would wrongly treat 0 as "unset".
+        gap = timedelta(minutes=float(max_gap)) if max_gap is not None else None
+        join_fields = spec.get('join_fields') or []
+        if isinstance(join_fields, str):
+            join_fields = [join_fields]
+
+        rows = self._build_rows_from_identity(identity_data)
+        first = self._first_records(rows)
+
+        # Ordered candidate records per step: (timestamp, feather_id, row), sorted.
+        step_candidates: List[List[tuple]] = []
+        for idx, st in enumerate(steps):
+            try:
+                conds = self._step_conditions(st)
+            except ValueError as e:
+                logger.warning(
+                    f"Sequence rule '{rule.rule_id}' step {idx + 1} is invalid: {e}")
+                return None
+            if not conds:
+                logger.warning(
+                    f"Sequence rule '{rule.rule_id}' step {idx + 1} has no valid conditions.")
+                return None
+            cands = []
+            matched_any = False
+            for c in conds:
+                for r in self._rows_matching(c, rows, first):
+                    matched_any = True
+                    ts = self._row_ts(r)
+                    if ts is not None:
+                        cands.append((ts, c.feather_id, r))
+            if not cands:
+                # Surface WHY a step contributed nothing rather than failing silently.
+                if matched_any:
+                    logger.warning(
+                        f"Sequence rule '{rule.rule_id}' step {idx + 1} matched records but none "
+                        f"carried a recognizable timestamp — cannot order this sequence.")
+                return None
+            cands.sort(key=lambda x: x[0])
+            step_candidates.append(cands)
+
+        # Ordered-chain search (backtracking): pick one record per step so that
+        # timestamps are non-decreasing, each consecutive gap <= max_gap, every
+        # chosen record is distinct (one event can't satisfy two steps), and the
+        # join key (if any) is identical across the whole chain.
+        n = len(step_candidates)
+        chosen: List[Optional[tuple]] = [None] * n  # (feather_id, row) per step
+        used_ids = set()
+
+        def search(step_idx: int, prev_time, binding) -> bool:
+            if step_idx == n:
+                return True
+            for ts, fid, row in step_candidates[step_idx]:
+                if prev_time is not None:
+                    if ts < prev_time:
+                        continue
+                    if gap is not None and ts - prev_time > gap:
+                        break  # sorted ascending: all later candidates exceed the gap too
+                rid = id(row)
+                if rid in used_ids:
+                    continue
+                new_binding = binding
+                if join_fields:
+                    key = self._seq_join_key(row, join_fields)
+                    if key is None:
+                        continue  # row lacks a join value → cannot bind into the chain
+                    if binding is None:
+                        new_binding = key
+                    elif key != binding:
+                        continue
+                used_ids.add(rid)
+                chosen[step_idx] = (fid, row)
+                if search(step_idx + 1, ts, new_binding):
+                    return True
+                used_ids.discard(rid)
+                chosen[step_idx] = None
+            return False
+
+        if not search(0, None, None):
+            return None
+
+        witness_feathers = [fid for (fid, _row) in chosen if fid]
+        cond_strs = [f"step {i + 1}: {st}" for i, st in enumerate(steps)]
+        if join_fields:
+            cond_strs.append(f"joined on: {', '.join(join_fields)}")
+        return self._make_advanced_result(rule, witness_feathers, cond_strs)
+
+    def _evaluate_advanced_rule(self, identity_data: Dict[str, Any],
+                                rule: SemanticRule) -> Optional[SemanticMatchResult]:
+        """Dispatch an advanced (non-match) rule to its evaluator."""
+        try:
+            if rule.rule_type == 'absence':
+                return self._evaluate_absence_rule(identity_data, rule)
+            if rule.rule_type == 'threshold':
+                return self._evaluate_threshold_rule(identity_data, rule)
+            if rule.rule_type == 'sequence':
+                return self._evaluate_sequence_rule(identity_data, rule)
+        except Exception as e:
+            logger.error(
+                f"Error evaluating advanced rule '{rule.rule_id}' "
+                f"(type={rule.rule_type}): {e}", exc_info=True)
+        return None
+
+    def _evaluate_identity_level_rules(self, identity_data: Dict[str, Any],
                                        rules: List[SemanticRule]) -> List[SemanticMatchResult]:
         """
         Evaluate rules that check identity-level fields (_identity feather_id).
@@ -1823,7 +2304,10 @@ class SemanticRuleEvaluator:
                         confidence=rule.confidence,
                         category=rule.category,
                         severity=rule.severity,
-                        scope=rule.scope
+                        scope=rule.scope,
+                        rule_type=getattr(rule, 'rule_type', 'match'),
+                        technique_id=list(getattr(rule, 'technique_id', []) or []),
+                        tactic=list(getattr(rule, 'tactic', []) or []),
                     )
                     matched_results.append(result)
                     
@@ -2126,7 +2610,10 @@ class SemanticRuleEvaluator:
                             confidence=rule.confidence,
                             category=rule.category,
                             severity=rule.severity,
-                            scope=rule.scope
+                            scope=rule.scope,
+                            rule_type=getattr(rule, 'rule_type', 'match'),
+                            technique_id=list(getattr(rule, 'technique_id', []) or []),
+                            tactic=list(getattr(rule, 'tactic', []) or []),
                         )
                         
                         matched_results.append(result)
@@ -2209,8 +2696,12 @@ class SemanticRuleEvaluator:
             'anchors': [],
             'evidence': []
         }
-        
-        return self.evaluate_identity(identity_data, wing_id, pipeline_id, wing_rules)
+
+        # Match-based evaluation (Time-Window engine): one representative row per
+        # feather, so advanced (absence/sequence/threshold/nested/negate/
+        # cross-feather) rules cannot be evaluated correctly and are skipped.
+        return self.evaluate_identity(identity_data, wing_id, pipeline_id, wing_rules,
+                                      allow_advanced=False)
     
     def evaluate_window(self, window_data: Dict[str, Any],
                        wing_id: Optional[str] = None,
@@ -2233,7 +2724,11 @@ class SemanticRuleEvaluator:
         identities = window_data.get('identities', [])
         for identity in identities:
             identity_name = identity.get('identity_name', 'Unknown')
-            matched = self.evaluate_identity(identity, wing_id, pipeline_id, wing_rules)
+            # Window-scoped (Time-Window engine) evaluation: advanced rules are
+            # Identity-engine-only, so skip them here for the same reason as
+            # evaluate_match (avoid spurious absence/sequence/threshold findings).
+            matched = self.evaluate_identity(identity, wing_id, pipeline_id, wing_rules,
+                                             allow_advanced=False)
             if matched:
                 results[identity_name] = matched
         

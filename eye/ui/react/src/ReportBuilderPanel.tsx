@@ -26,7 +26,7 @@ import {
 import { initializeBridge, onReportUpdated, getBridge } from './bridge';
 import ReportBlockComponent from './ReportBlockComponent';
 import ErrorBoundary from './ErrorBoundary';
-import { IconFileText, IconDownload, IconClipboardList } from './Icons';
+import { IconFileText, IconDownload, IconClipboardList, IconAlertTriangle, IconCircleCheck } from './Icons';
 import './ReportBuilderPanel.css';
 
 
@@ -314,7 +314,7 @@ const ReportBuilderPanel: React.FC = () => {
       {/* Error banner */}
       {error && (
         <div className="error-banner">
-          <span className="error-icon">⚠️</span>
+          <span className="error-icon"><IconAlertTriangle size={16} /></span>
           {error}
           <button onClick={() => setError(null)} className="dismiss-button">
             ✕
@@ -325,7 +325,7 @@ const ReportBuilderPanel: React.FC = () => {
       {/* Success banner */}
       {successMessage && (
         <div className="success-banner">
-          <span className="success-icon">✅</span>
+          <span className="success-icon"><IconCircleCheck size={16} /></span>
           {successMessage}
           <button onClick={() => setSuccessMessage(null)} className="dismiss-button">
             ✕
@@ -337,7 +337,7 @@ const ReportBuilderPanel: React.FC = () => {
       <div className="report-content">
         {blocks.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-icon">📋</div>
+            <div className="empty-icon"><IconClipboardList size={40} /></div>
             <h3>No report blocks yet</h3>
             <p>
               Ask the AI assistant to add findings to the report, or start

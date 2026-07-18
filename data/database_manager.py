@@ -417,15 +417,34 @@ class DatabaseManager:
         known_paths = {str(d.path.absolute()).lower() for d in discovered}
         
         for cand in candidate_dbs:
+            # Skip the Correlation Engine's normalized "feather" databases: they are
+            # copies of native artifacts the Eye already indexes directly, so surfacing
+            # them here would make the Eye analyze the SAME evidence twice. (The engine's
+            # correlation RESULTS are consulted separately via CorrelationService.)
+            parts_lower = {p.lower() for p in cand.parts}
+            if "feathers" in parts_lower and "correlation" in parts_lower:
+                continue
+
             cand_abs = str(cand.absolute()).lower()
             if cand_abs not in known_paths:
                 try:
+                    # External evidence imported via the Eye lands under
+                    # Target_Artifacts/Imported_Evidence/ — label it distinctly so the
+                    # schema manifest surfaces it as external data the model must
+                    # cross-reference against native artifacts (not just "Custom").
+                    if "Imported_Evidence" in cand.parts:
+                        category = "Imported Evidence"
+                        display_name = f"Imported: {cand.stem.replace('_', ' ').title()}"
+                    else:
+                        category = "Custom/Other Artifacts"
+                        display_name = f"{cand.stem.replace('_', ' ').title()} (Custom)"
+
                     # Create info for this custom/unconfigured database
                     custom_info = DatabaseInfo(
                         name=cand.name,
                         path=cand,
-                        category="Custom/Other Artifacts",
-                        display_name=f"{cand.stem.replace('_', ' ').title()} (Custom)",
+                        category=category,
+                        display_name=display_name,
                         exists=True
                     )
                     

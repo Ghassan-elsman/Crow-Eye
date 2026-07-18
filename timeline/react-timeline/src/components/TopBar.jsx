@@ -2,6 +2,7 @@
  * TopBar — Search, zoom controls, view-mode toggle, event count.
  */
 import { memo, useState, useEffect } from 'react';
+import { IconSearch, IconGlobe } from './Icons';
 
 function TopBar({ state, loading, stats }) {
   const {
@@ -40,7 +41,7 @@ function TopBar({ state, loading, stats }) {
 
       {viewMode === '24h' && (
         <div className="topbar__search-wrapper">
-          <span className="topbar__search-icon">🔍</span>
+          <span className="topbar__search-icon"><IconSearch size={14} color="currentColor" /></span>
           <input
             className="topbar__search"
             type="text"
@@ -185,9 +186,12 @@ function TopBar({ state, loading, stats }) {
         background: 'rgba(0, 255, 255, 0.1)',
         borderRadius: 4,
         border: '1px solid rgba(0, 255, 255, 0.3)',
-        marginRight: 15
+        marginRight: 15,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5
       }}>
-        🌐 UTC
+        <IconGlobe size={12} color="currentColor" /> UTC
       </div>
 
       {(viewMode !== '24h' && viewMode !== 'week') && <div className="topbar__info">{rangeLabel}</div>}

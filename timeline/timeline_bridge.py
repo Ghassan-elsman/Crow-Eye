@@ -539,7 +539,18 @@ class TimelineBridge(QObject):
                     parsed = self.parser.parse(row.get(key))
                     if parsed:
                         all_timestamps.append(parsed)
-        
+
+        # Extend bounds with any imported evidence feathers so the case time range
+        # covers external data the investigator added (see getImportedData).
+        for db_path, table, ts_col, _id_col in self._imported_feather_tables():
+            rel = os.path.relpath(db_path, self.case_dir)
+            sql = f'SELECT MIN("{ts_col}") as mn, MAX("{ts_col}") as mx FROM "{table}" WHERE "{ts_col}" IS NOT NULL'
+            for row in self._query_db(rel, sql):
+                for key in ['mn', 'mx']:
+                    parsed = self.parser.parse(row.get(key))
+                    if parsed:
+                        all_timestamps.append(parsed)
+
         if not all_timestamps:
             return json.dumps({"start": None, "end": None})
         
@@ -548,7 +559,122 @@ class TimelineBridge(QObject):
             "start": all_timestamps[0],
             "end": all_timestamps[-1]
         })
-    
+
+    # ──────────────────────────────────────────────
+    # Imported evidence (external SQLite / converted CSV·JSON feathers)
+    # ──────────────────────────────────────────────
+
+    _IMPORTED_SUBDIR = "Imported_Evidence"
+    _TS_NAME_RE = re.compile(
+        r"(time|date|timestamp|created|modified|accessed|executed|deleted|"
+        r"installed|connected|logon|logoff|start|end|when|_at$|_on$)",
+        re.IGNORECASE,
+    )
+    _ID_NAME_RE = re.compile(r"(name|path|file|host|user|sid|hash|process|image|url|ip)", re.IGNORECASE)
+
+    def _imported_feather_tables(self):
+        """Discover imported evidence tables to plot on the timeline.
+
+        Returns a list of ``(db_path, table, timestamp_col, identity_col)``. Works for
+        both converted CSV/JSON feathers (which stamp ``feather_metadata`` with the
+        primary timestamp) and directly-imported SQLite databases (columns inferred by
+        name, validated against real values). Tables without any recognisable timestamp
+        are skipped — they can't be placed on a temporal grid.
+        """
+        import glob
+        out = []
+        folder = os.path.join(self.case_dir, self._IMPORTED_SUBDIR)
+        if not os.path.isdir(folder):
+            return out
+        for db_path in sorted(glob.glob(os.path.join(folder, "*.db"))):
+            rel = os.path.relpath(db_path, self.case_dir)
+            # feather_metadata (converted files) declares the primary timestamp directly.
+            meta = {}
+            try:
+                for row in self._query_db(rel, "SELECT key, value FROM feather_metadata WHERE key LIKE 'table:%'"):
+                    try:
+                        blob = json.loads(row.get("value") or "{}")
+                        meta[blob.get("name")] = blob
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+            except Exception:
+                meta = {}
+
+            tables = [
+                r["name"] for r in self._query_db(
+                    rel,
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'feather_%'",
+                )
+            ]
+            for table in tables:
+                cols = [r["name"] for r in self._query_db(rel, f'PRAGMA table_info("{table}")')]
+                if not cols:
+                    continue
+                ts_col = None
+                id_col = None
+                blob = meta.get(table)
+                if blob:
+                    ts_col = blob.get("primary_timestamp_column")
+                    id_cols = blob.get("identity_columns") or []
+                    id_col = id_cols[0] if id_cols else None
+                if not ts_col:
+                    ts_col = self._infer_timestamp_column(rel, table, cols)
+                if not id_col:
+                    id_col = next((c for c in cols if self._ID_NAME_RE.search(c)), None) or (cols[0] if cols else None)
+                if ts_col:
+                    out.append((db_path, table, ts_col, id_col))
+        return out
+
+    def _infer_timestamp_column(self, rel_db, table, cols):
+        """Pick the timestamp column of a metadata-less table by name + value sampling."""
+        candidates = [c for c in cols if self._TS_NAME_RE.search(c)] + list(cols)
+        for c in candidates:
+            try:
+                sample = self._query_db(
+                    rel_db, f'SELECT "{c}" AS v FROM "{table}" WHERE "{c}" IS NOT NULL LIMIT 20')
+            except Exception:
+                continue
+            vals = [r.get("v") for r in sample if r.get("v") not in (None, "")]
+            if not vals:
+                continue
+            hits = sum(1 for v in vals if self.parser.parse(v))
+            if hits and hits >= max(1, int(0.6 * len(vals))):
+                return c
+        return None
+
+    @pyqtSlot(str, str, result=str)
+    def getImportedData(self, start: str, end: str) -> str:
+        """Get imported external-evidence events for the 'imported' artifact type.
+
+        Each row is emitted with a normalised ``timestamp`` (so the timeline's generic
+        artifact plotter places it) and a ``display_name`` (so identity-based correlation
+        links it to native artifacts). Capped per table to keep the payload bounded.
+        """
+        MAX_PER_TABLE = 5000
+        events = []
+        for db_path, table, ts_col, id_col in self._imported_feather_tables():
+            rel = os.path.relpath(db_path, self.case_dir)
+            source_db = os.path.splitext(os.path.basename(db_path))[0]
+            sql = (
+                f'SELECT * FROM "{table}" '
+                f'WHERE datetime("{ts_col}") BETWEEN datetime(?) AND datetime(?) '
+                f'ORDER BY "{ts_col}" LIMIT {MAX_PER_TABLE}'
+            )
+            rows = self._query_db(rel, sql, (start, end))
+            for row in rows:
+                parsed = self.parser.parse(row.get(ts_col))
+                if not parsed:
+                    continue
+                name = row.get(id_col) if id_col else None
+                row["timestamp"] = parsed
+                row["display_name"] = str(name) if name not in (None, "") else f"{source_db}:{table}"
+                row["artifact_type"] = "imported"
+                row["source_db"] = source_db
+                row["source_table"] = table
+                events.append(row)
+        return json.dumps(events)
+
     # ──────────────────────────────────────────────
     # SLOT: Lane 1 — Sessions / Power / Login
     # ──────────────────────────────────────────────

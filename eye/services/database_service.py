@@ -788,17 +788,66 @@ class ForensicDatabaseService:
                 "error": db_info.error
             })
 
-        # Also surface the Correlation Engine's normalized "feather" databases (which
-        # may be imported from external tools) so the Eye can query them too. They are
-        # arbitrary SQLite files NOT in the known-artifact set, so the manager's
-        # discovery skips them — we add them by walking the feathers directory.
+        # NOTE: We deliberately do NOT surface the Correlation Engine's normalized
+        # "feather" databases (<case>/Correlation/feathers/*.db). Those feathers are the
+        # engine's normalized COPIES of native artifacts the Eye already parses/queries
+        # directly — including them made the Eye analyze the SAME evidence twice
+        # (native DB + its feather => duplicated analysis). See _discover_feather_databases.
+        #
+        # We DO surface the Correlation Engine's RESULTS database (correlation_results.db),
+        # so the Eye has full query access to the correlated data (query_database /
+        # get_schema + the schema manifest), on top of the canned query_correlation_results
+        # tool. Results are distinct derived data, not a duplicate of native artifacts.
         known = {r.get("name") for r in result}
-        for feather in self._discover_feather_databases():
-            if feather.get("name") not in known:
-                result.append(feather)
-                known.add(feather.get("name"))
+        for corr in self._discover_correlation_databases():
+            if corr.get("name") not in known:
+                result.append(corr)
+                known.add(corr.get("name"))
 
         return result
+
+    def _discover_correlation_databases(self) -> List[Dict[str, Any]]:
+        """Surface the Correlation Engine's RESULTS database(s) as queryable databases.
+
+        The engine writes ``<case>/Correlation/output/correlation_results.db``. This
+        service is rooted at the artifacts dir (usually ``<case>/Target_Artifacts``), so
+        the Correlation dir is a sibling — we probe ``self.case_directory`` AND its parent.
+        Only RESULTS are surfaced (category "Correlation Results"); ``feathers/`` paths are
+        excluded (those duplicate native artifacts). Returns [] when absent."""
+        out: List[Dict[str, Any]] = []
+        seen = set()
+        try:
+            for base in (self.case_directory, self.case_directory.parent):
+                corr_dir = base / "Correlation"
+                if not corr_dir.is_dir():
+                    continue
+                candidates: List[Path] = []
+                output_dir = corr_dir / "output"
+                if output_dir.is_dir():
+                    candidates.extend(sorted(output_dir.glob("*.db")))
+                candidates.extend(sorted(corr_dir.rglob("correlation_results.db")))
+                for db in candidates:
+                    parts_lower = {p.lower() for p in db.parts}
+                    if "feathers" in parts_lower:
+                        continue
+                    if not db.is_file() or db.name in seen:
+                        continue
+                    tables = self._tables_at_path(db)
+                    out.append({
+                        "name": db.name,
+                        "path": str(db),
+                        "category": "Correlation Results",
+                        "display_name": f"Correlation: {db.stem}",
+                        "exists": True,
+                        "accessible": bool(tables),
+                        "tables": tables,
+                        "error": None if tables else "no readable tables",
+                    })
+                    seen.add(db.name)
+                break  # first base that has a Correlation dir wins
+        except Exception as e:
+            self.logger.debug(f"correlation-results discovery skipped: {e}")
+        return out
 
     def _tables_at_path(self, db_path: Path) -> List[str]:
         """List user tables of a SQLite file by absolute path (read-only)."""
@@ -822,9 +871,13 @@ class ForensicDatabaseService:
 
     def _discover_feather_databases(self) -> List[Dict[str, Any]]:
         """Walk ``<case>/Correlation/feathers/*.db`` (normalized correlation-engine
-        databases, possibly imported from external tools) and return DatabaseInfo-shaped
-        dicts with their real tables, so they appear in the schema manifest and are
-        queryable/resolvable. Returns [] when the directory is absent."""
+        databases) and return DatabaseInfo-shaped dicts with their real tables.
+
+        RETAINED FOR REFERENCE — intentionally NO LONGER called by ``discover_databases``:
+        these feathers duplicate native artifacts the Eye already queries, so surfacing
+        them caused duplicate-data analysis. External data now uses the dedicated
+        ``Target_Artifacts/Imported_Evidence/`` import path instead. Returns [] when the
+        directory is absent."""
         out: List[Dict[str, Any]] = []
         try:
             feather_dir = self.case_directory / "Correlation" / "feathers"

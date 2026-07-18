@@ -400,6 +400,28 @@
       }
     },
     {
+      "name": "correlate_imported_evidence",
+      "description": "Check whether IMPORTED external evidence correlates with the case's native artifacts. Extracts identity values (filenames, users, IPs, hashes) from imported databases and searches every other database for the same values, returning whether correlations exist plus the concrete native matches (database:table:rowid) and whether the imported time range overlaps the case. Call this to answer 'is the imported data connected to the case?' and to ground cross-source analysis.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Optional: restrict to a single imported database filename (e.g. 'vpn_logins.db'). Omit to check all imported evidence."
+          },
+          "max_values": {
+            "type": "integer",
+            "description": "Max distinct identity values to test per imported table (default 25)."
+          },
+          "time_window_minutes": {
+            "type": "integer",
+            "description": "Window (minutes) for reporting timestamp proximity between imported and native events (default 60)."
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "name": "report_add_chat_transcript",
       "description": "Add a styled chat transcript block to the forensic report. Use this to document AI reasoning, forensic synthesis, or important investigator dialogues.",
       "parameters": {

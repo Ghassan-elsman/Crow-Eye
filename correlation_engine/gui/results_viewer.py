@@ -18,19 +18,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QRect, QPoint
 from PyQt5.QtGui import QColor, QPainter, QBrush, QPen, QFont, QFontMetrics, QPalette
 
-# Matplotlib imports for chart rendering (optional)
-try:
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-    from matplotlib.figure import Figure
-    import matplotlib.pyplot as plt
-    MATPLOTLIB_AVAILABLE = True
-    print("[Info] matplotlib Qt5Agg backend loaded successfully")
-except ImportError as e:
-    MATPLOTLIB_AVAILABLE = False
-    print(f"[Info] matplotlib not available, using PyQt5 native charts")
-except Exception as e:
-    MATPLOTLIB_AVAILABLE = False
-    print(f"[Info] matplotlib not available, using PyQt5 native charts")
+# Matplotlib availability (optional). Charts default to the pure-PyQt5
+# PyQt5BarChart renderer; matplotlib is NOT imported at startup — importing it
+# eagerly cost ~0.3-0.8s of first-paint lag for a backend nothing here uses.
+# Probe cheaply with find_spec; any future matplotlib code must import it lazily
+# inside the render method (guarded by MATPLOTLIB_AVAILABLE).
+import importlib.util as _importlib_util
+MATPLOTLIB_AVAILABLE = _importlib_util.find_spec("matplotlib") is not None
 
 
 def format_time_duration(seconds: float) -> str:
@@ -666,7 +660,7 @@ class PieChartWithBreakdown(QWidget):
 
 
 from .ui_styling import CorrelationEngineStyles
-from .crow_eye_icons import apply_status_to_label
+from .crow_eye_icons import apply_status_to_label, CrowEyeIcons
 
 
 from ..engine.correlation_result import CorrelationResult, CorrelationMatch
@@ -1261,6 +1255,15 @@ class DynamicResultsTabWidget(QWidget):
         
         self.results_data: Dict[str, CorrelationResult] = {}
         self.engine_type = "time_based" # Default engine type
+
+        # Unified identity tab state for live runs. Each identity wing runs in
+        # its own execution (execution_control creates one PipelineExecutor per
+        # wing), so we accumulate execution_ids and rebuild ONE shared
+        # identity tab as each wing completes.
+        self._identity_run_exec_ids: List[str] = []
+        self._identity_run_wing_names: List[str] = []
+        self._identity_tab_container: Optional[QWidget] = None
+        self._identity_tab_viewer: Optional[QWidget] = None
         
         # Use results tab widget
         self.enhanced_tab_widget = ResultsTabWidget()
@@ -2168,13 +2171,15 @@ class DynamicResultsTabWidget(QWidget):
             print(f"[Error] Failed to handle CSV export: {e}")
             QMessageBox.critical(self, "Export Error", f"Failed to export:\n{str(e)}")
     
-    def create_wing_result_tab(self, wing_summary: dict, show_progress=True) -> None:
+    def create_wing_result_tab(self, wing_summary: dict, show_progress=True) -> Optional[int]:
         """
-        Create a new tab for a wing's results.
-        
-        Each tab contains:
-        1. Wing-specific summary section (charts + statistics for THIS wing only)
-        2. Tree view with detailed results (Identity or Time-Based)
+        Create (or update) the result tab for a completed wing.
+
+        Time-Window wings each get their own tab (summary section + tree).
+        Identity wings share ONE unified tab that is rebuilt as each wing
+        completes, with per-identity wing attribution.
+
+        Returns the index of the created/updated tab, or None on error.
         
         Args:
             wing_summary: Dictionary containing:
@@ -2219,25 +2224,28 @@ class DynamicResultsTabWidget(QWidget):
             engine_type = wing_summary['engine_type']
             execution_id = wing_summary['execution_id']
             database_path = wing_summary['database_path']
-            
+
             print(f"[DynamicResultsTabWidget] Creating wing tab: {wing_name} (engine: {engine_type})")
-            
+
+            # Identity wings share ONE unified tab (with wing attribution per
+            # identity) instead of one tab per wing
+            if engine_type == 'identity_based':
+                return self.create_or_update_identity_tab(wing_summary, show_progress=show_progress)
+
             # Create container widget for the tab
             tab_container = QWidget()
             tab_layout = QVBoxLayout(tab_container)
             tab_layout.setContentsMargins(5, 5, 5, 5)
             tab_layout.setSpacing(5)
-            
+
             # Add wing-specific summary section at top
             summary_section = self._create_wing_summary_section(wing_summary)
             if summary_section:
                 tab_layout.addWidget(summary_section)
-            
-            # Add appropriate tree viewer below (Identity or Time-Based)
+
+            # Add appropriate tree viewer below (Time-Based)
             viewer = None
-            if engine_type == 'identity_based':
-                viewer = self._create_identity_viewer(database_path, execution_id, show_progress=show_progress)
-            elif engine_type in ['time_window_scanning', 'time_based']:
+            if engine_type in ['time_window_scanning', 'time_based']:
                 viewer = self._create_timebased_viewer(database_path, execution_id, show_progress=show_progress)
             else:
                 # Unknown engine type - create error widget
@@ -2259,12 +2267,13 @@ class DynamicResultsTabWidget(QWidget):
             
             if viewer:
                 tab_layout.addWidget(viewer)
-            
+
             # Add tab to ResultsTabWidget with wing name
-            self.enhanced_tab_widget.tab_widget.addTab(tab_container, wing_name)
-            
+            tab_index = self.enhanced_tab_widget.tab_widget.addTab(tab_container, wing_name)
+
             print(f"[DynamicResultsTabWidget] [OK] Wing tab created: {wing_name}")
-            
+            return tab_index
+
         except Exception as e:
             print(f"[Error] Failed to create wing result tab: {e}")
             import traceback
@@ -2286,7 +2295,90 @@ class DynamicResultsTabWidget(QWidget):
             error_widget.setWordWrap(True)
             tab_name = wing_summary.get('wing_name', 'Error')
             self.enhanced_tab_widget.tab_widget.addTab(error_widget, tab_name)
-    
+            return None
+
+    def create_or_update_identity_tab(self, wing_summary: dict, show_progress=False) -> Optional[int]:
+        """
+        Create or refresh the single unified Identity results tab.
+
+        Live runs execute each wing in its own PipelineExecutor/execution, so
+        this accumulates execution_ids across wing completions and rebuilds
+        the viewer from the database each time (the viewer query joins
+        results to tag every match with its wing for attribution).
+
+        Returns the tab index of the unified identity tab, or None on error.
+        """
+        try:
+            tab_widget = self.enhanced_tab_widget.tab_widget
+
+            # A new run started: wing_index restarts at 1 (execution_control
+            # always numbers wings from 1). Reset accumulators so a previous
+            # run's wings don't bleed into this run's unified tab.
+            if wing_summary.get('wing_index') == 1:
+                self._identity_run_exec_ids = []
+                self._identity_run_wing_names = []
+                # Drop reference to any stale tab from a previous run; the tab
+                # itself is cleared elsewhere (or replaced below if still present)
+                if self._identity_tab_container is not None and tab_widget.indexOf(self._identity_tab_container) == -1:
+                    self._identity_tab_container = None
+                    self._identity_tab_viewer = None
+
+            execution_id = wing_summary.get('execution_id')
+            wing_name = wing_summary.get('wing_name', 'Unknown Wing')
+            database_path = wing_summary.get('database_path')
+
+            if execution_id is not None and execution_id not in self._identity_run_exec_ids:
+                self._identity_run_exec_ids.append(execution_id)
+            if wing_name not in self._identity_run_wing_names:
+                self._identity_run_wing_names.append(wing_name)
+
+            n_wings = len(self._identity_run_wing_names)
+            tab_title = f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})"
+
+            # Rebuild the unified viewer from the database (covers all wings so far)
+            viewer = self._create_identity_viewer(
+                database_path,
+                list(self._identity_run_exec_ids),
+                show_progress=show_progress,
+                wing_count=n_wings
+            )
+
+            existing_index = -1
+            if self._identity_tab_container is not None:
+                existing_index = tab_widget.indexOf(self._identity_tab_container)
+
+            if existing_index == -1:
+                # First identity wing of this run: create the unified tab
+                container = QWidget()
+                layout = QVBoxLayout(container)
+                layout.setContentsMargins(5, 5, 5, 5)
+                layout.setSpacing(5)
+                layout.addWidget(viewer)
+
+                self._identity_tab_container = container
+                self._identity_tab_viewer = viewer
+                tab_index = tab_widget.addTab(container, tab_title)
+                print(f"[DynamicResultsTabWidget] [OK] Unified identity tab created: {tab_title}")
+                return tab_index
+
+            # Subsequent wings: swap the viewer inside the existing tab
+            layout = self._identity_tab_container.layout()
+            if self._identity_tab_viewer is not None:
+                layout.removeWidget(self._identity_tab_viewer)
+                self._identity_tab_viewer.setParent(None)
+                self._identity_tab_viewer.deleteLater()
+            layout.addWidget(viewer)
+            self._identity_tab_viewer = viewer
+            tab_widget.setTabText(existing_index, tab_title)
+            print(f"[DynamicResultsTabWidget] [OK] Unified identity tab updated: {tab_title}")
+            return existing_index
+
+        except Exception as e:
+            print(f"[Error] Failed to create/update unified identity tab: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def _create_wing_summary_section(self, wing_summary: dict) -> QWidget:
         """
         Create summary section for a specific wing.
@@ -2380,157 +2472,50 @@ class DynamicResultsTabWidget(QWidget):
             traceback.print_exc()
             return None
     
-    def _create_identity_viewer(self, database_path: str, execution_id: str, show_progress=True):
+    def _create_identity_viewer(self, database_path: str, execution_ids, show_progress=True, wing_count=None):
         """
-        Create and populate Identity-Based results viewer.
-        
+        Create and populate the unified Identity-Based results viewer.
+
+        Loads matches from ALL given executions into a single view and tags
+        each match with the wing that produced it (matches.result_id ->
+        results.wing_id/wing_name), so the viewer can show per-identity
+        wing attribution.
+
         Args:
             database_path: Path to the database
-            execution_id: Execution ID to load
+            execution_ids: A single execution ID or a list of execution IDs
+                to load (live runs create one execution per wing)
             show_progress: If False, suppresses the progress dialog
-        
+            wing_count: Optional override for the wing count shown in the
+                result title (defaults to distinct wing names found)
+
         Requirements: 2.4, 3.1
         """
         try:
             from .identity_results_view import IdentityResultsView
-            
-            print(f"[DynamicResultsTabWidget] Creating Identity viewer for execution {execution_id}")
-            
-            # Create viewer instance
+
+            # Normalize to a list (single id accepted for backward compatibility)
+            if isinstance(execution_ids, (list, tuple, set)):
+                exec_ids = [e for e in execution_ids if e is not None]
+            else:
+                exec_ids = [execution_ids] if execution_ids is not None else []
+
+            if not exec_ids:
+                raise ValueError("No execution IDs provided for identity viewer")
+
+            print(f"[DynamicResultsTabWidget] Creating Identity viewer for execution(s) {exec_ids}")
+
+            # Read the CorrelationResult from the DB (pure-data helper, no Qt —
+            # also called by the background ResultsLoadWorker), then populate.
+            # On this (UI-thread) path pump the event loop between row batches so
+            # the loading dialog stays responsive during the gzip/JSON parse.
+            from PyQt5.QtWidgets import QApplication as _QApp
+            result = self._read_identity_result(
+                database_path, exec_ids, wing_count,
+                progress_cb=lambda done, total: _QApp.processEvents())
             viewer = IdentityResultsView()
-            
-            # Load data from database using execution_id
-            # We need to load the CorrelationResult from the database
-            from pathlib import Path
-            import sqlite3
-            
-            if not Path(database_path).exists():
-                raise FileNotFoundError(f"Database not found: {database_path}")
-            
-            # Query database for this execution's results
-            # For now, we'll create a minimal CorrelationResult-like object
-            # The viewer expects a CorrelationResult object with matches
-            from ..engine.correlation_result import CorrelationResult, CorrelationMatch
-            
-            conn = sqlite3.connect(database_path)
-            cursor = conn.cursor()
-            
-            # Load matches for this execution (including semantic_data for Task 1)
-            cursor.execute("""
-                SELECT 
-                    m.match_id,
-                    m.anchor_feather_id,
-                    m.anchor_artifact_type,
-                    m.match_score,
-                    m.feather_count,
-                    m.time_spread_seconds,
-                    m.matched_application,
-                    m.matched_file_path,
-                    m.timestamp,
-                    m.feather_records,
-                    m.weighted_score_value,
-                    m.weighted_score_interpretation,
-                    m.semantic_data
-                FROM matches m
-                JOIN results r ON m.result_id = r.result_id
-                WHERE r.execution_id = ?
-            """, (execution_id,))
-            
-            matches = []
-            for row in cursor.fetchall():
-                match_id, feather_id, artifact_type, score, feather_count, \
-                time_spread, app, file_path, timestamp, feather_records_json, \
-                weighted_score_value, weighted_score_interpretation, semantic_data_json = row
-                
-                # Parse JSON fields
-                import json
-                feather_records = json.loads(feather_records_json) if feather_records_json else {}
-                
-                # Parse semantic_data if present (Task 1 fix)
-                semantic_data = None
-                if semantic_data_json:
-                    try:
-                        semantic_data = json.loads(semantic_data_json)
-                    except Exception as e:
-                        pass
-                
-                # Reconstruct weighted_score dict if values exist
-                weighted_score = None
-                if weighted_score_value is not None:
-                    weighted_score = {
-                        'score': weighted_score_value,
-                        'interpretation': weighted_score_interpretation or ''
-                    }
-                
-                match = CorrelationMatch(
-                    match_id=match_id,
-                    timestamp=timestamp,
-                    feather_records=feather_records,
-                    match_score=score,
-                    feather_count=feather_count,
-                    time_spread_seconds=time_spread,
-                    anchor_feather_id=feather_id,
-                    anchor_artifact_type=artifact_type,
-                    matched_application=app,
-                    matched_file_path=file_path,
-                    weighted_score=weighted_score,
-                    semantic_data=semantic_data
-                )
-                matches.append(match)
-            
-            # Load feather metadata
-            cursor.execute("""
-                SELECT feather_metadata 
-                FROM results 
-                WHERE execution_id = ? AND feather_metadata IS NOT NULL
-                LIMIT 1
-            """, (execution_id,))
-            
-            feather_metadata = {}
-            row = cursor.fetchone()
-            if row and row[0]:
-                try:
-                    feather_metadata = json.loads(row[0])
-                except Exception as e:
-                    pass
-            
-            # Load statistics from results table
-            cursor.execute("""
-                SELECT 
-                    feathers_processed,
-                    total_records_scanned,
-                    execution_duration_seconds
-                FROM results
-                WHERE execution_id = ?
-                LIMIT 1
-            """, (execution_id,))
-            
-            stats_row = cursor.fetchone()
-            feathers_processed = stats_row[0] if stats_row and stats_row[0] is not None else 0
-            total_records_scanned = stats_row[1] if stats_row and stats_row[1] is not None else 0
-            execution_duration_seconds = stats_row[2] if stats_row and stats_row[2] is not None else 0.0
-            
-            conn.close()
-            
-            print(f"[DynamicResultsTabWidget] Loaded {len(matches)} matches from database")
-            print(f"[DynamicResultsTabWidget] Statistics: feathers={feathers_processed}, records={total_records_scanned}, time={execution_duration_seconds:.1f}s")
-            
-            # Create a minimal CorrelationResult object
-            exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
-            result = CorrelationResult(
-                wing_id=f"wing_{exec_id_str}",
-                wing_name=f"Wing {exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str}",
-                matches=matches,
-                total_matches=len(matches),
-                feather_metadata=feather_metadata,
-                feathers_processed=feathers_processed,
-                total_records_scanned=total_records_scanned,
-                execution_duration_seconds=execution_duration_seconds
-            )
-            
-            # Load into viewer (suppress progress dialog since parent already shows one)
             viewer.load_from_correlation_result(result, show_progress=show_progress)
-            
+
             return viewer
             
         except Exception as e:
@@ -2559,9 +2544,204 @@ class DynamicResultsTabWidget(QWidget):
             
             # Add error to viewer layout
             viewer.layout().insertWidget(0, error_label)
-            
+
             return viewer
-    
+
+    @staticmethod
+    def _read_identity_result(database_path, exec_ids, wing_count=None,
+                              progress_cb=None, is_canceled=None):
+        """PURE-DATA load (no Qt): read matches for the given executions from
+        SQLite, parse/decompress them, and return a combined CorrelationResult.
+
+        Safe to run on a background thread — touches no widgets. Optional worker
+        hooks: ``progress_cb(done, total)`` and ``is_canceled() -> bool`` (return
+        None if canceled)."""
+        from pathlib import Path
+        import sqlite3
+        import gzip
+        import json
+        from ..engine.correlation_result import CorrelationResult, CorrelationMatch
+
+        if not Path(database_path).exists():
+            raise FileNotFoundError(f"Database not found: {database_path}")
+
+        conn = sqlite3.connect(database_path)
+        try:
+            cursor = conn.cursor()
+
+            # Legacy DBs may predate some columns, so probe first.
+            cursor.execute("PRAGMA table_info(matches)")
+            match_columns = {row[1] for row in cursor.fetchall()}
+            has_compressed = 'compressed' in match_columns
+            has_anchor_cols = 'anchor_start_time' in match_columns
+
+            optional_cols = []
+            optional_cols.append("m.compressed" if has_compressed else "0 AS compressed")
+            if has_anchor_cols:
+                optional_cols.extend(["m.anchor_start_time", "m.anchor_end_time", "m.anchor_record_count"])
+            else:
+                optional_cols.extend(["NULL AS anchor_start_time", "NULL AS anchor_end_time", "NULL AS anchor_record_count"])
+
+            placeholders = ",".join("?" for _ in exec_ids)
+            cursor.execute(f"""
+                SELECT
+                    m.match_id,
+                    m.anchor_feather_id,
+                    m.anchor_artifact_type,
+                    m.match_score,
+                    m.feather_count,
+                    m.time_spread_seconds,
+                    m.matched_application,
+                    m.matched_file_path,
+                    m.timestamp,
+                    m.feather_records,
+                    m.weighted_score_value,
+                    m.weighted_score_interpretation,
+                    m.semantic_data,
+                    m.result_id,
+                    r.wing_id,
+                    r.wing_name,
+                    m.confidence_score,
+                    m.confidence_category,
+                    m.score_breakdown,
+                    {", ".join(optional_cols)}
+                FROM matches m
+                JOIN results r ON m.result_id = r.result_id
+                WHERE r.execution_id IN ({placeholders})
+            """, tuple(exec_ids))
+
+            rows = cursor.fetchall()
+            total_rows = len(rows)
+            matches = []
+            failed_rows = 0
+            for _row_i, row in enumerate(rows):
+                if _row_i and _row_i % 250 == 0:
+                    if progress_cb is not None:
+                        progress_cb(_row_i, total_rows)
+                    if is_canceled is not None and is_canceled():
+                        return None
+                try:
+                    (match_id, feather_id, artifact_type, score, feather_count,
+                     time_spread, app, file_path, timestamp, feather_records_json,
+                     weighted_score_value, weighted_score_interpretation, semantic_data_json,
+                     result_id, wing_id, wing_name,
+                     confidence_score, confidence_category, score_breakdown_json,
+                     compressed, anchor_start_time, anchor_end_time, anchor_record_count) = row
+
+                    feather_records = {}
+                    if feather_records_json:
+                        if compressed:
+                            raw = feather_records_json
+                            if isinstance(raw, str):
+                                raw = raw.encode('latin1')
+                            feather_records = json.loads(gzip.decompress(raw).decode('utf-8'))
+                        else:
+                            feather_records = json.loads(feather_records_json)
+
+                    semantic_data = None
+                    if semantic_data_json:
+                        try:
+                            semantic_data = json.loads(semantic_data_json)
+                        except Exception:
+                            pass
+
+                    score_breakdown = None
+                    if score_breakdown_json:
+                        try:
+                            score_breakdown = json.loads(score_breakdown_json)
+                        except Exception:
+                            pass
+
+                    weighted_score = None
+                    if weighted_score_value is not None:
+                        weighted_score = {
+                            'score': weighted_score_value,
+                            'interpretation': weighted_score_interpretation or ''
+                        }
+
+                    match = CorrelationMatch(
+                        match_id=match_id,
+                        timestamp=timestamp,
+                        feather_records=feather_records,
+                        match_score=score,
+                        feather_count=feather_count,
+                        time_spread_seconds=time_spread,
+                        anchor_feather_id=feather_id,
+                        anchor_artifact_type=artifact_type,
+                        matched_application=app,
+                        matched_file_path=file_path,
+                        score_breakdown=score_breakdown,
+                        confidence_score=confidence_score,
+                        confidence_category=confidence_category,
+                        weighted_score=weighted_score,
+                        semantic_data=semantic_data
+                    )
+                    match.wing_id = wing_id
+                    match.wing_name = wing_name or "Unknown Wing"
+                    match.result_id = result_id
+                    if anchor_start_time is not None:
+                        match.anchor_start_time = anchor_start_time
+                    if anchor_end_time is not None:
+                        match.anchor_end_time = anchor_end_time
+                    if anchor_record_count is not None:
+                        match.anchor_record_count = anchor_record_count
+                    matches.append(match)
+                except Exception as row_error:
+                    failed_rows += 1
+                    print(f"[DynamicResultsTabWidget] Skipping unreadable match row: {row_error}")
+
+            if failed_rows:
+                print(f"[DynamicResultsTabWidget] WARNING: {failed_rows} match rows could not be parsed")
+
+            cursor.execute(f"""
+                SELECT wing_name, feather_metadata, feathers_processed,
+                       total_records_scanned, execution_duration_seconds
+                FROM results
+                WHERE execution_id IN ({placeholders})
+            """, tuple(exec_ids))
+
+            feather_metadata = {}
+            wing_names = []
+            total_records_scanned = 0
+            execution_duration_seconds = 0.0
+            max_feathers_processed = 0
+            for wing_name, fm_json, feathers_col, records, duration in cursor.fetchall():
+                if wing_name and wing_name not in wing_names:
+                    wing_names.append(wing_name)
+                if fm_json:
+                    try:
+                        fm = json.loads(fm_json)
+                        if isinstance(fm, dict):
+                            for k, v in fm.items():
+                                if k not in feather_metadata:
+                                    feather_metadata[k] = v
+                    except Exception:
+                        pass
+                max_feathers_processed = max(max_feathers_processed, feathers_col or 0)
+                total_records_scanned += records or 0
+                execution_duration_seconds += duration or 0.0
+
+            feathers_processed = max(
+                max_feathers_processed,
+                len([k for k in feather_metadata.keys() if not k.startswith('_')])
+            )
+
+            print(f"[DynamicResultsTabWidget] Loaded {len(matches)} matches from {len(wing_names)} wing(s)")
+
+            n_wings = wing_count if wing_count is not None else (len(wing_names) or 1)
+            return CorrelationResult(
+                wing_id="identity_unified",
+                wing_name=f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})",
+                matches=matches,
+                total_matches=len(matches),
+                feather_metadata=feather_metadata,
+                feathers_processed=feathers_processed,
+                total_records_scanned=total_records_scanned,
+                execution_duration_seconds=execution_duration_seconds
+            )
+        finally:
+            conn.close()
+
     def _create_timebased_viewer(self, database_path: str, execution_id: str, show_progress=True):
         """
         Create and populate Time-Based results viewer from timebased_results_viewer.py.
@@ -2584,135 +2764,15 @@ class DynamicResultsTabWidget(QWidget):
             # Set database path
             viewer.set_database_path(database_path)
             
-            # Load data from database using execution_id
-            from pathlib import Path
-            import sqlite3
-            
-            if not Path(database_path).exists():
-                raise FileNotFoundError(f"Database not found: {database_path}")
-            
-            # Query database for this execution's results
-            from ..engine.correlation_result import CorrelationResult, CorrelationMatch
-            
-            conn = sqlite3.connect(database_path)
-            cursor = conn.cursor()
-            
-            # Load matches for this execution (including semantic_data for Task 1)
-            cursor.execute("""
-                SELECT 
-                    m.match_id,
-                    m.anchor_feather_id,
-                    m.anchor_artifact_type,
-                    m.match_score,
-                    m.feather_count,
-                    m.time_spread_seconds,
-                    m.matched_application,
-                    m.matched_file_path,
-                    m.timestamp,
-                    m.feather_records,
-                    m.weighted_score_value,
-                    m.weighted_score_interpretation,
-                    m.semantic_data
-                FROM matches m
-                JOIN results r ON m.result_id = r.result_id
-                WHERE r.execution_id = ?
-            """, (execution_id,))
-            
-            matches = []
-            for row in cursor.fetchall():
-                match_id, feather_id, artifact_type, score, feather_count, \
-                time_spread, app, file_path, timestamp, feather_records_json, \
-                weighted_score_value, weighted_score_interpretation, semantic_data_json = row
-                
-                # Parse JSON fields
-                import json
-                feather_records = json.loads(feather_records_json) if feather_records_json else {}
-                
-                # Parse semantic_data if present (Task 1 fix)
-                semantic_data = None
-                if semantic_data_json:
-                    try:
-                        semantic_data = json.loads(semantic_data_json)
-                    except Exception as e:
-                        pass
-                
-                # Reconstruct weighted_score dict if values exist
-                weighted_score = None
-                if weighted_score_value is not None:
-                    weighted_score = {
-                        'score': weighted_score_value,
-                        'interpretation': weighted_score_interpretation or ''
-                    }
-                
-                match = CorrelationMatch(
-                    match_id=match_id,
-                    timestamp=timestamp,
-                    feather_records=feather_records,
-                    match_score=score,
-                    feather_count=feather_count,
-                    time_spread_seconds=time_spread,
-                    anchor_feather_id=feather_id,
-                    anchor_artifact_type=artifact_type,
-                    matched_application=app,
-                    matched_file_path=file_path,
-                    weighted_score=weighted_score,
-                    semantic_data=semantic_data
-                )
-                matches.append(match)
-            
-            # Load feather metadata
-            cursor.execute("""
-                SELECT feather_metadata 
-                FROM results 
-                WHERE execution_id = ? AND feather_metadata IS NOT NULL
-                LIMIT 1
-            """, (execution_id,))
-            
-            feather_metadata = {}
-            row = cursor.fetchone()
-            if row and row[0]:
-                try:
-                    feather_metadata = json.loads(row[0])
-                except Exception as e:
-                    pass
-            
-            # Load statistics from results table
-            cursor.execute("""
-                SELECT 
-                    feathers_processed,
-                    total_records_scanned,
-                    execution_duration_seconds
-                FROM results
-                WHERE execution_id = ?
-                LIMIT 1
-            """, (execution_id,))
-            
-            stats_row = cursor.fetchone()
-            feathers_processed = stats_row[0] if stats_row and stats_row[0] is not None else 0
-            total_records_scanned = stats_row[1] if stats_row and stats_row[1] is not None else 0
-            execution_duration_seconds = stats_row[2] if stats_row and stats_row[2] is not None else 0.0
-            
-            conn.close()
-            
-            print(f"[DynamicResultsTabWidget] Loaded {len(matches)} matches from database")
-            print(f"[DynamicResultsTabWidget] Statistics: feathers={feathers_processed}, records={total_records_scanned}, time={execution_duration_seconds:.1f}s")
-            
-            # Create a minimal CorrelationResult object
-            exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
-            result = CorrelationResult(
-                wing_id=f"wing_{exec_id_str}",
-                wing_name=f"Wing {exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str}",
-                matches=matches,
-                total_matches=len(matches),
-                feather_metadata=feather_metadata,
-                feathers_processed=feathers_processed,
-                total_records_scanned=total_records_scanned,
-                execution_duration_seconds=execution_duration_seconds
-            )
-            
-            # Load into viewer (suppress progress dialog since parent already shows one)
+            # Read the CorrelationResult from the DB (pure-data helper, no Qt —
+            # also called by the background ResultsLoadWorker), then populate.
+            # Pump the event loop between row batches on this UI-thread path.
+            from PyQt5.QtWidgets import QApplication as _QApp
+            result = self._read_timebased_result(
+                database_path, execution_id,
+                progress_cb=lambda done, total: _QApp.processEvents())
             viewer.load_from_correlation_result(result, show_progress=show_progress)
-            
+
             return viewer
             
         except Exception as e:
@@ -2741,9 +2801,106 @@ class DynamicResultsTabWidget(QWidget):
             
             # Add error to viewer layout
             viewer.layout().insertWidget(0, error_label)
-            
+
             return viewer
-    
+
+    @staticmethod
+    def _read_timebased_result(database_path, execution_id, progress_cb=None, is_canceled=None):
+        """PURE-DATA load (no Qt) for a time-based execution: returns a
+        CorrelationResult. Safe to run on a background thread."""
+        from pathlib import Path
+        import sqlite3
+        import json
+        from ..engine.correlation_result import CorrelationResult, CorrelationMatch
+
+        if not Path(database_path).exists():
+            raise FileNotFoundError(f"Database not found: {database_path}")
+
+        conn = sqlite3.connect(database_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    m.match_id, m.anchor_feather_id, m.anchor_artifact_type, m.match_score,
+                    m.feather_count, m.time_spread_seconds, m.matched_application,
+                    m.matched_file_path, m.timestamp, m.feather_records,
+                    m.weighted_score_value, m.weighted_score_interpretation, m.semantic_data
+                FROM matches m
+                JOIN results r ON m.result_id = r.result_id
+                WHERE r.execution_id = ?
+            """, (execution_id,))
+
+            rows = cursor.fetchall()
+            total_rows = len(rows)
+            matches = []
+            for _row_i, row in enumerate(rows):
+                if _row_i and _row_i % 250 == 0:
+                    if progress_cb is not None:
+                        progress_cb(_row_i, total_rows)
+                    if is_canceled is not None and is_canceled():
+                        return None
+                (match_id, feather_id, artifact_type, score, feather_count,
+                 time_spread, app, file_path, timestamp, feather_records_json,
+                 weighted_score_value, weighted_score_interpretation, semantic_data_json) = row
+
+                feather_records = json.loads(feather_records_json) if feather_records_json else {}
+                semantic_data = None
+                if semantic_data_json:
+                    try:
+                        semantic_data = json.loads(semantic_data_json)
+                    except Exception:
+                        pass
+                weighted_score = None
+                if weighted_score_value is not None:
+                    weighted_score = {
+                        'score': weighted_score_value,
+                        'interpretation': weighted_score_interpretation or ''
+                    }
+                matches.append(CorrelationMatch(
+                    match_id=match_id, timestamp=timestamp, feather_records=feather_records,
+                    match_score=score, feather_count=feather_count, time_spread_seconds=time_spread,
+                    anchor_feather_id=feather_id, anchor_artifact_type=artifact_type,
+                    matched_application=app, matched_file_path=file_path,
+                    weighted_score=weighted_score, semantic_data=semantic_data
+                ))
+
+            cursor.execute("""
+                SELECT feather_metadata FROM results
+                WHERE execution_id = ? AND feather_metadata IS NOT NULL LIMIT 1
+            """, (execution_id,))
+            feather_metadata = {}
+            row = cursor.fetchone()
+            if row and row[0]:
+                try:
+                    feather_metadata = json.loads(row[0])
+                except Exception:
+                    pass
+
+            cursor.execute("""
+                SELECT feathers_processed, total_records_scanned, execution_duration_seconds
+                FROM results WHERE execution_id = ? LIMIT 1
+            """, (execution_id,))
+            stats_row = cursor.fetchone()
+            feathers_processed = stats_row[0] if stats_row and stats_row[0] is not None else 0
+            total_records_scanned = stats_row[1] if stats_row and stats_row[1] is not None else 0
+            execution_duration_seconds = stats_row[2] if stats_row and stats_row[2] is not None else 0.0
+
+            print(f"[DynamicResultsTabWidget] Loaded {len(matches)} matches from database")
+
+            exec_id_str = str(execution_id)
+            return CorrelationResult(
+                wing_id=f"wing_{exec_id_str}",
+                wing_name=f"Wing {exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str}",
+                matches=matches,
+                total_matches=len(matches),
+                feather_metadata=feather_metadata,
+                feathers_processed=feathers_processed,
+                total_records_scanned=total_records_scanned,
+                execution_duration_seconds=execution_duration_seconds
+            )
+        finally:
+            conn.close()
+
     def load_last_results(self, output_dir: str, progress_callback=None) -> None:
         """
         Load the most recent execution results from output directory.
@@ -2816,14 +2973,26 @@ class DynamicResultsTabWidget(QWidget):
             
             update_progress("Finding most recent execution...", 40)
             
-            # Get the most recent execution_id
-            cursor.execute("""
-                SELECT execution_id, engine_type, execution_time
-                FROM executions
-                ORDER BY execution_time DESC
-                LIMIT 1
-            """)
-            
+            # Get the most recent execution_id (+ its run_group_id when the
+            # column exists — legacy DBs predate it)
+            cursor.execute("PRAGMA table_info(executions)")
+            has_run_group = 'run_group_id' in {r[1] for r in cursor.fetchall()}
+
+            if has_run_group:
+                cursor.execute("""
+                    SELECT execution_id, engine_type, execution_time, run_group_id
+                    FROM executions
+                    ORDER BY execution_time DESC
+                    LIMIT 1
+                """)
+            else:
+                cursor.execute("""
+                    SELECT execution_id, engine_type, execution_time, NULL
+                    FROM executions
+                    ORDER BY execution_time DESC
+                    LIMIT 1
+                """)
+
             row = cursor.fetchone()
             if not row:
                 conn.close()
@@ -2834,16 +3003,33 @@ class DynamicResultsTabWidget(QWidget):
                     "No correlation executions found in the database.\n\nPlease run a correlation first."
                 )
                 return
-            
-            execution_id, engine_type, execution_time = row
+
+            execution_id, engine_type, execution_time, run_group_id = row
             print(f"[DynamicResultsTabWidget] Found most recent execution: {execution_id} ({engine_type}) at {execution_time}")
-            
+
+            # Live runs execute each wing in its OWN execution; the run_group_id
+            # links them. Load every sibling execution of the last run so the
+            # results show ALL wings, not just the final one.
+            run_execution_ids = [execution_id]
+            if run_group_id:
+                cursor.execute("""
+                    SELECT execution_id FROM executions
+                    WHERE run_group_id = ?
+                    ORDER BY execution_id
+                """, (run_group_id,))
+                sibling_ids = [r[0] for r in cursor.fetchall()]
+                if sibling_ids:
+                    run_execution_ids = sibling_ids
+                print(f"[DynamicResultsTabWidget] Run group {run_group_id}: {len(run_execution_ids)} execution(s)")
+
             conn.close()
-            
-            update_progress(f"Detecting wings from execution {execution_id}...", 50)
-            
-            # Detect all wings from this execution
-            wing_summaries = self._detect_wings_from_execution(str(db_path), execution_id)
+
+            update_progress(f"Detecting wings from {len(run_execution_ids)} execution(s)...", 50)
+
+            # Detect all wings across every execution of the run
+            wing_summaries = []
+            for exec_id in run_execution_ids:
+                wing_summaries.extend(self._detect_wings_from_execution(str(db_path), exec_id))
             
             if not wing_summaries:
                 print(f"[DynamicResultsTabWidget] ERROR: No wings found for execution {execution_id}")
@@ -2972,7 +3158,7 @@ class DynamicResultsTabWidget(QWidget):
             total_wings = aggregate_stats.get('total_wings_executed', 0)
             total_matches = aggregate_stats.get('total_matches_all_wings', 0)
             execution_times = aggregate_stats.get('execution_times', [])
-            total_time = sum(execution_times) if execution_times else 0
+            total_time = sum((t or 0) for t in execution_times) if execution_times else 0
             avg_matches = total_matches / total_wings if total_wings > 0 else 0
             
             # Format time for display
@@ -3021,7 +3207,13 @@ class DynamicResultsTabWidget(QWidget):
                 for feather_id, stats in feather_statistics.items():
                     if feather_id.startswith('_'):
                         continue
-                    matches = stats.get('identities_found', stats.get('matches_created', 0))
+                    # Time-window feathers have identities_found=0 (their matches
+                    # aren't identity-keyed) but a real matches_created — the plain
+                    # .get() default is dead since the key is always present, so
+                    # fall back explicitly or they'd vanish from the chart.
+                    matches = stats.get('identities_found', 0)
+                    if not matches:
+                        matches = stats.get('matches_created', 0)
                     if matches > 0:
                         matches_data[feather_id] = matches
                 
@@ -3080,6 +3272,7 @@ class DynamicResultsTabWidget(QWidget):
             # Helper function to format time
             def format_time(seconds):
                 """Format time as seconds, minutes, or hours"""
+                seconds = seconds or 0  # tolerate None / missing durations
                 if seconds < 60:
                     return f"{seconds:.1f}s"
                 elif seconds < 3600:
@@ -3205,24 +3398,47 @@ class DynamicResultsTabWidget(QWidget):
                 }
             """)
             
-            # Add each wing as a sub-tab within the combined viewer
-            for i, wing_summary in enumerate(wing_summaries):
+            # Identity wings share ONE unified sub-tab (with per-identity wing
+            # attribution); time-window wings keep one sub-tab per wing
+            identity_wings = [w for w in wing_summaries if w.get('engine_type') == 'identity_based']
+            time_wings = [w for w in wing_summaries if w.get('engine_type') != 'identity_based']
+
+            if identity_wings:
+                update_progress("Loading identity wings (unified view)...", 85)
+                identity_db_path = identity_wings[0].get('database_path', str(db_path))
+                n_wings = len(identity_wings)
+                # Each wing may live in its own execution (live runs) — pass
+                # every identity wing's execution id to the unified viewer
+                identity_exec_ids = []
+                for w in identity_wings:
+                    eid = w.get('execution_id', execution_id)
+                    if eid not in identity_exec_ids:
+                        identity_exec_ids.append(eid)
+                viewer = self._create_identity_viewer(
+                    identity_db_path, identity_exec_ids,
+                    show_progress=False, wing_count=n_wings
+                )
+                if viewer:
+                    combined_viewer.addTab(viewer, f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})")
+                    print(f"[DynamicResultsTabWidget] [OK] Added unified identity view ({n_wings} wings)")
+
+            for i, wing_summary in enumerate(time_wings):
                 wing_name = wing_summary.get('wing_name', f'Wing {i}')
                 engine_type = wing_summary.get('engine_type', 'unknown')
                 database_path = wing_summary.get('database_path', str(db_path))
-                
-                progress_percent = 85 + int((i / len(wing_summaries)) * 10)
+
+                progress_percent = 85 + int((i / max(len(time_wings), 1)) * 10)
                 update_progress(f"Loading {wing_name}...", progress_percent)
-                
+
                 print(f"[DynamicResultsTabWidget] Creating viewer for wing: {wing_name} ({engine_type})")
-                
-                # Create appropriate viewer based on engine type
+
                 viewer = None
-                if engine_type == 'identity_based':
-                    viewer = self._create_identity_viewer(database_path, execution_id, show_progress=False)
-                elif engine_type in ['time_window_scanning', 'time_based']:
-                    viewer = self._create_timebased_viewer(database_path, execution_id, show_progress=False)
-                
+                if engine_type in ['time_window_scanning', 'time_based']:
+                    # Use the wing's own execution id (live runs give each
+                    # wing its own execution)
+                    wing_exec_id = wing_summary.get('execution_id', execution_id)
+                    viewer = self._create_timebased_viewer(database_path, wing_exec_id, show_progress=False)
+
                 if viewer:
                     combined_viewer.addTab(viewer, wing_name)
                     print(f"[DynamicResultsTabWidget] [OK] Added {wing_name} to combined viewer")
@@ -3461,7 +3677,7 @@ class DynamicResultsTabWidget(QWidget):
             total_wings = aggregate_stats.get('total_wings_executed', 0)
             total_matches = aggregate_stats.get('total_matches_all_wings', 0)
             execution_times = aggregate_stats.get('execution_times', [])
-            total_time = sum(execution_times) if execution_times else 0
+            total_time = sum((t or 0) for t in execution_times) if execution_times else 0
             avg_matches = total_matches / total_wings if total_wings > 0 else 0
             
             # Format time for display
@@ -3731,7 +3947,12 @@ class DynamicResultsTabWidget(QWidget):
                         card_layout.addWidget(pct_label)
                         
                         # SECONDARY Percentage (Correlation Rate) - smaller, gray
-                        corr_label = QLabel(f"↳ {correlation_percentage:.1f}% correlated")
+                        corr_label = QLabel()
+                        corr_label.setTextFormat(Qt.RichText)
+                        corr_label.setText(
+                            f'<img src="{CrowEyeIcons.icon_path("subarrow")}" width="9" height="9"> '
+                            f'{correlation_percentage:.1f}% correlated'
+                        )
                         corr_label.setStyleSheet("color: #64748B; font-size: 5pt;")
                         corr_label.setToolTip(f"Correlation Rate: {correlation_percentage:.1f}% of extracted evidence resulted in correlations ({correlated:,} / {extracted:,})")
                         card_layout.addWidget(corr_label)
@@ -3747,8 +3968,8 @@ class DynamicResultsTabWidget(QWidget):
                     
                 except Exception as e:
                     print(f"[DynamicResultsTabWidget] [FAIL] ERROR creating charts: {e}")
-                import traceback
-                traceback.print_exc()
+                    import traceback
+                    traceback.print_exc()
             else:
                 print("[DynamicResultsTabWidget] [WARN] WARNING: No feather_statistics available - charts not created")
                 print(f"[DynamicResultsTabWidget] aggregate_stats keys: {list(aggregate_stats.keys())}")
@@ -3828,6 +4049,7 @@ class DynamicResultsTabWidget(QWidget):
                 # Helper function to format time
                 def format_time(seconds):
                     """Format time as seconds, minutes, or hours."""
+                    seconds = seconds or 0  # tolerate None / missing durations
                     if seconds < 60:
                         return f"{seconds:.1f}s"
                     elif seconds < 3600:

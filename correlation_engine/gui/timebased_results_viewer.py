@@ -432,7 +432,7 @@ class TimeBasedResultsViewer(QWidget):
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and hierarchical structure."""
         tree = QTreeWidget()
-        tree.setHeaderLabels(["Time Window / Identity / Evidence", "Feathers", "Score", "Semantic", "Records", "Artifact"])
+        tree.setHeaderLabels(["Time Window / Identity / Record", "Feathers", "Score", "Semantic", "Records", "Artifact"])
         
         tree.setColumnWidth(0, 300)
         tree.setColumnWidth(1, 150)
@@ -442,44 +442,62 @@ class TimeBasedResultsViewer(QWidget):
         tree.setColumnWidth(5, 80) # Artifact column
         
         tree.setAlternatingRowColors(True)
+        tree.setIndentation(22)
         tree.itemDoubleClicked.connect(self._on_double_click)
         tree.itemClicked.connect(self._on_item_clicked)
         tree.itemExpanded.connect(self._on_item_expanded)
         tree.itemCollapsed.connect(self._on_item_collapsed)
         tree.setContextMenuPolicy(Qt.CustomContextMenu)
         tree.customContextMenuRequested.connect(self._on_tree_context_menu)
-        
-        # Match app background - dark theme with expand/collapse indicators
-        tree.setStyleSheet("""
-            QTreeWidget {
+
+        # Dark theme + hierarchy visualization: slate guide lines show which
+        # row nests under which, and cyan chevrons show expanded/collapsed
+        # state on every row that has children. Same rules as the identity
+        # viewer so both result trees speak one visual language.
+        vline = CrowEyeIcons.icon_path("branch_vline")
+        more = CrowEyeIcons.icon_path("branch_more")
+        end = CrowEyeIcons.icon_path("branch_end")
+        closed = CrowEyeIcons.icon_path("branch_closed")
+        opened = CrowEyeIcons.icon_path("branch_open")
+        tree.setStyleSheet(f"""
+            QTreeWidget {{
                 font-size: 8pt;
                 background-color: #0B1220;
                 alternate-background-color: #1E293B;
                 border: 1px solid #334155;
                 color: #E2E8F0;
-            }
-            QTreeWidget::item { 
+            }}
+            QTreeWidget::item {{
                 padding: 4px 2px;
                 min-height: 24px;
-            }
-            QTreeWidget::item:selected { 
-                background-color: #334155; 
+            }}
+            QTreeWidget::item:selected {{
+                background-color: #334155;
                 color: #00FFFF;
-            }
-            QTreeWidget::branch {
+            }}
+            QTreeWidget::branch {{
                 background-color: transparent;
-            }
+            }}
+            QTreeWidget::branch:has-siblings:!adjoins-item {{
+                border-image: url({vline}) 0;
+            }}
+            QTreeWidget::branch:has-siblings:adjoins-item {{
+                border-image: url({more}) 0;
+            }}
+            QTreeWidget::branch:!has-children:!has-siblings:adjoins-item {{
+                border-image: url({end}) 0;
+            }}
             QTreeWidget::branch:has-children:!has-siblings:closed,
-            QTreeWidget::branch:closed:has-children:has-siblings {
+            QTreeWidget::branch:closed:has-children:has-siblings {{
                 border-image: none;
-                image: none;
-            }
+                image: url({closed});
+            }}
             QTreeWidget::branch:open:has-children:!has-siblings,
-            QTreeWidget::branch:open:has-children:has-siblings {
+            QTreeWidget::branch:open:has-children:has-siblings {{
                 border-image: none;
-                image: none;
-            }
-            QHeaderView::section {
+                image: url({opened});
+            }}
+            QHeaderView::section {{
                 background-color: #1E293B;
                 color: #00FFFF;
                 padding: 6px 4px;
@@ -488,7 +506,7 @@ class TimeBasedResultsViewer(QWidget):
                 border: none;
                 border-bottom: 2px solid #00FFFF;
                 min-height: 26px;
-            }
+            }}
         """)
         return tree
     
@@ -1385,25 +1403,28 @@ class TimeBasedResultsViewer(QWidget):
             temporal_indicator = "" # Blue diamond default
             tooltip = identity_name
         
-        # Task 6.2: Check if identity has semantic data for [S] indicator with error handling
+        # Task 6.2: Check if identity has semantic data (tag icon on the
+        # Semantic column instead of the old "[S] " text marker)
         try:
             has_semantic = semantic_value not in ["-", "Error", "Fallback", None, ""]
-            semantic_indicator = "[S] " if has_semantic else ""
         except Exception as e:
             logger.warning(f"Error checking semantic indicator: {e}")
-            semantic_indicator = ""
+            has_semantic = False
 
         # Identity item (6 columns - removed Time). Crow-Eye target icon
         # marks the focal identity; Qt draws the native expand chevron.
         item = QTreeWidgetItem([
-            f"{temporal_indicator} {semantic_indicator}{identity_name}" + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
+            f"{temporal_indicator} {identity_name}".strip() + (f" ({len(sub_identities)} variants)" if len(sub_identities) > 1 else ""),
             feather_str,
             score_str,
             semantic_value, # Semantic column with aggregated value
             str(total_matches),
             f"{len(base_feathers)} feathers"
         ])
-        item.setIcon(0, CrowEyeIcons.target())
+        item.setIcon(0, CrowEyeIcons.identity()) # fingerprint: the tracked actor/app
+        if has_semantic:
+            # Descriptive tag icon on the Semantic column (replaces "[S] ")
+            item.setIcon(3, CrowEyeIcons.tag())
         item.setFont(0, QFont("Segoe UI", 8, QFont.Bold))
         
         # Color based on temporal relationship
@@ -1550,7 +1571,7 @@ class TimeBasedResultsViewer(QWidget):
             str(len(matches)),
             f"{len(matches)} matches"
         ])
-        item.setIcon(0, CrowEyeIcons.link())
+        item.setIcon(0, CrowEyeIcons.sub_identity()) # branch-to-variant: name/version variant
         item.setFont(0, QFont("Segoe UI", 8))
         item.setForeground(0, QBrush(QColor("#FF9800"))) # Orange for sub-identity
         
@@ -1598,17 +1619,17 @@ class TimeBasedResultsViewer(QWidget):
         # Extract semantic value from match
         semantic_value = self._get_semantic_value(match)
         
-        # Evidence item (6 columns - removed Time column). Crow-Eye info icon
-        # marks leaf detail rows.
+        # Record item — the leaf level holds raw artifact records, labeled
+        # "Record" (not the identity's name). Crow-Eye record+magnifier icon.
         item = QTreeWidgetItem([
-            "Evidence",
+            "Record",
             feather_str,
             score_str,
             semantic_value, # Semantic column
             str(len(base_feathers)),
             match.anchor_artifact_type
         ])
-        item.setIcon(0, CrowEyeIcons.info())
+        item.setIcon(0, CrowEyeIcons.evidence()) # record+magnifier: raw artifact record
         item.setForeground(0, QBrush(QColor("#4CAF50"))) # Green for evidence
         
         # Color score
@@ -2329,6 +2350,9 @@ class TimeWindowDetailDialog(QDialog):
             self.setWindowTitle(f"Identity: {self.data.get('identity_name', 'Unknown')}")
         elif self.item_type == 'feather':
             self.setWindowTitle(f"Feather: {self.data.get('feather_id', 'Unknown')}")
+        elif self.item_type == 'evidence':
+            # The leaf level holds raw artifact RECORDS
+            self.setWindowTitle("Record Details")
         else:
             self.setWindowTitle(f"{self.item_type.capitalize()} Details")
         
@@ -3020,7 +3044,7 @@ class TimeWindowDetailDialog(QDialog):
             info_text = QTextEdit()
             info_text.setReadOnly(True)
             lines = []
-            lines.append(f"Evidence Record")
+            lines.append(f"Record")
             lines.append(f"=" * 50)
             
             # Handle both dict and object

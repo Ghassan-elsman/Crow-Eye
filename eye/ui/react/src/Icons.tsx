@@ -286,6 +286,29 @@ export const IconUser: React.FC<IconProps> = ({ size = defaultProps.size, classN
   </svg>
 );
 
+export const IconBucket: React.FC<IconProps> = ({ size = defaultProps.size, className, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M4 7h16l-1.6 12.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8z" />
+    <path d="M3 7a9 3 0 0 0 18 0a9 3 0 0 0-18 0z" />
+  </svg>
+);
+
+export const IconPin: React.FC<IconProps> = ({ size = defaultProps.size, className, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <line x1="12" y1="17" x2="12" y2="22" />
+    <path d="M9 4h6l-1 6 3 3H7l3-3-1-6z" />
+  </svg>
+);
+
+export const IconWrench: React.FC<IconProps> = ({ size = defaultProps.size, className, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M14.7 6.3a4 4 0 0 0-5.2 5.2l-6.1 6.1a1.5 1.5 0 0 0 2.1 2.1l6.1-6.1a4 4 0 0 0 5.2-5.2l-2.3 2.3-2.1-2.1 2.3-2.3z" />
+  </svg>
+);
+
 /** Returns the correct icon component for a ThinkingStep type */
 export const StepIcon: React.FC<{ type: string; status: string; size?: number }> = ({ type, status, size = 14 }) => {
   if (status === 'error') return <IconX size={size} color="var(--color-error)" />;

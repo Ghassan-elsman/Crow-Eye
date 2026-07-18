@@ -1,0 +1,116 @@
+{
+  "config_name": "ransomware_mass_encryption_correlation",
+  "wing_name": "Ransomware Mass-Encryption Correlation",
+  "wing_id": "default_wing_ransomware_001",
+  "description": "Detects ransomware-style mass file modification and recovery inhibition. Uses a THRESHOLD rule on a burst of USN file writes/renames within minutes (mass encryption) plus match rules for shadow-copy / backup deletion (vssadmin, wbadmin, bcdedit) and known recovery-inhibition tooling. Identity-Based engine only.",
+  "proves": "Files were mass-modified and recovery was inhibited, consistent with ransomware",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-07-12T00:00:00Z",
+  "last_modified": "2026-07-12T00:00:00Z",
+  "version": "1.0",
+
+  "feathers": [
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.45,
+      "tier": 1,
+      "tier_name": "Mass file modification evidence"
+    },
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.30,
+      "tier": 1,
+      "tier_name": "Recovery-inhibition tool execution"
+    },
+    {
+      "feather_config_name": "SystemLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemLogs_CrowEyeFeather.db",
+      "artifact_type": "SystemLogs",
+      "feather_id": "system_logs",
+      "weight": 0.25,
+      "tier": 2,
+      "tier_name": "Volume shadow / service context"
+    }
+  ],
+
+  "time_window_minutes": 60,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": ["MFT", "Prefetch", "SystemLogs"],
+  "use_weighted_scoring": true,
+
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed":  { "min": 0.70, "label": "Confirmed Ransomware Activity" },
+      "probable":   { "min": 0.40, "label": "Probable Ransomware Activity" },
+      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
+      "not_proven": { "min": 0.00, "label": "Not Proven" }
+    }
+  },
+
+  "semantic_rules": [
+    {
+      "rule_id": "rw_mass_write_burst",
+      "name": "Mass File-Write Burst (Threshold)",
+      "semantic_value": "Mass File Encryption",
+      "description": "100+ USN DATA_OVERWRITE / RENAME entries within 5 minutes — characteristic of ransomware encrypting files in bulk.",
+      "rule_type": "threshold",
+      "threshold": {
+        "condition": { "feather_id": "mft_usn", "field_name": "reason", "operator": "regex", "value": "DATA_OVERWRITE|RENAME_NEW_NAME|DATA_TRUNCATION" },
+        "min_count": 100,
+        "within_minutes": 5
+      },
+      "scope": "wing",
+      "category": "impact",
+      "severity": "critical",
+      "technique_id": ["T1486"],
+      "tactic": ["impact"]
+    },
+    {
+      "rule_id": "rw_recovery_inhibition",
+      "name": "Recovery Inhibition Tool",
+      "semantic_value": "Inhibit System Recovery",
+      "description": "Prefetch evidence of shadow-copy / backup deletion tooling (vssadmin, wbadmin, bcdedit, wmic shadowcopy).",
+      "rule_type": "match",
+      "conditions": [
+        { "feather_id": "prefetch", "field_name": "executable_name", "operator": "regex", "value": "\\b(?:vssadmin|wbadmin|bcdedit|wmic|diskshadow)\\b" }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "impact",
+      "severity": "high",
+      "technique_id": ["T1490"],
+      "tactic": ["impact"]
+    },
+    {
+      "rule_id": "rw_encrypt_then_inhibit",
+      "name": "Mass Encryption With Recovery Inhibition",
+      "semantic_value": "Confirmed Ransomware Pattern",
+      "description": "A mass file-write burst together with recovery-inhibition tooling — a high-confidence ransomware pattern.",
+      "rule_type": "threshold",
+      "threshold": {
+        "condition": { "feather_id": "mft_usn", "field_name": "reason", "operator": "regex", "value": "DATA_OVERWRITE|RENAME_NEW_NAME" },
+        "min_count": 50,
+        "within_minutes": 10
+      },
+      "scope": "wing",
+      "category": "impact",
+      "severity": "critical",
+      "technique_id": ["T1486", "T1490"],
+      "tactic": ["impact"]
+    }
+  ],
+
+  "tags": ["impact", "ransomware", "mass_encryption", "threshold", "default", "weighted", "apt"],
+  "case_types": ["intrusion", "ransomware", "apt"]
+}

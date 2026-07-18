@@ -7,15 +7,16 @@ Integrates the React chat interface and report builder panel with a split pane l
 """
 
 import os
+import json
 import logging
 import threading
 from typing import Optional
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QToolBar, QPushButton,
-    QSizePolicy, QLabel, QMessageBox, QFrame, QApplication
+    QSizePolicy, QLabel, QMessageBox, QFrame, QApplication, QFileDialog
 )
-from PyQt5.QtCore import Qt, QUrl, QSize, QTimer, QCoreApplication, QEventLoop
+from PyQt5.QtCore import Qt, QUrl, QSize, QTimer, QCoreApplication, QEventLoop, QThread, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage
 from PyQt5.QtWebChannel import QWebChannel
@@ -36,6 +37,29 @@ from eye.ui.case_summary_dialog import CaseSummaryDialog
 from eye.ui import message_box_helper
 
 logger = logging.getLogger(__name__)
+
+
+class _EvidenceImportWorker(QThread):
+    """Runs FeatherImporter off the GUI thread so a large CSV/JSON conversion
+    never freezes the Eye window. Emits the importer's result dict on finish."""
+
+    done = pyqtSignal(dict)
+
+    def __init__(self, artifacts_dir, src_path, parent=None):
+        super().__init__(parent)
+        self.artifacts_dir = str(artifacts_dir)
+        self.src_path = src_path
+
+    def run(self):
+        try:
+            from correlation_engine.feather.importer import FeatherImporter
+            result = FeatherImporter(self.artifacts_dir).import_file(self.src_path)
+        except Exception as e:  # never let the thread die silently
+            logger.exception("Evidence import worker failed")
+            result = {"ok": False, "error": f"Import failed: {e}", "dest_db": None,
+                      "table": None, "row_count": 0, "primary_timestamp": None,
+                      "source_type": None, "display_name": None}
+        self.done.emit(result)
 
 
 class OnboardingCancelled(Exception):
@@ -564,6 +588,7 @@ class EYEAssistantWindow(QWidget):
         self.bridge.case_context_requested.connect(self._on_case_context_clicked)
         self.bridge.case_summary_requested.connect(self._on_case_summary_clicked)
         self.bridge.settings_requested.connect(self._show_onboarding_wizard)
+        self.bridge.add_evidence_requested.connect(self._on_add_evidence)
         self.bridge.compliance_window_requested.connect(self._open_compliance_window)
         self.bridge.narrative_map_window_requested.connect(self._open_narrative_map_window)
 
@@ -606,6 +631,76 @@ class EYEAssistantWindow(QWidget):
         url = QUrl.fromLocalFile(react_build_path)
         self.chat_view.load(QUrl(url.toString() + "?view=chat"))
         self.report_view.load(QUrl(url.toString() + "?view=report"))
+
+    def _on_add_evidence(self):
+        """Open a native picker for external evidence, then import it in the background.
+
+        Accepts a SQLite database (copied verbatim) or a CSV/JSON (auto-converted to a
+        feather-shaped SQLite via FeatherImporter). The result lands under the case's
+        Target_Artifacts/Imported_Evidence/ folder, where the Eye's recursive DB
+        discovery picks it up. Shared by the top-bar button and the Settings dialog.
+        """
+        if self.database_service is None:
+            QMessageBox.warning(self, "No Case Loaded",
+                                "Open a case before importing external evidence.")
+            return
+        # Guard against overlapping imports.
+        if getattr(self, "_evidence_worker", None) is not None and self._evidence_worker.isRunning():
+            QMessageBox.information(self, "Import In Progress",
+                                    "An evidence import is already running. Please wait for it to finish.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Add new evidence", "",
+            "Forensics files (*.db *.sqlite *.sqlite3 *.csv *.tsv *.json *.jsonl);;"
+            "SQLite databases (*.db *.sqlite *.sqlite3);;"
+            "CSV/TSV (*.csv *.tsv);;JSON (*.json *.jsonl);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        artifacts_dir = getattr(self.database_service, "case_directory", None) or self.case_directory
+        self._evidence_worker = _EvidenceImportWorker(artifacts_dir, file_path, parent=self)
+        self._evidence_worker.done.connect(self._on_evidence_imported)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.bridge.status_updated.emit(json.dumps(
+                {"status": f"Importing evidence: {os.path.basename(file_path)}…"}))
+        except Exception:
+            pass
+        self._evidence_worker.start()
+
+    def _on_evidence_imported(self, result: dict):
+        """Handle the FeatherImporter result: refresh the Eye's DB view and notify."""
+        QApplication.restoreOverrideCursor()
+        self._evidence_worker = None
+
+        if not result or not result.get("ok"):
+            err = (result or {}).get("error") or "Unknown error."
+            QMessageBox.critical(self, "Evidence Import Failed", err)
+            return
+
+        # Make the new database visible to the model on the next query.
+        try:
+            if self.context_manager and hasattr(self.context_manager, "refresh_database_manifest"):
+                self.context_manager.refresh_database_manifest()
+        except Exception as e:
+            logger.warning(f"Could not refresh database manifest after import: {e}")
+
+        name = result.get("display_name") or "evidence"
+        rows = result.get("row_count") or 0
+        src_type = (result.get("source_type") or "").upper()
+        ts = result.get("primary_timestamp")
+        detail = f"'{name}' ({src_type}) imported with {rows:,} rows."
+        if src_type in ("CSV", "JSON"):
+            detail += ("\nDetected timeline timestamp column: "
+                       + (f"'{ts}'." if ts else "none (won't appear on the timeline)."))
+        detail += "\n\nThe Eye can now query it, and it appears in the Timeline's 'Imported Evidence' lane."
+        QMessageBox.information(self, "Evidence Imported", detail)
+        try:
+            self.bridge.status_updated.emit(json.dumps({"status": detail.splitlines()[0]}))
+        except Exception:
+            pass
 
     def _show_onboarding_wizard(self):
         # Ensure we have a credential manager instance

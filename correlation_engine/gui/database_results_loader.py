@@ -14,10 +14,29 @@ from PyQt5.QtWidgets import (
     QHeaderView, QCheckBox, QGroupBox, QComboBox, QLineEdit,
     QSplitter, QTextEdit, QWidget
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QThread, QObject
 from PyQt5.QtGui import QFont
 
 from ..engine.database_persistence import ResultsDatabase
+from .ui_styling import CorrelationEngineStyles
+from .crow_eye_icons import CrowEyeIcons
+
+
+class _ExecutionsQueryWorker(QObject):
+    """Runs the executions-list SQLite query off the UI thread so the loader
+    dialog doesn't freeze while reading a large database."""
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(self, db_path):
+        super().__init__()
+        self._db_path = db_path
+
+    def run(self):
+        try:
+            self.finished.emit(DatabaseResultsLoaderDialog._query_executions(self._db_path))
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class DatabaseResultsLoaderDialog(QDialog):
@@ -155,8 +174,23 @@ class DatabaseResultsLoaderDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
-        
+
         layout.addLayout(button_layout)
+
+        # Descriptive icons (Crow-Eye SVG set — no emojis)
+        self.browse_btn.setIcon(CrowEyeIcons.folder())
+        self.browse_other_btn.setIcon(CrowEyeIcons.folder())
+        select_all_btn.setIcon(CrowEyeIcons.add())
+        deselect_all_btn.setIcon(CrowEyeIcons.close())
+        self.load_btn.setIcon(CrowEyeIcons.history())
+        cancel_btn.setIcon(CrowEyeIcons.close())
+
+        # Dark theme for the whole dialog. Without this the dialog renders in
+        # default (white) Qt chrome. Must run AFTER all widgets exist; the
+        # helper only re-styles close/cancel/export-prefixed buttons, so the
+        # blue "Load Other Database" and green "Load Selected" accents above
+        # survive it.
+        CorrelationEngineStyles.apply_evidence_detail_styling(self)
     
     def _browse_database(self):
         """Browse for a database file in current case."""
@@ -182,60 +216,80 @@ class DatabaseResultsLoaderDialog(QDialog):
         if file_path:
             self._load_database(file_path)
     
+    @staticmethod
+    def _query_executions(db_path: str) -> List[Dict[str, Any]]:
+        """PURE-DATA: read the executions list from the DB (no Qt). Safe to run
+        on a worker thread — opens/uses/closes its own connection within scope."""
+        with ResultsDatabase(db_path) as db:
+            cursor = db.conn.cursor()
+            cursor.execute("""
+                SELECT
+                    e.execution_id, e.pipeline_name, e.engine_type, e.case_name,
+                    e.investigator, e.execution_time, COUNT(r.result_id) as result_count
+                FROM executions e
+                LEFT JOIN results r ON e.execution_id = r.execution_id
+                GROUP BY e.execution_id
+                ORDER BY e.execution_time DESC
+            """)
+            return [
+                {
+                    'execution_id': row[0], 'pipeline_name': row[1], 'engine_type': row[2],
+                    'case_name': row[3], 'investigator': row[4], 'execution_time': row[5],
+                    'result_count': row[6],
+                }
+                for row in cursor.fetchall()
+            ]
+
     def _load_database(self, db_path: str):
-        """Load executions from the specified database."""
+        """Load executions from the specified database on a background thread so
+        the dialog stays responsive on large databases."""
+        db_path_obj = Path(db_path)
+        if not db_path_obj.exists():
+            QMessageBox.warning(self, "Database Not Found",
+                                f"Database file not found:\n{db_path}")
+            return
+
+        # Ignore a new load while one is already running.
+        if getattr(self, '_exec_thread', None) is not None and self._exec_thread.isRunning():
+            return
+
+        self.current_db_path = db_path
+        self.db_path_edit.setText(db_path)
+        self._set_loading_state(True)
+
+        self._exec_thread = QThread(self)
+        self._exec_worker = _ExecutionsQueryWorker(db_path)
+        self._exec_worker.moveToThread(self._exec_thread)
+        self._exec_thread.started.connect(self._exec_worker.run)
+        self._exec_worker.finished.connect(self._on_executions_loaded, Qt.QueuedConnection)
+        self._exec_worker.error.connect(self._on_executions_error, Qt.QueuedConnection)
+        self._exec_worker.finished.connect(self._exec_thread.quit)
+        self._exec_worker.error.connect(self._exec_thread.quit)
+        self._exec_thread.finished.connect(self._exec_worker.deleteLater)
+        self._exec_thread.start()
+
+    def _set_loading_state(self, loading: bool):
+        """Show/clear a lightweight 'loading' state on the executions table."""
         try:
-            db_path_obj = Path(db_path)
-            if not db_path_obj.exists():
-                QMessageBox.warning(self, "Database Not Found", 
-                                  f"Database file not found:\n{db_path}")
-                return
-            
-            self.current_db_path = db_path
-            self.db_path_edit.setText(db_path)
-            
-            # Load executions from database
-            with ResultsDatabase(db_path) as db:
-                conn = db.conn
-                cursor = conn.cursor()
-                
-                cursor.execute("""
-                    SELECT 
-                        e.execution_id,
-                        e.pipeline_name,
-                        e.engine_type,
-                        e.case_name,
-                        e.investigator,
-                        e.execution_time,
-                        COUNT(r.result_id) as result_count
-                    FROM executions e
-                    LEFT JOIN results r ON e.execution_id = r.execution_id
-                    GROUP BY e.execution_id
-                    ORDER BY e.execution_time DESC
-                """)
-                
-                rows = cursor.fetchall()
-                
-                self.executions_data = []
-                for row in rows:
-                    execution_data = {
-                        'execution_id': row[0],
-                        'pipeline_name': row[1],
-                        'engine_type': row[2],
-                        'case_name': row[3],
-                        'investigator': row[4],
-                        'execution_time': row[5],
-                        'result_count': row[6]
-                    }
-                    self.executions_data.append(execution_data)
-            
-            self._populate_executions_table()
-            
-        except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            QMessageBox.critical(self, "Database Error",
-                               f"Failed to load database:\n{str(e)}\n\nDetails:\n{error_details}")
+            self.browse_btn.setEnabled(not loading)
+        except Exception:
+            pass
+        if loading:
+            self.executions_table.clearContents()
+            self.executions_table.setRowCount(1)
+            self.executions_table.setItem(0, 1, QTableWidgetItem("Loading executions…"))
+
+    def _on_executions_loaded(self, executions_data):
+        """UI-thread slot: populate the table with the worker's results."""
+        self.executions_data = executions_data
+        self._set_loading_state(False)
+        self._populate_executions_table()
+
+    def _on_executions_error(self, message: str):
+        """UI-thread slot: surface a load failure."""
+        self._set_loading_state(False)
+        QMessageBox.critical(self, "Database Error",
+                             f"Failed to load database:\n{message}")
     
     def _populate_executions_table(self):
         """Populate the executions table with data."""

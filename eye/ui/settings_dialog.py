@@ -666,8 +666,10 @@ class ContextWindowSettingsDialog(QDialog):
         
         # Show warning if sum exceeds max
         if budget_sum > max_tokens:
-            self.budget_warning_label.setText(
-                f"⚠️ Warning: Budget sum ({budget_sum:,}) exceeds max total tokens ({max_tokens:,})"
+            from correlation_engine.gui.crow_eye_icons import apply_status_to_label
+            apply_status_to_label(
+                self.budget_warning_label, "warning",
+                f"Warning: Budget sum ({budget_sum:,}) exceeds max total tokens ({max_tokens:,})"
             )
             self.budget_remaining_label.setStyleSheet("font-weight: bold; color: #EF4444; background: transparent;")
         else:

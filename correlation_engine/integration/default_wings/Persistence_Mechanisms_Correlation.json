@@ -104,6 +104,8 @@
   "semantic_rules": [
     {
       "rule_id": "pers_run_key",
+      "technique_id": ["T1547.001"],
+      "tactic": ["persistence"],
       "name": "Run / RunOnce Autostart Entry",
       "semantic_value": "Run Key Persistence",
       "description": "AutoStartPrograms entry indicates a binary is configured to run at logon/boot. Severity is 'info' because most autostart entries are legitimate (Discord, OneDrive, vendor utilities); tagging every entry as high-severity would drown the analyst in false-positive alerts. The wing's weighted scoring layer escalates the rating when combined with other persistence indicators.",
@@ -117,6 +119,8 @@
     },
     {
       "rule_id": "pers_service_install",
+      "technique_id": ["T1543.003"],
+      "tactic": ["persistence"],
       "name": "Service-Based Persistence",
       "semantic_value": "Service Persistence",
       "description": "A service is registered to launch a binary. Severity is 'info' because every Windows install has hundreds of legitimate services; tagging each as high-severity would be a sea of false positives. Suspicious services need additional context (unsigned binary, unusual path, recent install date) to warrant escalation.",

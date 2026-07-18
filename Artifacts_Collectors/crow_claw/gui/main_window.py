@@ -803,7 +803,7 @@ class CrowClawMainWindow(QMainWindow):
             # Add visual indicator for admin-required artifacts
             display_name = artifact.name
             if artifact.required_admin:
-                display_name = f"🔒 {artifact.name}"
+                display_name = f"{artifact.name}"
             
             item = QListWidgetItem(display_name)
             item.setData(Qt.UserRole, artifact)
@@ -1094,7 +1094,7 @@ class CrowClawMainWindow(QMainWindow):
         # Add info about wildcard expansion
         details += """
 <div style="margin: 15px 0; padding: 10px; background-color: #1A2B1A; border-left: 4px solid #00FF88; border-radius: 4px;">
-<p style="margin: 0; color: #00FF88; font-weight: bold; font-size: 10pt;">💡 WILDCARD INFO</p>
+<p style="margin: 0; color: #00FF88; font-weight: bold; font-size: 10pt;"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InNxdWFyZSIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciI+CiAgPHBhdGggZD0iTTkgMTggTDE1IDE4IE0xMCAyMSBMMTQgMjEgTTEyIDMgQTcgNyAwIDAgMSAxNSAxNiBMMTUgMTggTDkgMTggTDkgMTYgQTcgNyAwIDAgMSAxMiAzIFoiIHN0cm9rZT0iI0Y1OUUwQiIgc3Ryb2tlLXdpZHRoPSIyIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPgo=" width="13" height="13" style="vertical-align:middle"> WILDCARD INFO</p>
 <p style="margin: 5px 0 0 0; color: #E0E0E0; font-size: 9pt;">• Paths with <b style="color: #FFD700;">*</b> will expand to match multiple files</p>
 <p style="margin: 3px 0 0 0; color: #E0E0E0; font-size: 9pt;">• <span style="color: #00FFFF;">Users\\*\\NTUSER.DAT</span> will find all user profiles</p>
 <p style="margin: 3px 0 0 0; color: #E0E0E0; font-size: 9pt;">• <span style="color: #00FFFF;">$Recycle.Bin\\S-1-5-*</span> will find all user SIDs</p>
@@ -1147,7 +1147,7 @@ class CrowClawMainWindow(QMainWindow):
                 if artifact.required_admin:
                     admin_required_count += 1
                     if is_admin:
-                        admin_indicator = ' <span style="background-color: #3B2F1F; color: #FFAA00; padding: 2px 6px; border-radius: 3px; font-size: 8pt; font-weight: bold;">🔒 ADMIN REQUIRED</span>'
+                        admin_indicator = ' <span style="background-color: #3B2F1F; color: #FFAA00; padding: 2px 6px; border-radius: 3px; font-size: 8pt; font-weight: bold;"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj4KICA8cmVjdCB4PSI1IiB5PSIxMSIgd2lkdGg9IjE0IiBoZWlnaHQ9IjkiIHJ4PSIyIiBzdHJva2U9IiMwMEZGRkYiIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0ibm9uZSIvPgogIDxwYXRoIGQ9Ik04IDExIFY4IGE0IDQgMCAwIDEgOCAwIHYzIiBzdHJva2U9IiMwMEZGRkYiIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0ibm9uZSIvPgogIDxjaXJjbGUgY3g9IjEyIiBjeT0iMTUuNSIgcj0iMS4zIiBmaWxsPSIjMDBGRkZGIi8+Cjwvc3ZnPgo=" width="11" height="11" style="vertical-align:middle"> ADMIN REQUIRED</span>'
                     else:
                         admin_indicator = ' <span style="background-color: #3B1F1F; color: #FF6B6B; padding: 2px 6px; border-radius: 3px; font-size: 8pt; font-weight: bold;">⚠ ADMIN REQUIRED</span>'
                 
@@ -1160,14 +1160,14 @@ class CrowClawMainWindow(QMainWindow):
 """
 
                 # Expand default paths with actual partition
-                text += '<p style="margin: 8px 0 4px 0; font-size: 9pt; font-weight: bold; color: #00FF88;">📁 Default Paths:</p>'
+                text += '<p style="margin: 8px 0 4px 0; font-size: 9pt; font-weight: bold; color: #00FF88;"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InNxdWFyZSIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciI+CiAgPHBhdGggZD0iTTIgNiBMMiAxOSBBMSAxIDAgMCAwIDMgMjAgTDIxIDIwIEExIDEgMCAwIDAgMjIgMTkgTDIyIDggQTEgMSAwIDAgMCAyMSA3IEwxMSA3IEw5IDUgTDMgNSBBMSAxIDAgMCAwIDIgNiBaIiBzdHJva2U9IiMwMEZGRkYiIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K" width="13" height="13" style="vertical-align:middle"> Default Paths:</p>'
                 for path in artifact.default_paths:
                     expanded_path = path.replace("{PARTITION}", self.windows_partition)
                     text += f'<p style="margin: 2px 0 2px 20px; font-size: 9pt; color: #E0E0E0; font-family: Consolas;"><span style="color: #00FFFF;">→</span> <span style="background-color: #0F172A; padding: 2px 6px; border-radius: 2px;">{expanded_path}</span></p>'
 
                 # Show custom paths if any
                 if artifact.custom_paths:
-                    text += '<p style="margin: 8px 0 4px 0; font-size: 9pt; font-weight: bold; color: #FFAA00;">✏️ Custom Paths:</p>'
+                    text += '<p style="margin: 8px 0 4px 0; font-size: 9pt; font-weight: bold; color: #FFAA00;"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InNxdWFyZSIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciI+CiAgPHBhdGggZD0iTTQgMjAgTDQgMTYgTDE2IDQgTDIwIDggTDggMjAgWiIgc3Ryb2tlPSIjMDBGRkZGIiBzdHJva2Utd2lkdGg9IjIiIGZpbGw9Im5vbmUiLz4KICA8bGluZSB4MT0iMTQiIHkxPSI2IiB4Mj0iMTgiIHkyPSIxMCIgc3Ryb2tlPSIjMDBGRkZGIiBzdHJva2Utd2lkdGg9IjIiLz4KPC9zdmc+Cg==" width="13" height="13" style="vertical-align:middle"> Custom Paths:</p>'
                     for path in artifact.custom_paths:
                         expanded_path = path.replace("{PARTITION}", self.windows_partition)
                         text += f'<p style="margin: 2px 0 2px 20px; font-size: 9pt; color: #E0E0E0; font-family: Consolas;"><span style="color: #FFAA00;">→</span> <span style="background-color: #0F172A; padding: 2px 6px; border-radius: 2px;">{expanded_path}</span></p>'
@@ -1180,7 +1180,7 @@ class CrowClawMainWindow(QMainWindow):
 
 <div style="background-color: #1E293B; padding: 10px; border-radius: 4px; border: 2px solid #00FFFF;">
     <p style="margin: 0 0 8px 0; font-size: 11pt; font-weight: bold; color: #00FFFF; letter-spacing: 1px;">
-        📊 SUMMARY
+        <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InNxdWFyZSIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciI+CiAgPGxpbmUgeDE9IjMiIHkxPSIyMSIgeDI9IjIxIiB5Mj0iMjEiIHN0cm9rZT0iIzAwRkZGRiIgc3Ryb2tlLXdpZHRoPSIyIi8+CiAgPHJlY3QgeD0iNSIgeT0iMTMiIHdpZHRoPSIzIiBoZWlnaHQ9IjciIGZpbGw9IiMwMEZGRkYiLz4KICA8cmVjdCB4PSIxMCIgeT0iOCIgd2lkdGg9IjMiIGhlaWdodD0iMTIiIGZpbGw9IiMwMEZGRkYiLz4KICA8cmVjdCB4PSIxNSIgeT0iNCIgd2lkdGg9IjMiIGhlaWdodD0iMTYiIGZpbGw9IiMwMEZGRkYiLz4KPC9zdmc+Cg==" width="14" height="14" style="vertical-align:middle"> SUMMARY
     </p>
     <table style="width: 100%; font-size: 9pt; color: #E0E0E0;">
         <tr>
@@ -1218,7 +1218,7 @@ class CrowClawMainWindow(QMainWindow):
         text += """
 <div style="background-color: #1E293B; border-left: 4px solid #00FF88; padding: 8px; margin: 10px 0; border-radius: 4px;">
     <p style="margin: 0; font-size: 9pt; color: #00FF88;">
-        <b>💡 Note:</b> <span style="color: #E0E0E0;">Paths with wildcards (* or S-1-5-*) will expand to match multiple files during collection.</span>
+        <b><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InNxdWFyZSIgc3Ryb2tlLWxpbmVqb2luPSJtaXRlciI+CiAgPHBhdGggZD0iTTkgMTggTDE1IDE4IE0xMCAyMSBMMTQgMjEgTTEyIDMgQTcgNyAwIDAgMSAxNSAxNiBMMTUgMTggTDkgMTggTDkgMTYgQTcgNyAwIDAgMSAxMiAzIFoiIHN0cm9rZT0iI0Y1OUUwQiIgc3Ryb2tlLXdpZHRoPSIyIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPgo=" width="13" height="13" style="vertical-align:middle"> Note:</b> <span style="color: #E0E0E0;">Paths with wildcards (* or S-1-5-*) will expand to match multiple files during collection.</span>
     </p>
 </div>
 """
@@ -1477,7 +1477,7 @@ class CrowClawMainWindow(QMainWindow):
         self.access_method_display.setText("(Initializing...)")
         
         # Update button to show collection in progress
-        self.collect_button.setText("⏳ Collecting...")
+        self.collect_button.setText("Collecting...")
         self.collect_button.setEnabled(False)
         self.collect_button.setStyleSheet(
             f"QPushButton {{ background-color: {Colors.WARNING}; color: {Colors.BG_PRIMARY}; "

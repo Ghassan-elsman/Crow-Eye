@@ -298,6 +298,7 @@ class EYEBridge(QObject):
     case_context_requested = pyqtSignal()
     case_summary_requested = pyqtSignal()
     settings_requested = pyqtSignal()
+    add_evidence_requested = pyqtSignal()  # open the "Add new evidence" import flow
     compliance_window_requested = pyqtSignal()
     narrative_map_window_requested = pyqtSignal()  # open the Narrative Map OS window
 
@@ -3795,6 +3796,16 @@ class EYEBridge(QObject):
     def requestSettings(self):
         """Emit signal to show Settings/Onboarding wizard from main window."""
         self.settings_requested.emit()
+
+    @pyqtSlot()
+    def requestAddEvidence(self):
+        """Emit signal to open the 'Add new evidence' import flow from the main window.
+
+        The native file picker + conversion + case refresh all run on the Qt GUI
+        thread in EyeWindow (see EyeWindow._on_add_evidence), mirroring how
+        settings_requested is handled — a bridge QObject cannot host a QFileDialog.
+        """
+        self.add_evidence_requested.emit()
 
     @pyqtSlot()
     def requestComplianceWindow(self):

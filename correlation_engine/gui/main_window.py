@@ -25,10 +25,6 @@ from .execution_control import ExecutionControlWidget
 from .results_viewer import DynamicResultsTabWidget
 from ..integration.auto_feather_generator import AutoFeatherGenerator
 from ..integration.default_wings_loader import DefaultWingsLoader
-
-
-from ..integration.auto_feather_generator import AutoFeatherGenerator
-from ..integration.default_wings_loader import DefaultWingsLoader
 from .crow_eye_icons import apply_status_to_label
 
 
@@ -618,17 +614,20 @@ class MainWindow(QMainWindow):
             from PyQt5.QtCore import Qt
             default_wings = DefaultWingsLoader.load_all_default_wings()
             added_count = 0
+            # Precompute existing wing ids once (was O(n*m): a full list scan per
+            # default wing) and dedupe within the defaults too.
+            existing_ids = set()
+            for i in range(self.pipeline_builder.wings_list.count()):
+                existing = self.pipeline_builder.wings_list.item(i).data(Qt.UserRole)
+                wid = getattr(existing, 'wing_id', None) if existing else None
+                if wid:
+                    existing_ids.add(wid)
             for wing_config in default_wings:
-                already_exists = False
-                for i in range(self.pipeline_builder.wings_list.count()):
-                    item = self.pipeline_builder.wings_list.item(i)
-                    existing = item.data(Qt.UserRole)
-                    if existing and existing.wing_id == wing_config.wing_id:
-                        already_exists = True
-                        break
-                if not already_exists:
-                    self.pipeline_builder._add_wing_to_list(wing_config)
-                    added_count += 1
+                if wing_config.wing_id in existing_ids:
+                    continue
+                self.pipeline_builder._add_wing_to_list(wing_config)
+                existing_ids.add(wing_config.wing_id)
+                added_count += 1
             if added_count:
                 print(f"[Main Window] Loaded {added_count} default Wings into pipeline")
         except Exception as e:
@@ -1433,12 +1432,13 @@ class MainWindow(QMainWindow):
                 - feather_metadata: dict
         """
         print(f"[MainWindow] Wing completed: {wing_summary.get('wing_name')}")
-        
-        # Create new result tab for this wing (with summary section + tree view)
-        self.results_viewer.create_wing_result_tab(wing_summary)
-        
-        # Switch to the newly created tab
-        tab_index = self.results_viewer.enhanced_tab_widget.tab_widget.count() - 1
+
+        # Create (or update) the result tab for this wing. Identity wings all
+        # share one unified tab, so use the returned index instead of count()-1
+        # (updating an existing tab does not append).
+        tab_index = self.results_viewer.create_wing_result_tab(wing_summary)
+        if tab_index is None:
+            tab_index = self.results_viewer.enhanced_tab_widget.tab_widget.count() - 1
         self.results_viewer.enhanced_tab_widget.tab_widget.setCurrentIndex(tab_index)
     
     def _on_execution_completed(self, summary: dict):
@@ -1598,34 +1598,52 @@ class MainWindow(QMainWindow):
                     }
                 """)
                 
-                # Add each wing as a sub-tab within the combined viewer
-                wing_count = len(wing_summaries)
-                for wing_idx, wing_summary in enumerate(wing_summaries):
+                # Identity wings share ONE unified sub-tab (with per-identity
+                # wing attribution); time-window wings keep one sub-tab per wing
+                identity_wings = [w for w in wing_summaries if w.get('engine_type') == 'identity_based']
+                time_wings = [w for w in wing_summaries if w.get('engine_type') != 'identity_based']
+                wing_count = len(time_wings) + (1 if identity_wings else 0)
+
+                if identity_wings:
+                    n_wings = len(identity_wings)
+                    identity_db_path = identity_wings[0].get('database_path', db_path)
+
+                    progress.setLabelText(f"Loading execution {idx + 1}/{len(selected_executions)}: {execution_id}\nIdentity wings (unified view)")
+                    QApplication.processEvents()
+
+                    viewer = self.results_viewer._create_identity_viewer(
+                        identity_db_path, [execution_id],
+                        show_progress=False, wing_count=n_wings
+                    )
+                    if viewer:
+                        combined_viewer.addTab(viewer, f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})")
+                        print(f"[MainWindow] [OK] Added unified identity view ({n_wings} wings)")
+                    QApplication.processEvents()
+
+                for wing_idx, wing_summary in enumerate(time_wings):
                     wing_name = wing_summary.get('wing_name', 'Unknown Wing')
                     wing_engine_type = wing_summary.get('engine_type', 'unknown')
                     wing_db_path = wing_summary.get('database_path', db_path)
-                    
+
                     # Update progress for this wing
                     base_progress = int((idx / len(selected_executions)) * 90)
-                    wing_progress = int((wing_idx / wing_count) * (90 / len(selected_executions)))
+                    wing_progress = int((wing_idx / max(wing_count, 1)) * (90 / len(selected_executions)))
                     total_progress = base_progress + wing_progress
                     progress.setLabelText(f"Loading execution {idx + 1}/{len(selected_executions)}: {execution_id}\nWing {wing_idx + 1}/{wing_count}: {wing_name}")
                     progress.setValue(total_progress)
                     QApplication.processEvents()
-                    
+
                     print(f"[MainWindow] Creating viewer for wing: {wing_name} ({wing_engine_type})")
-                    
+
                     # Create appropriate viewer based on engine type
                     viewer = None
-                    if wing_engine_type == 'identity_based':
-                        viewer = self.results_viewer._create_identity_viewer(wing_db_path, execution_id, show_progress=False)
-                    elif wing_engine_type in ['time_window_scanning', 'time_based']:
+                    if wing_engine_type in ['time_window_scanning', 'time_based']:
                         viewer = self.results_viewer._create_timebased_viewer(wing_db_path, execution_id, show_progress=False)
-                    
+
                     if viewer:
                         combined_viewer.addTab(viewer, wing_name)
                         print(f"[MainWindow] [OK] Added {wing_name} to combined viewer")
-                    
+
                     # Update progress after wing is loaded
                     QApplication.processEvents()
                 
