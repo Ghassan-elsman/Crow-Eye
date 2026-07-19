@@ -152,9 +152,7 @@ flowchart TB
     RES -. "queried on demand" .-> EYE
     EYE <== "verdict · narrative · evidence" ==> NM
 
-    TL --> OUT
-    UB --> OUT
-    EYE --> OUT
+    EYE -- "report_* tools" --> OUT
 
 %% ═══════════ STYLE ═══════════
     classDef src   fill:#334155,stroke:#94a3b8,stroke-width:2px,color:#f1f5f9
@@ -185,6 +183,7 @@ flowchart TB
 | ② → ③ | Everything converges on one place: **the case databases**. Parsed artifacts land in `Target_Artifacts/`; imported third-party evidence lands in `Imported_Evidence/` and is auto-discovered. |
 | ③ → ④ | **The three analysis paths are independent of each other.** The Timeline and UBA read the case databases directly — neither requires a correlation run. The Correlation Engine is an *additional* layer, not a prerequisite. |
 | ④ → ⑤ | The Eye queries the case databases directly and can pull correlation results **on demand**. It never touches evidence itself — it emits tool calls that Crow-Eye executes and logs. |
+| ⑤ → Report | The **Living Report is built by the Eye alone**, through its `report_*` tools. The Timeline and UBA are analysis surfaces — they do not write to the report. Case-level findings can still be exported separately via [Search & Export](#-search--export). |
 | ⑤ ↔ | The **Narrative Map is bidirectional**: the Eye writes to it, you write to it, and its contents are injected into the Eye's prompt every turn. It is the memory, and you can command it. |
 
 **Independent stages.** The Timeline and UBA read the case artifact databases **directly** — neither requires a correlation run, and the Timeline does not depend on the Correlation Engine (it applies its own lightweight temporal grouping). Correlation is an additional analysis layer whose results the Eye can query.
