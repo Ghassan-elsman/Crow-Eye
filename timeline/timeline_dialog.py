@@ -214,20 +214,16 @@ class TimelineDialog(QDialog):
         ui = getattr(self.main_window, 'ui', None)
         if ui and hasattr(ui, 'case_paths') and 'artifacts_dir' in ui.case_paths:
             artifacts_dir = ui.case_paths['artifacts_dir']
-            if os.path.exists(artifacts_dir):
+            if artifacts_dir and os.path.exists(artifacts_dir):
                 return artifacts_dir
-        
+
         # 2. Fallback to case_dir (backwards compatibility)
         case_dir = getattr(self.main_window, 'case_dir', None)
         if case_dir:
             target_dir = os.path.join(case_dir, "Target_Artifacts")
             if os.path.exists(target_dir):
                 return target_dir
-                
-        # 3. Development/Test fallback
-        test_target = r"C:\Users\Ghass\Downloads\test 1\Target_Artifacts"
-        if os.path.exists(test_target):
-            logger.info(f"Using test Target_Artifacts directory: {test_target}")
-            return test_target
-            
-        raise ValueError("No case is currently loaded or Target_Artifacts not found.")
+
+        raise ValueError(
+            "No case is currently loaded. Open or create a case and parse the "
+            "computer's artifacts first, then open the Timeline.")

@@ -5,8 +5,8 @@ This module provides text-based icons and emoji representations for different
 artifact types and status indicators. These can be used in the GUI without
 requiring external image files.
 
-Author: Crow-eye Forensics
-License: MIT
+Author: Ghassan Elsman
+License: GPL-3.0
 """
 
 # ============================================================================

@@ -5,8 +5,8 @@ This module provides consistent styling for the GUI, including colors, fonts,
 spacing, and widget styles. It integrates with Crow-eye styles when available
 and provides fallback styling otherwise.
 
-Author: Crow-eye Forensics
-License: MIT
+Author: Ghassan Elsman
+License: GPL-3.0
 """
 
 # ============================================================================

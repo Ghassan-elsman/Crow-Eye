@@ -60,7 +60,7 @@ A brand-new analysis window (`uba/`, toolbar button or `Ctrl+Shift+B`) that read
 
 **40 declarative behavior detections** (`uba/config/behavior_rules.json`) spanning routine → notable → suspicious → critical:
 - Sign-in / sign-out, workstation unlock, remote-desktop logons, admin logons, credential use, account creation/changes (incl. admin-group additions)
-- Programs opened (UserAssist), programs run (Prefetch, expanded to per-run events), process creation (4688), program presence (ShimCache/AmCache/MUICache), app installs, app crashes (WER)
+- Programs opened (UserAssist), programs run (Prefetch, expanded to per-run events), process creation (4688), program presence (ShimCache/AmCache/MUICache), app installs, app crashes (Application Event Log 1001)
 - File open/create/delete/copy/rename — renames show the **full name history** (`old → … → current`) reconstructed from the USN journal, with soft-delete (`$R/$I`) resolution
 - Folder browsing (ShellBags), recent documents, typed locations, website visits
 - USB device connect, device presence, network shares, network connections and per-app data transferred (SRUM)
@@ -72,7 +72,7 @@ A brand-new analysis window (`uba/`, toolbar button or `Ctrl+Shift+B`) that read
 **Forensic guarantees**
 - Source databases are opened **read-only**; the analysis never touches the evidence.
 - Every event carries its provenance (`database → table → rowid`) and opens the real source rows on demand.
-- **Actor attribution never guesses**: an event is attributed to a User, an Application, the System — or left empty. Interactive logon sessions are used only as context labels ("during Gass3's session"), never to attribute an action.
+- **Actor attribution never guesses**: an event is attributed to a User, an Application, the System — or left empty. Interactive logon sessions are used only as context labels ("during `<user>`'s session"), never to attribute an action.
 - Wording distinguishes deliberate interaction (UserAssist, SRUM foreground) from artifacts an application can also generate (ShellBags, LNK, JumpLists), with explicit caveats on the card.
 
 **Data sources:** Security/System/Application Event Logs, USN Journal, MFT, UserAssist, BAM, Prefetch, ShimCache, AmCache, MUICache, ShellBags, LNK / JumpLists, Recycle Bin, SRUM (application, network, connectivity), and registry hives.

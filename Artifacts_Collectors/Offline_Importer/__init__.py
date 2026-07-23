@@ -16,13 +16,13 @@ Usage:
     from Artifacts_Collectors.Offline_Importer import launch_gui
     launch_gui()
 
-Author: Crow-eye Forensics
-License: MIT
+Author: Ghassan Elsman
+License: GPL-3.0
 """
 
 __version__ = "1.0.0"
-__author__ = "Crow-eye Forensics Team"
-__license__ = "MIT"
+__author__ = "Ghassan Elsman"
+__license__ = "GPL-3.0"
 __description__ = "Offline Windows Forensic Artifact Importer for Crow-eye"
 
 # ============================================================================

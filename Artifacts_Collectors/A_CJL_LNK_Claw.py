@@ -3233,10 +3233,15 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True, full_s
     return {'success': True, 'records': total_records, 'output_path': db_path}
 
 if __name__ == "__main__":
-    # USER CONFIGURATION: Set specialized paths here instead of using command-line arguments
-    CASE_PATH = r"C:\Users\Ghass\Downloads\test 1" 
-    OFFLINE = True # Set to True to parse files in case_path\live_acquisition\C_AJL_Lnk
-    DIRECT_PARSE = True # Set to True to parse live system artifacts directly
-    
+    # Usage: python A_CJL_LNK_Claw.py <case_path> [--live]
+    # Without --live, parses offline files under <case_path>\live_acquisition\C_AJL_Lnk
+    if len(sys.argv) < 2:
+        print("Usage: python A_CJL_LNK_Claw.py <case_path> [--live]")
+        sys.exit(1)
+
+    CASE_PATH = sys.argv[1]
+    DIRECT_PARSE = "--live" in sys.argv[2:]
+    OFFLINE = not DIRECT_PARSE
+
     A_CJL_LNK_Claw(case_path=CASE_PATH, offline_mode=OFFLINE, direct_parse=DIRECT_PARSE)
 

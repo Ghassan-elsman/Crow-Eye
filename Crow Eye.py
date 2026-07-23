@@ -38,7 +38,7 @@ Forensic Value:
 - Supports both live system analysis and offline forensic image examination
 
 Author: Ghassan Elsman
-Version: 0.12.0
+Version: 0.12.5
 License: GPL-3.0
 """
 

@@ -2,7 +2,7 @@
 Correlation Engine - Forensic Analysis System
 Main package for the correlation engine system.
 
-Version 0.12.0
+Version 0.12.5
 ==============
 Engine highlights (introduced in the 0.11.0 Reliability & Extensibility
 Release, still current):

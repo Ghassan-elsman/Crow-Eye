@@ -10,8 +10,8 @@ Architecture:
 - Integration with ImageParser, CollectionCoordinator, ArtifactCollector
 - Seamless handoff to ParseArtifactsDialog for parsing
 
-Author: Crow-eye Forensics
-License: MIT
+Author: Ghassan Elsman
+License: GPL-3.0
 """
 
 import os

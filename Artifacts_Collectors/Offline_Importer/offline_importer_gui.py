@@ -11,8 +11,8 @@ Architecture:
     - Background threading for collection operations to keep GUI responsive
     - Integration with existing case management and artifact collection components
 
-Author: Crow-eye Forensics
-License: MIT
+Author: Ghassan Elsman
+License: GPL-3.0
 """
 
 from PyQt5.QtWidgets import (
@@ -3690,7 +3690,7 @@ class OfflineImporterGUI(QMainWindow):
             "<p>A forensic artifact collection tool for Windows artifacts.</p>"
             "<p>Part of the Crow-eye Forensic Application Suite.</p>"
             "<p><b>Author:</b> Crow-eye Forensics</p>"
-            "<p><b>License:</b> MIT</p>"
+            "<p><b>License:</b> GPL-3.0</p>"
         )
     
     def show(self):

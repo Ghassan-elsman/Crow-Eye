@@ -26,8 +26,9 @@ setup(
     description="Windows Forensic Artifact Acquisition Tool",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="Crow-Eye Development Team",
-    url="https://github.com/yourusername/crow-eye",
+    author="Ghassan Elsman",
+    url="https://github.com/Ghassan-elsman/Crow-Eye",
+    license="GPL-3.0",
     packages=find_packages(),
     python_requires=">=3.8",
     install_requires=[
@@ -45,7 +46,7 @@ setup(
         "Intended Audience :: Developers",
         "Intended Audience :: Information Technology",
         "Intended Audience :: System Administrators",
-        "License :: OSI Approved :: MIT License",
+        "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Operating System :: Microsoft :: Windows",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
@@ -58,8 +59,8 @@ setup(
     ],
     keywords="forensics windows artifacts collection acquisition digital-investigation",
     project_urls={
-        "Documentation": "https://github.com/yourusername/crow-eye/wiki",
-        "Source": "https://github.com/yourusername/crow-eye",
-        "Tracker": "https://github.com/yourusername/crow-eye/issues",
+        "Documentation": "https://github.com/Ghassan-elsman/Crow-Eye/wiki",
+        "Source": "https://github.com/Ghassan-elsman/Crow-Eye",
+        "Tracker": "https://github.com/Ghassan-elsman/Crow-Eye/issues",
     },
 )
