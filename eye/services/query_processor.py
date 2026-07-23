@@ -54,6 +54,76 @@ def _is_transient_model_error(exc: Exception) -> bool:
     return any(m in s for m in _TRANSIENT_ERROR_MARKERS)
 
 
+# A forensic evidence reference: ``database:table:rowid``. The database segment is
+# matched greedily so imported-evidence DB names (which may contain spaces, dots, or
+# a subpath under Target_Artifacts/Imported_Evidence/) are captured whole; the table
+# is a SQL identifier and the rowid is an integer.
+_EVIDENCE_REF_RE = re.compile(r'^(?P<db>.+):(?P<table>[A-Za-z_]\w*):(?P<rowid>\d+)$')
+
+
+def _source_from_ref(ref: str) -> tuple:
+    """Turn a ``database:table:rowid`` evidence ref into ``(database, query)`` so an
+    evidence card can reload its real source row on demand — for BOTH native artifacts
+    and imported evidence. Returns ``("", "")`` when ``ref`` is not a row pointer
+    (e.g. it is just a tool name)."""
+    if not ref:
+        return "", ""
+    m = _EVIDENCE_REF_RE.match(ref.strip())
+    if not m:
+        return "", ""
+    return m.group("db").strip(), f'SELECT * FROM "{m.group("table")}" WHERE rowid = {m.group("rowid")}'
+
+
+def _source_from_row(row) -> tuple:
+    """Turn one provenance row (as returned by search / imported-evidence
+    correlation / semantic search — carrying ``database`` + ``table`` +
+    ``row_id``/``rowid``/``__rid``) into ``(database, query)`` so the evidence card
+    can reload the REAL source row. Returns ``("", "")`` when provenance is absent."""
+    if not isinstance(row, dict):
+        return "", ""
+    db = row.get("database") or row.get("db") or row.get("source_database")
+    table = row.get("table") or row.get("table_name")
+    rid = row.get("row_id", row.get("rowid", row.get("__rid")))
+    if db and table and rid is not None:
+        try:
+            return str(db), f'SELECT * FROM "{table}" WHERE rowid = {int(rid)}'
+        except (ValueError, TypeError):
+            return "", ""
+    return "", ""
+
+
+def _source_from_result(r: dict, inner: dict) -> tuple:
+    """Best-effort reloadable source for a tool result that did NOT take raw SQL
+    (search_artifacts, correlate_imported_evidence, semantic search). These tools
+    still return ``database:table:row_id`` provenance, so derive a single-row query
+    from it — this is what makes NATIVE and IMPORTED evidence loadable. Returns
+    ``(database, query)`` or ``("", "")``."""
+    # 1. Explicit ref string(s) on the result.
+    for key in ("evidence_refs", "refs", "ref"):
+        refs = inner.get(key) or r.get(key)
+        if isinstance(refs, str):
+            refs = [refs]
+        if isinstance(refs, list):
+            for ref in refs:
+                db, q = _source_from_ref(str(ref))
+                if db and q:
+                    return db, q
+    # 2. Structured rows carrying provenance (list, or {value: [rows]} maps).
+    for container in (inner.get("data"), r.get("data"), inner.get("matches"), inner.get("rows")):
+        rows = []
+        if isinstance(container, list):
+            rows = container
+        elif isinstance(container, dict):
+            for v in container.values():
+                if isinstance(v, list):
+                    rows.extend(v)
+        for row in rows:
+            db, q = _source_from_row(row)
+            if db and q:
+                return db, q
+    return "", ""
+
+
 class ContextOverflowError(Exception):
     """Raised when an assembled LLM payload exceeds the model's context window.
 
@@ -174,6 +244,14 @@ class QueryProcessor:
             # reload its source rows in the map's detail window.
             query = params.get("sql_query") or ""
             database = params.get("database_name") or ""
+            # Fallback for tools that don't take raw SQL (search_artifacts,
+            # correlate_imported_evidence, semantic search): derive a reloadable
+            # single-row query from the result's database:table:rowid provenance, so
+            # the evidence card shows the REAL row — incl. imported evidence.
+            if not (query and database):
+                db2, q2 = _source_from_result(r, inner)
+                if db2 and q2:
+                    database, query = db2, q2
             return tool, blob, query, database
 
         # ── Focused re-investigation of ONE narrative (double-click) ──
@@ -246,11 +324,16 @@ class QueryProcessor:
                 note = (e.get("note") or "").strip()
                 if not (ref or note):
                     continue
+                # If the ref is a database:table:rowid pointer, derive a reloadable
+                # source so the card shows the REAL row (native or imported evidence).
+                database, query = _source_from_ref(ref)
                 cards.append({
                     "kicker": ref or "evidence",
                     "data": note or ref,
                     "reason": "Evidence cited for this behavior.",
                     "ref": ref,
+                    "query": query,
+                    "database": database,
                 })
             return cards
 

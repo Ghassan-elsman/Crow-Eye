@@ -30,6 +30,7 @@ export type StatusUpdatedCallback = (statusMessage: string) => void;
 export type DialogueUpdatedCallback = (entryJson: string) => void;
 export type NarrativeMapUpdatedCallback = (envelopeJson: string) => void;
 export type NarrativeInvestigationCompleteCallback = (narrativeId: string) => void;
+export type NarrativeMapFocusCallback = (cardId: string) => void;
 
 /**
  * Bridge initialization state
@@ -48,6 +49,7 @@ const signalListeners = {
   dialogueUpdated: [] as DialogueUpdatedCallback[],
   narrativeMapUpdated: [] as NarrativeMapUpdatedCallback[],
   narrativeInvestigationComplete: [] as NarrativeInvestigationCompleteCallback[],
+  narrativeMapFocus: [] as NarrativeMapFocusCallback[],
 };
 
 /**
@@ -206,6 +208,20 @@ function connectSignalListeners(bridge: any) {
     });
   }
 
+  // Connect to narrative_map_focus signal (another window asked to focus a card:
+  // open/raise the map and select + open that Verdict/Narrative/Evidence detail).
+  if (bridge.narrative_map_focus && bridge.narrative_map_focus.connect) {
+    bridge.narrative_map_focus.connect((cardId: string) => {
+      signalListeners.narrativeMapFocus.forEach(callback => {
+        try {
+          callback(cardId);
+        } catch (error) {
+          console.error('Error in narrative_map_focus callback:', error);
+        }
+      });
+    });
+  }
+
   // Connect to narrativeInvestigationComplete signal (a double-click investigate finished)
   if (bridge.narrativeInvestigationComplete && bridge.narrativeInvestigationComplete.connect) {
     bridge.narrativeInvestigationComplete.connect((narrativeId: string) => {
@@ -320,6 +336,33 @@ export function onNarrativeInvestigationComplete(callback: NarrativeInvestigatio
   return () => {
     signalListeners.narrativeInvestigationComplete = signalListeners.narrativeInvestigationComplete.filter(cb => cb !== callback);
   };
+}
+
+/**
+ * Register a callback fired when another window (e.g. the Compliance panel) asks
+ * to focus a specific Verdict/Narrative/Evidence card in this Narrative Map.
+ *
+ * @returns Unsubscribe function
+ */
+export function onNarrativeMapFocus(callback: NarrativeMapFocusCallback): () => void {
+  signalListeners.narrativeMapFocus.push(callback);
+  return () => {
+    signalListeners.narrativeMapFocus = signalListeners.narrativeMapFocus.filter(cb => cb !== callback);
+  };
+}
+
+/**
+ * Ask Crow-Eye to open/raise the Narrative Map window and focus a card by id
+ * (opening its detail panel). Called from the Compliance window. Fire-and-forget.
+ */
+export function focusNarrativeMap(cardId: string): void {
+  const b = getBridge() as any;
+  if (!b || typeof b.focus_narrative_map !== 'function') return;
+  try {
+    b.focus_narrative_map(cardId);
+  } catch (error) {
+    console.error('Error invoking focus_narrative_map:', error);
+  }
 }
 
 /**
@@ -830,6 +873,9 @@ export interface ActivityAuditEntry {
   tools: string[] | null;
   block_id: string | null;
   iteration: number | null;
+  // For narrative_map entries: the Verdict/Narrative/Evidence node id, used to
+  // deep-link the entry to that card's detail panel in the Narrative Map window.
+  card_id?: string | null;
 }
 
 export interface ActivityAuditResponse {

@@ -301,6 +301,7 @@ class EYEBridge(QObject):
     add_evidence_requested = pyqtSignal()  # open the "Add new evidence" import flow
     compliance_window_requested = pyqtSignal()
     narrative_map_window_requested = pyqtSignal()  # open the Narrative Map OS window
+    narrative_map_focus = pyqtSignal(str)  # focus a Verdict/Narrative/Evidence card (id) in the map
 
     # Signals for async operations
     query_complete = pyqtSignal(str)  # JSON response when query completes
@@ -3015,6 +3016,8 @@ class EYEBridge(QObject):
                             "tools": None,
                             "block_id": None,
                             "iteration": None,
+                            # Node id for deep-linking to the map's detail panel.
+                            "card_id": r.get("card_id") or "",
                         })
                 except Exception as e:
                     logger.debug(f"narrative-map activity stream skipped: {e}")
@@ -3816,6 +3819,30 @@ class EYEBridge(QObject):
     def requestNarrativeMapWindow(self):
         """Emit signal to open the Narrative Map in its own OS window."""
         self.narrative_map_window_requested.emit()
+
+    @pyqtSlot(str)
+    def focus_narrative_map(self, card_id: str):
+        """Open/raise the Narrative Map window and focus a specific card, opening its
+        detail panel. Invoked from the Compliance window's 'view in map' links.
+
+        The bridge object is shared across the Eye windows' QWebChannels, so
+        emitting ``narrative_map_focus`` reaches the map window's React (mirroring
+        how ``narrative_map_updated`` live-updates it). The focus is deferred so a
+        freshly-opened map window has a moment to mount before it selects the card.
+        """
+        cid = card_id or ""
+        try:
+            self.narrative_map_window_requested.emit()
+        except Exception as e:
+            logger.debug(f"focus_narrative_map: could not request map window: {e}")
+        try:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(350, lambda: self.narrative_map_focus.emit(cid))
+        except Exception:
+            try:
+                self.narrative_map_focus.emit(cid)
+            except Exception as e:
+                logger.debug(f"focus_narrative_map: could not emit focus: {e}")
 
     # ── Narrative Map ──────────────────────────────────────────
     def _narrative_map_service(self):

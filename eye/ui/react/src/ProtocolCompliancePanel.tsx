@@ -28,6 +28,7 @@ import {
   getDroppedPayloadFull,
   getSealedPayloadFull,
   onNarrativeMapUpdated,
+  focusNarrativeMap,
   type GepRuleStatus,
   type GepPrinciple,
   type ActivityAuditEntry,
@@ -2102,7 +2103,23 @@ const ProtocolCompliancePanel: React.FC = () => {
                   <span style={styles.timelineCaret}>{isOpen ? '▾' : '▸'}</span>
                 </button>
                 {isOpen && (
-                  <pre style={styles.timelineDetail}>{entry.detail || '(no further detail)'}</pre>
+                  <div>
+                    <pre style={styles.timelineDetail}>{entry.detail || '(no further detail)'}</pre>
+                    {entry.type === 'narrative_map' && entry.card_id && (
+                      <button
+                        onClick={() => focusNarrativeMap(entry.card_id as string)}
+                        title="Open this card's detail panel in the Narrative Map window"
+                        style={{
+                          margin: '2px 0 8px 12px', padding: '4px 10px', cursor: 'pointer',
+                          fontSize: '12px', color: '#a855f7',
+                          background: 'rgba(168,85,247,0.12)',
+                          border: '1px solid rgba(168,85,247,0.45)', borderRadius: '4px',
+                        }}
+                      >
+                        ↗ View in Narrative Map
+                      </button>
+                    )}
+                  </div>
                 )}
               </article>
             );

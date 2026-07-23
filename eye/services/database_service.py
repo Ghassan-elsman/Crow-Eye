@@ -110,24 +110,69 @@ class ForensicDatabaseService:
     # serialized per turn anyway).
     # ------------------------------------------------------------------
     def _resolve_db_path(self, database_name: str) -> Optional[Path]:
-        """Resolve a database name to its on-disk file path."""
+        """Resolve a database name to its on-disk file path.
+
+        Accepts a bare filename, a relative subpath (e.g.
+        ``Imported_Evidence/foo.db``), or a full path. When a native artifact
+        database and an imported-evidence database share a filename, resolution is
+        disambiguated deterministically so an evidence card never cross-resolves to
+        the wrong file: a path/hint that points at imported evidence prefers the
+        ``Imported_Evidence/`` copy, otherwise the native copy wins.
+        """
+        if not database_name:
+            return None
+        name = str(database_name).strip()
+        norm = name.replace("\\", "/").lower()
+        wants_imported = "imported_evidence" in norm or "imported" in Path(name).stem.lower()
+
+        # 1. Direct path — absolute, or relative to the case dir (a subpath is
+        #    inherently unambiguous, so honor it before any name matching).
         try:
-            p = self.case_directory / database_name
+            pabs = Path(name)
+            if pabs.is_absolute() and pabs.exists():
+                return pabs
+            p = self.case_directory / name
             if p.exists():
                 return p
         except Exception:
             pass
+
+        # 2. Manager's resolved-paths cache (exact name).
         try:
             resolved = getattr(self.db_manager, "resolved_paths", {}) or {}
-            rp = resolved.get(database_name)
+            rp = resolved.get(name)
             if rp and Path(rp).exists():
                 return Path(rp)
         except Exception:
             pass
+
+        # 3. Discovery, disambiguating filename collisions native-vs-imported.
         try:
-            for d in self.discover_databases():
-                if d.get("name") == database_name and d.get("path") and Path(d["path"]).exists():
-                    return Path(d["path"])
+            discovered = [d for d in self.discover_databases()
+                          if d.get("path") and Path(d["path"]).exists()]
+            base = Path(name).name
+            stem = Path(base).stem.lower()
+
+            def _matches(d) -> bool:
+                dn = d.get("name") or ""
+                pn = Path(str(d.get("path"))).name
+                return dn == name or dn == base or pn == base
+
+            cands = [d for d in discovered if _matches(d)]
+            if not cands:  # extension-insensitive stem match (e.g. srum vs srum_data)
+                cands = [d for d in discovered
+                         if Path(str(d.get("path"))).stem.lower() == stem]
+            if len(cands) == 1:
+                return Path(cands[0]["path"])
+            if cands:
+                def _is_imported(d) -> bool:
+                    return (d.get("category") == "Imported Evidence"
+                            or "Imported_Evidence" in Path(str(d.get("path"))).parts)
+                imported = [d for d in cands if _is_imported(d)]
+                native = [d for d in cands if not _is_imported(d)]
+                pool = imported if wants_imported else (native or imported)
+                if pool:
+                    return Path(pool[0]["path"])
         except Exception:
             pass
         return None

@@ -24,7 +24,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   isBridgeReady, initializeBridge, getNarrativeMap, commitMapEdit as bridgeCommit, onNarrativeMapUpdated,
-  investigateNarrative, onNarrativeInvestigationComplete,
+  investigateNarrative, onNarrativeInvestigationComplete, onNarrativeMapFocus,
 } from './bridge';
 import DataViewer from './DataViewer';
 import type { DataViewerProps } from './types';
@@ -149,6 +149,10 @@ const EMPTY_GRAPH = (): MapGraph => ({
 export default function NarrativeMap() {
   const init = useMemo(() => EMPTY_GRAPH(), []);
   const [graph, setGraph] = useState<MapGraph>(init);
+  // Latest graph, readable from once-registered subscriptions (focus deep-link)
+  // without a stale closure.
+  const graphRef = useRef<MapGraph>(init);
+  graphRef.current = graph;
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [actor, setActor] = useState<Actor>('eye');
   const [sel, setSel] = useState<Sel>(null);
@@ -293,7 +297,19 @@ export default function NarrativeMap() {
       setInvestigatingId(cur => (cur === id ? null : cur));
     });
 
-    return () => { cancelled = true; if (off) off(); offInvestigate(); };
+    // Deep-link from another window (Compliance panel): select the requested card
+    // and open its detail panel. Resolves against the latest graph via graphRef.
+    const offFocus = onNarrativeMapFocus((cardId) => {
+      if (!cardId) return;
+      const g = graphRef.current;
+      if (cardId === g.verdict.id) { setSel({ k: 'v', id: g.verdict.id }); return; }
+      const n = g.narratives.find(x => x.id === cardId);
+      if (n) { setSel({ k: 'n', id: n.id }); setNarrDetail(n); return; }
+      const ev = g.evidence[cardId];
+      if (ev) { setSel({ k: 'e', id: ev.id }); setEvDetail(ev); return; }
+    });
+
+    return () => { cancelled = true; if (off) off(); offInvestigate(); offFocus(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1022,6 +1038,8 @@ export default function NarrativeMap() {
                     <span className="nm-dim">by</span> {selObj.authoredBy === 'system' ? 'System (parser)' : isEye(selObj.authoredBy) ? `The Eye · ${String(selObj.authoredBy).split(':')[1] || ''}` : 'Investigator'}
                     {(selObj as Evidence).sealed && <span className="nm-sealed-inline"><IconLock size={10} /> {(selObj as Evidence).sealed}</span>}
                   </div>
+
+                  {sel!.k === 'e' && <InspectorEvidenceRows evidence={selObj as Evidence} live={live} />}
                   {sel!.k === 'n' && (selObj as Narrative).meta?.created_from && (
                     <div className="nm-meta-line nm-raised-from">
                       <span className="nm-dim">raised from:</span> <em>{(selObj as Narrative).meta!.created_from}</em>
@@ -1211,46 +1229,49 @@ export default function NarrativeMap() {
 
 // ── Evidence detail window ──────────────────────────────────────────────
 // Opens on double-click. Shows the evidence record as a Field/Value table, its
-// notes, and — when the reference is a `db:table:rowid` pointer — a "Load source
-// rows" button that pulls the underlying artifact row(s) from the case database
-// and renders them with the shared DataViewer.
-const EV_REF_RE = /^([\w.\-]+):([\w]+):(\d+)$/;
+// notes, and — when the reference is a `db:table:rowid` pointer — the underlying
+// artifact row(s) pulled from the case database and rendered with the shared
+// DataViewer. The real rows auto-load (native OR imported evidence).
+//
+// The database segment is matched greedily so imported-evidence DB names — which
+// may contain spaces, dots, or a subpath under Target_Artifacts/Imported_Evidence/ —
+// are captured whole; table is a SQL identifier and rowid an integer.
+const EV_REF_RE = /^(.+):([A-Za-z_]\w*):(\d+)$/;
 
-const EvidenceDetailModal: React.FC<{
-  evidence: Evidence;
-  ownerTitle: string | null;
-  live: boolean;
-  onClose: () => void;
-}> = ({ evidence: e, ownerTitle, live, onClose }) => {
+// Shared source-row loader used by BOTH the inspector (auto) and the evidence
+// detail popup. Resolves the evidence's stored query+database, or synthesizes a
+// single-row query from a `db:table:rowid` ref, and returns the real rows.
+export function useSourceRows(e: Evidence | null, live: boolean, auto: boolean) {
   const [rows, setRows] = useState<DataViewerProps | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const refMatch = EV_REF_RE.exec((e.ref || '').trim());
-  const hasQuery = !!(e.query && e.database);          // SQL + db stored by the Eye
-  const canLoad = hasQuery || !!refMatch;
+  const refMatch = e ? EV_REF_RE.exec((e.ref || '').trim()) : null;
+  const hasQuery = !!(e && e.query && e.database);      // SQL + db stored by the Eye
+  const canLoad = !!(hasQuery || refMatch);
+  const refKey = refMatch ? refMatch[0] : '';
 
-  const runQuery = async (db: string, sql: string): Promise<DataViewerProps | null> => {
-    const bridge: any = (window as any).bridge;
-    if (!live || !bridge || typeof bridge.query_database !== 'function') return null;
-    const tryDb = async (d: string) => {
-      try {
-        const raw = await bridge.query_database(d, sql);
-        const res = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        const data = res?.data || res;
-        const r = data?.rows || data?.data;
-        if (res?.success !== false && Array.isArray(r) && r.length) {
-          return { columns: data.columns || (r[0] ? Object.keys(r[0]) : []), rows: r, query: sql, database: d, table: '' } as DataViewerProps;
-        }
-      } catch { /* */ }
-      return null;
-    };
-    return (await tryDb(db)) || (await tryDb(db.endsWith('.db') ? db : db + '.db'));
-  };
-
-  const loadSource = async () => {
+  const load = useCallback(async () => {
+    if (!e) return;
     setErr(null); setRows(null);
     if (!live) { setErr('Bridge unavailable — open a live case to query the source database.'); return; }
+    const bridge: any = (window as any).bridge;
+    if (!bridge || typeof bridge.query_database !== 'function') { setErr('Bridge unavailable.'); return; }
+    const runQuery = async (db: string, sql: string): Promise<DataViewerProps | null> => {
+      const tryDb = async (d: string) => {
+        try {
+          const raw = await bridge.query_database(d, sql);
+          const res = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          const data = res?.data || res;
+          const r = data?.rows || data?.data;
+          if (res?.success !== false && Array.isArray(r) && r.length) {
+            return { columns: data.columns || (r[0] ? Object.keys(r[0]) : []), rows: r, query: sql, database: d, table: '' } as DataViewerProps;
+          }
+        } catch { /* */ }
+        return null;
+      };
+      return (await tryDb(db)) || (await tryDb(db.endsWith('.db') ? db : db + '.db'));
+    };
     setLoading(true);
     let data: DataViewerProps | null = null;
     if (hasQuery) {
@@ -1258,14 +1279,56 @@ const EvidenceDetailModal: React.FC<{
       if (!data) { setLoading(false); setErr('The source query returned no rows (the data may have changed or the query needs a smaller scope).'); return; }
     } else if (refMatch) {
       const [, dbTok, table, rowid] = refMatch;
-      data = await runQuery(dbTok, `SELECT * FROM ${table} WHERE rowid = ${rowid}`);
+      data = await runQuery(dbTok, `SELECT * FROM "${table}" WHERE rowid = ${rowid}`);
       if (!data) { setLoading(false); setErr(`No rows found for ${table} (rowid ${rowid}) in “${dbTok}”.`); return; }
     } else {
       setLoading(false); setErr('No queryable source recorded for this evidence.'); return;
     }
     setLoading(false);
     setRows(data);
-  };
+  }, [e?.id, live, hasQuery, refKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-load the real rows when the selected/opened evidence changes.
+  useEffect(() => {
+    setRows(null); setErr(null);
+    if (auto && canLoad && live) { load(); }
+  }, [e?.id, auto, canLoad, live, load]);
+
+  return { rows, loading, err, canLoad, reload: load };
+}
+
+// Presentational block: the "Source artifact" rows table shared by the inspector
+// and the evidence detail popup.
+const SourceRowsView: React.FC<{
+  state: ReturnType<typeof useSourceRows>;
+  reloadLabel?: string;
+}> = ({ state, reloadLabel = 'Reload rows' }) => (
+  <div className="nm-modal-src">
+    <div className="nm-modal-subhead">Source artifact</div>
+    <button className="nm-btn" onClick={state.reload} disabled={state.loading || !state.canLoad}>
+      {state.loading ? 'Loading…' : reloadLabel}
+    </button>
+    {!state.canLoad && <span className="nm-dim nm-modal-srchint">No queryable source recorded for this evidence (it came from a non-database tool).</span>}
+    {state.err && <div className="nm-modal-err">{state.err}</div>}
+    {state.rows && <DataViewer {...state.rows} />}
+  </div>
+);
+
+// Inspector block: auto-loads and shows the selected evidence card's REAL rows
+// (native or imported) inline in the side panel, so the investigator sees the
+// actual records without opening the popup.
+const InspectorEvidenceRows: React.FC<{ evidence: Evidence; live: boolean }> = ({ evidence, live }) => {
+  const src = useSourceRows(evidence, live, true);
+  return <SourceRowsView state={src} reloadLabel="Reload rows" />;
+};
+
+const EvidenceDetailModal: React.FC<{
+  evidence: Evidence;
+  ownerTitle: string | null;
+  live: boolean;
+  onClose: () => void;
+}> = ({ evidence: e, ownerTitle, live, onClose }) => {
+  const src = useSourceRows(e, live, true);   // auto-load the real rows on open
 
   const kv: [string, React.ReactNode][] = [
     ['Source', (e.kicker || 'artifact').toUpperCase()],
@@ -1304,15 +1367,7 @@ const EvidenceDetailModal: React.FC<{
             </div>
           )}
 
-          <div className="nm-modal-src">
-            <div className="nm-modal-subhead">Source artifact</div>
-            <button className="nm-btn" onClick={loadSource} disabled={loading || !canLoad}>
-              {loading ? 'Loading…' : 'Load source rows'}
-            </button>
-            {!canLoad && <span className="nm-dim nm-modal-srchint">No queryable source recorded for this evidence (it came from a non-database tool).</span>}
-            {err && <div className="nm-modal-err">{err}</div>}
-            {rows && <DataViewer {...rows} />}
-          </div>
+          <SourceRowsView state={src} reloadLabel="Reload rows" />
         </div>
       </div>
     </div>

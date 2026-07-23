@@ -760,6 +760,9 @@ class NarrativeMapService:
             "actor": actor,
             "kind": event.get("kind", ""),
             "target": str(target),
+            # The node id this change applies to, so the Compliance window can
+            # deep-link the entry to that Verdict/Narrative/Evidence detail panel.
+            "card_id": str(event.get("id") or ""),
             "reason": reason,
             "evidence": refs,
             "gep": gep,
