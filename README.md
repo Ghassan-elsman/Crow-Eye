@@ -123,10 +123,13 @@ flowchart TB
     UB["USER BEHAVIOR ANALYTICS<br/>40 detections · plain-English story"]
     CE["CORRELATION ENGINE<br/>Feathers → Wings → Engines → Pipelines"]
     RES[("Correlation results")]
+    DL["DYNAMIC LINKING<br/>non-destructive enrichment overlay"]
+    INTEL[("Crow_Intelligence.db<br/>SID · MAC · hash · GUID → name")]
 
 %% ═══════════ 5. AI LAYER ═══════════
     EYE["EYE<br/>GEP-governed AI assistant"]
     NM["NARRATIVE MAP<br/>hash-chained case memory"]
+    COMP["COMPLIANCE<br/>live GEP status · EvidenceSeal audit"]
 
     OUT["LIVING REPORT<br/>CSV · JSON · HTML"]
 
@@ -148,9 +151,17 @@ flowchart TB
     CASE -- "read-only" --> CE
     CE --> RES
 
+    CASE -- "read-only gather (ATTACH)" --> DL
+    DL -- "builds" --> INTEL
+    DL -. "enriches views · ATTACH + LEFT JOIN" .-> TL
+    DL -. "enriches views" .-> UB
+
     CASE -- "read-only queries" --> EYE
     RES -. "queried on demand" .-> EYE
     EYE <== "verdict · narrative · evidence" ==> NM
+
+    EYE -- "every tool call · EvidenceSeal chain" --> COMP
+    COMP -. "audit_trail.json" .-> OUT
 
     EYE -- "report_* tools" --> OUT
 
@@ -164,9 +175,9 @@ flowchart TB
 
     class S1,S2,S3,S4 src
     class I1,I2,I3,I4,PARSERS ing
-    class CASE,RES store
-    class TL,UB,CE ana
-    class EYE,NM ai
+    class CASE,RES,INTEL store
+    class TL,UB,CE,DL ana
+    class EYE,NM,COMP ai
     class OUT out
 
     linkStyle default stroke-width:2px
@@ -182,13 +193,17 @@ flowchart TB
 | ① → ② | **Four independent doors into a case.** You never need Crow-Eye's own collector — a folder from Velociraptor, KAPE, or an EDR package goes through the Offline Importer, and third-party CSV/JSON/SQLite goes through Import Evidence. |
 | ② → ③ | Everything converges on one place: **the case databases**. Parsed artifacts land in `Target_Artifacts/`; imported third-party evidence lands in `Imported_Evidence/` and is auto-discovered. |
 | ③ → ④ | **The three analysis paths are independent of each other.** The Timeline and UBA read the case databases directly — neither requires a correlation run. The Correlation Engine is an *additional* layer, not a prerequisite. |
+| ③ ⟳ ④ | **Dynamic Linking is an enrichment overlay, not a pipeline stage.** It reads the case databases read-only, gathers identity mappings (SID → username, MAC → network, hash/GUID → app) into a per-case `Crow_Intelligence.db`, and overlays human-readable context onto the views via non-destructive `ATTACH` + `LEFT JOIN`. It enriches *display* — never the evidence. |
 | ④ → ⑤ | The Eye queries the case databases directly and can pull correlation results **on demand**. It never touches evidence itself — it emits tool calls that Crow-Eye executes and logs. |
 | ⑤ → Report | The **Living Report is built by the Eye alone**, through its `report_*` tools. The Timeline and UBA are analysis surfaces — they do not write to the report. Case-level findings can still be exported separately via [Search & Export](#-search--export). |
 | ⑤ ↔ | The **Narrative Map is bidirectional**: the Eye writes to it, you write to it, and its contents are injected into the Eye's prompt every turn. It is the memory, and you can command it. |
+| ⑤ ⟳ | The **Compliance page audits the Eye.** Every tool call the Eye makes is anchored to the **EvidenceSeal** hash chain; the page renders live per-rule **GEP** status (10 principles) verified from that chain and `EYE_Logs/`, exportable as `audit_trail.json`. |
 
 **Independent stages.** The Timeline and UBA read the case artifact databases **directly** — neither requires a correlation run, and the Timeline does not depend on the Correlation Engine (it applies its own lightweight temporal grouping). Correlation is an additional analysis layer whose results the Eye can query.
 
-**Read-only by design.** Parsing writes to the case database; every downstream stage (UBA, the Timeline, correlation viewers, the Eye) opens those databases **read-only**. The original evidence is never modified — [Dynamic Linking](#-analysis-modes) enriches views via non-destructive `ATTACH` queries rather than rewriting rows.
+**Read-only by design.** Parsing writes to the case database; every downstream stage (UBA, the Timeline, correlation viewers, the Eye) opens those databases **read-only**. The original evidence is never modified — [Dynamic Linking](#-analysis-modes) reads the case databases to build a per-case `Crow_Intelligence.db` of identity mappings and enriches views via non-destructive `ATTACH` + `LEFT JOIN` queries rather than rewriting rows.
+
+**Governed by design.** Every action the Eye takes is anchored to the tamper-evident **EvidenceSeal** hash chain, and the **Compliance** page continuously verifies the Eye against the [Ghassan Elsman Protocol (GEP)](eye/docs/GEP_standard.md) — live per-rule status, exportable to `EYE_Logs/audit_trail.json`.
 
 ## 📥 Download & Install
 
