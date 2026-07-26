@@ -8,7 +8,7 @@
 Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a court-defensible verdict.</p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-![Version](https://img.shields.io/badge/version-0.12.5-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-0.12.6-brightgreen.svg)
 ![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.7.0-8a2be2.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational.svg)
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
@@ -55,7 +55,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 - 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux** (live parsers are Windows-only).
 - 🔒 **Private by design** — **0 ms of data sent off-device**; the Eye AI assistant can run fully **air-gapped**.
 - 🧾 **Court-grade** — evidence is cryptographically sealed and every step is auditable.
-- 📦 **Current version:** 0.12.5 · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
+- 📦 **Current version:** 0.12.6 · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
 
 ## ✨ Highlights
 

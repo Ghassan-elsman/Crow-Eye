@@ -38,14 +38,14 @@ Forensic Value:
 - Supports both live system analysis and offline forensic image examination
 
 Author: Ghassan Elsman
-Version: 0.12.5
+Version: 0.12.6
 License: GPL-3.0
 """
 
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.12.5"  # Single source of truth — read by the About menu, the update
+__version__ = "0.12.6"  # Single source of truth — read by the About menu, the update
                         # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
 

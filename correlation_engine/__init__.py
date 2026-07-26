@@ -2,7 +2,7 @@
 Correlation Engine - Forensic Analysis System
 Main package for the correlation engine system.
 
-Version 0.12.5
+Version 0.12.6
 ==============
 Engine highlights (introduced in the 0.11.0 Reliability & Extensibility
 Release, still current):
@@ -17,7 +17,7 @@ Release, still current):
 - 78-test regression suite locking in the contract
 """
 
-__version__ = "0.12.5"
+__version__ = "0.12.6"
 __author__ = "Crow-Eye Forensics"
 
 # Import optimization module
