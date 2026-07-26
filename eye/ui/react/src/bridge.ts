@@ -587,6 +587,35 @@ export async function getGroupedBackendConnections(): Promise<GroupedBackendResp
   }
 }
 
+const groupedBackendsListeners: Array<(g: GroupedBackendResponse) => void> = [];
+
+/**
+ * Subscribe to the background live-refreshed model-menu grouping. The bridge
+ * returns a fast cached grouping synchronously (getGroupedBackendConnections)
+ * and then pushes the authoritative live listing through this signal.
+ */
+export function onGroupedBackendsReady(callback: (g: GroupedBackendResponse) => void): () => void {
+  groupedBackendsListeners.push(callback);
+  const b = window.bridge as any;
+  if (b && b.grouped_backends_ready && b.grouped_backends_ready.connect && !b.__groupedBackendsHooked) {
+    b.__groupedBackendsHooked = true;
+    b.grouped_backends_ready.connect((json: string) => {
+      try {
+        const res = JSON.parse(json);
+        if (res.success && res.data) {
+          groupedBackendsListeners.forEach(cb => {
+            try { cb(res.data as GroupedBackendResponse); } catch (e) { console.error('grouped_backends_ready cb failed:', e); }
+          });
+        }
+      } catch (e) { console.error('grouped_backends_ready parse failed:', e); }
+    });
+  }
+  return () => {
+    const i = groupedBackendsListeners.indexOf(callback);
+    if (i > -1) groupedBackendsListeners.splice(i, 1);
+  };
+}
+
 /**
  * Switch the actively connected AI model.
  * 

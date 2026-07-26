@@ -20,6 +20,7 @@ import {
   onStatusUpdated,
   onDialogueUpdated,
   getGroupedBackendConnections,
+  onGroupedBackendsReady,
   switchActiveModel,
   showCaseContext,
   showCaseSummary,
@@ -365,6 +366,13 @@ const ChatInterface: React.FC = () => {
       showToast(msg, 'error');
     });
 
+    // Background live-refresh of the model menu: replace the fast cached grouping
+    // with the authoritative one (fresh models + is_active) whenever it arrives.
+    const unsubGrouped = onGroupedBackendsReady((grouped) => {
+      setGroupedBackends(grouped);
+      setFetchingModels(false);
+    });
+
     // Listen for reflow-charts signal from bridge. The bridge is registered as
     // window.bridge by bridge.ts (not window.eyeBridge — that property was a
     // long-standing typo that silently disabled chart reflow on splitter resize).
@@ -380,6 +388,7 @@ const ChatInterface: React.FC = () => {
       unsubQC?.(); unsubRU?.(); unsubEO?.(); unsubSU?.(); unsubDU?.(); unsubTW?.();
       unsubscribeReport();
       unsubscribeError();
+      unsubGrouped();
     };
   }, []);
 
@@ -400,15 +409,19 @@ const ChatInterface: React.FC = () => {
     } catch { /* silent */ }
   }, []);
 
-  const handleModelMenuToggle = async () => {
-    if (!showModelMenu) {
-      // Opening menu, fetch models
-      setFetchingModels(true);
-      const grouped = await getGroupedBackendConnections();
-      setGroupedBackends(grouped);
-      setFetchingModels(false);
-    }
-    setShowModelMenu(!showModelMenu);
+  const handleModelMenuToggle = () => {
+    if (showModelMenu) { setShowModelMenu(false); return; }
+    // Open INSTANTLY — never block the open on a fetch. Show cached options at once
+    // (kept across opens); only show the loading row when nothing is cached yet. The
+    // bridge returns a fast in-memory grouping synchronously and pushes the live
+    // refresh via onGroupedBackendsReady (subscribed in the bridge-init effect),
+    // which updates the menu in place.
+    setShowModelMenu(true);
+    setFetchingModels(!groupedBackends);
+    getGroupedBackendConnections()
+      .then((grouped) => { if (grouped) setGroupedBackends(grouped); })
+      .catch(() => { /* keep whatever we had */ })
+      .finally(() => setFetchingModels(false));
   };
 
   const handleModelSelect = async (modelId: string) => {
@@ -470,6 +483,9 @@ const ChatInterface: React.FC = () => {
       // (auto-fired by the Python slot) will produce a query_complete that the
       // existing listener catches, clears switchingTo, and flushes pendingSend.
       fetchContextStats();
+      // Refresh the menu grouping so the active-model marker follows the switch
+      // (fast cached return + background live refresh via onGroupedBackendsReady).
+      getGroupedBackendConnections().then((g) => { if (g) setGroupedBackends(g); }).catch(() => {});
     } catch (err) {
       failAndFlush(err instanceof Error ? err.message : 'unknown error');
     }

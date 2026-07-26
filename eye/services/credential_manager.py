@@ -67,6 +67,15 @@ class CredentialManager:
         # Start storage in a daemon thread so it doesn't block app exit
         threading.Thread(target=_store_worker, daemon=True).start()
 
+    def has_cached_credential(self, key: str) -> bool:
+        """Fast, non-blocking check for whether a credential is already in the
+        in-memory cache. NEVER touches the OS keychain (no thread, no timeout), so
+        it is safe to call on the GUI thread and in tight loops (e.g. building the
+        model-menu options for ~10 providers). A False here only means "not cached
+        this session" — use get_credential() for an authoritative lookup."""
+        with self._lock:
+            return key in self._cache
+
     def get_credential(self, key: str, timeout: float = 2.0) -> Optional[str]:
         """
         Retrieve a credential with a mandatory safety timeout.

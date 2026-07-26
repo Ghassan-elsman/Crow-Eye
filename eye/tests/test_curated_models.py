@@ -84,18 +84,20 @@ class TestCuratedCatalog(unittest.TestCase):
 
 
 class TestGroupedBackendOptionsCurated(unittest.TestCase):
-    def _router(self, live_models):
+    def _router(self, models):
         r = ModelRouter.__new__(ModelRouter)  # skip _initialize_backend
         r.logger = logging.getLogger("test-router")
         r.config = {"backend": "anthropic", "model_name": "claude-opus-4-8"}
         r.credential_manager = None
         r.backend = MagicMock()
-        r.backend.list_models.return_value = live_models
+        # Live path reads list_models(); fast path reads the backend's _model_cache.
+        r.backend.list_models.return_value = models
+        r.backend._model_cache = list(models)
         return r
 
-    def test_curated_merged_and_deduped(self):
+    def test_curated_merged_and_deduped_live(self):
         r = self._router(["claude-opus-4-8", "legacy-model"])
-        groups = r.get_grouped_backend_options()
+        groups = r.get_grouped_backend_options(live=True)
         cloud = [o for o in groups["Cloud API"] if o["backend"] == "anthropic"]
         names = [o["model_name"] for o in cloud]
         # Live model kept, curated merged, the shared id appears exactly once.
@@ -107,11 +109,21 @@ class TestGroupedBackendOptionsCurated(unittest.TestCase):
         self.assertTrue(any(o["is_active"] for o in cloud
                             if o["model_name"] == "claude-opus-4-8"))
 
-    def test_works_when_live_list_empty(self):
-        r = self._router([])  # e.g. offline / detect failed
-        groups = r.get_grouped_backend_options()
+    def test_fast_path_uses_cache_not_network(self):
+        # Default (live=False) must NOT call list_models() — it reads _model_cache.
+        r = self._router(["claude-opus-4-8", "legacy-model"])
+        groups = r.get_grouped_backend_options()  # live defaults to False
+        r.backend.list_models.assert_not_called()
         names = [o["model_name"] for o in groups["Cloud API"] if o["backend"] == "anthropic"]
-        self.assertIn("claude-opus-4-8", names)  # curated still offered
+        self.assertIn("legacy-model", names)         # from _model_cache
+        self.assertIn("claude-sonnet-4-6", names)    # curated still merged
+
+    def test_works_when_list_empty(self):
+        r = self._router([])  # e.g. offline / detect failed / cold cache
+        for live in (False, True):
+            groups = r.get_grouped_backend_options(live=live)
+            names = [o["model_name"] for o in groups["Cloud API"] if o["backend"] == "anthropic"]
+            self.assertIn("claude-opus-4-8", names, f"live={live}")  # curated still offered
 
 
 if __name__ == "__main__":

@@ -25,46 +25,66 @@
   gap: 7px;
 }
 
-.action-chip {
+/* A chip = a run-button (body) + a small pencil edit-button, joined into one pill. */
+.action-chip-wrap {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
+  align-items: stretch;
   border-radius: var(--radius-full);
   border: 1px solid var(--color-border-accent);
   background: var(--color-accent-dim);
-  color: var(--color-accent-bright);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  -webkit-transition: background 0.15s, border-color 0.15s;
-  transition: background 0.15s, border-color 0.15s;
+  overflow: hidden;
+  -webkit-transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
 }
 
-.action-chip:hover {
+.action-chip-wrap:hover {
   background: rgba(168,85,247,0.25);
   border-color: var(--color-accent);
   -webkit-transform: translateY(-1px);
   transform: translateY(-1px);
 }
 
-.action-chip:active {
-  -webkit-transform: translateY(0);
-  transform: translateY(0);
+.action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--color-accent-bright);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
 }
+
+.action-chip-edit {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: none;
+  border-left: 1px solid var(--color-border-accent);
+  background: transparent;
+  color: var(--color-accent-bright);
+  opacity: 0.7;
+  cursor: pointer;
+}
+.action-chip-edit:hover { opacity: 1; background: rgba(168,85,247,0.25); }
 
 .chip-label { font-size: 12px; }
 
-.action-chip:disabled {
-  opacity: 0.55;
+.action-chip:disabled,
+.action-chip-edit:disabled {
   cursor: default;
+}
+.action-chip-wrap:has(.action-chip:disabled) {
+  opacity: 0.55;
   -webkit-transform: none;
   transform: none;
 }
 
-/* The chip whose action is currently running (double-click execute). */
-.action-chip--running {
+/* The chip whose action is currently running. */
+.action-chip-wrap--running {
   opacity: 1;
   border-color: var(--color-accent);
   background: rgba(168,85,247,0.28);

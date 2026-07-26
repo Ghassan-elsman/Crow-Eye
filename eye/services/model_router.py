@@ -314,10 +314,18 @@ class ModelRouter:
             self.logger.error(f"Error retrieving models with quota: {e}")
             return []
 
-    def get_grouped_backend_options(self) -> Dict[str, List[Dict[str, Any]]]:
+    def get_grouped_backend_options(self, live: bool = False) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Aggregates available models from all configured backends into a 
+        Aggregates available models from all configured backends into a
         grouped structure for the UI model menu.
+
+        ``live=False`` (default) is a FAST, purely in-memory build safe to call on
+        the GUI thread: the active backend's model list comes from the backend's
+        cache (falling back to the curated catalog), and other providers' "Connect
+        to…" discovery entries are decided from the credential manager's in-memory
+        cache — NO network round-trips and NO OS-keychain reads. ``live=True`` does
+        the authoritative refresh (live ``list_models()`` + real credential probes)
+        and is meant to run on a background thread.
         """
         from eye.services.context_window_registry import curated_models
 
@@ -345,9 +353,14 @@ class ModelRouter:
                 "is_active": is_active
             })
 
-        # 1. Models from the CURRENT active backend (Live Discovery)
+        # 1. Models from the CURRENT active backend. Live path hits the provider;
+        # fast path reuses the backend's cached list (populated on the initial
+        # connection / any prior live refresh) so opening the menu never blocks.
         try:
-            active_models = self.list_models()
+            if live:
+                active_models = self.list_models()
+            else:
+                active_models = list(getattr(self.backend, "_model_cache", None) or [])
 
             # Map current backend to category
             category = "Cloud API"
@@ -383,10 +396,16 @@ class ModelRouter:
         for bt, label in cloud_providers:
             if bt == active_bt: continue
 
-            # If we have a key, show a discovery option
+            # If we have a key, show a discovery option. Fast path uses the
+            # in-memory credential cache (no OS-keychain read per provider — that
+            # was up to ~10 blocking keychain lookups every time the menu opened);
+            # the live refresh does the authoritative probe.
             key_name = f"{bt}_api_key"
-            if self.credential_manager and self.credential_manager.get_credential(key_name):
-                add_opt("Cloud API", bt, "default", f"Connect to {label}...")
+            if self.credential_manager:
+                has_key = (self.credential_manager.get_credential(key_name) if live
+                           else self.credential_manager.has_cached_credential(key_name))
+                if has_key:
+                    add_opt("Cloud API", bt, "default", f"Connect to {label}...")
 
             # Always surface the curated models for the provider so current
             # Claude models are selectable in the menu (selecting one switches

@@ -329,6 +329,7 @@ class EYEBridge(QObject):
     narrative_map_focus = pyqtSignal(str)  # focus a Verdict/Narrative/Evidence card (id) in the map
     evidence_window_requested = pyqtSignal()  # open the Imported Evidence OS window
     imported_evidence_ready = pyqtSignal(str)  # async verified imported-evidence listing (JSON)
+    grouped_backends_ready = pyqtSignal(str)  # async live-refreshed model-menu grouping (JSON)
 
     # Signals for async operations
     query_complete = pyqtSignal(str)  # JSON response when query completes
@@ -947,14 +948,40 @@ class EYEBridge(QObject):
     @pyqtSlot(result=str)
     def get_grouped_backend_connections(self) -> str:
         """
-        Get all configured or active backend connections and their models,
-        grouped by backend type.
+        Get all configured backend connections and their models, grouped by backend
+        type. Returns the FAST in-memory grouping synchronously (no network / no
+        OS-keychain reads) so the model dropdown opens instantly, and kicks off a
+        background thread that does the authoritative live refresh and emits it via
+        ``grouped_backends_ready`` — the UI updates the menu in place when it lands.
         """
         try:
             if not self.context_manager or not self.context_manager.model_router:
                 return safe_json_dumps({"success": False, "data": None, "error": "ModelRouter not initialized"})
-            
-            options = self.context_manager.model_router.get_grouped_backend_options()
+
+            router = self.context_manager.model_router
+            options = router.get_grouped_backend_options(live=False)
+
+            # Background live refresh (real list_models() + credential probes).
+            bridge = self
+
+            class _GroupedBackendsWorker(QThread):
+                def run(self):
+                    try:
+                        live = router.get_grouped_backend_options(live=True)
+                        bridge.grouped_backends_ready.emit(safe_json_dumps(
+                            {"success": True, "data": live, "error": None}))
+                    except Exception as exc:
+                        logger.debug(f"grouped-backends live refresh failed: {exc}")
+
+            if not hasattr(self, "_active_workers"):
+                self._active_workers = []
+            worker = _GroupedBackendsWorker()
+            self._active_workers.append(worker)
+            worker.finished.connect(lambda w=worker: (
+                self._active_workers.remove(w) if w in self._active_workers else None,
+                w.deleteLater()))
+            worker.start()
+
             return safe_json_dumps({
                 "success": True,
                 "data": options,
