@@ -269,9 +269,22 @@ class OnboardingWizard(QDialog):
             }
         """)
         self.import_evidence_button.setToolTip(
-            "Import external forensics evidence (SQLite, CSV or JSON) into the open case")
+            "Import external forensics evidence (SQLite, CSV, JSON — or a report, "
+            "e-mail export, or browser-tool output, stored verbatim) into the open case")
         self.import_evidence_button.clicked.connect(self._on_import_evidence)
         nav_layout.addWidget(self.import_evidence_button)
+
+        # View the imported-evidence ledger (hashes + integrity) — opens the same
+        # Imported Evidence window as the Eye top bar's "Evidence" button.
+        self.view_evidence_button = QPushButton("View Evidence")
+        self.view_evidence_button.setFixedHeight(40)
+        self.view_evidence_button.setMinimumWidth(140)
+        self.view_evidence_button.setStyleSheet(self.import_evidence_button.styleSheet())
+        self.view_evidence_button.setToolTip(
+            "Open the Imported Evidence window — every imported database/document "
+            "with SHA-256 hashes and live integrity verification")
+        self.view_evidence_button.clicked.connect(self._on_view_evidence)
+        nav_layout.addWidget(self.view_evidence_button)
 
         nav_layout.addStretch()
         
@@ -668,10 +681,15 @@ class OnboardingWizard(QDialog):
                                  placeholder="local-model")
             
         elif integration_type == "cloud_api":
-            # Cloud API configuration
-            self._add_backend_selector(form_layout, ["openai", "anthropic", "gemini"])
-            self._add_text_input(form_layout, "api_key", "API Key:", 
-                                 placeholder="sk-... or AIza...", password=True)
+            # Cloud API configuration. Ordered common-first (investigators most often
+            # bring OpenRouter / Google AI Studio / NVIDIA keys).
+            self._add_backend_selector(form_layout, [
+                "openrouter", "gemini", "nvidia", "openai", "anthropic",
+                "deepseek", "kimi", "groq", "mistral", "xai",
+            ])
+            self._add_text_input(form_layout, "api_key", "API Key:",
+                                 placeholder="sk-or-… (OpenRouter) · AIza… (Google AI Studio) · nvapi-… (NVIDIA) · sk-… · gsk_… · xai-…",
+                                 password=True)
             self._add_text_input(form_layout, "model_name", "Model Name:",
                                  placeholder="e.g. claude-opus-4-8 — or click Detect / Common Models")
         
@@ -706,9 +724,23 @@ class OnboardingWizard(QDialog):
         backend_layout.setSpacing(8)
         
         self.backend_group = QButtonGroup()
-        
+
+        # Friendly display names (the raw ids like "xai"/"deepseek" title-case badly).
+        provider_labels = {
+            "openrouter": "OpenRouter",
+            "gemini": "Gemini (Google AI Studio)",
+            "nvidia": "NVIDIA",
+            "openai": "OpenAI",
+            "anthropic": "Anthropic",
+            "deepseek": "DeepSeek",
+            "kimi": "Kimi (Moonshot)",
+            "groq": "Groq",
+            "mistral": "Mistral",
+            "xai": "xAI (Grok)",
+        }
+
         for backend in backends:
-            radio = QRadioButton(backend.replace("_", " ").title())
+            radio = QRadioButton(provider_labels.get(backend, backend.replace("_", " ").title()))
             radio.toggled.connect(lambda checked, b=backend: self._on_backend_selected(b) if checked else None)
             self.backend_group.addButton(radio)
             backend_layout.addWidget(radio)
@@ -835,17 +867,42 @@ class OnboardingWizard(QDialog):
 
         # Heuristic validation for API key format
         if backend == "openai" and not api_key.startswith("sk-"):
-            QMessageBox.warning(self, "Invalid API Key Format", 
+            QMessageBox.warning(self, "Invalid API Key Format",
                                "OpenAI API keys usually start with 'sk-'.\n\nPlease check your key.")
             return
         elif backend == "gemini" and not api_key.startswith("AIza"):
-            QMessageBox.warning(self, "Invalid API Key Format", 
+            QMessageBox.warning(self, "Invalid API Key Format",
                                "Gemini API keys usually start with 'AIza'.\n\nPlease check your key.")
             return
         elif backend == "anthropic" and not api_key.startswith("sk-ant-"):
-            QMessageBox.warning(self, "Invalid API Key Format", 
+            QMessageBox.warning(self, "Invalid API Key Format",
                                "Anthropic API keys usually start with 'sk-ant-'.\n\nPlease check your key.")
             return
+        elif backend == "deepseek" and not api_key.startswith("sk-"):
+            QMessageBox.warning(self, "Invalid API Key Format",
+                               "DeepSeek API keys usually start with 'sk-'.\n\nPlease check your key.")
+            return
+        elif backend == "kimi" and not api_key.startswith("sk-"):
+            QMessageBox.warning(self, "Invalid API Key Format",
+                               "Kimi (Moonshot) API keys usually start with 'sk-'.\n\nPlease check your key.")
+            return
+        elif backend == "openrouter" and not api_key.startswith("sk-or-"):
+            QMessageBox.warning(self, "Invalid API Key Format",
+                               "OpenRouter API keys usually start with 'sk-or-'.\n\nGet one at openrouter.ai/keys.")
+            return
+        elif backend == "nvidia" and not api_key.startswith("nvapi-"):
+            QMessageBox.warning(self, "Invalid API Key Format",
+                               "NVIDIA API keys usually start with 'nvapi-'.\n\nGet one at build.nvidia.com.")
+            return
+        elif backend == "groq" and not api_key.startswith("gsk_"):
+            QMessageBox.warning(self, "Invalid API Key Format",
+                               "Groq API keys usually start with 'gsk_'.\n\nGet one at console.groq.com.")
+            return
+        elif backend == "xai" and not api_key.startswith("xai-"):
+            QMessageBox.warning(self, "Invalid API Key Format",
+                               "xAI (Grok) API keys usually start with 'xai-'.\n\nPlease check your key.")
+            return
+        # Mistral keys are bare tokens with no fixed prefix — only non-empty is checked.
 
         try:
             # Temporarily store key for validation
@@ -858,7 +915,27 @@ class OnboardingWizard(QDialog):
             
             available_models = temp_router.backend.list_models()
 
+            from eye.services.context_window_registry import curated_models, recommended_models
+
             if not available_models:
+                # Live discovery came back empty. For a CLOUD provider with a curated
+                # catalog, don't dead-end a valid key — offer the common models so the
+                # investigator can still pick one and proceed (detection can be flaky
+                # across SDK versions / network conditions). Only local servers, which
+                # genuinely have nothing loaded, get the hard error.
+                curated = curated_models(backend)
+                if curated:
+                    QMessageBox.information(
+                        self, "Using Common Models",
+                        f"Couldn't fetch the live model list for {backend.replace('_', ' ').title()} "
+                        "right now (network or key permissions). Showing the common models "
+                        "instead — you can type an exact model name too.")
+                    self._show_model_selection_dialog(
+                        list(curated),
+                        recommended=recommended_models(backend),
+                        title=f"Common {backend.replace('_', ' ').title()} Models")
+                    return
+
                 backend_title = backend.title()
                 if "LM Studio" in backend_title or "Ollama" in backend_title:
                     help_text = (
@@ -877,10 +954,8 @@ class OnboardingWizard(QDialog):
                 QMessageBox.warning(self, "No Models Found", help_text)
                 return
 
-            
             # Merge curated IDs the API may not list yet (brand-new models) and
             # highlight the recommended ones at the top of the dialog.
-            from eye.services.context_window_registry import curated_models, recommended_models
             merged = list(available_models)
             for m in curated_models(backend):
                 if m not in merged:
@@ -1116,6 +1191,17 @@ class OnboardingWizard(QDialog):
             QMessageBox.information(
                 self, "Import Evidence",
                 "Open a case in the Eye first, then import external evidence."
+            )
+
+    def _on_view_evidence(self):
+        """Open the Imported Evidence window (hashes + integrity) — shared path."""
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_open_evidence_window"):
+            parent._open_evidence_window()
+        else:
+            QMessageBox.information(
+                self, "Imported Evidence",
+                "Open a case in the Eye first to view its imported evidence."
             )
 
     def _on_run_diagnostics(self):

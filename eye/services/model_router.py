@@ -136,13 +136,68 @@ class ModelRouter:
                     return LMStudioBackend(endpoint, mn)
             
             # --- APPROACH 3: CLOUD API AGENTS ---
-            if bt == "openai": 
+            if bt == "openai":
                 if not self.credential_manager:
                     raise ValueError("CredentialManager required for OpenAI backend")
                 return OpenAIBackend(mn, self.credential_manager)
             if bt == "anthropic": return AnthropicBackend(mn, self.credential_manager)
             if bt == "gemini": return GeminiBackend(mn, self.credential_manager)
-            
+            # OpenAI-compatible providers reuse OpenAIBackend with a base_url + their
+            # own keyring credential. base_url is overridable via config["api_endpoint"]
+            # (e.g. to reach the China endpoint api.moonshot.cn instead of .ai).
+            if bt == "deepseek":
+                if not self.credential_manager:
+                    raise ValueError("CredentialManager required for DeepSeek backend")
+                return OpenAIBackend(
+                    mn, self.credential_manager,
+                    base_url=self.config.get("api_endpoint") or "https://api.deepseek.com",
+                    credential_key="deepseek_api_key", provider_label="DeepSeek")
+            if bt in ("kimi", "moonshot"):
+                if not self.credential_manager:
+                    raise ValueError("CredentialManager required for Kimi backend")
+                return OpenAIBackend(
+                    mn, self.credential_manager,
+                    base_url=self.config.get("api_endpoint") or "https://api.moonshot.ai/v1",
+                    credential_key="kimi_api_key", provider_label="Kimi (Moonshot)")
+            if bt == "openrouter":
+                if not self.credential_manager:
+                    raise ValueError("CredentialManager required for OpenRouter backend")
+                # OpenRouter fans out to every model behind one key. The optional
+                # attribution headers are what OpenRouter asks apps to send.
+                return OpenAIBackend(
+                    mn, self.credential_manager,
+                    base_url=self.config.get("api_endpoint") or "https://openrouter.ai/api/v1",
+                    credential_key="openrouter_api_key", provider_label="OpenRouter",
+                    default_headers={"HTTP-Referer": "https://crow-eye.com", "X-Title": "Crow-Eye"})
+            if bt == "nvidia":
+                if not self.credential_manager:
+                    raise ValueError("CredentialManager required for NVIDIA backend")
+                return OpenAIBackend(
+                    mn, self.credential_manager,
+                    base_url=self.config.get("api_endpoint") or "https://integrate.api.nvidia.com/v1",
+                    credential_key="nvidia_api_key", provider_label="NVIDIA")
+            if bt == "groq":
+                if not self.credential_manager:
+                    raise ValueError("CredentialManager required for Groq backend")
+                return OpenAIBackend(
+                    mn, self.credential_manager,
+                    base_url=self.config.get("api_endpoint") or "https://api.groq.com/openai/v1",
+                    credential_key="groq_api_key", provider_label="Groq")
+            if bt == "mistral":
+                if not self.credential_manager:
+                    raise ValueError("CredentialManager required for Mistral backend")
+                return OpenAIBackend(
+                    mn, self.credential_manager,
+                    base_url=self.config.get("api_endpoint") or "https://api.mistral.ai/v1",
+                    credential_key="mistral_api_key", provider_label="Mistral")
+            if bt in ("xai", "grok"):
+                if not self.credential_manager:
+                    raise ValueError("CredentialManager required for xAI backend")
+                return OpenAIBackend(
+                    mn, self.credential_manager,
+                    base_url=self.config.get("api_endpoint") or "https://api.x.ai/v1",
+                    credential_key="xai_api_key", provider_label="xAI (Grok)")
+
             raise ValueError(f"Unsupported forensic AI backend: {bt} (Type: {it})")
             
         except ValueError:
@@ -313,9 +368,16 @@ class ModelRouter:
 
         # 2. Add 'Discovery' options for other cloud backends if they have keys
         cloud_providers = [
+            ("openrouter", "OpenRouter"),
+            ("gemini", "Gemini (Google AI Studio)"),
+            ("nvidia", "NVIDIA"),
             ("openai", "OpenAI"),
             ("anthropic", "Anthropic"),
-            ("gemini", "Gemini")
+            ("deepseek", "DeepSeek"),
+            ("kimi", "Kimi (Moonshot)"),
+            ("groq", "Groq"),
+            ("mistral", "Mistral"),
+            ("xai", "xAI (Grok)"),
         ]
 
         for bt, label in cloud_providers:

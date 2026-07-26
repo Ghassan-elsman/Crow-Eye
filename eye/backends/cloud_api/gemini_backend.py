@@ -312,26 +312,35 @@ class GeminiBackend(LLMBackend):
             models = []
             # Iterate through the available models from the Google GenAI API
             for m in self.client.models.list():
-                # Extract identifiers and capabilities
+                # Extract identifiers and capabilities. The MODERN google-genai SDK
+                # exposes capabilities on `supported_actions`; the legacy SDK used
+                # `supported_generation_methods`. Older code only checked the legacy
+                # field, so with the modern SDK every model was filtered out and a
+                # VALID key looked broken ("No supported models were found"). Read
+                # both, and — when neither is populated (common on the modern SDK) —
+                # be permissive: include the model and only exclude the obvious
+                # non-chat families (embeddings / AQA / imagen / veo) by name.
                 m_name = getattr(m, "name", "") or ""
-                methods = getattr(m, "supported_generation_methods", []) or []
-                actions = getattr(m, "supported_actions", []) or []
-                
-                # Permissive check for chat/generation capabilities
-                is_chat = any(x in methods or x in actions for x in ["generateContent", "generateMessage", "generateText", "chat"])
-                
-                if is_chat:
-                    # Strip prefix if present (e.g., "models/gemini-pro" -> "gemini-pro")
-                    clean_name = m_name.replace("models/", "")
-                    if clean_name and clean_name not in models:
-                        models.append(clean_name)
-            
-            if models: 
+                methods = getattr(m, "supported_generation_methods", None) or []
+                actions = getattr(m, "supported_actions", None) or []
+                caps = set(methods) | set(actions)
+                generative = {"generateContent", "generateMessage", "generateText",
+                              "chat", "bidiGenerateContent"}
+                clean_name = m_name.replace("models/", "")
+                low = clean_name.lower()
+                non_chat = any(tag in low for tag in
+                               ("embedding", "aqa", "imagen", "veo", "-tts", "image-generation"))
+                is_chat = (bool(caps & generative) or not caps) and not non_chat
+
+                if is_chat and clean_name and clean_name not in models:
+                    models.append(clean_name)
+
+            if models:
                 self._model_cache = models
                 self.logger.info(f"Discovered {len(models)} Gemini models via Google GenAI API.")
             else:
                 self.logger.warning("Gemini API returned no chat-capable models. Check API key permissions.")
-                
+
             return models
         except Exception as e: 
             self.logger.error(f"Failed to list Cloud (Gemini) models: {e}")

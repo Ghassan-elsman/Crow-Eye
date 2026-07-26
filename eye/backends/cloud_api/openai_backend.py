@@ -26,10 +26,23 @@ class OpenAIBackend(LLMBackend):
     """
     Official OpenAI Cloud Backend.
     Includes real-time quota tracking via HTTP header inspection.
+
+    Also serves any OpenAI-compatible provider (DeepSeek, Kimi/Moonshot, etc.) by
+    passing a ``base_url`` and the provider's ``credential_key``. The wire format,
+    tool-calling shape, and quota headers are identical, so those providers reuse
+    this backend rather than duplicating it.
     """
-    def __init__(self, model_name: str, credential_manager):
+    def __init__(self, model_name: str, credential_manager,
+                 base_url: Optional[str] = None,
+                 credential_key: str = "openai_api_key",
+                 provider_label: Optional[str] = None,
+                 default_headers: Optional[Dict[str, str]] = None):
         self.model_name = model_name
         self.credential_manager = credential_manager
+        self.base_url = base_url                      # None → api.openai.com
+        self.credential_key = credential_key          # keyring name for the API key
+        self.provider_label = provider_label or "OpenAI"
+        self.default_headers = default_headers        # e.g. OpenRouter attribution
         self.logger = logging.getLogger(self.__class__.__name__)
         self.quota_stats = "API Managed"
         self._client = None
@@ -37,7 +50,7 @@ class OpenAIBackend(LLMBackend):
 
     @property
     def client(self):
-        """Lazy-loaded OpenAI client."""
+        """Lazy-loaded OpenAI (or OpenAI-compatible) client."""
         if self._client is None:
             try:
                 import openai
@@ -45,12 +58,17 @@ class OpenAIBackend(LLMBackend):
                 self.logger.error(f"Critical: Failed to import 'openai' SDK: {e}")
                 raise ImportError("The 'openai' SDK is missing. "
                                  "Please run 'pip install openai' in the Crow-Eye venv.") from e
-            
-            api_key = self.credential_manager.get_credential("openai_api_key")
+
+            api_key = self.credential_manager.get_credential(self.credential_key)
             if not api_key:
-                raise ValueError("OpenAI API key not found. Please configure it in the Setup Wizard.")
-                
-            self._client = openai.OpenAI(api_key=api_key)
+                raise ValueError(f"{self.provider_label} API key not found. Please configure it in the Setup Wizard.")
+
+            kwargs = {"api_key": api_key}
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            if self.default_headers:
+                kwargs["default_headers"] = self.default_headers
+            self._client = openai.OpenAI(**kwargs)
         return self._client
 
     def generate(self, system_prompt, user_message, tools=None, history=None, gen_params=None):

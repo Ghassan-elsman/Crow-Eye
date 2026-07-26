@@ -27,6 +27,7 @@ import {
   openAddEvidence,
   openComplianceWindow,
   openNarrativeMapWindow,
+  openEvidenceWindow,
   initializeTriage,
   getBackendStatus,
   onTruncationWarning,
@@ -67,6 +68,7 @@ const ChatInterface: React.FC = () => {
   // sync-prefixed message in chat is resolved by the query_complete listener.
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
   const switchingRef = useRef(false);            // mirror of switchingTo for listeners
+  const isLoadingRef = useRef(false);            // mirror of isLoading for stable callbacks
   const pendingSendRef = useRef<string | null>(null);
   const sendMessageRef = useRef<((q: string) => void) | null>(null);
   const syncRecentMessageIdsRef = useRef<(() => void) | null>(null);
@@ -649,8 +651,18 @@ const ChatInterface: React.FC = () => {
 
   sendMessageRef.current = sendMessage;             // keep listener-accessible reference fresh
   syncRecentMessageIdsRef.current = syncRecentMessageIds;
-  const handleOptionSelect = (query: string) => sendMessage(query);
-  const handleActionChipClick = (query: string) => setInputValue(query);
+  isLoadingRef.current = isLoading;                 // mirror for identity-stable callbacks
+
+  // Identity-stable handlers (via refs) so the memoized MessageList doesn't
+  // re-render on every keystroke / unrelated state change.
+  const handleOptionSelect = useCallback((query: string) => { sendMessageRef.current?.(query); }, []);
+  const handleActionChipClick = useCallback((query: string) => setInputValue(query), []);
+  // Double-click on a suggested-action chip: run it immediately (no compose step).
+  const handleActionChipExecute = useCallback((query: string) => {
+    if (isLoadingRef.current) return;               // a query is already running
+    setInputValue('');                              // clear anything the single-click inserted
+    sendMessageRef.current?.(query);
+  }, []);
 
   // Logo button handler — re-shows loading dialog when clicked while something is loading
   const handleLogoClick = () => {
@@ -696,16 +708,16 @@ const ChatInterface: React.FC = () => {
     }
   };
 
-  const handlePinToggle = async (messageId: string, shouldPin: boolean) => {
+  const handlePinToggle = useCallback(async (messageId: string, shouldPin: boolean) => {
     try {
-      const response = shouldPin 
+      const response = shouldPin
         ? await pinMessage(messageId)
         : await unpinMessage(messageId);
       const result = JSON.parse(response);
       if (result.success) {
         // Update message in local state
-        setMessages(prev => prev.map(msg => 
-          msg.id === messageId 
+        setMessages(prev => prev.map(msg =>
+          msg.id === messageId
             ? { ...msg, metadata: { ...msg.metadata, pinned: shouldPin } }
             : msg
         ));
@@ -714,7 +726,7 @@ const ChatInterface: React.FC = () => {
     } catch (error) {
       console.error('Error toggling pin:', error);
     }
-  };
+  }, [fetchContextStats]);
 
   // Safe numeric reads for stats bar
   const statTokens    = contextStats?.total_tokens    ?? 0;
@@ -887,6 +899,15 @@ const ChatInterface: React.FC = () => {
                 <span>Narrative Map</span>
               </button>
               <button
+                className="hdr-action-btn"
+                onClick={openEvidenceWindow}
+                title="Open Imported Evidence — all imported databases and documents with SHA-256 hashes and integrity verification"
+                aria-label="Imported Evidence"
+              >
+                <IconDatabase size={13} />
+                <span>Evidence</span>
+              </button>
+              <button
                 className="hdr-action-btn hdr-action-btn--danger"
                 onClick={handleClearHistory}
                 title="Clear conversation history"
@@ -917,6 +938,7 @@ const ChatInterface: React.FC = () => {
           <MessageList
             messages={messages}
             onActionChipClick={handleActionChipClick}
+            onActionChipExecute={handleActionChipExecute}
             onOptionSelect={handleOptionSelect}
             isLoading={isLoading}
             thinkingSteps={thinkingSteps}

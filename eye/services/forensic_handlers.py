@@ -574,12 +574,139 @@ class ForensicHandlers:
             result["note"] = f"List truncated. Showing 50 of {total_files} items to protect context limits."
         return result
 
+    # ── Imported document evidence (reports / e-mail exports / browser output) ──
+
+    def _imported_evidence_manifest(self):
+        """Manifest rooted at the case's artifacts dir (Target_Artifacts)."""
+        from eye.services.imported_evidence_manifest import ImportedEvidenceManifest
+        artifacts_dir = getattr(getattr(self.cm, "database_service", None),
+                                "case_directory", None)
+        if not artifacts_dir and self.cm.case_directory:
+            cand = Path(self.cm.case_directory) / "Target_Artifacts"
+            artifacts_dir = cand if cand.exists() else self.cm.case_directory
+        if not artifacts_dir:
+            return None
+        return ImportedEvidenceManifest(artifacts_dir)
+
+    _DOC_READ_CAP = 20_000  # chars per call — keeps one document from flooding context
+
+    def handle_read_imported_evidence(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """List or read VERBATIM-imported document evidence (third-party reports,
+        Gmail/e-mail exports, browser-forensics output) from
+        ``Imported_Evidence/Documents/``. Without ``name`` → the document list
+        (with SHA-256). With ``name`` (+ optional ``offset``) → extracted text.
+        """
+        manifest = self._imported_evidence_manifest()
+        if manifest is None:
+            return {"success": False, "error": "No case directory configured."}
+
+        docs = manifest.list_documents()
+        name = (params.get("name") or "").strip()
+        if not name:
+            return {"success": True, "data": {
+                "documents": [{
+                    "name": d.get("name"), "source_type": d.get("source_type"),
+                    "size_bytes": d.get("size_bytes"),
+                    "imported_at": d.get("imported_at"),
+                    "sha256": d.get("sha256"),
+                } for d in docs],
+                "count": len(docs),
+                "hint": "Call again with {name: <document name>} to read its text.",
+            }}
+
+        entry = next((d for d in docs if d.get("name") == name), None)
+        if entry is None:
+            # forgiving match (case-insensitive / stem)
+            low = name.lower()
+            entry = next((d for d in docs
+                          if (d.get("name") or "").lower() == low
+                          or Path(d.get("name") or "").stem.lower() == low), None)
+        if entry is None:
+            return {"success": False,
+                    "error": f"No imported document named '{name}'. "
+                             f"Available: {[d.get('name') for d in docs][:20]}"}
+
+        path = Path(entry.get("dest_path") or "")
+        if not path.exists():
+            return {"success": False, "error": f"Document file missing on disk: {path.name}"}
+
+        try:
+            text = self._extract_document_text(path)
+        except Exception as e:
+            return {"success": False, "error": f"Could not extract text from {path.name}: {e}"}
+
+        offset = max(0, int(params.get("offset") or 0))
+        chunk = text[offset:offset + self._DOC_READ_CAP]
+        truncated = (offset + len(chunk)) < len(text)
+        data = {
+            "name": entry.get("name"),
+            "sha256": entry.get("sha256"),
+            "total_chars": len(text),
+            "offset": offset,
+            "content": chunk,
+        }
+        if truncated:
+            data["note"] = (f"Truncated at {self._DOC_READ_CAP} chars — call again with "
+                            f"offset={offset + len(chunk)} for the next part.")
+        return {"success": True, "data": data,
+                "evidence_refs": [f"imported_document:{entry.get('name')}:{entry.get('sha256')}"]}
+
+    @staticmethod
+    def _extract_document_text(path: Path) -> str:
+        """Best-effort text extraction per document type (stdlib-first)."""
+        ext = path.suffix.lower()
+        if ext in (".txt", ".md", ".log", ".csv"):
+            return path.read_text(encoding="utf-8", errors="replace")
+        if ext in (".html", ".htm"):
+            import re as _re
+            raw = path.read_text(encoding="utf-8", errors="replace")
+            raw = _re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", raw)
+            raw = _re.sub(r"(?s)<[^>]+>", " ", raw)
+            return _re.sub(r"[ \t]{2,}", " ", raw)
+        if ext == ".eml":
+            import email
+            from email import policy
+            msg = email.message_from_bytes(path.read_bytes(), policy=policy.default)
+            parts = [f"{h}: {msg.get(h, '')}" for h in ("From", "To", "Cc", "Date", "Subject")]
+            body = msg.get_body(preferencelist=("plain", "html"))
+            parts.append("")
+            parts.append(body.get_content() if body is not None else "(no text body)")
+            return "\n".join(parts)
+        if ext == ".mbox":
+            import mailbox
+            out = []
+            for i, msg in enumerate(mailbox.mbox(str(path))):
+                out.append(f"--- Message {i + 1} ---")
+                for h in ("From", "To", "Date", "Subject"):
+                    out.append(f"{h}: {msg.get(h, '')}")
+                try:
+                    payload = msg.get_payload(decode=True)
+                    if payload:
+                        out.append(payload.decode("utf-8", errors="replace"))
+                except Exception:
+                    out.append("(could not decode body)")
+                out.append("")
+            return "\n".join(out) if out else "(empty mailbox)"
+        if ext == ".pdf":
+            try:
+                from pypdf import PdfReader
+            except ImportError:
+                try:
+                    from PyPDF2 import PdfReader  # older environments
+                except ImportError:
+                    raise RuntimeError("PDF support needs the 'pypdf' package "
+                                       "(pip install pypdf)")
+            reader = PdfReader(str(path))
+            return "\n".join((page.extract_text() or "") for page in reader.pages)
+        # Unknown type — try plain text.
+        return path.read_text(encoding="utf-8", errors="replace")
+
     def handle_internet_search(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Perform internet forensic research using the dedicated service."""
         query = params.get("query")
         if not query:
             return {"success": False, "error": "Missing search query."}
-            
+
         return self.cm.internet_search_service.search(query)
 
     def handle_fetch_web_content(self, params: Dict[str, Any]) -> Dict[str, Any]:

@@ -46,6 +46,9 @@ export interface Evidence {
   free?: boolean; x?: number; y?: number;
   // Source query + database that produced this evidence (for "Load source rows").
   query?: string; database?: string;
+  // Full captured text — shown when there is no reloadable DB source (non-database
+  // tool, or a text-mode / non-function-calling model), so evidence is never blank.
+  content?: string;
 }
 export interface Narrative {
   id: string; state: State; title: string; reason: string; authoredBy: string;
@@ -1297,29 +1300,45 @@ export function useSourceRows(e: Evidence | null, live: boolean, auto: boolean) 
   return { rows, loading, err, canLoad, reload: load };
 }
 
-// Presentational block: the "Source artifact" rows table shared by the inspector
-// and the evidence detail popup.
+// Presentational block: the evidence's real DB rows when a source exists, and
+// otherwise the full CAPTURED TEXT — so evidence from a non-database tool or a
+// text-mode (non-function-calling) model is never blank.
 const SourceRowsView: React.FC<{
+  evidence: Evidence;
   state: ReturnType<typeof useSourceRows>;
   reloadLabel?: string;
-}> = ({ state, reloadLabel = 'Reload rows' }) => (
-  <div className="nm-modal-src">
-    <div className="nm-modal-subhead">Source artifact</div>
-    <button className="nm-btn" onClick={state.reload} disabled={state.loading || !state.canLoad}>
-      {state.loading ? 'Loading…' : reloadLabel}
-    </button>
-    {!state.canLoad && <span className="nm-dim nm-modal-srchint">No queryable source recorded for this evidence (it came from a non-database tool).</span>}
-    {state.err && <div className="nm-modal-err">{state.err}</div>}
-    {state.rows && <DataViewer {...state.rows} />}
-  </div>
-);
+}> = ({ evidence, state, reloadLabel = 'Reload rows' }) => {
+  const captured = (evidence.content || evidence.data || '').trim();
+  // Rows are the primary view; fall back to the captured text when the evidence
+  // has no reloadable source, or a query legitimately returned nothing.
+  const showCaptured = !state.rows && !state.loading && !!captured;
+  return (
+    <div className="nm-modal-src">
+      <div className="nm-modal-subhead">{state.canLoad ? 'Source artifact' : 'Captured evidence'}</div>
+      {state.canLoad && (
+        <button className="nm-btn" onClick={state.reload} disabled={state.loading}>
+          {state.loading ? 'Loading…' : reloadLabel}
+        </button>
+      )}
+      {state.err && <div className="nm-modal-err">{state.err}</div>}
+      {state.rows && <DataViewer {...state.rows} />}
+      {showCaptured && <pre className="nm-ev-captured">{captured}</pre>}
+      {showCaptured && !state.canLoad && (
+        <span className="nm-dim nm-modal-srchint">Non-database result — showing the captured text; no source rows to reload.</span>
+      )}
+      {!state.rows && !state.loading && !captured && (
+        <span className="nm-dim nm-modal-srchint">No content recorded for this evidence.</span>
+      )}
+    </div>
+  );
+};
 
 // Inspector block: auto-loads and shows the selected evidence card's REAL rows
 // (native or imported) inline in the side panel, so the investigator sees the
-// actual records without opening the popup.
+// actual records — or the captured text — without opening the popup.
 const InspectorEvidenceRows: React.FC<{ evidence: Evidence; live: boolean }> = ({ evidence, live }) => {
   const src = useSourceRows(evidence, live, true);
-  return <SourceRowsView state={src} reloadLabel="Reload rows" />;
+  return <SourceRowsView evidence={evidence} state={src} reloadLabel="Reload rows" />;
 };
 
 const EvidenceDetailModal: React.FC<{
@@ -1332,7 +1351,7 @@ const EvidenceDetailModal: React.FC<{
 
   const kv: [string, React.ReactNode][] = [
     ['Source', (e.kicker || 'artifact').toUpperCase()],
-    ['Detail', e.data ? <Md>{e.data}</Md> : '—'],
+    ['Detail', (e.content || e.data) ? <Md>{e.content || e.data}</Md> : '—'],
     ['Why it matters', e.reason ? <Md>{e.reason}</Md> : '—'],
     ...(e.query ? [['Query', <code className="nm-ev-query">{e.query}</code>] as [string, React.ReactNode]] : []),
     ['Reference', e.database ? `${e.database}` : (e.ref || '—')],
@@ -1367,7 +1386,7 @@ const EvidenceDetailModal: React.FC<{
             </div>
           )}
 
-          <SourceRowsView state={src} reloadLabel="Reload rows" />
+          <SourceRowsView evidence={e} state={src} reloadLabel="Reload rows" />
         </div>
       </div>
     </div>

@@ -16,6 +16,8 @@ import './MessageList.css';
 interface MessageListProps {
   messages: Message[];
   onActionChipClick: (query: string) => void;
+  /** Double-click on a suggested-action chip: run it immediately. */
+  onActionChipExecute?: (query: string) => void;
   onOptionSelect: (query: string, label: string) => void;
   isLoading?: boolean;
   thinkingSteps?: ThinkingStep[];
@@ -40,6 +42,7 @@ const RetainedDialogue: React.FC<{ entries: EyeDialogueEntry[] }> = ({ entries }
 const MessageList: React.FC<MessageListProps> = ({
   messages,
   onActionChipClick,
+  onActionChipExecute,
   onOptionSelect,
   isLoading,
   thinkingSteps = [],
@@ -138,6 +141,8 @@ const MessageList: React.FC<MessageListProps> = ({
                 <ActionChips
                   chips={message.action_chips}
                   onChipClick={onActionChipClick}
+                  onChipExecute={onActionChipExecute}
+                  disabled={isLoading}
                 />
               )}
 
@@ -210,4 +215,9 @@ const MessageList: React.FC<MessageListProps> = ({
   );
 };
 
-export default MessageList;
+// Memoized: the chat re-renders on every keystroke in the input bar (inputValue
+// state lives in ChatInterface). Without memo, every ReactMarkdown bubble
+// re-renders per keystroke — noticeable lag on long conversations. With memo +
+// identity-stable callbacks from ChatInterface, the list only re-renders when
+// messages / thinking steps / live dialogue actually change.
+export default React.memo(MessageList);

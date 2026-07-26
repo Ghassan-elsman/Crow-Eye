@@ -285,6 +285,31 @@ class QueryWorker(QThread):
                     pass
 
 
+class ModelSwitchValidator(QThread):
+    """Background connectivity check for a just-switched model/backend.
+
+    Runs ``backend.validate_connectivity()`` (one cheap models.list() round-trip)
+    OFF the GUI thread so a dead network / bad key can never freeze the UI.
+    Emits ``finished_validation(ok, detail)``; the bridge then either persists the
+    switch and fires the case-context sync, or reverts to the previous model and
+    tells the investigator the key/model is not working.
+    """
+    finished_validation = pyqtSignal(bool, str)
+
+    def __init__(self, backend):
+        super().__init__()
+        self._backend = backend
+
+    def run(self):
+        try:
+            ok = bool(self._backend.validate_connectivity())
+            detail = "" if ok else ("the provider rejected the request — check that the "
+                                    "API key is valid and the model name exists")
+            self.finished_validation.emit(ok, detail)
+        except Exception as e:
+            self.finished_validation.emit(False, str(e))
+
+
 class EYEBridge(QObject):
     """
     QWebChannel bridge exposing EYE AI assistant functionality to React frontend.
@@ -302,6 +327,8 @@ class EYEBridge(QObject):
     compliance_window_requested = pyqtSignal()
     narrative_map_window_requested = pyqtSignal()  # open the Narrative Map OS window
     narrative_map_focus = pyqtSignal(str)  # focus a Verdict/Narrative/Evidence card (id) in the map
+    evidence_window_requested = pyqtSignal()  # open the Imported Evidence OS window
+    imported_evidence_ready = pyqtSignal(str)  # async verified imported-evidence listing (JSON)
 
     # Signals for async operations
     query_complete = pyqtSignal(str)  # JSON response when query completes
@@ -937,47 +964,123 @@ class EYEBridge(QObject):
             logger.error(f"Error getting grouped backend connections: {e}", exc_info=True)
             return safe_json_dumps({"success": False, "data": None, "error": str(e)})
 
+    # Backend id -> integration_type, used when persisting a model switch. Must
+    # cover EVERY selectable provider (the old inline list only knew
+    # openai/anthropic/gemini, so switching to the newer providers persisted a
+    # wrong integration_type).
+    _INTEGRATION_TYPE_BY_BACKEND = {
+        "openai": "cloud_api", "anthropic": "cloud_api", "gemini": "cloud_api",
+        "deepseek": "cloud_api", "kimi": "cloud_api", "moonshot": "cloud_api",
+        "openrouter": "cloud_api", "nvidia": "cloud_api", "groq": "cloud_api",
+        "mistral": "cloud_api", "xai": "cloud_api", "grok": "cloud_api",
+        "ollama": "local_server", "lm_studio": "local_server", "vllm": "local_server",
+    }
+
     @pyqtSlot(str, result=bool)
     def switch_active_model(self, model_name: str) -> bool:
         """
         Switch the actively connected AI model, supporting format "backend:model_name"
         to change the backend connection type on-the-fly.
+
+        The switch is ACCEPTED immediately (returns True), then the new
+        model/key is VALIDATED on a background thread. Only a validated switch is
+        persisted and followed by the case-context sync; a failed validation
+        reverts to the previous model and posts a clear error to the chat — so a
+        bad API key or model name surfaces in seconds, not as a silent hang.
         """
         try:
             if not self.context_manager:
                 return False
-            
+
             backend = None
             if ":" in model_name:
                 backend, model_name = model_name.split(":", 1)
-            
-            self.context_manager.model_router.switch_model(model_name, backend=backend)
-            logger.info(f"Switched model to {model_name} (Backend: {backend or 'unchanged'})")
-            
-            # Persist the configuration changes immediately
+
+            router = self.context_manager.model_router
+            # Snapshot for revert if the new model/key turns out not to work.
+            prev = {
+                "backend": router.config.get("backend"),
+                "model_name": router.config.get("model_name"),
+                "integration_type": router.config.get("integration_type"),
+            }
+
+            router.switch_model(model_name, backend=backend)
+            logger.info(f"Switched model to {model_name} (Backend: {backend or 'unchanged'}) — validating…")
+
+            # Validate connectivity off the GUI thread. Context for the continuation
+            # is stored on self, and the signal connects to a BOUND METHOD of this
+            # QObject so Qt queues the callback onto the main thread (a lambda would
+            # run on the worker thread instead).
+            validator = ModelSwitchValidator(router.backend)
+            if not hasattr(self, "_active_workers"):
+                self._active_workers = []
+            self._active_workers.append(validator)  # keep a ref so it isn't GC'd
+            self._pending_switch = {"backend": backend, "model_name": model_name,
+                                    "prev": prev, "worker": validator}
+            validator.finished_validation.connect(self._on_switch_validated)
+            validator.start()
+            return True
+        except Exception as e:
+            logger.error(f"Error switching model: {e}", exc_info=True)
+            return False
+
+    def _on_switch_validated(self, ok: bool, detail: str) -> None:
+        """Main-thread continuation of switch_active_model after the background
+        connectivity check."""
+        ctx = getattr(self, "_pending_switch", None) or {}
+        self._pending_switch = None
+        backend = ctx.get("backend")
+        model_name = ctx.get("model_name") or ""
+        prev = ctx.get("prev") or {}
+        worker = ctx.get("worker")
+        try:
+            if worker in getattr(self, "_active_workers", []):
+                self._active_workers.remove(worker)
+                worker.deleteLater()
+        except Exception:
+            pass
+
+        if ok:
+            logger.info(f"Model switch validated: {backend or 'same backend'}:{model_name}")
+            # Persist the configuration only now that we know it works.
             try:
                 from eye.services.config_manager import ConfigManager
                 cfg_manager = ConfigManager()
                 config = cfg_manager.load_config()
                 if backend:
                     config["backend"] = backend
-                    if backend in ["openai", "anthropic", "gemini"]:
-                        config["integration_type"] = "cloud_api"
-                    elif backend in ["ollama", "lm_studio"]:
-                        config["integration_type"] = "local_server"
+                    it = self._INTEGRATION_TYPE_BY_BACKEND.get(backend)
+                    if it:
+                        config["integration_type"] = it
                 config["model_name"] = model_name
                 cfg_manager.save_config(config)
                 logger.info("Saved updated backend configuration to eye_config.json")
             except Exception as cfg_exc:
                 logger.warning(f"Could not save config to eye_config.json: {cfg_exc}")
 
-            # Automatically trigger a case context analysis query after switching models
+            # Case-context sync on the (now verified) model.
             self.process_query("analyze_case_context")
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error switching model: {e}", exc_info=True)
-            return False
+            return
+
+        # Validation failed — revert to the previous model so the Eye keeps working.
+        target_label = f"{backend + ':' if backend else ''}{model_name}"
+        prev_label = f"{prev.get('backend')}:{prev.get('model_name')}"
+        logger.warning(f"Model switch to {target_label} failed validation: {detail} — reverting to {prev_label}")
+        try:
+            router = self.context_manager.model_router
+            router.switch_model(prev.get("model_name") or "", backend=prev.get("backend"))
+            if prev.get("integration_type"):
+                router.config["integration_type"] = prev["integration_type"]
+        except Exception as revert_exc:
+            logger.error(f"Could not revert model switch: {revert_exc}", exc_info=True)
+
+        self.query_complete.emit(safe_json_dumps({
+            "success": False,
+            "data": None,
+            "error": (f"Could not activate {target_label} — the API key or model is not "
+                      f"working ({detail or 'connectivity check failed'}). "
+                      f"Reverted to {prev_label}."),
+        }))
 
     @pyqtSlot(result=str)
     def get_backend_status(self) -> str:
@@ -3022,6 +3125,36 @@ class EYEBridge(QObject):
                 except Exception as e:
                     logger.debug(f"narrative-map activity stream skipped: {e}")
 
+            # ----- Imported evidence stream ---------------------------
+            # Chain of custody: every imported database/document appears in the
+            # Compliance feed with its SHA-256 hashes (source + in-case copy).
+            try:
+                manifest = self._imported_evidence_manifest()
+                if manifest is not None:
+                    for e in manifest.list_entries(verify=False):
+                        sha = e.get("sha256") or "?"
+                        sha_src = e.get("sha256_source")
+                        detail = (f"Source: {e.get('source_path') or '(pre-manifest import)'}\n"
+                                  f"In-case copy: {e.get('dest_path')}\n"
+                                  f"SHA-256 (in-case): {sha}")
+                        if sha_src:
+                            detail += f"\nSHA-256 (source): {sha_src}"
+                        if e.get("row_count"):
+                            detail += f"\nRows: {e['row_count']:,}"
+                        if e.get("size_bytes"):
+                            detail += f"\nSize: {e['size_bytes']:,} bytes"
+                        entries.append({
+                            "timestamp": e.get("imported_at", ""),
+                            "type": "evidence_import",
+                            "summary": f"Imported evidence: {e.get('name')} ({e.get('kind')})",
+                            "detail": detail,
+                            "tools": None,
+                            "block_id": None,
+                            "iteration": None,
+                        })
+            except Exception as e:
+                logger.debug(f"imported-evidence activity stream skipped: {e}")
+
             # ----- Sort chronologically (entries with missing timestamps
             #       float to the end so they don't break the ordering).
             entries.sort(key=lambda e: e.get("timestamp") or "9999")
@@ -3819,6 +3952,68 @@ class EYEBridge(QObject):
     def requestNarrativeMapWindow(self):
         """Emit signal to open the Narrative Map in its own OS window."""
         self.narrative_map_window_requested.emit()
+
+    @pyqtSlot()
+    def requestEvidenceWindow(self):
+        """Emit signal to open the Imported Evidence window (list + hashes)."""
+        self.evidence_window_requested.emit()
+
+    def _imported_evidence_manifest(self):
+        """Manifest rooted at the case's artifacts directory, or None."""
+        try:
+            from eye.services.imported_evidence_manifest import ImportedEvidenceManifest
+            artifacts_dir = getattr(self.database_service, "case_directory", None)
+            if not artifacts_dir and getattr(self.context_manager, "case_directory", None):
+                from pathlib import Path
+                cand = Path(self.context_manager.case_directory) / "Target_Artifacts"
+                artifacts_dir = cand if cand.exists() else self.context_manager.case_directory
+            return ImportedEvidenceManifest(artifacts_dir) if artifacts_dir else None
+        except Exception as e:
+            logger.error(f"Could not open imported-evidence manifest: {e}")
+            return None
+
+    @pyqtSlot(result=str)
+    def get_imported_evidence(self) -> str:
+        """Immediate (unverified) imported-evidence listing. Also kicks off a
+        background re-hash of every file; the verified listing arrives via the
+        ``imported_evidence_ready`` signal so multi-GB evidence never blocks the
+        GUI thread."""
+        manifest = self._imported_evidence_manifest()
+        if manifest is None:
+            return safe_json_dumps({"success": False, "data": None,
+                                    "error": "No case is loaded."})
+        try:
+            entries = manifest.list_entries(verify=False)
+            for e in entries:
+                e.setdefault("integrity", "verifying")
+
+            # Background verification (streamed re-hash of each file).
+            bridge = self
+
+            class _HashVerifyWorker(QThread):
+                def run(self):
+                    try:
+                        verified = manifest.list_entries(verify=True)
+                        bridge.imported_evidence_ready.emit(safe_json_dumps(
+                            {"success": True, "data": {"entries": verified}, "error": None}))
+                    except Exception as exc:
+                        bridge.imported_evidence_ready.emit(safe_json_dumps(
+                            {"success": False, "data": None, "error": str(exc)}))
+
+            if not hasattr(self, "_active_workers"):
+                self._active_workers = []
+            worker = _HashVerifyWorker()
+            self._active_workers.append(worker)
+            worker.finished.connect(lambda w=worker: (
+                self._active_workers.remove(w) if w in self._active_workers else None,
+                w.deleteLater()))
+            worker.start()
+
+            return safe_json_dumps({"success": True,
+                                    "data": {"entries": entries}, "error": None})
+        except Exception as e:
+            logger.error(f"get_imported_evidence failed: {e}", exc_info=True)
+            return safe_json_dumps({"success": False, "data": None, "error": str(e)})
 
     @pyqtSlot(str)
     def focus_narrative_map(self, card_id: str):

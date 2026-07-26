@@ -77,6 +77,40 @@ _MODEL_WINDOWS = [
     ("gemini-1.0-pro", 32_768),
     ("gemini-pro", 32_768),
     ("gemini", 1_000_000),
+    # DeepSeek (OpenAI-compatible). V3/R1 expose a 64K context window via the API.
+    ("deepseek-reasoner", 65_536),
+    ("deepseek-chat", 65_536),
+    ("deepseek", 65_536),
+    # Kimi / Moonshot (OpenAI-compatible). Window is encoded in the model id.
+    ("moonshot-v1-128k", 131_072),
+    ("moonshot-v1-32k", 32_768),
+    ("moonshot-v1-8k", 8_192),
+    ("kimi-k2", 131_072),
+    ("kimi", 131_072),
+    ("moonshot", 131_072),
+    # xAI Grok.
+    ("grok-4", 256_000),
+    ("grok-3-mini", 131_072),
+    ("grok-3", 131_072),
+    ("grok", 131_072),
+    # Mistral.
+    ("mistral-large", 131_072),
+    ("mistral-medium", 131_072),
+    ("mistral-small", 32_768),
+    ("codestral", 262_144),
+    ("magistral", 40_960),
+    ("mistral", 32_768),
+    # Open-weight families used by NVIDIA / Groq / OpenRouter (matched by
+    # `prefix in name`, so they also resolve namespaced ids like
+    # `meta/llama-3.3-70b-instruct` and `moonshotai/kimi-k2-instruct`).
+    ("llama-3.3", 131_072),
+    ("llama-3.1", 131_072),
+    ("llama-3", 8_192),
+    ("nemotron", 131_072),
+    ("qwen3", 131_072),
+    ("qwen2.5", 131_072),
+    ("qwen", 32_768),
+    ("gpt-oss", 131_072),
 ]
 
 
@@ -133,7 +167,13 @@ def resolve_context_window(backend: Optional[str], model_name: Optional[str]) ->
 #
 # Order matters: most-capable first within a family. RECOMMENDED is the subset
 # the UI highlights as the suggested choices (mapped to the Eye's deployment
-# story: Opus = deep analysis, Sonnet = balanced default, Haiku = fast triage).
+# story: deep analysis / balanced default / fast triage).
+#
+# These are an OFFLINE convenience so "Common Models" works without an API round
+# trip. The account's live ``list_models()`` is always merged on top, so brand-new
+# IDs still appear even if this list lags; a stale entry is harmless (the user can
+# pick a live one). Providers that are OpenAI-compatible (DeepSeek, Kimi/Moonshot)
+# are keyed by their backend id.
 # ---------------------------------------------------------------------------
 CURATED_MODELS: dict = {
     "anthropic": [
@@ -144,15 +184,126 @@ CURATED_MODELS: dict = {
         "claude-haiku-4-5",
         "claude-fable-5",
     ],
-    "openai": [],
-    "gemini": [],
+    "openai": [
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "o3",
+        "o4-mini",
+        "gpt-4-turbo",
+    ],
+    "gemini": [
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+    ],
+    "deepseek": [
+        "deepseek-chat",
+        "deepseek-reasoner",
+    ],
+    "kimi": [
+        "kimi-k2-0711-preview",
+        "kimi-latest",
+        "moonshot-v1-128k",
+        "moonshot-v1-32k",
+        "moonshot-v1-8k",
+    ],
+    # OpenRouter fans out to every model behind one key (namespaced ids). Live
+    # list_models() returns the full catalog; this is just a common-picks seed.
+    "openrouter": [
+        "anthropic/claude-opus-4",
+        "openai/gpt-4.1",
+        "google/gemini-2.5-pro",
+        "deepseek/deepseek-chat",
+        "moonshotai/kimi-k2",
+        "meta-llama/llama-3.3-70b-instruct",
+        "x-ai/grok-4",
+        "qwen/qwen-2.5-72b-instruct",
+    ],
+    # NVIDIA NIM (build.nvidia.com). Namespaced ids; live list_models() authoritative.
+    "nvidia": [
+        "meta/llama-3.3-70b-instruct",
+        "deepseek-ai/deepseek-v3",
+        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "qwen/qwen2.5-coder-32b-instruct",
+        "mistralai/mistral-large-2-instruct",
+    ],
+    "groq": [
+        "llama-3.3-70b-versatile",
+        "moonshotai/kimi-k2-instruct",
+        "openai/gpt-oss-120b",
+        "qwen/qwen3-32b",
+        "llama-3.1-8b-instant",
+    ],
+    "mistral": [
+        "mistral-large-latest",
+        "mistral-medium-latest",
+        "mistral-small-latest",
+        "codestral-latest",
+    ],
+    "xai": [
+        "grok-4",
+        "grok-3",
+        "grok-3-mini",
+    ],
 }
 
+# RECOMMENDED = the subset the wizard/menu highlights (starred, floated to top).
+# The Eye is AGENTIC — every recommended id must SUPPORT TOOL CALLING, and the
+# FIRST entry is the most powerful tool-calling model for that provider. Models
+# that cannot call tools (e.g. DeepSeek-Reasoner/R1) are deliberately excluded
+# from recommendations even when they are otherwise strong.
 RECOMMENDED_MODELS: dict = {
     "anthropic": [
         "claude-opus-4-8",    # deep / complex threat analysis
         "claude-sonnet-4-6",  # balanced default
         "claude-haiku-4-5",   # fast triage
+    ],
+    "openai": [
+        "gpt-4.1",            # most powerful general tool-caller
+        "gpt-4o",             # balanced default
+        "o4-mini",            # fast reasoning + tools
+    ],
+    "gemini": [
+        "gemini-2.5-pro",     # deep analysis
+        "gemini-2.5-flash",   # balanced default
+        "gemini-2.0-flash",   # fast triage
+    ],
+    "deepseek": [
+        # deepseek-reasoner (R1) is intentionally NOT recommended — it cannot call
+        # tools, and the Eye needs tools. deepseek-chat (V3) supports function calling.
+        "deepseek-chat",      # V3 — supports tool calling
+    ],
+    "kimi": [
+        "kimi-k2-0711-preview",  # strongest agentic tool-use
+        "moonshot-v1-128k",      # long-context default
+        "moonshot-v1-32k",       # balanced
+    ],
+    "openrouter": [
+        "anthropic/claude-opus-4",  # most powerful tool-caller
+        "openai/gpt-4.1",           # strong default
+        "google/gemini-2.5-pro",    # long-context
+    ],
+    "nvidia": [
+        "meta/llama-3.3-70b-instruct",             # tool-capable default
+        "deepseek-ai/deepseek-v3",                 # strong tool-caller
+        "nvidia/llama-3.1-nemotron-70b-instruct",  # NVIDIA-tuned
+    ],
+    "groq": [
+        "llama-3.3-70b-versatile",     # tool-capable, very fast
+        "moonshotai/kimi-k2-instruct", # strong agentic tool-use
+        "openai/gpt-oss-120b",         # powerful open model
+    ],
+    "mistral": [
+        "mistral-large-latest",   # most powerful tool-caller
+        "mistral-medium-latest",  # balanced
+    ],
+    "xai": [
+        "grok-4",   # most powerful tool-caller
+        "grok-3",   # balanced
     ],
 }
 

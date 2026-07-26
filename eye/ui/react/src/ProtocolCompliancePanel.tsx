@@ -173,6 +173,7 @@ const TYPE_STYLE: Record<AuditEntryType, { label: string; color: string; bg: str
   report_deleted:     { label: 'REPORT −',      color: '#f43f5e', bg: 'rgba(244,63,94,0.12)',   border: 'rgba(244,63,94,0.45)'   },
   report_other:       { label: 'REPORT',        color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.30)' },
   narrative_map:      { label: 'MAP',           color: '#a855f7', bg: 'rgba(168,85,247,0.12)',  border: 'rgba(168,85,247,0.45)'  },
+  evidence_import:    { label: 'IMPORT',        color: '#67e8f9', bg: 'rgba(103,232,249,0.10)', border: 'rgba(103,232,249,0.45)' },
 };
 
 const formatTs = (ts: string): string => {
@@ -826,7 +827,7 @@ const ProtocolCompliancePanel: React.FC = () => {
     if (auditFilter === 'queries') {
       return e.type === 'user_query' || e.type === 'assistant_response' || e.type === 'tool_call';
     }
-    if (auditFilter === 'evidence') return e.type === 'tool_result';
+    if (auditFilter === 'evidence') return e.type === 'tool_result' || e.type === 'evidence_import';
     if (auditFilter === 'report') return e.type.startsWith('report_');
     if (auditFilter === 'map') return e.type === 'narrative_map';
     return true;

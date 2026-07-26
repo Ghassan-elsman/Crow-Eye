@@ -28,9 +28,49 @@ class TestCuratedCatalog(unittest.TestCase):
         self.assertTrue(set(rec).issubset(set(curated_models("anthropic"))))
 
     def test_unknown_backend_is_empty(self):
-        self.assertEqual(curated_models("openai"), [])      # intentionally not curated
         self.assertEqual(curated_models("nope"), [])
         self.assertEqual(recommended_models("nope"), [])
+
+    def test_cloud_providers_curated(self):
+        # Common models are offered offline for every cloud provider, including the
+        # OpenAI-compatible ones (DeepSeek, Kimi, OpenRouter, NVIDIA, Groq, Mistral, xAI).
+        for backend, expected in (
+            ("openai", "gpt-4o"),
+            ("gemini", "gemini-2.5-pro"),
+            ("deepseek", "deepseek-chat"),
+            ("kimi", "moonshot-v1-128k"),
+            ("openrouter", "openai/gpt-4.1"),
+            ("nvidia", "meta/llama-3.3-70b-instruct"),
+            ("groq", "llama-3.3-70b-versatile"),
+            ("mistral", "mistral-large-latest"),
+            ("xai", "grok-4"),
+        ):
+            self.assertIn(expected, curated_models(backend), backend)
+            # recommended is a non-empty subset of curated
+            rec = recommended_models(backend)
+            self.assertTrue(rec, backend)
+            self.assertTrue(set(rec).issubset(set(curated_models(backend))), backend)
+
+    def test_recommended_are_tool_calling_only(self):
+        # The Eye is agentic: deepseek-reasoner (R1) cannot call tools, so it must
+        # NOT be recommended, while deepseek-chat (V3) must be.
+        rec = recommended_models("deepseek")
+        self.assertIn("deepseek-chat", rec)
+        self.assertNotIn("deepseek-reasoner", rec)
+        # First recommendation per provider = the most powerful tool-caller.
+        self.assertEqual(recommended_models("xai")[0], "grok-4")
+        self.assertEqual(recommended_models("mistral")[0], "mistral-large-latest")
+        self.assertEqual(recommended_models("openrouter")[0], "anthropic/claude-opus-4")
+
+    def test_windows_resolve_for_openai_compatible(self):
+        self.assertEqual(resolve_context_window("deepseek", "deepseek-chat"), 65_536)
+        self.assertEqual(resolve_context_window("kimi", "moonshot-v1-32k"), 32_768)
+        self.assertEqual(resolve_context_window("kimi", "moonshot-v1-128k"), 131_072)
+        self.assertEqual(resolve_context_window("xai", "grok-4"), 256_000)
+        self.assertEqual(resolve_context_window("mistral", "mistral-large-latest"), 131_072)
+        self.assertEqual(resolve_context_window("groq", "llama-3.3-70b-versatile"), 131_072)
+        # Namespaced OpenRouter ids resolve via `prefix in name`.
+        self.assertEqual(resolve_context_window("openrouter", "meta-llama/llama-3.3-70b-instruct"), 131_072)
 
     def test_returns_fresh_list_each_call(self):
         a = curated_models("anthropic")

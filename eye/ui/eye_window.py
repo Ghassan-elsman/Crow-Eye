@@ -10,6 +10,7 @@ import os
 import json
 import logging
 import threading
+from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtWidgets import (
@@ -40,8 +41,19 @@ logger = logging.getLogger(__name__)
 
 
 class _EvidenceImportWorker(QThread):
-    """Runs FeatherImporter off the GUI thread so a large CSV/JSON conversion
-    never freezes the Eye window. Emits the importer's result dict on finish."""
+    """Runs evidence import off the GUI thread so a large conversion or hash
+    never freezes the Eye window. Emits the importer's result dict on finish.
+
+    Two paths:
+    - SQLite/CSV/JSON  → FeatherImporter (converted/copied into Imported_Evidence/)
+    - Report/e-mail/browser-output documents (pdf/html/txt/md/log/eml/mbox) →
+      copied VERBATIM into Imported_Evidence/Documents/ — no conversion, because
+      third-party output is often a report, not a convertible table. The Eye
+      reads these with the read_imported_evidence tool.
+
+    Every successful import is recorded in the imported-evidence manifest with
+    SHA-256 hashes of the source AND the in-case copy (chain of custody).
+    """
 
     done = pyqtSignal(dict)
 
@@ -50,10 +62,45 @@ class _EvidenceImportWorker(QThread):
         self.artifacts_dir = str(artifacts_dir)
         self.src_path = src_path
 
+    def _import_document(self):
+        """Copy a document verbatim into Imported_Evidence/Documents/ (unique name)."""
+        import shutil
+        from eye.services.imported_evidence_manifest import ImportedEvidenceManifest
+        manifest = ImportedEvidenceManifest(self.artifacts_dir)
+        manifest.documents_dir.mkdir(parents=True, exist_ok=True)
+        src = Path(self.src_path)
+        dest = manifest.documents_dir / src.name
+        n = 1
+        while dest.exists():
+            dest = manifest.documents_dir / f"{src.stem}_{n}{src.suffix}"
+            n += 1
+        shutil.copy2(src, dest)
+        return manifest, dest
+
     def run(self):
+        from eye.services.imported_evidence_manifest import (
+            DOCUMENT_EXTENSIONS, ImportedEvidenceManifest)
+        ext = Path(self.src_path).suffix.lower()
         try:
-            from correlation_engine.feather.importer import FeatherImporter
-            result = FeatherImporter(self.artifacts_dir).import_file(self.src_path)
+            if ext in DOCUMENT_EXTENSIONS:
+                manifest, dest = self._import_document()
+                entry = manifest.record_import(self.src_path, dest, "document",
+                                               {"source_type": ext.lstrip(".").upper()})
+                result = {"ok": True, "source_type": "DOCUMENT", "dest_db": None,
+                          "table": None, "row_count": 0, "primary_timestamp": None,
+                          "display_name": dest.name, "doc_path": str(dest),
+                          "sha256": (entry or {}).get("sha256")}
+            else:
+                from correlation_engine.feather.importer import FeatherImporter
+                result = FeatherImporter(self.artifacts_dir).import_file(self.src_path)
+                if result.get("ok") and result.get("dest_db"):
+                    entry = ImportedEvidenceManifest(self.artifacts_dir).record_import(
+                        self.src_path, result["dest_db"], "database",
+                        {"source_type": result.get("source_type"),
+                         "table": result.get("table"),
+                         "row_count": result.get("row_count"),
+                         "primary_timestamp": result.get("primary_timestamp")})
+                    result["sha256"] = (entry or {}).get("sha256")
         except Exception as e:  # never let the thread die silently
             logger.exception("Evidence import worker failed")
             result = {"ok": False, "error": f"Import failed: {e}", "dest_db": None,
@@ -108,6 +155,43 @@ class EYECompliancePopupWindow(QWidget):
         self.view.page().setWebChannel(self.web_channel)
 
         self.view.load(QUrl(react_build_url + "?view=compliance"))
+        layout.addWidget(self.view)
+        self.setStyleSheet("background-color: #0B1220;")
+
+
+class EYEEvidencePopupWindow(QWidget):
+    """
+    Standalone OS window listing ALL imported evidence (databases and verbatim
+    documents) with SHA-256 hashes and live integrity verification — the case's
+    chain-of-custody view for external evidence. Shares the same EYEBridge
+    instance as the main Eye AI window via a fresh QWebChannel.
+    """
+
+    def __init__(self, react_build_url: str, bridge, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Window)
+        self.setWindowTitle("Eye AI — Imported Evidence")
+        self.setWindowIcon(QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        self.resize(1000, 700)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.view = QWebEngineView(self)
+        self.view.setPage(SilentWebEnginePage(self.view))
+        self.view.setAttribute(Qt.WA_TranslucentBackground)
+        self.view.page().setBackgroundColor(Qt.transparent)
+        settings = self.view.settings()
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
+        settings.setAttribute(QWebEngineSettings.AllowRunningInsecureContent, True)
+
+        self.web_channel = QWebChannel(self.view.page())
+        self.web_channel.registerObject("bridge", bridge)
+        self.view.page().setWebChannel(self.web_channel)
+
+        self.view.load(QUrl(react_build_url + "?view=evidence"))
         layout.addWidget(self.view)
         self.setStyleSheet("background-color: #0B1220;")
 
@@ -182,6 +266,7 @@ class EYEAssistantWindow(QWidget):
         self.bridge = None
         self._compliance_window = None  # lazy-instantiated EYECompliancePopupWindow
         self._narrative_map_window = None  # lazy-instantiated EYENarrativeMapPopupWindow
+        self._evidence_window = None  # lazy-instantiated EYEEvidencePopupWindow
         self._session_started = False  # gate so start_session() runs once per window
 
         # Debounce chart reflow so dragging the splitter doesn't fire dozens of
@@ -591,6 +676,7 @@ class EYEAssistantWindow(QWidget):
         self.bridge.add_evidence_requested.connect(self._on_add_evidence)
         self.bridge.compliance_window_requested.connect(self._open_compliance_window)
         self.bridge.narrative_map_window_requested.connect(self._open_narrative_map_window)
+        self.bridge.evidence_window_requested.connect(self._open_evidence_window)
 
         # Reflow report-pane charts whenever the splitter is dragged so charts
         # stay aligned with their container width. Debounced via _chart_reflow_timer.
@@ -652,9 +738,12 @@ class EYEAssistantWindow(QWidget):
 
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Add new evidence", "",
-            "Forensics files (*.db *.sqlite *.sqlite3 *.csv *.tsv *.json *.jsonl);;"
+            "Forensics files (*.db *.sqlite *.sqlite3 *.csv *.tsv *.json *.jsonl "
+            "*.pdf *.html *.htm *.txt *.md *.log *.eml *.mbox);;"
             "SQLite databases (*.db *.sqlite *.sqlite3);;"
-            "CSV/TSV (*.csv *.tsv);;JSON (*.json *.jsonl);;All Files (*)"
+            "CSV/TSV (*.csv *.tsv);;JSON (*.json *.jsonl);;"
+            "Reports & documents (*.pdf *.html *.htm *.txt *.md *.log);;"
+            "Email exports (*.eml *.mbox);;All Files (*)"
         )
         if not file_path:
             return
@@ -687,15 +776,33 @@ class EYEAssistantWindow(QWidget):
         except Exception as e:
             logger.warning(f"Could not refresh database manifest after import: {e}")
 
+        # Live-refresh any open Imported Evidence window: re-list + re-verify in the
+        # background; the verified listing arrives via imported_evidence_ready.
+        try:
+            if self.bridge is not None:
+                self.bridge.get_imported_evidence()
+        except Exception as e:
+            logger.debug(f"Imported-evidence refresh broadcast skipped: {e}")
+
         name = result.get("display_name") or "evidence"
         rows = result.get("row_count") or 0
         src_type = (result.get("source_type") or "").upper()
         ts = result.get("primary_timestamp")
-        detail = f"'{name}' ({src_type}) imported with {rows:,} rows."
-        if src_type in ("CSV", "JSON"):
-            detail += ("\nDetected timeline timestamp column: "
-                       + (f"'{ts}'." if ts else "none (won't appear on the timeline)."))
-        detail += "\n\nThe Eye can now query it, and it appears in the Timeline's 'Imported Evidence' lane."
+        sha = result.get("sha256")
+        if src_type == "DOCUMENT":
+            detail = (f"'{name}' imported verbatim as a DOCUMENT (no conversion)."
+                      + (f"\nSHA-256: {sha}" if sha else ""))
+            detail += ("\n\nThe Eye can read it with the read_imported_evidence tool. "
+                       "It is hashed and listed in the Imported Evidence window and "
+                       "the Compliance activity stream.")
+        else:
+            detail = f"'{name}' ({src_type}) imported with {rows:,} rows."
+            if src_type in ("CSV", "JSON"):
+                detail += ("\nDetected timeline timestamp column: "
+                           + (f"'{ts}'." if ts else "none (won't appear on the timeline)."))
+            if sha:
+                detail += f"\nSHA-256: {sha}"
+            detail += "\n\nThe Eye can now query it, and it appears in the Timeline's 'Imported Evidence' lane."
         QMessageBox.information(self, "Evidence Imported", detail)
         try:
             self.bridge.status_updated.emit(json.dumps({"status": detail.splitlines()[0]}))
@@ -835,6 +942,31 @@ class EYEAssistantWindow(QWidget):
         self._compliance_window.show()
         self._compliance_window.raise_()
         self._compliance_window.activateWindow()
+
+    def _open_evidence_window(self):
+        """Open the Imported Evidence window (list + SHA-256 + integrity check)."""
+        if self._evidence_window is not None:
+            try:
+                if not self._evidence_window.isVisible():
+                    self._evidence_window.show()
+                self._evidence_window.raise_()
+                self._evidence_window.activateWindow()
+                return
+            except RuntimeError:
+                self._evidence_window = None
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        react_build_path = os.path.join(base_dir, 'ui', 'react', 'dist', 'index.html')
+        if not os.path.exists(react_build_path):
+            logger.error("Cannot open Imported Evidence window: React build missing at %s", react_build_path)
+            return
+        react_build_url = QUrl.fromLocalFile(react_build_path).toString()
+
+        self._evidence_window = EYEEvidencePopupWindow(react_build_url, self.bridge, parent=self)
+        self._evidence_window.destroyed.connect(lambda *_: setattr(self, '_evidence_window', None))
+        self._evidence_window.show()
+        self._evidence_window.raise_()
+        self._evidence_window.activateWindow()
 
     def _open_narrative_map_window(self):
         """Open the Narrative Map as a separate OS window so the investigator can view

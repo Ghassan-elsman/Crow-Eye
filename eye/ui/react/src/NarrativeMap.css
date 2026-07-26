@@ -422,6 +422,13 @@
 .nm-modal-srchint { font-size: 12px; }
 .nm-modal-err { color: var(--color-error); font-size: 12.5px; }
 .nm-ev-query { display: block; font-family: var(--font-mono); font-size: 11.5px; color: var(--color-cyan); white-space: pre-wrap; word-break: break-word; }
+.nm-ev-captured {
+  margin: 0; padding: 8px 10px; max-height: 320px; overflow: auto;
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.45;
+  color: var(--color-text); background: rgba(0,0,0,0.22);
+  border: 1px solid var(--color-border, rgba(255,255,255,0.08)); border-radius: 4px;
+  white-space: pre-wrap; word-break: break-word;
+}
 
 /* ---------- rendered markdown (react-markdown) ----------
    Used in the detail modals (KV cells), notes, and the side inspector — where

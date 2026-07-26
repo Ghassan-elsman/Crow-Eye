@@ -223,6 +223,9 @@ class NarrativeMapService:
                 "id": e.get("id", eid),
                 "kicker": e.get("kicker", "artifact"),
                 "data": e.get("data", ""),
+                # Full captured text (non-DB / text-mode evidence stays viewable even
+                # without a reloadable source). Empty for older cards.
+                "content": e.get("content", ""),
                 "reason": e.get("reason", ""),
                 "ref": e.get("ref") or (e.get("evidence") or [""])[0] if e.get("evidence") else e.get("ref", ""),
                 # Source query + database so the detail window can reload real rows.
@@ -903,6 +906,7 @@ class NarrativeMapService:
                 "id": eid,
                 "kicker": evidence.get("kicker", "artifact"),
                 "data": evidence.get("data", ""),
+                "content": evidence.get("content", ""),
                 "reason": evidence.get("reason", "Supports the narrative."),
                 "ref": evidence.get("ref", ""),
                 # SQL + database that produced this evidence, so the map's detail

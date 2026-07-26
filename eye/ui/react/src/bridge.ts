@@ -739,6 +739,79 @@ export function openNarrativeMapWindow(): void {
 }
 
 /**
+ * Open the Imported Evidence window (all imported databases/documents with
+ * SHA-256 hashes + integrity verification). Falls back to the URL-swap when the
+ * PyQt bridge is unavailable.
+ */
+export function openEvidenceWindow(): void {
+  const b = window.bridge as any;
+  if (b && b.requestEvidenceWindow) {
+    b.requestEvidenceWindow();
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set('view', 'evidence');
+  window.location.href = url.toString();
+}
+
+// ── Imported Evidence (chain of custody) ───────────────────────────────
+
+export interface ImportedEvidenceEntry {
+  id: string;
+  name: string;
+  kind: 'database' | 'document';
+  imported_at: string;
+  source_path: string | null;
+  dest_path: string;
+  size_bytes: number | null;
+  sha256: string | null;
+  sha256_source: string | null;
+  integrity?: 'verified' | 'mismatch' | 'missing' | 'verifying';
+  source_type?: string;
+  table?: string;
+  row_count?: number;
+  primary_timestamp?: string;
+  hashed_late?: boolean;
+}
+
+/**
+ * Immediate imported-evidence listing (integrity: "verifying"); the backend
+ * re-hashes every file in the background and pushes the VERIFIED listing via
+ * the imported_evidence_ready signal (subscribe with onImportedEvidenceReady).
+ */
+export async function getImportedEvidence(): Promise<string | null> {
+  const b = window.bridge as any;
+  if (!b || typeof b.get_imported_evidence !== 'function') return null;
+  try {
+    return await b.get_imported_evidence();
+  } catch (error) {
+    console.error('Error fetching imported evidence:', error);
+    return null;
+  }
+}
+
+const importedEvidenceListeners: Array<(json: string) => void> = [];
+
+/** Subscribe to the async verified imported-evidence listing. */
+export function onImportedEvidenceReady(callback: (json: string) => void): () => void {
+  importedEvidenceListeners.push(callback);
+  // Lazy signal hookup (the main connectSignals ran before this window's needs).
+  const b = window.bridge as any;
+  if (b && b.imported_evidence_ready && b.imported_evidence_ready.connect && !(b.__evidenceReadyHooked)) {
+    b.__evidenceReadyHooked = true;
+    b.imported_evidence_ready.connect((json: string) => {
+      importedEvidenceListeners.forEach(cb => {
+        try { cb(json); } catch (e) { console.error('imported_evidence_ready callback failed:', e); }
+      });
+    });
+  }
+  return () => {
+    const i = importedEvidenceListeners.indexOf(callback);
+    if (i > -1) importedEvidenceListeners.splice(i, 1);
+  };
+}
+
+/**
  * Pin a message to prevent it from being summarized.
  * 
  * @param messageId The ID of the message to pin
@@ -863,7 +936,8 @@ export type AuditEntryType =
   | 'report_edited'
   | 'report_deleted'
   | 'report_other'
-  | 'narrative_map';
+  | 'narrative_map'
+  | 'evidence_import';
 
 export interface ActivityAuditEntry {
   timestamp: string;

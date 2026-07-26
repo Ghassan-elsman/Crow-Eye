@@ -733,6 +733,23 @@
       }
     },
     {
+      "name": "read_imported_evidence",
+      "description": "List or read VERBATIM-imported document evidence — third-party forensic reports, Gmail/e-mail exports (.eml/.mbox), browser-forensics tool output, PDFs/HTML/text — stored unconverted under Imported_Evidence/Documents/ with chain-of-custody SHA-256 hashes. Call with no arguments to list the available documents; call with a name to read its extracted text. Large documents are paged — follow the offset hint to continue reading.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Document file name from the list (omit to list all imported documents)."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Character offset to continue reading a long document from (default 0)."
+          }
+        }
+      }
+    },
+    {
       "name": "correlation_create_wing",
       "description": "Create a new correlation Wing in the active case. A Wing is a named correlation rule that ties feathers (artifact databases) together with a time window and a minimum-match threshold. Use ONLY when the analyst explicitly asks for a new wing, or when you have identified a correlation pattern that recurs across the case and an explicit wing would speed future analysis. ALWAYS provide reason (forensic justification) and related_evidence (concrete database:table:rowid refs that motivated the wing). The handler enforces GEP Rules 9/10/11. Returns the saved wing path and the assigned wing_id.",
       "parameters": {

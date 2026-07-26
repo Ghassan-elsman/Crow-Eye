@@ -155,6 +155,8 @@ class CredentialManager:
         Utility to purge all forensic AI credentials.
         Used primarily during 'Log Out' or 'Reset' operations.
         """
-        known_keys = ["openai_api_key", "anthropic_api_key", "gemini_api_key"]
+        known_keys = ["openai_api_key", "anthropic_api_key", "gemini_api_key",
+                      "deepseek_api_key", "kimi_api_key", "openrouter_api_key",
+                      "nvidia_api_key", "groq_api_key", "mistral_api_key", "xai_api_key"]
         for key in known_keys:
             self.delete_credential(key)

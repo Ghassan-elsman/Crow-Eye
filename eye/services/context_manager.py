@@ -547,6 +547,7 @@ class ContextManager:
             "query_correlation_results": f.handle_query_correlation_results,
             "correlate_imported_evidence": f.handle_correlate_imported_evidence,
             "list_case_files": f.handle_list_case_files,
+            "read_imported_evidence": f.handle_read_imported_evidence,
             "internet_search": f.handle_internet_search,
             "fetch_web_content": f.handle_fetch_web_content,
             "switch_model": f.handle_switch_model,
@@ -1088,6 +1089,28 @@ class ContextManager:
                 "CORROBORATE, CONFLICT, or where one is SILENT (per the cross-source rule) — and cite "
                 "both sides as `database:table:rowid`. Do not report imported evidence in isolation."
             )
+
+        # 2b-ii. IMPORTED DOCUMENT EVIDENCE — verbatim reports / e-mail exports /
+        # browser-forensics output under Imported_Evidence/Documents/. These are NOT
+        # databases; the model reads them with read_imported_evidence.
+        try:
+            from eye.services.imported_evidence_manifest import ImportedEvidenceManifest
+            artifacts_dir = getattr(getattr(self, "database_service", None), "case_directory", None)
+            if artifacts_dir:
+                docs = ImportedEvidenceManifest(artifacts_dir).list_documents()
+                if docs:
+                    names = ", ".join(f"`{d.get('name')}`" for d in docs[:15])
+                    core_str += (
+                        "\n\n## Imported Document Evidence — verbatim files present\n"
+                        f"The investigator imported {len(docs)} document(s) without conversion "
+                        f"(third-party reports, e-mail exports, browser-tool output): {names}. "
+                        "Each is hashed (SHA-256, chain of custody). Use the "
+                        "**`read_imported_evidence`** tool to list and READ them — analyze their "
+                        "content as first-class evidence and cross-reference it against the "
+                        "native artifacts."
+                    )
+        except Exception:
+            pass
 
         # 2c. CORRELATION ENGINE AVAILABILITY (Priority 1: MUST KEEP)
         # Checked fresh each build (not cached in the manifest) so a Correlation

@@ -60,6 +60,12 @@ def _is_transient_model_error(exc: Exception) -> bool:
 # is a SQL identifier and the rowid is an integer.
 _EVIDENCE_REF_RE = re.compile(r'^(?P<db>.+):(?P<table>[A-Za-z_]\w*):(?P<rowid>\d+)$')
 
+# The short `data` field is the card's one-line label (kept small). `content` stores
+# the fuller captured text so evidence WITHOUT a reloadable DB source — e.g. from a
+# non-database tool, or from a text-mode (non-function-calling) model — is still fully
+# visible in the map's inspector / detail popup. Capped to protect the map JSON size.
+_EVIDENCE_CONTENT_CAP = 6000
+
 
 def _source_from_ref(ref: str) -> tuple:
     """Turn a ``database:table:rowid`` evidence ref into ``(database, query)`` so an
@@ -276,6 +282,7 @@ class QueryProcessor:
                 if nms.attach_evidence(focus_id, {
                     "kicker": tool,
                     "data": (blob[:120] + "…") if len(blob) > 120 else blob,
+                    "content": blob[:_EVIDENCE_CONTENT_CAP],
                     "reason": "Additional evidence found during deeper investigation.",
                     "ref": tool, "query": query, "database": database,
                 }):
@@ -310,6 +317,7 @@ class QueryProcessor:
             return {
                 "kicker": tool,
                 "data": (blob[:120] + "…") if len(blob) > 120 else blob,
+                "content": blob[:_EVIDENCE_CONTENT_CAP],
                 "reason": "Result that established this finding.",
                 "ref": tool, "query": query, "database": database,
             }
@@ -330,6 +338,9 @@ class QueryProcessor:
                 cards.append({
                     "kicker": ref or "evidence",
                     "data": note or ref,
+                    # Full cited text so text-mode / prose evidence stays visible even
+                    # when there is no reloadable DB source.
+                    "content": (note or ref)[:_EVIDENCE_CONTENT_CAP],
                     "reason": "Evidence cited for this behavior.",
                     "ref": ref,
                     "query": query,
