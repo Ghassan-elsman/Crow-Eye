@@ -42,6 +42,7 @@ Connect the AI backend you already use. Every new provider is a **single-key, Op
 
 - **AI setup — "Validate & Save" now always works.** Configuring a model backend could silently do nothing if you pressed Back and then Next in the setup wizard. The final step now reliably validates the connection and saves your configuration regardless of how you navigated the wizard.
 - **Local Ollama server on a LAN or custom address is now honored.** When Ollama was configured as a Local Server, the Eye ignored the address you entered and always tried `localhost:11434`. It now connects to the endpoint you configured — a dedicated AI server on your LAN or a non-default port.
+- **Setup wizard shows a "Validating…" indicator.** Clicking Validate & Save now shows a live progress indicator while the connection is checked, and the check runs off the UI thread so the window no longer freezes on a slow or unreachable backend.
 
 ---
 

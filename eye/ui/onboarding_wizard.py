@@ -17,12 +17,47 @@ from PyQt5.QtWidgets import (
     QButtonGroup, QWidget, QStackedWidget, QFormLayout, QComboBox,
     QInputDialog
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QPalette, QColor, QFont
 import json
 from pathlib import Path
 
 from styles import CrowEyeStyles
+
+
+class _WizardConnectivityWorker(QThread):
+    """Run the setup wizard's connectivity check OFF the GUI thread.
+
+    Does the GUI-less half of the old ``validate_connectivity()``: store the
+    API key (if any), build a ``ModelRouter`` and ping the backend. Emits
+    ``done(ok, detail)`` — the wizard's slot shows the result on the GUI
+    thread. Running off-thread lets the "Validating…" indicator animate and
+    keeps the window responsive (a dead network / bad key can no longer freeze
+    it). Operates on the wizard's live ``config`` dict so the CLI
+    auto-model-switch side effect persists exactly as before. Never touches Qt
+    widgets here. ``detail`` is the exception text on error, "" on a clean
+    negative result — the slot uses that to pick the error dialog.
+    """
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, config, credential_manager):
+        super().__init__()
+        self._config = config
+        self._credential_manager = credential_manager
+
+    def run(self):
+        try:
+            api_key = self._config.get("api_key")
+            if api_key:
+                key_name = f"{self._config['backend']}_api_key"
+                self._credential_manager.store_credential(key_name, api_key)
+
+            from eye.services.model_router import ModelRouter
+            router = ModelRouter(self._config, self._credential_manager)
+            ok = bool(router.validate_connectivity())
+            self.done.emit(ok, "")
+        except Exception as e:
+            self.done.emit(False, str(e))
 
 
 class CloudAPIWarningDialog(QDialog):
@@ -1132,59 +1167,86 @@ class OnboardingWizard(QDialog):
                         "You can now proceed to validate and save your configuration."
                     )
     
-    def validate_connectivity(self):
+    def _begin_validation(self):
+        """Start connectivity validation on a worker thread and show a busy
+        'Validating…' indicator so the investigator sees it start.
+
+        The check runs off the GUI thread (``_WizardConnectivityWorker``), so
+        the modal progress dialog animates and the window stays responsive even
+        while a slow/bad endpoint blocks. ``_on_validation_done`` finishes the
+        flow (result dialog + save) back on the GUI thread.
         """
-        Test connection to configured backend using ModelRouter.
-        
-        Attempts to validate connectivity to the configured LLM backend.
-        Shows success or error message to the user.
-        
-        Returns:
-            bool: True if connectivity validated successfully, False otherwise
-            
-        """
-        try:
-            # Store API key temporarily if provided (for cloud APIs)
-            api_key = self.config.get("api_key")
-            if api_key:
-                key_name = f"{self.config['backend']}_api_key"
-                self.credential_manager.store_credential(key_name, api_key)
-            
-            # Create temporary ModelRouter with current configuration
-            from eye.services.model_router import ModelRouter
-            temp_router = ModelRouter(self.config, self.credential_manager)
-            
-            # Test connectivity
-            if temp_router.validate_connectivity():
-                QMessageBox.information(
-                    self,
-                    "Connectivity Validated",
-                    f"Successfully connected to {self.config['backend']}!\n\n"
-                    "Your configuration will now be saved."
-                )
-                return True
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Connectivity Failed",
-                    f"Failed to connect to {self.config['backend']}.\n\n"
-                    "Please check your configuration and try again.\n\n"
-                    "Troubleshooting:\n"
-                    "- Verify the executable path or API endpoint is correct\n"
-                    "- Ensure the service is running\n"
-                    "- Check your API key if using cloud services"
-                )
-                return False
-                
-        except Exception as e:
+        # Re-entrancy guard: ignore extra clicks while a check is in flight.
+        if getattr(self, "_validating", False):
+            return
+        self._validating = True
+
+        from PyQt5.QtWidgets import QProgressDialog
+
+        backend = self.config.get("backend") or "the backend"
+        self.back_button.setEnabled(False)
+        self.next_button.setEnabled(False)
+        self.next_button.setText("Validating…")
+
+        self._validation_progress = QProgressDialog(
+            f"Validating connection to {backend}…", None, 0, 0, self
+        )
+        self._validation_progress.setWindowTitle("Validating")
+        self._validation_progress.setCancelButton(None)          # not cancellable
+        self._validation_progress.setWindowModality(Qt.WindowModal)
+        self._validation_progress.setMinimumDuration(0)          # show immediately
+        self._validation_progress.setAutoClose(False)
+        self._validation_progress.setAutoReset(False)
+        self._validation_progress.show()
+
+        worker = _WizardConnectivityWorker(self.config, self.credential_manager)
+        self._validation_worker = worker
+        worker.done.connect(self._on_validation_done)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda: setattr(self, "_validation_worker", None))
+        worker.start()
+
+    def _on_validation_done(self, ok, detail):
+        """GUI-thread slot: dismiss the indicator, restore the buttons, then
+        show the result (same wording as before) and save on success."""
+        progress = getattr(self, "_validation_progress", None)
+        if progress is not None:
+            progress.close()
+            self._validation_progress = None
+
+        self.back_button.setEnabled(True)
+        self.next_button.setEnabled(True)
+        self.next_button.setText("Validate & Save")
+        self._validating = False
+
+        backend = self.config.get("backend")
+        if ok:
+            QMessageBox.information(
+                self,
+                "Connectivity Validated",
+                f"Successfully connected to {backend}!\n\n"
+                "Your configuration will now be saved."
+            )
+            self.save_configuration(self.config.copy())
+        elif detail:
             QMessageBox.critical(
                 self,
                 "Validation Error",
-                f"An error occurred during connectivity validation:\n\n{str(e)}\n\n"
+                f"An error occurred during connectivity validation:\n\n{detail}\n\n"
                 "Please check your configuration and try again."
             )
-            return False
-    
+        else:
+            QMessageBox.warning(
+                self,
+                "Connectivity Failed",
+                f"Failed to connect to {backend}.\n\n"
+                "Please check your configuration and try again.\n\n"
+                "Troubleshooting:\n"
+                "- Verify the executable path or API endpoint is correct\n"
+                "- Ensure the service is running\n"
+                "- Check your API key if using cloud services"
+            )
+
     def _on_import_evidence(self):
         """Delegate to the main Eye window's evidence-import flow (single shared path)."""
         parent = self.parent()
@@ -1367,9 +1429,8 @@ class OnboardingWizard(QDialog):
                     self.show_credential_input(self.config["integration_type"])
 
         elif step == "credential":
-            # Credential Input -> Validate & Save
-            if self.validate_connectivity():
-                self.save_configuration(self.config.copy())
+            # Credential Input -> Validate & Save (threaded, with a busy indicator)
+            self._begin_validation()
     
     def _on_back(self):
         """Handle Back button click."""
