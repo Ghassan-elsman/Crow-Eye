@@ -38,6 +38,11 @@ Connect the AI backend you already use. Every new provider is a **single-key, Op
 - **The model dropdown opens instantly.** It used to freeze the UI on every open (a live network call plus up to ten OS-keychain reads on the GUI thread). It now opens immediately from a cached list and refreshes in the background.
 - **Suggested-action chips run on a single click** with an instant running indicator; a small pencil icon inserts the action into the message box to edit first. Typing in long conversations no longer lags.
 
+### 🔧 Fixes
+
+- **AI setup — "Validate & Save" now always works.** Configuring a model backend could silently do nothing if you pressed Back and then Next in the setup wizard. The final step now reliably validates the connection and saves your configuration regardless of how you navigated the wizard.
+- **Local Ollama server on a LAN or custom address is now honored.** When Ollama was configured as a Local Server, the Eye ignored the address you entered and always tried `localhost:11434`. It now connects to the endpoint you configured — a dedicated AI server on your LAN or a non-default port.
+
 ---
 
 ## Version 0.12.5 — Universal Import & Investigator Experience Release

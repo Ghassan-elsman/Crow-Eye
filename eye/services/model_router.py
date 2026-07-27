@@ -123,7 +123,16 @@ class ModelRouter:
                 
             # --- APPROACH 2: DIRECT LOCAL SERVERS ---
             if it in ["local_server", "local_api"]:
-                if bt == "ollama": return OllamaBackend(mn, self.config.get("executable_path", ""))
+                if bt == "ollama":
+                    # Honor a configured server URL (LAN IP / custom port). The
+                    # wizard stores it in api_endpoint; executable_path is a legacy
+                    # fallback; localhost is the default so existing setups are
+                    # unchanged. Passed as api_endpoint= so OllamaBackend takes the
+                    # correct branch (positional executable_path was being ignored).
+                    endpoint = (self.config.get("api_endpoint")
+                                or self.config.get("executable_path")
+                                or "http://localhost:11434")
+                    return OllamaBackend(mn, api_endpoint=endpoint)
                 if bt == "lm_studio": 
                     endpoint = self.config.get("api_endpoint")
                     if not endpoint:

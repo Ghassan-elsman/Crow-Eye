@@ -465,7 +465,8 @@ class OnboardingWizard(QDialog):
         # Add page to stack
         self.pages.addWidget(page)
         self.pages.setCurrentWidget(page)
-        
+        page.setProperty("wizard_step", "welcome")
+
         # Update navigation
         self.back_button.setEnabled(False)
         self.next_button.setEnabled(True)
@@ -539,7 +540,8 @@ class OnboardingWizard(QDialog):
         # Add page to stack
         self.pages.addWidget(page)
         self.pages.setCurrentWidget(page)
-        
+        page.setProperty("wizard_step", "integration")
+
         # Update navigation
         self.back_button.setEnabled(True)
         self.next_button.setEnabled(False)  # Enable when selection is made
@@ -701,7 +703,8 @@ class OnboardingWizard(QDialog):
         # Add page to stack
         self.pages.addWidget(page)
         self.pages.setCurrentWidget(page)
-        
+        page.setProperty("wizard_step", "credential")
+
         # Update navigation
         self.back_button.setEnabled(True)
         self.next_button.setEnabled(True)
@@ -1335,14 +1338,21 @@ class OnboardingWizard(QDialog):
             )
     
     def _on_next(self):
-        """Handle Next button click."""
-        current_index = self.pages.currentIndex()
-        
-        if current_index == 0:
+        """Handle Next button click.
+
+        Dispatch on the current page's logical step (stamped via the
+        ``wizard_step`` property), NOT on the stack index. Pages are appended
+        cumulatively and never removed, so a Back-then-Next cycle pushes the
+        credential page to index 3+; a numeric-index dispatch then matched no
+        branch and the "Validate & Save" click was silently ignored.
+        """
+        step = self.pages.currentWidget().property("wizard_step")
+
+        if step == "welcome":
             # Welcome -> Integration Selection
             self.show_integration_selection()
-            
-        elif current_index == 1:
+
+        elif step == "integration":
             # Integration Selection -> Credential Input
             if self.config["integration_type"]:
                 # Show warning dialog for cloud API selection
@@ -1355,8 +1365,8 @@ class OnboardingWizard(QDialog):
                 else:
                     # For local integrations, proceed directly
                     self.show_credential_input(self.config["integration_type"])
-            
-        elif current_index == 2:
+
+        elif step == "credential":
             # Credential Input -> Validate & Save
             if self.validate_connectivity():
                 self.save_configuration(self.config.copy())
@@ -1367,10 +1377,13 @@ class OnboardingWizard(QDialog):
         
         if current_index > 0:
             self.pages.setCurrentIndex(current_index - 1)
-            
-            # Update navigation buttons
-            if current_index - 1 == 0:
-                self.back_button.setEnabled(False)
-            
+
+            # Update navigation from the landed page's logical step (the
+            # previous stack page is always an earlier step, so its state is
+            # preserved) rather than fragile index arithmetic.
+            landed = self.pages.currentWidget().property("wizard_step")
+            self.back_button.setEnabled(landed != "welcome")
             self.next_button.setEnabled(True)
-            self.next_button.setText("Next")
+            self.next_button.setText(
+                "Validate & Save" if landed == "credential" else "Next"
+            )
