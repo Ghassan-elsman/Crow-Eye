@@ -1254,27 +1254,18 @@ class TimelineBridge(QObject):
             ['last_check_time', 'last_install_time', 'scheduled_install_time']
         )
 
-        # NetworkInterfacesInfo
-        net_info_sql = """
-            SELECT interface_id, ip_address, mac_address, timestamp as access_date 
-            FROM NetworkInterfacesInfo
-            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
-        """
-        result['network_interfaces'] = self._parse_timestamps_in_rows(
-            self._query_db("registry_data.db", net_info_sql, (start, end)),
-            ['access_date']
-        )
-
-        # NetworkListProfiles
-        net_list_sql = """
-            SELECT profile_name as filename, profile_name as name, guid, timestamp as access_date
-            FROM NetworkListProfiles
-            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
-        """
-        result['network_list_profiles'] = self._parse_timestamps_in_rows(
-            self._query_db("registry_data.db", net_list_sql, (start, end)),
-            ['access_date']
-        )
+        # NetworkInterfacesInfo and NetworkListProfiles are deliberately NOT
+        # placed on the timeline.
+        #
+        # NetworkInterfacesInfo carries no real event time — its only timestamp
+        # is the parser-bookkeeping column (now `parsed_at`, formerly
+        # `timestamp`). Plotting it rendered "when Crow-Eye ran" as network
+        # activity, which is exactly the confusion the parsed_at rename removes.
+        # Interface configuration is still available in the Registry tab.
+        #
+        # NetworkListProfiles was never a table any RegClaw path creates (the
+        # real table is Network_list, queried below), so that query only ever
+        # returned nothing.
 
         # USBStorageDevices
         usb_sql = """

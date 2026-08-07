@@ -59,9 +59,16 @@ add it to the `timestamp` category:
 }
 ```
 
-Bookkeeping fields (`parsed_at`, `inserted_at`, `created_at`) go in
-the `bookkeeping` category so they sift to the back of the priority
-list — real event times always win when both are present.
+Bookkeeping fields go in the `bookkeeping` category so they sift to the
+back of the priority list — real event times always win when both are
+present.
+
+**Name your parser's bookkeeping column `parsed_at`.** That is the
+canonical name every Crow-Eye parser writes, and `utils/parse_time_column.py`
+is the single source of truth for it. The legacy aliases still in the
+`bookkeeping` category (`parsed_timestamp`, `parse_timestamp`,
+`inserted_at`, `created_at`) exist only so case databases written by
+older builds keep working — do not use them in new parsers.
 
 ---
 

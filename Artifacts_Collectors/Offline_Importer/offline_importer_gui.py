@@ -100,12 +100,14 @@ def _oi_lbl(text, name):
 
 def _oi_pbtn(text, name):
     from PyQt5.QtWidgets import QPushButton
-    b = QPushButton(text); b.setIcon(_oi_icon(name)); return b
+    from PyQt5.QtCore import QSize
+    b = QPushButton(text); b.setIcon(_oi_icon(name)); b.setIconSize(QSize(16, 16)); return b
 
 
 def _oi_cbox(text, name):
     from PyQt5.QtWidgets import QCheckBox
-    c = QCheckBox(text); c.setIcon(_oi_icon(name)); return c
+    from PyQt5.QtCore import QSize
+    c = QCheckBox(text); c.setIcon(_oi_icon(name)); c.setIconSize(QSize(16, 16)); return c
 
 
 @dataclass

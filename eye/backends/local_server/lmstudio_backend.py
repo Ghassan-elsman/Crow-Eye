@@ -168,31 +168,44 @@ class LMStudioBackend(LLMBackend):
                 # HTTP errors (4xx, 5xx) - don't retry, just fail immediately
                 self.logger.error(f"LM Studio HTTP error: {e}")
                 error_detail = ""
+                no_models_loaded = False
+                # NOTE: the "no models loaded" case is only FLAGGED here and raised
+                # after the except block. Raising inside this try meant the bare
+                # `except` below caught our own RuntimeError and replaced the
+                # actionable instructions with the generic status-code message.
                 try:
                     error_json = e.response.json()
                     error_msg = error_json.get("error", {}).get("message", "")
-                    
-                    # Specific handling for LM Studio "No models loaded" error
-                    if "No models loaded" in error_msg:
-                        raise RuntimeError(
-                            "LM Studio Error: No AI model is currently loaded in the server.\n\n"
-                            "To fix this:\n"
-                            "1. Open LM Studio on the host machine.\n"
-                            "2. Go to the 'AI Chat' or 'Local Server' tab.\n"
-                            "3. Select and LOAD a model into memory at the top of the window.\n"
-                            "4. Ensure the server is STARTED on port 1234."
-                        )
+                    no_models_loaded = "No models loaded" in error_msg
                     error_detail = error_msg or e.response.text
-                except:
+                except Exception:
                     try:
                         error_detail = e.response.text
-                    except:
+                    except Exception:
                         pass
-                
+
+                if no_models_loaded:
+                    raise RuntimeError(
+                        "LM Studio Error: No AI model is currently loaded in the server.\n\n"
+                        "To fix this:\n"
+                        "1. Open LM Studio on the host machine.\n"
+                        "2. Go to the 'AI Chat' or 'Local Server' tab.\n"
+                        "3. Select and LOAD a model into memory at the top of the window.\n"
+                        "4. Ensure the server is STARTED on port 1234."
+                    )
+
                 raise RuntimeError(
                     f"LM Studio returned error: {e.response.status_code} - {error_detail or str(e)}"
                 )
-    
+
+        # Unreachable for max_retries >= 1 (every branch above returns or raises),
+        # but a caller passing 0 would otherwise fall through and return None,
+        # producing an opaque AttributeError on `.json()` at the call site.
+        raise RuntimeError(
+            f"LM Studio request to {url} was never attempted (max_retries={max_retries})."
+        )
+
+
     def generate(
         self,
         system_prompt: str,
@@ -203,9 +216,12 @@ class LMStudioBackend(LLMBackend):
     ) -> Dict[str, Any]:
         """
         Uses standard OpenAI-compatible chat completion payload.
-        
-        Note: Per the GEP Pre-Flight Integrity guarantee (GEP-1), we perform a 'Pre-Flight Ping'
-        to ensure the backend is alive before sending forensic data.
+
+        Pre-flight connectivity is NOT re-checked here: ContextManager already
+        gates every query on a TTL-cached ``validate_connectivity()`` (GEP-1), so
+        pinging again per model call added a second ``/v1/models`` round-trip to
+        every iteration of the agentic loop. A server that dies mid-turn still
+        surfaces clearly through _make_request_with_retry's connection handling.
         """
         # Ensure we have a model name. If not, try to pick one from the server.
         target_model = self.model_name
@@ -213,6 +229,9 @@ class LMStudioBackend(LLMBackend):
             loaded_models = self.list_models()
             if loaded_models:
                 target_model = loaded_models[0]
+                # Persist the resolution so get_context_window() and any later
+                # call look up the model we are ACTUALLY using, not the placeholder.
+                self.model_name = target_model
                 self.logger.info(f"LM Studio: No model configured. Auto-selecting first loaded: {target_model}")
             else:
                 self.logger.error("LM Studio: No models are currently loaded in the server.")
@@ -221,26 +240,6 @@ class LMStudioBackend(LLMBackend):
                     "Please open LM Studio and load a model into memory before starting the investigation."
                 )
 
-        if not self.validate_connectivity():
-            # Distinguish between 'Server Offline' and 'Server Online but No Models Loaded'
-            try:
-                check_resp = self.session.get(f"{self.api_endpoint}/v1/models", timeout=2)
-                if check_resp.status_code == 200:
-                    data = check_resp.json()
-                    if "data" not in data or not data["data"]:
-                        raise RuntimeError(
-                            "LM Studio Server is ONLINE, but NO MODELS ARE LOADED.\n\n"
-                            "Please go to LM Studio and LOAD a model (e.g., Llama 3) into memory before continuing."
-                        )
-            except (RuntimeError, requests.exceptions.RequestException) as e:
-                if isinstance(e, RuntimeError): raise e
-            
-            self.logger.error(f"Pre-flight ping failed for LM Studio at {self.api_endpoint}")
-            raise ConnectionError(
-                f"Cannot reach LM Studio at {self.api_endpoint}. "
-                f"Ensure LM Studio is running and the Local Server is STARTED on port 1234."
-            )
-            
         try:
             # Build the raw messages array (system + history + user)
             raw_messages = [{"role": "system", "content": system_prompt}]
@@ -304,10 +303,28 @@ class LMStudioBackend(LLMBackend):
             message = data["choices"][0]["message"]
             content = message.get("content", "")
             tool_calls = message.get("tool_calls", [])
-            
+
+            # LM Studio does NOT reject an unknown model id — it answers with
+            # whatever model is currently loaded and returns HTTP 200 (verified
+            # live: a request for "definitely-not-a-real-model-xyz" was served by
+            # microsoft/phi-4-reasoning). For a forensic tool that seals the model
+            # name into the chain of custody, silently attributing an answer to a
+            # model that never produced it is not acceptable — so detect the
+            # substitution, warn, and report the model that ACTUALLY answered.
+            actual_model = data.get("model") or target_model
+            substituted = bool(actual_model and actual_model != target_model)
+            if substituted:
+                self.logger.warning(
+                    "LM Studio served this request with '%s', NOT the requested '%s'. "
+                    "The loaded model differs from the configured one.",
+                    actual_model, target_model,
+                )
+
             return {
                 "content": content,
-                "tool_calls": tool_calls
+                "tool_calls": tool_calls,
+                "model": actual_model,
+                "model_substituted": substituted,
             }
             
         except (ConnectionError, TimeoutError, RuntimeError):
@@ -350,20 +367,52 @@ class LMStudioBackend(LLMBackend):
     
     def list_models(self) -> List[str]:
         """
-        Returns the list of currently loaded models in LM Studio.
-        
-        Queries the /v1/models endpoint to see what models are available.
-        This is like checking what's in your toolbox.
-        
+        Returns the chat-capable models available in LM Studio.
+
+        The OpenAI-compatible ``/v1/models`` endpoint lists EVERYTHING the server
+        holds — including embedding models, which cannot answer a forensic
+        question at all. Verified live: a server holding an embedding model
+        offered ``text-embedding-nomic-embed-text-v1.5`` in the Eye's model menu
+        as though it were a chat model. So we prefer LM Studio's native
+        ``/api/v0/models``, which reports a per-model ``type``, and keep only
+        ``llm``/``vlm`` entries. Older servers without ``/api/v0`` fall back to
+        the unfiltered OpenAI-compatible list.
+
         Returns:
-            List[str]: List of model IDs (e.g., ["llama-3-8b", "mistral-7b"])
+            List[str]: List of chat-capable model IDs (e.g., ["llama-3-8b"])
         """
+        try:
+            native = self.session.get(
+                f"{self.api_endpoint}/api/v0/models",
+                timeout=self.connect_timeout,
+            )
+            if native.status_code == 200:
+                entries = (native.json() or {}).get("data", []) or []
+                chat = [m for m in entries
+                        if m.get("id") and m.get("type") in ("llm", "vlm")]
+                if chat:
+                    # Already-loaded models first: auto-selection takes the first
+                    # entry, and picking a model the investigator has actually
+                    # loaded avoids a slow cold JIT load (and a model that may
+                    # fail to load at all).
+                    chat.sort(key=lambda m: 0 if m.get("state") == "loaded" else 1)
+                    return [m["id"] for m in chat]
+                # /api/v0 answered but nothing is chat-capable — that is a real,
+                # actionable answer, not a reason to fall back to a noisier list.
+                if entries:
+                    self.logger.warning(
+                        "LM Studio holds no chat-capable models (only %s).",
+                        ", ".join(sorted({str(m.get('type')) for m in entries})))
+                    return []
+        except Exception as e:
+            self.logger.debug(f"LM Studio /api/v0/models unavailable, using /v1/models: {e}")
+
         try:
             response = self.session.get(
                 f"{self.api_endpoint}/v1/models",
                 timeout=self.connect_timeout
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 models = data.get("data", [])
@@ -371,7 +420,7 @@ class LMStudioBackend(LLMBackend):
             else:
                 self.logger.warning(f"Failed to list LM Studio models: HTTP {response.status_code}")
                 return []
-                
+
         except Exception as e:
             self.logger.error(f"Error listing LM Studio models: {e}")
             return []

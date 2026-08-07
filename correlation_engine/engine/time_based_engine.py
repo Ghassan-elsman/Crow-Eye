@@ -801,7 +801,8 @@ class OptimizedFeatherQuery:
             'created_time', 'modified_time', 'accessed_time',
             'create_time', 'modify_time', 'access_time',
             'created_on', 'modified_on', 'accessed_on',
-            # NOTE: 'parsed_at' / 'parsed_timestamp' deliberately excluded.
+            # NOTE: 'parsed_at' (and its legacy aliases 'parsed_timestamp' /
+            # 'parse_timestamp' / 'inserted_at') deliberately excluded.
             # Those columns store the moment the FEATHER was generated, not
             # the moment the underlying artifact was observed. Treating them
             # as a real per-row timestamp would assign every row in a

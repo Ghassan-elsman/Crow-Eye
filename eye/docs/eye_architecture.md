@@ -124,7 +124,7 @@ Operating Rules** that uphold it; the Eye's Operating Rules are *how it gets ans
 | **GEP-7 Integrity & Non-Repudiation** | Read-only evidence; SHA-256 hash-chained message & report-block IDs; `EvidenceSeal` payload hash chain; tamper-evident `EYE_Logs/`. |
 | **GEP-8 Transparency & Explainability** | Tool traceability (every call logged + LLM-visible); live thinking/dialogue stream; machine-readable per-turn compliance export to the Compliance panel; dual output to the report. |
 | **GEP-9 Human Authority** | "Assistant, not replacement" framing; write-side authorship (`EyeAuthorship`: author + reason + edit history); read-only on non-Eye-authored items; reversible artifacts. |
-| **GEP-10 Defensibility** | Professional/legal-grade tone operating rule; structured report blocks; objective, court-ready output. |
+| **GEP-10 Defensibility** | Professional tone operating rule; structured report blocks; objective output structured for independent review. |
 
 **Per-answer compliance** (`_evaluate_gep_turn`) grades every answer against **all 10 GEP
 principles** — Evidence Primacy (GEP-1), Traceability (GEP-2, via sealed provenance refs),
@@ -155,7 +155,7 @@ N-A where a principle doesn't apply to that turn, and persists the result for th
 
 ## 6. Context Integrity & Chain of Custody
 
-Court-defensibility requires that EYE **never silently truncates** what the model
+Traceability to source records requires that EYE **never silently truncates** what the model
 sees, and that exactly what it saw is provable. This is enforced in
 `query_processor.guarded_generate` (the single choke point for every model call)
 plus supporting services.

@@ -2,6 +2,8 @@
 
 This document contains the comprehensive schema for all parsed artifacts and correlation databases. Use this reference to write precise SQL queries without needing to call `get_schema` first.
 
+**`parsed_at` is parser bookkeeping** — it records when Crow-Eye parsed the artifact, not when the artifact activity occurred. Never use it as an event time. Case databases written by older Crow-Eye builds may still carry the legacy names `timestamp` (registry tables), `parsed_timestamp` (ShimCache), `parse_timestamp` (SRUM metadata) or `inserted_at` (USN); check the actual schema before querying an older case.
+
 
 ## Database: `amcache.db`
 
@@ -734,7 +736,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `registered_organization` | TEXT |
 | `product_id` | TEXT |
 | `installation_date` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `TimeZoneInfo`
@@ -746,7 +748,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `daylight_name` | TEXT |
 | `bias` | INTEGER |
 | `active_time_bias` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `NetworkInterfacesInfo`
@@ -761,7 +763,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `dhcp_server` | TEXT |
 | `dns_servers` | TEXT |
 | `mac_address` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `Auto`
@@ -772,7 +774,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `au_options` | INTEGER |
 | `scheduled_install_day` | INTEGER |
 | `scheduled_install_time` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `WindowsUpdateInfo`
@@ -784,7 +786,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `au_options` | INTEGER |
 | `scheduled_install_day` | INTEGER |
 | `scheduled_install_time` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `ShutdownInfo`
@@ -795,7 +797,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `shutdown_count` | INTEGER |
 | `shutdown_type` | TEXT |
 | `clean_shutdown` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `USBDevices`
@@ -843,7 +845,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `first_connected` | TEXT |
 | `last_connected` | TEXT |
 | `last_removed` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `USBStorageVolumes`
@@ -854,7 +856,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `volume_guid` | TEXT |
 | `volume_name` | TEXT |
 | `drive_letter` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `BrowserHistory`
@@ -866,7 +868,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `title` | TEXT |
 | `visit_count` | INTEGER |
 | `last_visit` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `InstalledSoftware`
@@ -879,7 +881,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `install_date` | TEXT |
 | `install_location` | TEXT |
 | `uninstall_string` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `SystemServices`
@@ -894,7 +896,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `service_type` | INTEGER |
 | `error_control` | INTEGER |
 | `status` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `AutoStartPrograms`
@@ -904,7 +906,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `location` | TEXT |
 | `program_name` | TEXT |
 | `command` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `DAM`
@@ -947,7 +949,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `search_type` | TEXT |
 | `mru_position` | INTEGER |
 | `access_date` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `UserAssist`
@@ -960,7 +962,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `focus_count` | INTEGER |
 | `focus_time` | INTEGER |
 | `user_sid` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `Shellbags`
@@ -994,7 +996,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `command` | TEXT |
 | `mru_position` | INTEGER |
 | `access_date` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `MUICache`
@@ -1061,7 +1063,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `profile_path` | TEXT |
 | `profile_image_path` | TEXT |
 | `profile_loaded` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `RecentDocs`
@@ -1098,7 +1100,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `entry_size` | INTEGER |
 | `cache_entry_position` | INTEGER |
 | `entry_hash` | TEXT |
-| `parsed_timestamp` | TIMESTAMP |
+| `parsed_at` | TIMESTAMP |
 
 
 ### Table: `sqlite_sequence`
@@ -1200,7 +1202,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | INTEGER |
-| `parse_timestamp` | TEXT |
+| `parsed_at` | TEXT |
 | `srudb_path` | TEXT |
 | `total_records_parsed` | INTEGER |
 | `parsing_duration_seconds` | REAL |
@@ -1226,7 +1228,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `security_id` | INTEGER |
 | `file_attributes` | TEXT |
 | `record_length` | INTEGER |
-| `inserted_at` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `deleted_entries`
@@ -1242,7 +1244,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `next_valid_usn` | INTEGER |
 | `forensic_significance` | TEXT |
 | `potential_activity` | TEXT |
-| `inserted_at` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ## Database: `correlation_results.db`

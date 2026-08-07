@@ -150,7 +150,7 @@ class ShimCacheParser:
                 entry_size INTEGER DEFAULT 0,
                 cache_entry_position INTEGER DEFAULT 0,
                 entry_hash TEXT UNIQUE,
-                parsed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(path, last_modified)
             )
         ''')

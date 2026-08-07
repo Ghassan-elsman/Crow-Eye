@@ -205,7 +205,7 @@ SCHEMA_ENERGY_USAGE = """
 SCHEMA_METADATA = """
     CREATE TABLE IF NOT EXISTS srum_metadata (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        parse_timestamp TEXT NOT NULL,
+        parsed_at TEXT NOT NULL,
         srudb_path TEXT,
         total_records_parsed INTEGER,
         parsing_duration_seconds REAL,
@@ -1799,7 +1799,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             # Insert metadata
             cursor.execute("""
                 INSERT INTO srum_metadata 
-                (parse_timestamp, srudb_path, total_records_parsed, parsing_duration_seconds, notes)
+                (parsed_at, srudb_path, total_records_parsed, parsing_duration_seconds, notes)
                 VALUES (?, ?, ?, ?, ?)
             """, (
                 get_current_forensic_timestamp(),

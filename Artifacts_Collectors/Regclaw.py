@@ -361,7 +361,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 registered_organization TEXT,
                 product_id TEXT,
                 installation_date TEXT,
-                timestamp TEXT
+                parsed_at TEXT
             )''')
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS TimeZoneInfo (
@@ -370,7 +370,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 daylight_name TEXT,
                 bias INTEGER,
                 active_time_bias INTEGER,
-                timestamp TEXT
+                parsed_at TEXT
             )''')
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS NetworkInterfacesInfo (
@@ -382,7 +382,7 @@ def main_live_reg(db_filename='registry_data.db'):
             dhcp_server TEXT,
             dns_servers TEXT,
             mac_address TEXT,
-            timestamp TEXT
+            parsed_at TEXT
             )''')
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS Auto (
@@ -390,7 +390,7 @@ def main_live_reg(db_filename='registry_data.db'):
             au_options INTEGER,
             scheduled_install_day INTEGER,
             scheduled_install_time INTEGER,
-            timestamp TEXT
+            parsed_at TEXT
             )''')
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS WindowsUpdateInfo (
@@ -399,7 +399,7 @@ def main_live_reg(db_filename='registry_data.db'):
             au_options INTEGER,
             scheduled_install_day INTEGER,
             scheduled_install_time INTEGER,
-            timestamp TEXT
+            parsed_at TEXT
             )''')
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS ShutdownInfo (
@@ -407,7 +407,7 @@ def main_live_reg(db_filename='registry_data.db'):
             shutdown_count INTEGER,
             shutdown_type TEXT,
             clean_shutdown INTEGER,
-            timestamp TEXT
+            parsed_at TEXT
             )''')
             # Enhanced tables for USB devices
             cursor.execute('''
@@ -447,7 +447,7 @@ def main_live_reg(db_filename='registry_data.db'):
             first_connected TEXT,
             last_connected TEXT,
             last_removed TEXT,
-            timestamp TEXT
+            parsed_at TEXT
             )''')
             try:
                 cursor.execute('ALTER TABLE USBStorageDevices ADD COLUMN last_removed TEXT')
@@ -459,7 +459,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 volume_guid TEXT,
                 volume_name TEXT,
                 drive_letter TEXT,
-                timestamp TEXT,
+                parsed_at TEXT,
                 PRIMARY KEY (device_id, volume_guid)
         )''')
         # Enhanced table for browser history
@@ -470,7 +470,7 @@ def main_live_reg(db_filename='registry_data.db'):
             title TEXT,
             visit_count INTEGER,
             last_visit TEXT,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # Enhanced table for installed software
         cursor.execute('''
@@ -481,7 +481,7 @@ def main_live_reg(db_filename='registry_data.db'):
             install_date TEXT,
             install_location TEXT,
             uninstall_string TEXT,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # Enhanced table for system services
         cursor.execute('''
@@ -494,7 +494,7 @@ def main_live_reg(db_filename='registry_data.db'):
             service_type INTEGER,
             error_control INTEGER,
             status TEXT,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # Create table for auto start programs
         cursor.execute('''
@@ -502,7 +502,7 @@ def main_live_reg(db_filename='registry_data.db'):
             location TEXT,
             program_name TEXT,
             command TEXT,
-            timestamp TEXT,
+            parsed_at TEXT,
             PRIMARY KEY (location, program_name)
         )''')
         # Enhanced DAM and BAM tables with detailed process information
@@ -539,7 +539,7 @@ def main_live_reg(db_filename='registry_data.db'):
             search_type TEXT,
             mru_position INTEGER,
             access_date TEXT,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # UserAssist table for program execution tracking
         # user_sid now contains the actual Windows user SID (e.g., S-1-5-21-...)
@@ -552,7 +552,7 @@ def main_live_reg(db_filename='registry_data.db'):
             focus_count INTEGER,
             focus_time INTEGER,
             user_sid TEXT,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # Shellbags table for folder access history (enhanced with additional metadata)
         # Check if old schema exists and migrate if needed
@@ -635,7 +635,7 @@ def main_live_reg(db_filename='registry_data.db'):
             command TEXT,
             mru_position INTEGER,
             access_date TEXT,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # MUICache table for application name and path tracking
         cursor.execute('''
@@ -692,7 +692,7 @@ def main_live_reg(db_filename='registry_data.db'):
             profile_path TEXT,
             profile_image_path TEXT,
             profile_loaded INTEGER,
-            timestamp TEXT
+            parsed_at TEXT
         )''')
         # Insert data into the respective tables
         for table_name, (hive, key) in paths.items():
@@ -715,7 +715,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             "user_run": "HKCU Run",
                             "user_run_once": "HKCU RunOnce"
                         }[table_name]
-                        cursor.execute('INSERT OR IGNORE INTO AutoStartPrograms (location, program_name, command, timestamp) VALUES (?, ?, ?, ?)',
+                        cursor.execute('INSERT OR IGNORE INTO AutoStartPrograms (location, program_name, command, parsed_at) VALUES (?, ?, ?, ?)',
                                       (location, name, str(data), format_forensic_timestamp(get_current_utc())))
                 except Exception as e:
                     logging.error(f"Error inserting into table {db_table_name} for key {key}: {e}")
@@ -896,7 +896,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                    
                                     # Insert into database with formatted focus time
                                     cursor.execute('''INSERT OR IGNORE INTO UserAssist
-                                                   (program_path, run_count, last_execution, focus_count, focus_time, user_sid, timestamp)
+                                                   (program_path, run_count, last_execution, focus_count, focus_time, user_sid, parsed_at)
                                                    VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                                  (program_path, run_count, last_execution, focus_count, focus_time_formatted,
                                                   user_sid, format_forensic_timestamp(get_current_utc())))
@@ -1141,7 +1141,7 @@ def main_live_reg(db_filename='registry_data.db'):
                    
                     # Insert into database
                     cursor.execute('''INSERT OR IGNORE INTO RunMRU
-                                   (command, mru_position, access_date, timestamp)
+                                   (command, mru_position, access_date, parsed_at)
                                    VALUES (?, ?, ?, ?)''',
                                  (command, mru_position, access_date, format_forensic_timestamp(get_current_utc())))
                    
@@ -1271,7 +1271,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     # Insert into WordWheelQuery table with error handling
                     try:
                         cursor.execute('''INSERT OR IGNORE INTO WordWheelQuery
-                                       (search_term, search_type, mru_position, access_date, timestamp)
+                                       (search_term, search_type, mru_position, access_date, parsed_at)
                                        VALUES (?, ?, ?, ?, ?)''',
                                      (search_term, search_type, mru_position, access_date,
                                       format_forensic_timestamp(get_current_utc())))
@@ -1433,7 +1433,7 @@ def main_live_reg(db_filename='registry_data.db'):
         if not check_exists(cursor, 'WindowsUpdateInfo', ['last_check_time', 'last_install_time'], (last_check, last_install)):
             cursor.execute('''
             INSERT INTO WindowsUpdateInfo
-            (last_check_time, last_install_time, au_options, scheduled_install_day, scheduled_install_time, timestamp)
+            (last_check_time, last_install_time, au_options, scheduled_install_day, scheduled_install_time, parsed_at)
             VALUES (?, ?, ?, ?, ?, ?)''',
             (last_check, last_install, au_options, scheduled_day, scheduled_time, format_forensic_timestamp(get_current_utc())))
         else:
@@ -1495,7 +1495,7 @@ def main_live_reg(db_filename='registry_data.db'):
         if not check_exists(cursor, 'ComputerNameInfo', ['computer_name', 'registered_owner'], (computer_name, registered_owner)):
             cursor.execute('''
             INSERT INTO ComputerNameInfo
-            (computer_name, registered_owner, registered_organization, product_id, installation_date, timestamp)
+            (computer_name, registered_owner, registered_organization, product_id, installation_date, parsed_at)
             VALUES (?, ?, ?, ?, ?, ?)''',
             (computer_name, registered_owner, registered_org, product_id, install_date, format_forensic_timestamp(get_current_utc())))
         else:
@@ -1536,7 +1536,7 @@ def main_live_reg(db_filename='registry_data.db'):
         if not check_exists(cursor, 'TimeZoneInfo', ['time_zone_name', 'standard_name'], (tz_name, standard_name)):
             cursor.execute('''
             INSERT INTO TimeZoneInfo
-            (time_zone_name, standard_name, daylight_name, bias, active_time_bias, timestamp)
+            (time_zone_name, standard_name, daylight_name, bias, active_time_bias, parsed_at)
             VALUES (?, ?, ?, ?, ?, ?)''',
             (tz_name, standard_name, daylight_name, bias, active_bias, format_forensic_timestamp(get_current_utc())))
         else:
@@ -1581,7 +1581,7 @@ def main_live_reg(db_filename='registry_data.db'):
             if not check_exists(cursor, 'NetworkInterfacesInfo', ['interface_id', 'ip_address'], (interface_id, ip_address)):
                 cursor.execute('''
                 INSERT INTO NetworkInterfacesInfo
-                (interface_id, ip_address, subnet_mask, default_gateway, dhcp_enabled, dhcp_server, dns_servers, mac_address, timestamp)
+                (interface_id, ip_address, subnet_mask, default_gateway, dhcp_enabled, dhcp_server, dns_servers, mac_address, parsed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (interface_id, ip_address, subnet_mask, default_gateway, dhcp_enabled, dhcp_server, dns_servers, mac_address,
                  format_forensic_timestamp(get_current_utc())))
@@ -1629,7 +1629,7 @@ def main_live_reg(db_filename='registry_data.db'):
         if not check_exists(cursor, 'ShutdownInfo', ['shutdown_time', 'shutdown_type'], (shutdown_time, shutdown_type)):
             cursor.execute('''
             INSERT INTO ShutdownInfo
-            (shutdown_time, shutdown_count, shutdown_type, clean_shutdown, timestamp)
+            (shutdown_time, shutdown_count, shutdown_type, clean_shutdown, parsed_at)
             VALUES (?, ?, ?, ?, ?)''',
             (shutdown_time, shutdown_count, shutdown_type, clean_shutdown, format_forensic_timestamp(get_current_utc())))
         else:
@@ -2025,7 +2025,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     # Insert into USB storage devices table
                     cursor.execute('''
                     INSERT OR IGNORE INTO USBStorageDevices
-                    (device_id, friendly_name, serial_number, vendor_id, product_id, revision, first_connected, last_connected, last_removed, timestamp)
+                    (device_id, friendly_name, serial_number, vendor_id, product_id, revision, first_connected, last_connected, last_removed, parsed_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                     (f"{device_class}\\{serial_number}", friendly_name, serial_number, vendor_id, product_id, revision,
                      first_connected, last_connected, last_removed, format_forensic_timestamp(get_current_utc())))
@@ -2091,7 +2091,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                         else:
                                             cursor.execute('''
                                             INSERT OR IGNORE INTO USBStorageVolumes
-                                            (device_id, volume_guid, volume_name, drive_letter, timestamp)
+                                            (device_id, volume_guid, volume_name, drive_letter, parsed_at)
                                             VALUES (?, ?, ?, ?, ?)''',
                                             (candidate_id, volume_guid, "", drive_letter, format_forensic_timestamp(get_current_utc())))
                                             volume_count += 1
@@ -2113,7 +2113,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     continue
                 cursor.execute('''
                 INSERT INTO BrowserHistory
-                (browser, url, title, visit_count, last_visit, timestamp)
+                (browser, url, title, visit_count, last_visit, parsed_at)
                 VALUES (?, ?, ?, ?, ?, ?)''',
                 ("Internet Explorer/Edge", str(url), "", 0, "", format_forensic_timestamp(get_current_utc())))
             print("Browser history from registry inserted into database successfully.")
@@ -2152,7 +2152,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         continue
                     cursor.execute('''
                     INSERT INTO InstalledSoftware
-                    (display_name, display_version, publisher, install_date, install_location, uninstall_string, timestamp)
+                    (display_name, display_version, publisher, install_date, install_location, uninstall_string, parsed_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)''',
                     (display_name, display_version, publisher, install_date, install_location, uninstall_string,
                      format_forensic_timestamp(get_current_utc())))
@@ -2188,7 +2188,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             continue
                         cursor.execute('''
                         INSERT INTO InstalledSoftware
-                        (display_name, display_version, publisher, install_date, install_location, uninstall_string, timestamp)
+                        (display_name, display_version, publisher, install_date, install_location, uninstall_string, parsed_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?)''',
                         (display_name, display_version, publisher, install_date, install_location, uninstall_string,
                          format_forensic_timestamp(get_current_utc())))
@@ -2243,7 +2243,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     status = "Boot"
                 cursor.execute('''
                 INSERT OR IGNORE INTO SystemServices
-                (service_name, display_name, description, image_path, start_type, service_type, error_control, status, timestamp)
+                (service_name, display_name, description, image_path, start_type, service_type, error_control, status, parsed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (service_name, display_name, description, image_path, start_type, service_type, error_control, status,
                  format_forensic_timestamp(get_current_utc())))
@@ -2378,7 +2378,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     # Insert user profile data into database
                     cursor.execute('''
                     INSERT OR REPLACE INTO UserProfiles
-                    (user_sid, username, profile_path, profile_image_path, profile_loaded, timestamp)
+                    (user_sid, username, profile_path, profile_image_path, profile_loaded, parsed_at)
                     VALUES (?, ?, ?, ?, ?, ?)''',
                     (sid, username, profile_path, profile_image_path, profile_loaded, 
                      format_forensic_timestamp(get_current_utc())))

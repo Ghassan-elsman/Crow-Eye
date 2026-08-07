@@ -213,6 +213,16 @@ class ContextManager:
                 "No case directory provided. Audit trail and pinning features disabled."
             )
 
+        # Back-reference so router-level services (the tool-capability probe) can
+        # reach the case's audit trail. Weak, so it never keeps a ContextManager
+        # alive after a case is closed.
+        if self.model_router is not None:
+            try:
+                import weakref
+                self.model_router._context_manager_ref = weakref.ref(self)
+            except Exception as e:
+                self.logger.debug(f"Could not attach the context-manager back-reference: {e}")
+
         # Single persistent evidence-seal writer for this case. Constructing one
         # per turn (the old behavior) re-read the hash chain from disk every turn
         # and, worse, let two writers (query loop + map-reduce) on the same case
@@ -1151,11 +1161,19 @@ class ContextManager:
         # Models without native function-calling (e.g. Gemma on the Gemini API) can
         # only call tools via the TEXT protocol — so they MUST see the tool list in
         # text even when "constrained" (otherwise they have no idea what tools exist).
+        # Capability comes from ModelRouter's detection ladder (cache → provider
+        # metadata → family registry → live probe), NOT a hardcoded name match.
+        # That match only knew about Gemma, so every OTHER model without native
+        # function calling silently got no tool instructions at all — it could see
+        # no tools and had no format to call them with.
         _mr = getattr(self, "model_router", None)
         _cfg = (getattr(_mr, "config", {}) or {}) if _mr is not None else {}
-        _mdl = (_cfg.get("model_name") or "").replace("models/", "").lower()
-        text_tool_protocol = ((_cfg.get("backend") or "").lower() == "gemini"
-                              and _mdl.startswith("gemma"))
+        text_tool_protocol = False
+        if _mr is not None:
+            try:
+                text_tool_protocol = _mr.get_tool_support() != "native"
+            except Exception as e:
+                self.logger.debug(f"Tool-capability lookup for the system prompt failed: {e}")
         # For small-context models WITH native function calling, the text summary is
         # skipped (tools arrive in the JSON 'tools' field). Gemma always gets it.
         if text_tool_protocol or not is_constrained:

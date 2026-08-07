@@ -45,7 +45,7 @@ License: GPL-3.0
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.12.6"  # Single source of truth — read by the About menu, the update
+__version__ = "0.12.7"  # Single source of truth — read by the About menu, the update
                         # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
 
@@ -839,6 +839,26 @@ except ImportError as e:
     print(Fore.RED + f"[-] Failed to import PartitionWindow: {str(e)}" + Fore.RESET)
     PartitionWindow = None
 
+# Parser-bookkeeping column helpers. Parsers now write `parsed_at`; older case
+# databases carry legacy names (timestamp / parsed_timestamp / inserted_at) and
+# are never rewritten, so read paths resolve and relabel instead.
+try:
+    from utils.parse_time_column import (
+        PARSE_TIME_LABEL, is_parse_time_column,
+        nice_headers as nice_column_headers,
+    )
+except ImportError as e:
+    print(Fore.RED + f"[-] Failed to import parse_time_column helpers: {str(e)}" + Fore.RESET)
+    PARSE_TIME_LABEL = "Parsed At"
+
+    def is_parse_time_column(column, table=None):
+        return bool(column) and str(column).strip().lower() in (
+            "parsed_at", "parsed_timestamp", "parse_timestamp", "inserted_at")
+
+    def nice_column_headers(columns, table=None):
+        return [PARSE_TIME_LABEL if is_parse_time_column(c, table)
+                else str(c).replace("_", " ").title() for c in columns]
+
 
 # Comprehensive dependency validation with automatic recovery
 def validate_dependencies():
@@ -1298,6 +1318,24 @@ class _EyeInstantSplash(QtWidgets.QWidget):
 class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just a plain object
     def __init__(self, parent=None):
         super().__init__(parent)
+
+    def _mft_usn_status(self, status=None, log=None):
+        """Show a correlator notice on the loading screen.
+
+        Only the status line is set here. The correlator also prints its `log`
+        sentence, and the loading dialog captures stdout — so adding it again
+        would show the same explanation twice.
+
+        Guarded throughout: a display that cannot draw must never stop a
+        correlation that is already running.
+        """
+        dialog = getattr(self, '_current_loading_dialog', None)
+        if not dialog or not status:
+            return
+        try:
+            dialog.set_status(status)
+        except Exception as e:
+            print(f"[MFT-USN] Could not update the loading screen: {e}")
 
     def _on_generic_heartbeat(self):
         """Process events to keep GUI responsive during long-running background tasks."""
@@ -1845,7 +1883,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     "MRU Position", "Created Date", "Modified Date", "Accessed Date",
                     "Attributes", "File Size", "Special Folder", "Network Share",
                     "Server Name", "Share Name", "Drive Letter", "MFT Record", 
-                    "Registry Path", "Analyzing Date"
+                    "Registry Path", "Parsed At"
                 ]
                 self.Shellbags_table.setColumnCount(len(headers))
                 self.Shellbags_table.setHorizontalHeaderLabels(headers)
@@ -2693,8 +2731,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.UserProfiles_table.setRowCount(0)
                 
                 # Set headers based on user request and DB schema
-                # DB Schema: user_sid, username, profile_path, profile_image_path, profile_loaded, timestamp
-                headers = ["Username", "SID", "Profile Image Path", "Profiles Loaded", "Parsed Timestamp"]
+                # DB Schema: user_sid, username, profile_path, profile_image_path, profile_loaded, parsed_at
+                headers = ["Username", "SID", "Profile Image Path", "Profiles Loaded", "Parsed At"]
                 self.UserProfiles_table.setColumnCount(len(headers))
                 self.UserProfiles_table.setHorizontalHeaderLabels(headers)
                 
@@ -2720,7 +2758,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     self.UserProfiles_table.setItem(row_index, 2, QtWidgets.QTableWidgetItem(str(row[3]) if row[3] is not None else ""))
                     # Profiles Loaded
                     self.UserProfiles_table.setItem(row_index, 3, QtWidgets.QTableWidgetItem(str(row[4]) if row[4] is not None else ""))
-                    # Parsed Timestamp
+                    # Parsed At
                     self.UserProfiles_table.setItem(row_index, 4, QtWidgets.QTableWidgetItem(str(row[5]) if row[5] is not None else ""))
                         
                 self.UserProfiles_table.setUpdatesEnabled(True)
@@ -2956,7 +2994,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         usn_headers = [
             "Volume Letter", "Filename", "USN", "Major Version", "FRN", "Parent FRN", 
             "Timestamp", "Reason", "Source Info", "Security ID", "File Attributes", 
-            "Record Length", "Inserted At"
+            "Record Length", "Parsed At"
         ]
         self.USN_table.setColumnCount(len(usn_headers))
         for i, header in enumerate(usn_headers):
@@ -3909,6 +3947,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     parent=self.USN_tab
                 )
                 
+                # Show friendly header labels. The model keeps using the real
+                # column names for SQL, so this also renders the bookkeeping
+                # column as "Parsed At" on databases written by older builds,
+                # where it is still stored as `inserted_at`.
+                self.USN_table.setHorizontalHeaderLabels(
+                    self.get_nice_usn_headers(columns))
+
                 # Set default ordering
                 self.USN_table.set_order_by('usn ASC')
                 
@@ -4463,8 +4508,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     conn.close()
                     return None
                     
-                # Query to get all ShimCache entries
-                cursor.execute("""SELECT filename, path, last_modified, last_modified_readable, parsed_timestamp 
+                # Query to get all ShimCache entries. The parse-time column was
+                # renamed to parsed_at; resolve it so databases written by older
+                # Crow-Eye builds (parsed_timestamp) still load without a rewrite.
+                from utils.parse_time_column import resolve_parse_time_column
+                parse_col = resolve_parse_time_column(conn, "shimcache_entries") or "NULL"
+                cursor.execute(f"""SELECT filename, path, last_modified, last_modified_readable, {parse_col}
                               FROM shimcache_entries ORDER BY last_modified DESC""")
                 rows = cursor.fetchall()
                 conn.close()
@@ -4516,7 +4565,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 # Set column headers if not already set
                 if self.ShimCache_main_table.columnCount() != 5:
                     self.ShimCache_main_table.setColumnCount(5)
-                    headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+                    headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed At"]
                     self.ShimCache_main_table.setHorizontalHeaderLabels(headers)
                 
                 # Clear existing rows
@@ -6307,10 +6356,22 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             was_updates_enabled = gui_table.updatesEnabled()
             gui_table.setUpdatesEnabled(False)
 
-            # Set columns
+            # Set columns. When the widget's static headers (set in
+            # retranslateUi) don't match the schema we fall back to the DB
+            # column names, prettified — otherwise the tab would show raw
+            # snake_case.
             if gui_table.columnCount() != len(columns):
                 gui_table.setColumnCount(len(columns))
-                gui_table.setHorizontalHeaderLabels(columns)
+                gui_table.setHorizontalHeaderLabels(nice_column_headers(columns, db_table))
+
+            # Force the parser-bookkeeping column to read "Parsed At" whatever
+            # it is stored as. Case databases written by older builds still
+            # carry the legacy name (`timestamp`) and are never rewritten, so
+            # the label has to be applied on the read side.
+            for c_idx, col in enumerate(columns):
+                if is_parse_time_column(col, db_table):
+                    header_item = QtWidgets.QTableWidgetItem(PARSE_TIME_LABEL)
+                    gui_table.setHorizontalHeaderItem(c_idx, header_item)
 
             # Set row count
             gui_table.setRowCount(len(rows))
@@ -7577,7 +7638,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             headers = [
                 "Service Name", "Display Name", "Description",
                 "Image Path", "Start type", "Service Type",
-                "Error Control", "Status", "Analysis time"
+                "Error Control", "Status", "Parsed At"
             ]
             self.SystemServices_table.setColumnCount(len(headers))
             for i, header in enumerate(headers):
@@ -7641,7 +7702,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize ShimCache_table headers if it exists (for Registry widget)
         if hasattr(self, 'ShimCache_table'):
             self.ShimCache_table.setColumnCount(5)
-            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShimCache_table.setHorizontalHeaderItem(i, item)
@@ -7650,7 +7711,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize ShimCache_main_table headers for main tab
         if hasattr(self, 'ShimCache_main_table'):
             self.ShimCache_main_table.setColumnCount(5)
-            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShimCache_main_table.setHorizontalHeaderItem(i, item)
@@ -7851,7 +7912,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize Browser_history_table headers if it exists
         if hasattr(self, 'Browser_history_table'):
             self.Browser_history_table.setColumnCount(6)
-            headers = ["Browser", "URL", "Title", "Visit count", "Last visit", "Time stamp"]
+            headers = ["Browser", "URL", "Title", "Visit count", "Last visit", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.Browser_history_table.setHorizontalHeaderItem(i, item)
@@ -7867,7 +7928,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize ShimCache_table headers if it exists
         if hasattr(self, 'ShimCache_table'):
             self.ShimCache_table.setColumnCount(5)
-            headers = ["Filename", "Path", "Last Modified", "Last Modified (Readable)", "Parsed Timestamp"]
+            headers = ["Filename", "Path", "Last Modified", "Last Modified (Readable)", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShimCache_table.setHorizontalHeaderItem(i, item)
@@ -8160,7 +8221,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.tableWidget.setColumnCount(7)
             headers = [
                 "Name", "Version", "Publisher", "Install Date",
-                "Install Location", "Uninstall String", "Analyzing Date"
+                "Install Location", "Uninstall String", "Parsed At"
             ]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
@@ -10301,7 +10362,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 from mft_usn_correlator import MFTUSNCorrelator
                 
                 # Initialize the correlator with case directory
-                correlator = MFTUSNCorrelator(case_directory=case_root)
+                correlator = MFTUSNCorrelator(case_directory=case_root,
+                                              status_callback=self._mft_usn_status)
                 
                 # Run the complete correlation analysis (correlator will check for empty databases and run parsers if needed)
                 correlator.run_correlation_for_case()
@@ -10609,7 +10671,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             from mft_usn_correlator import MFTUSNCorrelator
             
             # Initialize the correlator with case directory
-            correlator = MFTUSNCorrelator(case_directory=case_root)
+            correlator = MFTUSNCorrelator(case_directory=case_root,
+                                          status_callback=self._mft_usn_status)
             
             # Run the complete correlation analysis
             correlator.run_correlation_for_case()
@@ -10728,6 +10791,32 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             import traceback
             traceback.print_exc()
     
+    def get_nice_usn_headers(self, columns):
+        """Map journal_events column names to UI header labels.
+
+        Used by the USN VirtualTableWidget, which is built from the live DB
+        columns rather than the static header list. `parsed_at` and its legacy
+        alias `inserted_at` both render as "Parsed At"; `timestamp` is left
+        alone because in the USN journal it is a real event time.
+        """
+        mapping = {
+            "volume_letter": "Volume Letter",
+            "filename": "Filename",
+            "usn": "USN",
+            "major_version": "Major Version",
+            "frn": "FRN",
+            "parent_frn": "Parent FRN",
+            "timestamp": "Timestamp",
+            "reason": "Reason",
+            "source_info": "Source Info",
+            "security_id": "Security ID",
+            "file_attributes": "File Attributes",
+            "record_length": "Record Length",
+        }
+        return [mapping.get(col, PARSE_TIME_LABEL if is_parse_time_column(col, 'journal_events')
+                            else col.replace('_', ' ').title())
+                for col in columns]
+
     def get_nice_srum_headers(self, columns):
         """Map SQLite snake_case column names to nice title-cased UI header labels"""
         mapping = {
@@ -10760,6 +10849,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "bytes_sent": "Bytes Sent",
             "bytes_received": "Bytes Received",
             "event_timestamp": "Event Timestamp",
+            "parsed_at": "Parsed At",
             "state_transition": "State Transition",
             "charge_level": "Charge Level",
             "cycle_count": "Cycle Count"

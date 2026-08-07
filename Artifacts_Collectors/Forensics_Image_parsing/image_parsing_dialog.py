@@ -123,12 +123,14 @@ def _ip_lbl(text, name):
 
 def _ip_pbtn(text, name):
     from PyQt5.QtWidgets import QPushButton
-    b = QPushButton(text); b.setIcon(_ip_icon(name)); return b
+    from PyQt5.QtCore import QSize
+    b = QPushButton(text); b.setIcon(_ip_icon(name)); b.setIconSize(QSize(16, 16)); return b
 
 
 def _ip_cbox(text, name):
     from PyQt5.QtWidgets import QCheckBox
-    c = QCheckBox(text); c.setIcon(_ip_icon(name)); return c
+    from PyQt5.QtCore import QSize
+    c = QCheckBox(text); c.setIcon(_ip_icon(name)); c.setIconSize(QSize(16, 16)); return c
 
 
 class CollectionWorker(QThread):

@@ -702,27 +702,35 @@ class OnboardingWizard(QDialog):
         
         if integration_type == "local_cli":
             # Local CLI configuration
-            from eye.cli_agents.cli_profiles import list_supported_backends
-            self._add_backend_selector(form_layout, list_supported_backends())
+            from eye.backends.backend_registry import LOCAL_CLI_BACKENDS
+            self._add_backend_selector(form_layout, LOCAL_CLI_BACKENDS)
             self._add_text_input(form_layout, "executable_path", "Executable Path:", 
                                  placeholder="/usr/local/bin/ollama")
             self._add_text_input(form_layout, "model_name", "Model Name:", 
                                  placeholder="llama2")
             
         elif integration_type == "local_api":
-            # Local API configuration
-            self._add_backend_selector(form_layout, ["lm_studio", "vllm"])
-            self._add_text_input(form_layout, "api_endpoint", "API Endpoint:", 
-                                 placeholder="http://localhost:1234")
+            # Local API configuration. Ollama belongs here too — the router has
+            # always supported it as a local SERVER, but the wizard only offered
+            # it as a CLI agent, so a LAN Ollama could not be configured at setup.
+            from eye.backends.backend_registry import LOCAL_SERVER_BACKENDS
+            self._add_backend_selector(form_layout, LOCAL_SERVER_BACKENDS)
+            self._add_text_input(form_layout, "api_endpoint", "API Endpoint:",
+                                 placeholder="http://localhost:1234 (LM Studio) · http://localhost:11434 (Ollama)")
             self._add_text_input(form_layout, "model_name", "Model Name:", 
                                  placeholder="local-model")
             
         elif integration_type == "cloud_api":
             # Cloud API configuration. Ordered common-first (investigators most often
             # bring OpenRouter / Google AI Studio / NVIDIA keys).
+            from eye.backends.backend_registry import CLOUD_API_BACKENDS
+            # Ordered common-first; the `moonshot`/`grok` aliases are omitted
+            # because `kimi`/`xai` are the same providers under their primary ids.
             self._add_backend_selector(form_layout, [
-                "openrouter", "gemini", "nvidia", "openai", "anthropic",
-                "deepseek", "kimi", "groq", "mistral", "xai",
+                bk for bk in (
+                    "openrouter", "gemini", "nvidia", "openai", "anthropic",
+                    "deepseek", "kimi", "groq", "mistral", "xai",
+                ) if bk in CLOUD_API_BACKENDS
             ])
             self._add_text_input(form_layout, "api_key", "API Key:",
                                  placeholder="sk-or-… (OpenRouter) · AIza… (Google AI Studio) · nvapi-… (NVIDIA) · sk-… · gsk_… · xai-…",

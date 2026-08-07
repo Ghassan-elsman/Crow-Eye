@@ -73,7 +73,7 @@
   "journal_events": {
     "artifact_type": "USN",
     "primary_timestamp_column": "timestamp",
-    "secondary_timestamp_columns": ["inserted_at"],
+    "secondary_timestamp_columns": ["parsed_at"],
     "identity_columns_preferred": ["filename"],
     "table_kind": "filesystem_metadata"
   },

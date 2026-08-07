@@ -1602,7 +1602,7 @@ class SRUMParser:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS srum_metadata (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    parse_timestamp TEXT NOT NULL,
+                    parsed_at TEXT NOT NULL,
                     srudb_path TEXT,
                     total_records_parsed INTEGER,
                     parsing_duration_seconds REAL,
@@ -1845,11 +1845,11 @@ class SRUMParser:
                 try:
                     cursor.execute("""
                         INSERT INTO srum_metadata (
-                            parse_timestamp, srudb_path, total_records_parsed,
+                            parsed_at, srudb_path, total_records_parsed,
                             parsing_duration_seconds, windows_version, notes
                         ) VALUES (?, ?, ?, ?, ?, ?)
                     """, (
-                        metadata.get('parse_timestamp', get_current_forensic_timestamp()),
+                        metadata.get('parsed_at', get_current_forensic_timestamp()),
                         metadata.get('srudb_path', self.srudb_path),
                         metadata.get('total_records', total_records),
                         metadata.get('parsing_duration_seconds', 0.0),
@@ -2156,7 +2156,7 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         
         # Prepare metadata for database storage
         metadata = {
-            'parse_timestamp': get_current_forensic_timestamp(),
+            'parsed_at': get_current_forensic_timestamp(),
             'srudb_path': srudb_path,
             'total_records': total_records,
             'parsing_duration_seconds': duration,

@@ -696,7 +696,7 @@ def init_db(db_path=OUTPUT_DB):
             security_id INTEGER,
             file_attributes TEXT,
             record_length INTEGER,
-            inserted_at TEXT,
+            parsed_at TEXT,
             PRIMARY KEY (volume_letter, usn)
         )
     ''')
@@ -714,7 +714,7 @@ def init_db(db_path=OUTPUT_DB):
             next_valid_usn INTEGER,
             forensic_significance TEXT,
             potential_activity TEXT,
-            inserted_at TEXT,
+            parsed_at TEXT,
             PRIMARY KEY (volume_letter, gap_start_usn)
         )
     ''')
@@ -1039,13 +1039,13 @@ def read_journal_events(volume_letter, cursor, conn):
                         
                         record_count += 1
                         chunk_records += 1
-                        inserted_at = get_current_forensic_timestamp()
+                        parsed_at = get_current_forensic_timestamp()
                         
                         # Add to batch instead of immediate insert
                         batch_records.append((
                             volume_letter, rec["filename"], rec["usn"], rec["major_version"], rec["frn"], rec["parent_frn"],
                             rec["timestamp"], rec["reason"], rec["source_info"], rec["security_id"],
-                            rec["file_attributes"], rec["record_length"], inserted_at
+                            rec["file_attributes"], rec["record_length"], parsed_at
                         ))
                         
                         # Increment progress counter and update progress bar more frequently
@@ -1097,7 +1097,7 @@ def read_journal_events(volume_letter, cursor, conn):
                                 # Insert only new records
                                 if new_records:
                                     cursor.executemany(
-                                        "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, inserted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                        "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                         new_records
                                     )
                                 
@@ -1149,7 +1149,7 @@ def read_journal_events(volume_letter, cursor, conn):
                     # Insert only new records
                     if new_records:
                         cursor.executemany(
-                            "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, inserted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             new_records
                         )
                     

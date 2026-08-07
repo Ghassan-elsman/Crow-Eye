@@ -71,6 +71,22 @@ class OpenAIBackend(LLMBackend):
             self._client = openai.OpenAI(**kwargs)
         return self._client
 
+    # Reasoning-model families on the OpenAI API (o1/o3/o4/GPT-5). They reject
+    # BOTH `max_tokens` (they require `max_completion_tokens`) and any
+    # `temperature`/`top_p` other than the default — so sending the Eye's normal
+    # generation knobs 400s every single request. `o3` and `o4-mini` ship in the
+    # curated/recommended catalogue, so this is the difference between a
+    # recommended model working and never answering at all.
+    _REASONING_PREFIXES = ("o1", "o3", "o4", "o5", "gpt-5")
+
+    def _is_reasoning_model(self) -> bool:
+        """True when the active model is an OpenAI reasoning model."""
+        name = (self.model_name or "").strip().lower()
+        # OpenRouter-style ids carry a vendor prefix ("openai/o3-mini").
+        if "/" in name:
+            name = name.rsplit("/", 1)[-1]
+        return name.startswith(self._REASONING_PREFIXES)
+
     def generate(self, system_prompt, user_message, tools=None, history=None, gen_params=None):
         """Performs generation and captures rate-limit headers for UI feedback."""
         try:
@@ -89,12 +105,18 @@ class OpenAIBackend(LLMBackend):
             # worker thread indefinitely (parity with Ollama/LM Studio).
             params = {"model": self.model_name, "messages": messages, "timeout": 120}
             gp = gen_params or {}
-            if gp.get("temperature") is not None:
-                params["temperature"] = gp["temperature"]
+            reasoning = self._is_reasoning_model()
             if gp.get("max_output_tokens") is not None:
-                params["max_tokens"] = gp["max_output_tokens"]
-            if gp.get("top_p") is not None:
-                params["top_p"] = gp["top_p"]
+                # Reasoning models renamed this parameter and reject the old name.
+                key = "max_completion_tokens" if reasoning else "max_tokens"
+                params[key] = gp["max_output_tokens"]
+            if not reasoning:
+                # Reasoning models only accept their default sampling settings;
+                # sending temperature/top_p at all is a 400.
+                if gp.get("temperature") is not None:
+                    params["temperature"] = gp["temperature"]
+                if gp.get("top_p") is not None:
+                    params["top_p"] = gp["top_p"]
             if tools:
                 # Format tools to strict OpenAI specification: {"type": "function", "function": {...}}
                 formatted_tools = []

@@ -162,7 +162,8 @@ class GenericCLIBackend(LLMBackend):
             args: List[str] = []
             m_flag = self.profile.get("model_flag")
 
-            # Only add model flag if we have a specific, non-generic model name
+            # Only pass a model if we have a specific, non-generic name — otherwise
+            # let the agent use its own default.
             is_generic = self.model_name in [None, "", "default", "cli-default-model"] or "CLI Agent" in str(self.model_name)
             if m_flag and not is_generic:
                 args.extend([m_flag, self.model_name])
@@ -175,6 +176,11 @@ class GenericCLIBackend(LLMBackend):
                 text_block = system_instruction + text_block
 
             args.extend(self.profile.get("default_flags", []))
+
+            # Tools that take the model POSITIONALLY after their subcommand
+            # (`ollama run <model>`) rather than via a flag.
+            if self.profile.get("model_after_default_flags") and not is_generic:
+                args.append(self.model_name)
 
             stdin_input = text_block if self.profile.get("use_stdin") else None
 

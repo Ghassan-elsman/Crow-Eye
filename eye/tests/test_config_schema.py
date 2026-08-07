@@ -88,5 +88,63 @@ class TestSchemaReconciliation(unittest.TestCase):
         jsonschema.validate(example, self.schema)
 
 
+class TestProviderConfigRoundTrip(unittest.TestCase):
+    """save_config -> load_config for the providers the UI actually offers.
+
+    This is the end-to-end version of the schema drift bug: the wizard validated
+    connectivity, then save_config raised and the choice was never persisted.
+    Anything selectable must survive a write/read cycle.
+    """
+
+    CASES = [
+        {"integration_type": "cloud_api", "backend": "openrouter",
+         "model_name": "anthropic/claude-opus-4"},
+        {"integration_type": "cloud_api", "backend": "groq",
+         "model_name": "llama-3.3-70b-versatile"},
+        {"integration_type": "cloud_api", "backend": "deepseek",
+         "model_name": "deepseek-chat"},
+        {"integration_type": "cloud_api", "backend": "xai", "model_name": "grok-4"},
+        {"integration_type": "local_server", "backend": "ollama",
+         "model_name": "llama3:latest"},
+        {"integration_type": "local_server", "backend": "lm_studio",
+         "model_name": "local-model", "api_endpoint": "http://localhost:1234"},
+        {"integration_type": "local_cli", "backend": "claude_code",
+         "model_name": "claude-opus-4-8", "executable_path": "/usr/local/bin/claude"},
+    ]
+
+    def test_round_trip(self):
+        import tempfile
+        from eye.services.config_manager import ConfigManager
+
+        for cfg in self.CASES:
+            with self.subTest(backend=cfg["backend"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    manager = ConfigManager(tmp)
+                    # The schema lives in the real configs/ dir, not the temp one.
+                    manager.schema_path = SCHEMA_PATH
+                    manager.save_config(dict(cfg))
+                    self.assertEqual(manager.load_config(), cfg)
+
+    def test_load_survives_an_unknown_backend(self):
+        """A config naming a backend this build's schema doesn't know must load
+        with a warning, not raise — load_config runs during EYEWindow startup."""
+        import json as _json
+        import tempfile
+        from eye.services.config_manager import ConfigManager
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = ConfigManager(tmp)
+            manager.schema_path = SCHEMA_PATH
+            future = {"integration_type": "cloud_api", "backend": "gemini",
+                      "model_name": "m"}
+            manager.save_config(future)
+            # Hand-edit to something the enum rejects, as a newer build would.
+            with open(manager.config_path, "w", encoding="utf-8") as f:
+                _json.dump({**future, "backend": "some-future-provider"}, f)
+
+            loaded = manager.load_config()  # must not raise
+            self.assertEqual(loaded["backend"], "some-future-provider")
+
+
 if __name__ == "__main__":
     unittest.main()
