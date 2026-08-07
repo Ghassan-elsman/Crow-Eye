@@ -45,7 +45,7 @@ License: GPL-3.0
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.12.7"  # Single source of truth — read by the About menu, the update
+__version__ = "0.12.8"  # Single source of truth — read by the About menu, the update
                         # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
 
@@ -432,157 +432,110 @@ def check_and_install_requirements():
 check_and_install_requirements()
 
 
-def ensure_timeline_built():
-    """Ensure the React timeline frontend is built and ready."""
-    timeline_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'timeline', 'react-timeline')
-    dist_dir = os.path.join(timeline_dir, 'dist')
-    
-    index_html = os.path.join(dist_dir, 'index.html')
-    src_dir = os.path.join(timeline_dir, 'src')
-    
-    # Check if we need to rebuild (if index.html is missing OR older than source files)
-    node_modules_dir = os.path.join(timeline_dir, 'node_modules')
-    should_rebuild = not os.path.exists(index_html) or not os.path.exists(node_modules_dir)
-    
-    if not should_rebuild and os.path.exists(src_dir):
-        # Check if any file in src/ is newer than index.html
-        build_mtime = os.path.getmtime(index_html)
-        for root_dir, _, files in os.walk(src_dir):
-            for f in files:
-                f_path = os.path.join(root_dir, f)
-                try:
-                    if os.path.getmtime(f_path) > build_mtime:
-                        should_rebuild = True
-                        print(f" -> Detected change in {f}, triggering rebuild...")
-                        break
-                except OSError:
-                    continue
-            if should_rebuild: break
-            
-    if should_rebuild:
-        print('\n' + '-'*40)
-        print('[STARTING] Building Timeline React Application...')
-        print('-'*40)
-        
-        # First, ensure Node.js and npm are installed
-        try:
-            from utils.nodejs_installer import ensure_nodejs_installed
-            
-            if not ensure_nodejs_installed():
-                print(Fore.YELLOW + " -> Node.js installation failed or incomplete" + Fore.RESET)
-                print(Fore.YELLOW + " -> Timeline feature will not be available" + Fore.RESET)
-                print(Fore.YELLOW + " -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
-                return
-        except ImportError as e:
-            print(Fore.RED + f" -> [ERROR] Failed to import Node.js installer: {e}" + Fore.RESET)
-            print(Fore.YELLOW + " -> Please verify that 'utils/nodejs_installer.py' exists." + Fore.RESET)
-            return
-        except Exception as e:
-            print(Fore.RED + f" -> [ERROR] Unexpected error during Node.js check: {e}" + Fore.RESET)
-            return
-        
-        # Now build the timeline with npm
-        try:
-            print(" -> Installing NPM dependencies (this may take a minute)...")
-            # Explicitly pass current environment to ensure Node.js is in PATH
-            npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
-            subprocess.run([npm_cmd, 'install'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            
-            print(" -> Building React application...")
-            subprocess.run([npm_cmd, 'run', 'build'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            # Apply patches for compatibility
-            try:
-                from eye.ui.react.patch_eye_ui import patch_file
-                patch_file(os.path.join(dist_dir, 'index.html'))
-                print(" -> Applied browser compatibility patches to Timeline")
-            except:
-                pass
-                
-            print(Fore.GREEN + " -> [FINISHED] Timeline built successfully!" + Fore.RESET)
-            print('-'*40 + '\n')
-                
-        except subprocess.CalledProcessError as e:
-            print(Fore.RED + f" -> Failed to build Timeline. Exit code: {e.returncode}" + Fore.RESET)
-            print(Fore.YELLOW + " -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
-            print(Fore.YELLOW + f" {timeline_dir}" + Fore.RESET)
-        except FileNotFoundError:
-            print(Fore.RED + " -> NPM not found. Please install Node.js to use the Timeline feature." + Fore.RESET)
-    else:
-        print(" -> Timeline React application already built")
+def _react_ui_needs_build(ui_dir, index_html):
+    """Decide whether a React UI has to be built before it can be used.
 
-def ensure_eye_ui_built():
-    """Ensure the Eye AI React frontend is built and ready."""
-    eye_ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eye', 'ui', 'react')
-    dist_dir = os.path.join(eye_ui_dir, 'dist')
-    
-    index_html = os.path.join(dist_dir, 'index.html')
-    src_dir = os.path.join(eye_ui_dir, 'src')
-    
-    # Check if we need to rebuild (if index.html is missing OR older than source files)
-    node_modules_dir = os.path.join(eye_ui_dir, 'node_modules')
-    should_rebuild = not os.path.exists(index_html) or not os.path.exists(node_modules_dir)
-    
-    if not should_rebuild and os.path.exists(src_dir):
-        # Check if any file in src/ is newer than index.html
-        build_mtime = os.path.getmtime(index_html)
-        for root_dir, _, files in os.walk(src_dir):
-            for f in files:
-                f_path = os.path.join(root_dir, f)
-                try:
-                    if os.path.getmtime(f_path) > build_mtime:
-                        should_rebuild = True
-                        print(f" -> Detected change in {f}, triggering rebuild...")
-                        break
-                except OSError:
-                    continue
-            if should_rebuild: break
-            
-    if should_rebuild:
-        print('\n' + '-'*40)
-        print('[STARTING] Building Eye AI React Application...')
-        print('-'*40)
-        
-        # First, ensure Node.js and npm are installed
-        try:
-            from utils.nodejs_installer import ensure_nodejs_installed
-            
-            if not ensure_nodejs_installed():
-                print(Fore.YELLOW + " -> Node.js installation failed or incomplete" + Fore.RESET)
-                print(Fore.YELLOW + " -> Eye AI Assistant features will not be available" + Fore.RESET)
-                print(Fore.YELLOW + " -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
-                return
-        except ImportError as e:
-            print(Fore.RED + f" -> Failed to import Node.js installer: {e}" + Fore.RESET)
-            print(Fore.YELLOW + " -> Please manually install Node.js from https://nodejs.org/" + Fore.RESET)
-            return
-        
-        # Now build the Eye UI with npm
-        try:
-            print(" -> Installing NPM dependencies for Eye AI...")
-            npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
-            subprocess.run([npm_cmd, 'install'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            
-            print(" -> Building Eye AI React application...")
-            subprocess.run([npm_cmd, 'run', 'build'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            
-            # Apply patches for compatibility
+    Three situations, and they are not the same person:
+
+    - No build at all -> build it. Needs Node, and there is no alternative.
+    - A build, but no node_modules -> USE IT. Someone with no node_modules is
+      running Crow-Eye, not developing it, and the build they have was shipped
+      with the release. Rebuilding here is what made a fresh clone try to
+      download Node just to regenerate a file it already had — and on an
+      air-gapped forensic workstation that download cannot succeed, so the
+      feature was simply lost.
+    - A build AND node_modules -> that is a developer; rebuild when anything in
+      src/ is newer, so their edits show up.
+    """
+    if not os.path.exists(index_html):
+        return True
+
+    node_modules_dir = os.path.join(ui_dir, 'node_modules')
+    if not os.path.exists(node_modules_dir):
+        return False
+
+    src_dir = os.path.join(ui_dir, 'src')
+    if not os.path.exists(src_dir):
+        return False
+
+    build_mtime = os.path.getmtime(index_html)
+    for root_dir, _, files in os.walk(src_dir):
+        for f in files:
             try:
-                from eye.ui.react.patch_eye_ui import patch_file
-                patch_file(os.path.join(dist_dir, 'index.html'))
-                print(" -> Applied browser compatibility patches to Eye UI")
-            except Exception as e:
-                print(f" -> Patching failed: {e}")
-                
-            print(Fore.GREEN + " -> [FINISHED] Eye AI built successfully!" + Fore.RESET)
-            print('-'*40 + '\n')
-        except subprocess.CalledProcessError as e:
-            print(Fore.RED + f" -> Failed to build Eye AI. Exit code: {e.returncode}" + Fore.RESET)
-            print(Fore.YELLOW + " -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
-            print(Fore.YELLOW + f" {eye_ui_dir}" + Fore.RESET)
-        except FileNotFoundError:
-            print(Fore.RED + " -> NPM not found. Please install Node.js to use the Eye AI feature." + Fore.RESET)
-    else:
-        print(" -> Eye AI React application already built")
+                if os.path.getmtime(os.path.join(root_dir, f)) > build_mtime:
+                    print(f" -> Detected change in {f}, triggering rebuild...")
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def ensure_react_ui_built(label, *ui_path_parts):
+    """Build one of Crow-Eye's React front-ends if it isn't ready.
+
+    `label` names the feature in the console output; `ui_path_parts` locate its
+    folder relative to this file (the one holding package.json, src/ and dist/).
+
+    One function for all three UIs. It used to be two near-identical copies, and
+    the cost of that showed: when UBA was added, nobody wrote the third copy, so
+    the UBA interface was never built by anything and the window could only ever
+    report its own build as missing.
+    """
+    ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), *ui_path_parts)
+    dist_dir = os.path.join(ui_dir, 'dist')
+    index_html = os.path.join(dist_dir, 'index.html')
+
+    if not _react_ui_needs_build(ui_dir, index_html):
+        print(f" -> {label} React application already built")
+        return
+
+    print('\n' + '-'*40)
+    print(f'[STARTING] Building {label} React Application...')
+    print('-'*40)
+
+    # First, ensure Node.js and npm are installed
+    try:
+        from utils.nodejs_installer import ensure_nodejs_installed
+
+        if not ensure_nodejs_installed():
+            print(Fore.YELLOW + " -> Node.js installation failed or incomplete" + Fore.RESET)
+            print(Fore.YELLOW + f" -> {label} feature will not be available" + Fore.RESET)
+            print(Fore.YELLOW + " -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
+            return
+    except ImportError as e:
+        print(Fore.RED + f" -> [ERROR] Failed to import Node.js installer: {e}" + Fore.RESET)
+        print(Fore.YELLOW + " -> Please verify that 'utils/nodejs_installer.py' exists." + Fore.RESET)
+        return
+    except Exception as e:
+        print(Fore.RED + f" -> [ERROR] Unexpected error during Node.js check: {e}" + Fore.RESET)
+        return
+
+    try:
+        print(f" -> Installing NPM dependencies for {label} (this may take a minute)...")
+        # Explicitly pass current environment to ensure Node.js is in PATH
+        npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
+        subprocess.run([npm_cmd, 'install'], cwd=ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
+
+        print(f" -> Building {label} React application...")
+        subprocess.run([npm_cmd, 'run', 'build'], cwd=ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
+
+        # Apply patches for compatibility
+        try:
+            from eye.ui.react.patch_eye_ui import patch_file
+            patch_file(index_html)
+            print(f" -> Applied browser compatibility patches to {label}")
+        except Exception as e:
+            print(f" -> Patching failed: {e}")
+
+        print(Fore.GREEN + f" -> [FINISHED] {label} built successfully!" + Fore.RESET)
+        print('-'*40 + '\n')
+
+    except subprocess.CalledProcessError as e:
+        print(Fore.RED + f" -> Failed to build {label}. Exit code: {e.returncode}" + Fore.RESET)
+        print(Fore.YELLOW + " -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
+        print(Fore.YELLOW + f" {ui_dir}" + Fore.RESET)
+    except FileNotFoundError:
+        print(Fore.RED + f" -> NPM not found. Please install Node.js to use the {label} feature." + Fore.RESET)
 
 
 # Handle pywin32 post-install if needed (Windows only)
@@ -677,11 +630,11 @@ print('='*60)
 print('[STEP 5/5] Node.js and React Build Pipeline...')
 print('='*60)
 
-# Build the Timeline if necessary
-ensure_timeline_built()
-
-# Build the Eye AI if necessary
-ensure_eye_ui_built()
+# Build each React front-end if necessary. UBA belongs here too — it was the one
+# that was missing, which is why its window could only report a missing build.
+ensure_react_ui_built('Timeline', 'timeline', 'react-timeline')
+ensure_react_ui_built('Eye AI', 'eye', 'ui', 'react')
+ensure_react_ui_built('UBA', 'uba', 'react-uba')
 
 print('[STEP 5/5] Complete!\n')
 

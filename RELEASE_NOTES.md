@@ -2,6 +2,20 @@
 
 ---
 
+## Version 0.12.8 — Fix: User Behavior Analytics could not open from a source checkout
+
+**Release date:** 2026-08-08
+
+A fix release. Running Crow-Eye from a clone of this repository and opening **User Behavior Analytics** produced *"UBA interface build not found — run npm install && npm run build"*, and nothing in the application ever built it. If you run the packaged installer, you were never affected.
+
+- **UBA is now built at startup like the Timeline and the Eye.** Crow-Eye's start-up build step handled those two but had no step for UBA at all — it was added after that step was written and never wired in, so the interface was never built by anything.
+- **The UBA and Timeline interfaces now ship prebuilt.** A packaging rule intended for Python build output was also matching the compiled interfaces, so they never reached the repository. Both are now included (about 300 KB each), which means **neither needs Node.js to open** — this matters on an isolated or air-gapped workstation, where Crow-Eye cannot download Node.
+- **A clone no longer rebuilds an interface it already has.** Start-up treated a missing `node_modules` folder as reason to rebuild, so a fresh checkout tried to download Node and rebuild files that were already present and current. It now rebuilds only when the interface is genuinely missing, or when you have edited its source with a development environment installed.
+
+The Eye's own interface is still built on first launch — it is a 9 MB bundle, and shipping it prebuilt would add that to the repository on every rebuild.
+
+---
+
 ## Version 0.12.7 — Correlation Correctness & Provenance Release
 
 **Release date:** 2026-08-07

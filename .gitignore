@@ -9,7 +9,11 @@ __pycache__/
 env/
 build/
 develop-eggs/
-dist/
+# Root only. An unanchored "dist/" matches a directory of that name at ANY depth,
+# which silently excluded every React build (uba/react-uba/dist,
+# timeline/react-timeline/dist, eye/ui/react/dist) and left UBA unopenable from a
+# clone. Python packaging only ever writes to the repo root.
+/dist/
 downloads/
 eggs/
 .eggs/
@@ -53,6 +57,15 @@ yarn-error.log*
 nodejs/
 
 # UI build artifacts
+#
+# The UBA and Timeline builds ARE committed (~300 KB each, single-file vite
+# bundles) so Crow-Eye runs from a clone with no Node.js — which matters on an
+# air-gapped workstation, where nodejs_installer cannot reach nodejs.org.
+#
+# The Eye bundle is the deliberate exception: 8.4 MB of inlined single-file HTML
+# plus a 1.1 MB logo, which would add ~9 MB to history on every rebuild. It is
+# built on first launch instead. Don't "fix" this inconsistency — it is a size
+# trade-off, not an oversight.
 eye/ui/react/dist/
 
 # =============================================================================
