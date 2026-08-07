@@ -2,23 +2,9 @@
 
 ---
 
-## Version 0.12.8 — Fix: User Behavior Analytics could not open from a source checkout
-
-**Release date:** 2026-08-08
-
-A fix release. Running Crow-Eye from a clone of this repository and opening **User Behavior Analytics** produced *"UBA interface build not found — run npm install && npm run build"*, and nothing in the application ever built it. If you run the packaged installer, you were never affected.
-
-- **UBA is now built at startup like the Timeline and the Eye.** Crow-Eye's start-up build step handled those two but had no step for UBA at all — it was added after that step was written and never wired in, so the interface was never built by anything.
-- **The UBA and Timeline interfaces now ship prebuilt.** A packaging rule intended for Python build output was also matching the compiled interfaces, so they never reached the repository. Both are now included (about 300 KB each), which means **neither needs Node.js to open** — this matters on an isolated or air-gapped workstation, where Crow-Eye cannot download Node.
-- **A clone no longer rebuilds an interface it already has.** Start-up treated a missing `node_modules` folder as reason to rebuild, so a fresh checkout tried to download Node and rebuild files that were already present and current. It now rebuilds only when the interface is genuinely missing, or when you have edited its source with a development environment installed.
-
-The Eye's own interface is still built on first launch — it is a 9 MB bundle, and shipping it prebuilt would add that to the repository on every rebuild.
-
----
-
 ## Version 0.12.7 — Correlation Correctness & Provenance Release
 
-**Release date:** 2026-08-07
+**Release date:** 2026-08-08
 
 This release fixes a **correctness bug in MFT ↔ USN correlation that could attribute a deleted file's journal history to a different file**, and removes a long-standing source of timeline confusion by giving the parser's own bookkeeping timestamp a single, unmistakable name. Both change what Crow-Eye reports on a case, so read the two sections below before working an existing investigation. Alongside them, the Eye now determines — and tells you — whether the model you selected can actually call forensic tools, instead of assuming it can and failing opaquely mid-query.
 
@@ -51,6 +37,16 @@ The Eye is agentic — everything it does for you runs through forensic tool cal
 - Capability is now **determined**, through a ladder of increasingly expensive checks — cached result, the provider's own metadata, known model families, then a live probe against the model itself — and Crow-Eye records **how it knew**.
 - **Settings → Eye shows the verdict with its provenance**, plus a **Re-test** button that probes the live model. "Verified by a live probe" and "assumed because we recognise the name" are very different claims, and you can see which one you have.
 - A model confirmed unable to function-call is **no longer sent a tool payload at all** — it is taught the text tool-call protocol instead, and told so once, clearly. A merely *assumed* verdict never changes what is sent, so a wrong guess can never quietly disable tools on a model that supports them.
+
+### 🖥️ Fixed: User Behavior Analytics could not open from a source checkout
+
+Running Crow-Eye from a clone of the repository and opening **User Behavior Analytics** produced *"UBA interface build not found — run npm install && npm run build"*, and nothing in the application ever built it.
+
+- **UBA is now built at startup like the Timeline and the Eye.** Crow-Eye's start-up build step handled those two but had no step for UBA at all — it was added after that step was written and never wired in, so the interface was never built by anything.
+- **The UBA and Timeline interfaces now ship prebuilt.** A packaging rule intended for Python build output was also matching the compiled interfaces, so they never reached the repository. Both are now included (about 300 KB each), which means **neither needs Node.js to open** — this matters on an isolated or air-gapped workstation, where Crow-Eye cannot download Node.
+- **A clone no longer rebuilds an interface it already has.** Start-up treated a missing `node_modules` folder as reason to rebuild, so a fresh checkout tried to download Node and rebuild files that were already present and current. It now rebuilds only when the interface is genuinely missing, or when you have edited its source with a development environment installed.
+
+The Eye's own interface is still built on first launch — it is a 9 MB bundle, and shipping it prebuilt would add that to the repository on every rebuild.
 
 ### 🔧 Fixes
 
