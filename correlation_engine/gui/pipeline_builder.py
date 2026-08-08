@@ -76,21 +76,52 @@ class PipelineBuilderWidget(QWidget):
 
     def set_config_manager(self, config_manager):
         """
-        Set Configuration Manager and connect signals.
-        
+        Set Configuration Manager and connect its live-update signals.
+
         Args:
-            config_manager: ConfigurationManager instance
+            config_manager: a ``config.configuration_manager.ConfigurationManager``
+                (the app-level QObject singleton). Anything else is accepted, but
+                only the parts of it that exist are wired up.
+
+        These signals drive REFRESH ONLY -- the builder is fully usable without
+        them, so a manager that does not provide them must not stop the window
+        from opening. It used to: connecting unconditionally meant a caller
+        passing correlation_engine.config.ConfigManager (a plain file-IO class
+        with no signals at all, and an easy name to confuse) raised
+        AttributeError, which the caller's try/except turned into "Failed to open
+        Pipeline Builder". Degrading to "no live updates" is always better than
+        losing the editor.
         """
         self.config_manager = config_manager
-        
-        # Connect signals for real-time updates
-        if self.config_manager:
-            self.config_manager.feather_added.connect(self._on_feather_added)
-            self.config_manager.feather_removed.connect(self._on_feather_removed)
-            self.config_manager.wing_added.connect(self._on_wing_added)
-            self.config_manager.wing_removed.connect(self._on_wing_removed)
-            self.config_manager.configurations_loaded.connect(self._on_configurations_loaded)
-            print("[Pipeline Builder] Connected to Configuration Manager signals")
+        if not self.config_manager:
+            return
+
+        connected, missing = [], []
+        for signal_name, handler in (
+            ("feather_added", self._on_feather_added),
+            ("feather_removed", self._on_feather_removed),
+            ("wing_added", self._on_wing_added),
+            ("wing_removed", self._on_wing_removed),
+            ("configurations_loaded", self._on_configurations_loaded),
+        ):
+            signal = getattr(self.config_manager, signal_name, None)
+            if signal is None or not hasattr(signal, "connect"):
+                missing.append(signal_name)
+                continue
+            try:
+                signal.connect(handler)
+                connected.append(signal_name)
+            except Exception as e:
+                missing.append(f"{signal_name} ({e})")
+
+        if connected:
+            print(f"[Pipeline Builder] Connected to Configuration Manager signals: "
+                  f"{', '.join(connected)}")
+        if missing:
+            # Named rather than swallowed: this is the symptom of being handed the
+            # wrong manager, and it should be obvious in the log.
+            print(f"[Pipeline Builder] No live updates for: {', '.join(missing)} "
+                  f"(manager is {type(self.config_manager).__name__})")
     
     def set_case_directory(self, case_directory: str):
         """
@@ -1936,8 +1967,10 @@ class PipelineBuilderWidget(QWidget):
         """Handle configurations loaded signal from Configuration Manager."""
         print("[Pipeline Builder] Configurations loaded signal received")
         
-        # Load feathers from Configuration Manager
-        if self.config_manager:
+        # Load feathers from Configuration Manager. Guarded for the same reason as
+        # the signals above: get_all_feathers() belongs to the app-level
+        # ConfigurationManager, and a manager without it must not break the load.
+        if self.config_manager and hasattr(self.config_manager, "get_all_feathers"):
             try:
                 feathers = self.config_manager.get_all_feathers()
                 print(f"[Pipeline Builder] Loading {len(feathers)} feathers from Configuration Manager")

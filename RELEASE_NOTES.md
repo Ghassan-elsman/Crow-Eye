@@ -6,7 +6,7 @@
 
 **Release date:** 2026-08-08
 
-This release fixes a **correctness bug in MFT ↔ USN correlation that could attribute a deleted file's journal history to a different file**, and removes a long-standing source of timeline confusion by giving the parser's own bookkeeping timestamp a single, unmistakable name. Both change what Crow-Eye reports on a case, so read the two sections below before working an existing investigation. Alongside them, the Eye now determines — and tells you — whether the model you selected can actually call forensic tools, instead of assuming it can and failing opaquely mid-query.
+This release fixes a **correctness bug in MFT ↔ USN correlation that could attribute a deleted file's journal history to a different file**, and removes a long-standing source of timeline confusion by giving the parser's own bookkeeping timestamp a single, unmistakable name. Both change what Crow-Eye reports on a case, so read the two sections below before working an existing investigation. Alongside them, the Eye now determines — and tells you — whether the model you selected can actually call forensic tools, and the installed build gains a rebuilt update, rollback and version-choice flow.
 
 ### 🔗 Fixed: MFT ↔ USN correlation was joining on the wrong key
 
@@ -48,8 +48,35 @@ Running Crow-Eye from a clone of the repository and opening **User Behavior Anal
 
 The Eye's own interface is still built on first launch — it is a 9 MB bundle, and shipping it prebuilt would add that to the repository on every rebuild.
 
+### 🔄 Updates install when you close, not while you work
+
+*(This section and the three that follow apply to the installer build. If you run Crow-Eye from source there is no auto-updater to change.)*
+
+- **The download happens in the background while you investigate.** Crow-Eye fetches and verifies the update as you work, then installs it as you close. Closing is instant either way — it is never the download you are waiting on, and an update is never a dialog in the middle of a case.
+- When the update is ready, the status bar says so. Nothing interrupts you, and nothing is applied until you close.
+- **The next launch is the new version.** No "install now?" prompt, no separate step.
+- You can turn this off in **Settings → Updates** and go back to being asked first.
+
+### ⏪ Roll back to an earlier version
+
+- **One-click return to your previous build.** Updating now keeps the files it replaced, so **Settings → Updates** offers *"Roll back to v…"*. It needs no download and works with no internet — which matters on an isolated workstation. Your cases and settings are untouched.
+- **Install any published version.** The same panel lists every release and installs the one you pick, so you can go further back than the last update.
+- The installer now **allows installing an older version over a newer one**, which it previously refused outright.
+
+### 📋 Choose which version to keep when installing
+
+- Running the installer when Crow-Eye is **already installed** now asks first, naming the version in the installer, and lets you **install it** or **keep what you have**. Previously it replaced the existing install with no confirmation.
+- This is what makes going backwards safe: a downgrade is never silent.
+- Silent installs are unaffected, so the in-app updater still installs without prompting.
+
+### 📰 What changed, after it changes
+
+- **The first launch after an update shows what was fixed and added**, read from the release notes shipped with the build. It appears once, then not again.
+
 ### 🔧 Fixes
 
+- **The Pipeline Builder could not be opened from Settings.** Both **Edit** and **Create** in Settings → Pipeline Management failed immediately with *"Failed to open Pipeline Builder"* — the builder was being handed the wrong configuration manager, one that carries none of the signals it listens to. It now shares the same configuration manager as the Correlation Engine, so a feather or wing added in one appears in the other while both are open. Opening the builder from the Correlation Engine window was never affected.
+- **Renaming a pipeline while editing it no longer leaves a duplicate behind.** The file is named after the pipeline, so renaming used to write a second pipeline and keep the original — the rename now moves it.
 - **Local CLI agents were invoked with flags that do not exist.** The Claude CLI profile passed `--prompt` and `--system-prompt` (the real flags are `-p` and `--append-system-prompt`), so every invocation failed on flag parsing. The Ollama CLI profile hard-coded `llama3` as an argument, so **the model you configured was ignored** and every investigation ran against whatever `llama3` happened to be installed.
 - **Choosing certain providers silently failed to save.** The configuration schema's list of valid backends had not kept up with the provider catalogue, so connectivity validated, the write then failed, and the choice was never persisted. There is now a single list of supported backends that the schema is tested against.
 - **Ollama can now be configured as a local server during setup** — the router always supported it, but the wizard only offered it as a CLI agent, so a LAN Ollama could not be set up at all. A placeholder model name is also resolved to a model that is actually installed, rather than being sent literally.

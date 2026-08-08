@@ -35,6 +35,39 @@ except ImportError:
         GROUP_BOX = ""
 
 
+def _shared_configuration_manager(case_directory):
+    """The app-level ConfigurationManager singleton, pointed at this case.
+
+    This is the SAME object the Correlation Engine window uses
+    (correlation_engine/integration/correlation_integration.py), which is the
+    point: sharing it is what lets a feather added in one place show up in the
+    other, through the signals the Pipeline Builder connects to.
+
+    Note the near-miss in naming. ``correlation_engine.config.ConfigManager`` is a
+    different class entirely -- a plain file-IO helper with no signals -- and
+    passing THAT to the builder is what produced
+    "'ConfigManager' object has no attribute 'feather_added'".
+
+    Returns None if the app-level config package is unavailable; the builder then
+    runs without live updates rather than failing to open.
+    """
+    try:
+        from config.configuration_manager import ConfigurationManager
+    except ImportError as e:
+        print(f"[Pipeline Management] ConfigurationManager unavailable ({e}); "
+              f"the Pipeline Builder will open without live configuration updates")
+        return None
+
+    try:
+        manager = ConfigurationManager.get_instance()
+        manager.set_case_directory(str(case_directory))
+        return manager
+    except Exception as e:
+        print(f"[Pipeline Management] Could not prepare ConfigurationManager ({e}); "
+              f"continuing without live configuration updates")
+        return None
+
+
 class PipelineManagementTab(QWidget):
     """
     Tab for managing case pipelines in Settings dialog.
@@ -462,26 +495,25 @@ class PipelineManagementTab(QWidget):
         """Create a new pipeline using Pipeline Builder."""
         try:
             from .pipeline_builder import PipelineBuilderWidget
-            from ..config import ConfigManager
-            
+
             # Create Pipeline Builder dialog
             from PyQt5.QtWidgets import QDialog, QVBoxLayout, QDialogButtonBox
-            
+
             dialog = QDialog(self)
             dialog.setWindowTitle("Create New Pipeline")
             dialog.setMinimumSize(1000, 700)
             dialog.setModal(True)
-            
+
             layout = QVBoxLayout(dialog)
-            
+
             # Create Pipeline Builder widget
             builder = PipelineBuilderWidget()
             builder.set_case_directory(str(self.case_directory))
-            
-            # Set up config manager
-            correlation_dir = self.case_directory / "Correlation"
-            config_manager = ConfigManager(str(correlation_dir))
-            builder.set_config_manager(config_manager)
+
+            # Share the Correlation Engine's configuration manager (see
+            # _shared_configuration_manager) so the builder sees the same feathers
+            # and wings, and updates as they change.
+            builder.set_config_manager(_shared_configuration_manager(self.case_directory))
             
             layout.addWidget(builder)
             
@@ -523,9 +555,9 @@ class PipelineManagementTab(QWidget):
         
         try:
             from .pipeline_builder import PipelineBuilderWidget
-            from ..config import ConfigManager, PipelineConfig
+            from ..config import PipelineConfig
             from PyQt5.QtWidgets import QDialog, QVBoxLayout, QDialogButtonBox
-            
+
             # Load pipeline
             pipeline_config = PipelineConfig.load_from_file(str(pipeline_file))
 
@@ -547,9 +579,8 @@ class PipelineManagementTab(QWidget):
             builder = PipelineBuilderWidget()
             builder.set_case_directory(str(self.case_directory))
 
-            # Set up config manager
-            config_manager = ConfigManager(str(correlation_dir))
-            builder.set_config_manager(config_manager)
+            # Share the Correlation Engine's configuration manager, as above.
+            builder.set_config_manager(_shared_configuration_manager(self.case_directory))
 
             # Load pipeline into builder
             builder.load_pipeline(pipeline_config)
@@ -560,21 +591,25 @@ class PipelineManagementTab(QWidget):
             button_box = QDialogButtonBox(
                 QDialogButtonBox.Save | QDialogButtonBox.Cancel
             )
-            button_box.accepted.connect(lambda: self._save_pipeline(builder, dialog))
+            # original_file lets the save reconcile a rename: the filename is derived
+            # from the pipeline name, so renaming would otherwise write a second file
+            # and leave this one behind.
+            button_box.accepted.connect(
+                lambda: self._save_pipeline(builder, dialog, original_file=pipeline_file))
             button_box.rejected.connect(dialog.reject)
             layout.addWidget(button_box)
-            
+
             # Apply styling
             dialog.setStyleSheet("""
                 QDialog {
                     background-color: #0F172A;
                 }
             """)
-            
+
             if dialog.exec_() == QDialog.Accepted:
                 self.load_pipelines()
                 self.pipelines_changed.emit()
-                
+
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -582,8 +617,14 @@ class PipelineManagementTab(QWidget):
                 f"Failed to edit pipeline:\n{str(e)}"
             )
     
-    def _save_pipeline(self, builder, dialog):
-        """Save pipeline from builder."""
+    def _save_pipeline(self, builder, dialog, original_file=None):
+        """Save pipeline from builder.
+
+        ``original_file`` is the file an EDIT started from. The saved filename is
+        derived from the pipeline name, so without it a rename writes a new file
+        and silently leaves the old one behind -- the investigator edits one
+        pipeline and ends up with two.
+        """
         try:
             # Validate pipeline
             is_valid, errors = builder.validate_pipeline()
@@ -608,7 +649,23 @@ class PipelineManagementTab(QWidget):
             # Save to file
             pipeline_file = self.pipelines_dir / f"{pipeline_config.config_name}.json"
             pipeline_config.save_to_file(str(pipeline_file))
-            
+
+            # A rename must MOVE the pipeline, not clone it. Only after the new
+            # file is safely written, and only when it really is a different file,
+            # so a failed save can never destroy the original.
+            if original_file is not None:
+                try:
+                    original = Path(original_file).resolve()
+                    if original != pipeline_file.resolve() and original.exists():
+                        original.unlink()
+                        print(f"[Pipeline Management] Renamed pipeline: "
+                              f"{original.name} -> {pipeline_file.name}")
+                except OSError as e:
+                    # The new pipeline is saved and correct; a leftover old file is
+                    # untidy, not broken, so say so rather than failing the save.
+                    print(f"[Pipeline Management] Saved as {pipeline_file.name}, but the "
+                          f"previous file could not be removed ({e})")
+
             dialog.accept()
             
         except Exception as e:
