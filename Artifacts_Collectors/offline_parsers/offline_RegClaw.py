@@ -2442,7 +2442,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 dhcp_server = values.get('DhcpServer', ('', 'REG_SZ'))[0] if 'DhcpServer' in values else ''
                 dns_servers = _first('NameServer', 'DhcpNameServer', 'DhcpNameServers')
 
-                if ip_address and not check_exists(cursor, 'NetworkInterfacesInfo', ['interface_id'], (interface_id,)):
+                # An interface with no IP is still an interface, and its DNS
+                # servers and gateway can still matter. Gating on ip_address
+                # dropped six of this machine's ten interfaces, so the offline
+                # parser reported four where the live one reported ten.
+                if not check_exists(cursor, 'NetworkInterfacesInfo', ['interface_id'], (interface_id,)):
                     cursor.execute('''INSERT INTO NetworkInterfacesInfo
                         (interface_id, ip_address, subnet_mask, default_gateway, dhcp_enabled, dhcp_server, dns_servers, parsed_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
@@ -2542,12 +2546,20 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                      int(bias), int(active_time_bias), get_current_forensic_timestamp()))
             
             # Also populate the raw time_zone table (column is row_data).
-            if not check_exists(cursor, 'time_zone', ['name'], ('TimeZoneKeyName',)):
-                cursor.execute('INSERT INTO time_zone (name, row_data, type) VALUES (?, ?, ?)',
-                             ('TimeZoneKeyName', str(time_zone_name), 'REG_SZ'))
-            if not check_exists(cursor, 'time_zone', ['name'], ('StandardName',)):
-                cursor.execute('INSERT INTO time_zone (name, row_data, type) VALUES (?, ?, ?)',
-                             ('StandardName', str(standard_name), 'REG_SZ'))
+            #
+            # Every value, not a hardcoded two. This is a raw name/row_data dump
+            # and the live parser writes one row per value, so pinning it to
+            # TimeZoneKeyName and StandardName gave 2 rows offline against 10
+            # live from the same key - Bias, ActiveTimeBias, DaylightBias and
+            # the rest simply vanished.
+            for _tz_name, _tz_pair in timezone_values.items():
+                _tz_data, _tz_type = (_tz_pair if isinstance(_tz_pair, tuple)
+                                      else (_tz_pair, 'REG_SZ'))
+                if check_exists(cursor, 'time_zone', ['name'], (str(_tz_name),)):
+                    continue
+                cursor.execute(
+                    'INSERT INTO time_zone (name, row_data, type) VALUES (?, ?, ?)',
+                    (str(_tz_name), str(_tz_data), str(_tz_type)))
         except Exception as e:
             logging.debug(f"TimeZone path unavailable: {e}")
         

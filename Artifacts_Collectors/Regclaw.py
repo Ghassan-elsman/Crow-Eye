@@ -2405,7 +2405,14 @@ def main_live_reg(db_filename='registry_data.db'):
                         install_location = str(data)
                     elif name.lower() == "uninstallstring":
                         uninstall_string = str(data)
-                # Only insert if there's a display name (filters out some system components)
+                # An Uninstall subkey with no DisplayName is still an
+                # installed-software record: AddressBook, Connection Manager,
+                # DXM_Runtime and 17 others on this machine. Skipping them
+                # dropped 20 entries the offline parser has always kept, which
+                # falls back to the subkey name for exactly this case.
+                if not display_name:
+                    display_name = str(app_id)
+
                 if display_name:
                     if check_exists(cursor, 'InstalledSoftware', ['display_name', 'display_version'], (display_name, display_version)):
                         logging.info(f"Skipping duplicate InstalledSoftware entry: {display_name}")
@@ -2608,10 +2615,15 @@ def main_live_reg(db_filename='registry_data.db'):
             
             for sid, profile_values in profile_subkeys.items():
                 try:
-                    # Skip system profiles (those without S-1-5-21 prefix)
-                    # S-1-5-21 prefix indicates domain/local user accounts
-                    if not sid.startswith('S-1-5-21'):
-                        continue
+                    # Every ProfileList entry is recorded, service SIDs
+                    # included. Skipping anything without an S-1-5-21 prefix
+                    # dropped three of the four profiles this key actually
+                    # holds, and made the live parser disagree with the offline
+                    # one about the same artifact - the offline parser has
+                    # always recorded all four. A table named for the artifact
+                    # reports what the artifact contains; deciding that
+                    # S-1-5-18 is uninteresting is the analyst's call, not the
+                    # parser's.
                     
                     # Extract profile information from ProfileList
                     profile_path = ""
