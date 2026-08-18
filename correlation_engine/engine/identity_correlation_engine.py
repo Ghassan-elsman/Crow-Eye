@@ -144,7 +144,7 @@ class IdentityCorrelationEngine:
         # match — so unrelated columns happening to end in "_at" stay.
         _BOOKKEEPING_FIELDS = {
             'parsed_at', 'parsed_timestamp',
-            'inserted_at', 'created_at',
+            'parse_timestamp', 'inserted_at', 'created_at',
         }
         try:
             from utils.standard_fields import StandardFields as _SF

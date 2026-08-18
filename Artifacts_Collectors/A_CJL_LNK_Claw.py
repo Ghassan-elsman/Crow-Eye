@@ -9,7 +9,7 @@ import re
 import string
 import traceback
 import json
-from utils.time_utils import format_forensic_timestamp
+from utils.time_utils import format_forensic_timestamp, filetime_to_datetime
 
 try:
     import olefile
@@ -85,16 +85,117 @@ def ad_timestamp(filetime, isObject=False):
         MIN_VALID_FILETIME = 315576000000000  # ~1 year from 1601-01-01
         
         if filetime > MIN_VALID_FILETIME:
-            windows_epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
-            # Use integer division to prevent float errors
-            dt = windows_epoch + timedelta(microseconds=filetime // 10)
-            
+            dt = filetime_to_datetime(filetime)
+
             # Additional validation: timestamp should be between 1602 and 2100
             if datetime(1602, 1, 1, tzinfo=timezone.utc) <= dt <= datetime(2100, 1, 1, tzinfo=timezone.utc):
                 return format_forensic_timestamp(dt)
     except Exception:
         pass
     return ""
+
+def _fat_timestamp(dos_datetime):
+    """FAT date-time (32-bit) to a formatted UTC string, or ''.
+
+    Shell item extension blocks store creation and last-access as FAT
+    date-times, not FILETIMEs - two seconds of resolution, packed as
+    [date:16][time:16]. Reading them as 8-byte FILETIMEs yields values that
+    fail every sanity check, which is why these fields came out empty.
+    """
+    if not dos_datetime:
+        return ""
+    try:
+        date = dos_datetime & 0xFFFF
+        time_ = (dos_datetime >> 16) & 0xFFFF
+        year = ((date >> 9) & 0x7F) + 1980
+        month = (date >> 5) & 0x0F
+        day = date & 0x1F
+        hour = (time_ >> 11) & 0x1F
+        minute = (time_ >> 5) & 0x3F
+        second = (time_ & 0x1F) * 2
+        if not (1 <= month <= 12 and 1 <= day <= 31 and hour < 24
+                and minute < 60 and second < 60):
+            return ""
+        return format_forensic_timestamp(
+            datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc))
+    except Exception:
+        return ""
+
+
+def _find_beef0004(item_data):
+    """Locate the 0xBEEF0004 extension block. Returns (offset, size, version).
+
+    The item's last two bytes give the offset of the first block; the chain then
+    runs by each block's own size. Matched on the FULL 32-bit signature, because
+    0xBEEF0026 (a date block) commonly precedes 0xBEEF0004 and a 16-bit test
+    cannot tell them apart.
+    """
+    try:
+        if len(item_data) < 10:
+            return (None, 0, 0)
+        offset = unpack_int(item_data[len(item_data) - 2:])
+        while 0 < offset < len(item_data) - 8:
+            size = unpack_int(item_data[offset:offset + 2])
+            version = unpack_int(item_data[offset + 2:offset + 4])
+            signature = unpack_int(item_data[offset + 4:offset + 8])
+            if size < 8:
+                return (None, 0, 0)
+            if signature == 0xBEEF0004:
+                return (offset, size, version)
+            offset += size
+    except Exception:
+        pass
+    return (None, 0, 0)
+
+
+def _filesystem_path_from_idlist(idlist_path):
+    """A real filesystem path from a reconstructed IDList chain, or ''.
+
+    The chain is a shell-namespace path, not a filesystem one. It begins at a
+    namespace root recorded as a GUID - `[{D04FE050-...}]` is My Computer - and
+    the join leaves a doubled separator after the drive:
+
+        [{D04FE050-...}]\\C:\\\\Program Files (x86)\\...\\Player.exe
+
+    Dropping the namespace roots and collapsing the doubled separator gives the
+    path Windows itself reports for the same shortcut. Anything that does not
+    reduce to a drive-letter or UNC path is rejected: a shell-namespace string
+    in a column called Local_Path is worse than an empty one, because it looks
+    like a path and resolves nowhere.
+    """
+    if not idlist_path:
+        return ""
+    parts = [p for p in str(idlist_path).split("\\") if p]
+    # Drop leading namespace roots: [{GUID}] or a bare {GUID}.
+    while parts and (parts[0].startswith("[{") or parts[0].startswith("{")):
+        parts.pop(0)
+    if not parts:
+        return ""
+
+    candidate = "\\".join(parts)
+    if len(parts[0]) == 2 and parts[0][1] == ":" and parts[0][0].isalpha():
+        return candidate            # C:\...
+    if str(idlist_path).startswith("\\\\"):
+        return "\\\\" + candidate   # UNC
+    return ""
+
+
+def _beef0004_name_offset(version):
+    """Where the long name starts inside a 0xBEEF0004 block, by version.
+
+    The header grows with the version, so this is computed rather than assumed.
+    Verified against a live shell item: version 9 puts the name at 0x2E, which
+    is where `4orensics.case2` actually sits.
+    """
+    offset = 0x24 if version >= 7 else 0x12
+    if version >= 3:
+        offset += 2
+    if version >= 9:
+        offset += 4
+    if version >= 8:
+        offset += 4
+    return offset
+
 
 def windows_filetime_to_unix(filetime):
     try:
@@ -684,6 +785,35 @@ def parse_custom_destinations_category_header(data, offset=0x0C):
         type_map = {0x00: "Pinned", 0x01: "Recent", 0x02: "Frequent", 0x03: "Tasks"}
         result['CustDest_Category_Type_Name'] = type_map.get(category_type, f"Unknown (0x{category_type:08X})")
         
+        # The layout after the type field DEPENDS ON THE TYPE. Only a named
+        # (custom) category carries a name and its own entry count; types 1 and
+        # 2 do not, and reading a name length from bytes that are really the
+        # start of the entry data produced stored counts of 4998656 and 136193
+        # on 5 of 11 real files.
+        #
+        # Verified against the raw bytes on a live machine: for every type 2
+        # file the u32 at offset+4 equals the number of embedded LNK streams the
+        # parser independently recovered (8 = 8, 1 = 1, 2 = 2, 3 = 3). For type
+        # 1 that field is a known-category id and the entries belong to the
+        # category that follows.
+        if category_type == 0x02:
+            if offset + 8 > len(data):
+                return result
+            result['CustDest_Entry_Count'] = unpack_int(data[offset+4:offset+8])
+            result['Next_Category_Offset'] = offset + 8
+            return result
+
+        if category_type == 0x01:
+            if offset + 8 > len(data):
+                return result
+            result['CustDest_Known_Category_Id'] = unpack_int(data[offset+4:offset+8])
+            # A known category contributes no entries of its own.
+            result['Next_Category_Offset'] = offset + 8
+            return result
+
+        # category_type 0x00 (a named custom category) keeps the original
+        # handling below. No file on the machine this was verified against
+        # carries one, so it is left as it was rather than rewritten on a guess.
         # Requirement 13B.3: Extract Name Length from bytes [offset+4:offset+6]
         if offset + 6 > len(data):
             return result
@@ -935,7 +1065,7 @@ class LnkStreamParser:
         Parse Console Data Block (0xA0000002) to extract terminal configuration.
         
         Requirement 32: Extract font size, font family, screen buffer size, and window size
-        from Console Data Block. Flag suspicious window sizes (1×1 or very small) as
+        from Console Data Block. Flag suspicious window sizes (1x1 or very small) as
         potentially indicating hidden console execution.
         
         Args:
@@ -945,9 +1075,9 @@ class LnkStreamParser:
             dict with keys:
                 - Console_Font_Size: int (font size in pixels)
                 - Console_Font_Family: int (font family identifier)
-                - Console_Screen_Buffer: str (width×height format)
-                - Console_Window_Size: str (width×height format)
-                - Console_Window_Suspicious: bool (True if window size is 1×1 or very small)
+                - Console_Screen_Buffer: str (widthxheight format)
+                - Console_Window_Size: str (widthxheight format)
+                - Console_Window_Suspicious: bool (True if window size is 1x1 or very small)
         """
         result = {}
         
@@ -964,18 +1094,18 @@ class LnkStreamParser:
             font_family = unpack_int(block_bytes[16:20])
             result['Console_Font_Family'] = font_family
             
-            # Requirement 32.3: Extract screen buffer size from block bytes [24:28] as width×height
+            # Requirement 32.3: Extract screen buffer size from block bytes [24:28] as widthxheight
             buffer_width = unpack_int(block_bytes[24:26])
             buffer_height = unpack_int(block_bytes[26:28])
             result['Console_Screen_Buffer'] = f"{buffer_width}x{buffer_height}"
             
-            # Requirement 32.4: Extract window size from block bytes [28:32] as width×height
+            # Requirement 32.4: Extract window size from block bytes [28:32] as widthxheight
             window_width = unpack_int(block_bytes[28:30])
             window_height = unpack_int(block_bytes[30:32])
             result['Console_Window_Size'] = f"{window_width}x{window_height}"
             
-            # Requirement 32.6: Flag window size 1×1 or very small as potentially suspicious
-            # Consider window sizes <= 5×5 as suspicious (hidden execution indicator)
+            # Requirement 32.6: Flag window size 1x1 or very small as potentially suspicious
+            # Consider window sizes <= 5x5 as suspicious (hidden execution indicator)
             if (window_width <= 5 and window_height <= 5) or (window_width == 1 and window_height == 1):
                 result['Console_Window_Suspicious'] = True
                 
@@ -1388,7 +1518,7 @@ class LnkStreamParser:
             block_start = self.offset
             block_size = unpack_int(self.read(4))
             if block_size < 8: break
-            block_end = block_start + block_size  # absolute end — advance here no matter what
+            block_end = block_start + block_size  # absolute end - advance here no matter what
             signature = unpack_int(self.read(4))
             
             if signature == 0xA0000003:  # Tracker Data Block (96 bytes)
@@ -1477,6 +1607,63 @@ class LnkStreamParser:
                 
             # Always jump to the definitive end of this block
             self.offset = block_end
+
+        # Every data block has now been read, so the target can be settled.
+        self._resolve_target()
+
+    def _resolve_target(self):
+        """Fill Local_Path from whichever structure actually holds the target.
+
+        A shortcut does not have to carry a LinkInfo structure. Those that set
+        ForceNoLinkInfo - most of the Start Menu on a stock Windows install -
+        keep the target in the EnvironmentVariableDataBlock instead, and the
+        IDList always carries a shell-item chain. Local_Path was only ever
+        filled from LinkInfo, so 27 of 40 real shortcuts recorded NO target at
+        all while Windows resolved one for every single case.
+
+        That is not only a display gap: feather_schemas gives LNK_Files the
+        identity [Source_Name, Local_Path], so those shortcuts correlated on a
+        filename alone and could never match the same executable in Prefetch,
+        Amcache or ShimCache.
+
+        The value is stored EXACTLY as the shortcut holds it. `%windir%` is not
+        expanded: expansion would use the environment of the machine running
+        Crow-Eye, which for an image acquired elsewhere is the wrong machine -
+        the same reason user_identity resolves SIDs from the evidence and the
+        MUI table is static.
+
+        Target_Source records which structure the target came from, so an
+        analyst can see whether it is a literal path or a variable reference.
+        """
+        try:
+            pm = self.parsed_data.get('Property_Metadata')
+            if isinstance(pm, str):
+                try:
+                    pm = json.loads(pm)
+                except Exception:
+                    pm = {}
+            pm = pm or {}
+
+            if (self.parsed_data.get('Local_Path') or '').strip():
+                self.parsed_data['Target_Source'] = 'LinkInfo'
+                return
+
+            env_target = (self.parsed_data.get('Environment_Variables') or '').strip()
+            if env_target:
+                self.parsed_data['Local_Path'] = env_target
+                self.parsed_data['Target_Source'] = 'EnvironmentVariableDataBlock'
+                return
+
+            idlist_target = _filesystem_path_from_idlist(pm.get('IDList_Path'))
+            if idlist_target:
+                self.parsed_data['Local_Path'] = idlist_target
+                self.parsed_data['Target_Source'] = 'IDList'
+                return
+
+            self.parsed_data['Target_Source'] = ''
+        except Exception as e:
+            import logging
+            logging.getLogger('A_CJL_LNK_Claw').debug(f"Target resolution failed: {e}")
 
     def parse_idlist(self, data):
         """
@@ -1601,20 +1788,30 @@ class LnkStreamParser:
             # Requirement 1.3: Extract short name from offset [14:]
             if len(item_data) >= 14:
                 short_name = item_data[14:].split(b'\0')[0]
-                if short_name:
-                    short_name_str = short_name.decode('ascii', errors='ignore')
-                    if short_name_str:
-                        idlist_details.append(short_name_str)
-                        
-                        # Requirement 1.3: Extract primary name after short name
-                        # Primary name follows short name + null terminator
-                        primary_name_offset = 14 + len(short_name) + 1
-                        if primary_name_offset < len(item_data):
-                            primary_name = item_data[primary_name_offset:].split(b'\0')[0]
-                            if primary_name and primary_name != short_name:
-                                primary_name_str = primary_name.decode('ascii', errors='ignore')
-                                if primary_name_str:
-                                    self.parsed_data['Property_Metadata']['ShellItem_PrimaryName'] = primary_name_str
+                short_name_str = short_name.decode('ascii', errors='ignore') if short_name else ''
+
+                # The path chain takes the LONG name when the item carries one.
+                # The 8.3 name is what the item opens with, so appending it
+                # produced paths like C:\Windows\Installer\{1FBF8~1\_1869D~1.EXE
+                # where the extension block held the real
+                # {1FBF8EDB-E45B-43F2-...}\_1869D477D7B673FD763C42.exe.
+                long_name_str = ''
+                ext_off, ext_size, ext_ver = _find_beef0004(item_data)
+                if ext_off is not None:
+                    block = item_data[ext_off:ext_off + ext_size]
+                    name_at = _beef0004_name_offset(ext_ver)
+                    if 0 < name_at < len(block):
+                        raw = block[name_at:]
+                        end = 0
+                        while end + 1 < len(raw) and raw[end:end + 2] != b'\x00\x00':
+                            end += 2
+                        long_name_str = raw[:end].decode('utf-16-le', errors='ignore').strip()
+
+                chosen = long_name_str or short_name_str
+                if chosen:
+                    idlist_details.append(chosen)
+                if short_name_str and long_name_str and short_name_str != long_name_str:
+                    self.parsed_data['Property_Metadata']['ShellItem_PrimaryName'] = short_name_str
         except Exception:
             pass
     
@@ -1681,126 +1878,122 @@ class LnkStreamParser:
     
     def _parse_extension_block(self, item_data):
         """
-        Parse extension block (0xBEEF signature).
-        
+        Parse the 0xBEEF0004 shell item extension block.
+
         Requirement 1.5: Parse extension block structure
         Requirement 1.6: Handle version-specific formats
         Requirement 1.7: Extract localized names
-        
-        Extension block structure:
-        - Offset [0:2]: Size (16-bit)
-        - Offset [2:4]: Version (16-bit) - 0x0003, 0x0004, 0x0007, 0x0008, 0x0009
-        - Offset [4:6]: Signature (16-bit) - must be 0xBEEF
-        - Offset [6:8]: Unknown/Reserved
-        - Offset [8:16]: MFT Reference (64-bit: 48-bit entry + 16-bit sequence)
-        - Offset [16:24]: Creation Time (FILETIME, version >= 0x0004)
-        - Offset [24:32]: Access Time (FILETIME, version >= 0x0004)
-        - Offset [32:40]: Write Time (FILETIME, version >= 0x0004)
-        - Offset [40:]: Long Name (Unicode, version >= 0x0007)
+
+        Layout, relative to the START of the block:
+
+            0x00 Size (16-bit)
+            0x02 Version (16-bit) - 3, 7, 8, 9 seen in the wild
+            0x04 Signature (32-bit) - 0xBEEF0004 for a file entry
+            0x08 Creation time (FAT date-time, 32-bit)
+            0x0C Last access time (FAT date-time, 32-bit)
+            0x10 Unknown (16-bit)
+            version >= 7: 0x12 unknown (16-bit), 0x14 file reference (64-bit:
+                          48-bit MFT entry + 16-bit sequence), 0x1C unknown (64-bit)
+            version >= 3: long string size (16-bit)
+            version >= 9: unknown (32-bit)
+            version >= 8: unknown (32-bit)
+            then the long name (UTF-16, null terminated) - 0x2E for version 9
+
+        The block is located from the item's own trailing offset field and the
+        chain is walked by each block's size, matching the FULL 32-bit
+        signature. Two things this replaced were wrong:
+
+        * it byte-searched for `EF BE` and took `index - 4` as the block start.
+          In 0xBEEF0004 stored little-endian (04 00 EF BE) those bytes sit at
+          offset 6, so every field was read TWO BYTES EARLY. Its "version" was
+          really the signature's low word, so it reported 0x0004 for every
+          block regardless of the true version, and that value happened to be
+          in its list of valid versions - which is why the block was accepted
+          and everything read out of it was wrong.
+        * a 16-bit 0xBEEF test cannot distinguish 0xBEEF0004 from 0xBEEF0026,
+          the date block that commonly precedes it in the same chain.
+
+        Measured on a real shell item, the old code reported MFT entry
+        144862216681926 where the true value is 185432, and decoded
+        `4orensics.case2` as misaligned UTF-16.
         """
-        # Search for 0xBEEF signature (little-endian: 0xEF 0xBE)
-        # The signature is at offset [4:6] in the extension block
-        # So we need to find it and then back up 4 bytes to get the start
-        beef_sig = b'\xEF\xBE'
-        search_offset = 0
-        
-        while search_offset < len(item_data):
-            beef_idx = item_data.find(beef_sig, search_offset)
-            if beef_idx == -1:
-                return
-            
-            # Extension block starts 4 bytes before the signature
-            ext_start = beef_idx - 4
-            if ext_start < 0:
-                search_offset = beef_idx + 1
-                continue
-            
+        if len(item_data) < 10:
+            return
+
+        # The last two bytes of a file entry hold the offset of the first
+        # extension block; blocks then run consecutively.
+        try:
+            offset = unpack_int(item_data[len(item_data)-2:])
+        except Exception:
+            return
+
+        ext_start = None
+        ext_size = 0
+        ext_version = 0
+        while 0 < offset < len(item_data) - 8:
             try:
-                # Requirement 1.5: Parse extension block size (offset [0:2])
-                if ext_start + 2 > len(item_data):
-                    return
-                ext_size = unpack_int(item_data[ext_start:ext_start+2])
-                
-                # Validate size is reasonable
-                # Note: Size can be as small as 8 bytes for basic extension blocks
-                # The size field includes the size and version fields themselves
-                if ext_size < 8 or ext_size > 1024:
-                    search_offset = beef_idx + 1
-                    continue
-                
-                # Requirement 1.5: Parse extension block version (offset [2:4])
-                if ext_start + 4 > len(item_data):
-                    return
-                ext_version = unpack_int(item_data[ext_start+2:ext_start+4])
-                
-                # Validate version is one of the known versions
-                if ext_version not in [0x0003, 0x0004, 0x0007, 0x0008, 0x0009]:
-                    search_offset = beef_idx + 1
-                    continue
-                
-                self.parsed_data['Property_Metadata']['ShellItem_ExtensionVersion'] = f"0x{ext_version:04X}"
-                
-                # Requirement 1.5: Validate signature (offset [4:6] must be 0xBEEF)
-                if ext_start + 6 > len(item_data):
-                    return
-                signature = unpack_int(item_data[ext_start+4:ext_start+6])
-                if signature != 0xBEEF:
-                    search_offset = beef_idx + 1
-                    continue
-                
-                # Requirement 1.5: Extract MFT reference (offset [8:16])
-                # This is the critical field for MFT Entry Number extraction
-                if ext_start + 16 <= len(item_data):
-                    mft_ref_data = item_data[ext_start+8:ext_start+16]
-                    mft_ref_val = unpack_int(mft_ref_data, 'int')
-                    
-                    # MFT Reference is 64-bit: 48-bit entry number + 16-bit sequence
-                    mft_entry = mft_ref_val & 0xFFFFFFFFFFFF  # Lower 48 bits
-                    mft_sequence = mft_ref_val >> 48  # Upper 16 bits
-                    
-                    # Only set if non-zero (zero means not available)
-                    if mft_entry > 0:
-                        self.parsed_data['MFT_Entry_Number'] = str(mft_entry)
-                        self.parsed_data['MFT_Sequence_Number'] = str(mft_sequence)
-                        self.parsed_data['Property_Metadata']['ShellItem_MFT_Entry'] = str(mft_entry)
-                        self.parsed_data['Property_Metadata']['ShellItem_MFT_Sequence'] = str(mft_sequence)
-                
-                # Requirement 1.5: Extract timestamps (offset [16:40]) for version >= 0x0004
-                if ext_version >= 0x0004 and ext_start + 40 <= len(item_data):
-                    c_t = ad_timestamp(unpack_int(item_data[ext_start+16:ext_start+24]))
-                    a_t = ad_timestamp(unpack_int(item_data[ext_start+24:ext_start+32]))
-                    m_t = ad_timestamp(unpack_int(item_data[ext_start+32:ext_start+40]))
-                    if c_t:
-                        self.parsed_data['Property_Metadata']['ShellItem_Creation'] = c_t
-                    if a_t:
-                        self.parsed_data['Property_Metadata']['ShellItem_Access'] = a_t
-                    if m_t:
-                        self.parsed_data['Property_Metadata']['ShellItem_Modification'] = m_t
-                
-                # Requirement 1.6 & 1.7: Extract long name for version >= 0x0007
-                if ext_version >= 0x0007 and ext_start + 40 < len(item_data):
-                    # Long name starts at offset [40:] as null-terminated Unicode
-                    long_name_data = item_data[ext_start+40:]
-                    # Find null terminator (2 bytes for Unicode)
-                    null_idx = long_name_data.find(b'\x00\x00')
-                    if null_idx != -1 and null_idx > 0:
-                        try:
-                            long_name = long_name_data[:null_idx].decode('utf-16-le', errors='ignore')
-                            if long_name:
-                                self.parsed_data['Property_Metadata']['ShellItem_LongName'] = long_name
-                        except Exception:
-                            pass
-                
-                # Successfully parsed extension block, return
+                size = unpack_int(item_data[offset:offset+2])
+                version = unpack_int(item_data[offset+2:offset+4])
+                signature = unpack_int(item_data[offset+4:offset+8])
+            except Exception:
                 return
-                
-            except Exception as e:
-                # Requirement 1.8: Log warnings for malformed extension blocks
-                import logging
-                logger = logging.getLogger('A_CJL_LNK_Claw')
-                logger.debug(f"Failed to parse extension block at offset {ext_start}: {str(e)}")
-                search_offset = beef_idx + 1
-                continue
+            if size < 8:
+                return
+            if signature == 0xBEEF0004:
+                ext_start, ext_size, ext_version = offset, size, version
+                break
+            offset += size
+
+        if ext_start is None:
+            return
+
+        try:
+            block = item_data[ext_start:ext_start+ext_size]
+            self.parsed_data['Property_Metadata']['ShellItem_ExtensionVersion'] = f"0x{ext_version:04X}"
+
+            # Creation and last access are FAT date-times, not FILETIMEs.
+            if len(block) >= 0x10:
+                c_t = _fat_timestamp(unpack_int(block[0x08:0x0C]))
+                a_t = _fat_timestamp(unpack_int(block[0x0C:0x10]))
+                if c_t:
+                    self.parsed_data['Property_Metadata']['ShellItem_Creation'] = c_t
+                if a_t:
+                    self.parsed_data['Property_Metadata']['ShellItem_Access'] = a_t
+
+            # File reference: version 7 and later only, at 0x14.
+            #
+            # Only recorded when it can actually BE an NTFS reference. The field
+            # is present whatever the volume's filesystem, and on exFAT it holds
+            # a directory-entry value instead. NTFS addresses records in 1 KB
+            # units, so even a 4 TB volume stays well under 2**32 - two entries
+            # on this machine, both on an exFAT drive, reported numbers around
+            # 3.4e11 as MFT records.
+            if ext_version >= 7 and len(block) >= 0x1C:
+                mft_ref_val = unpack_int(block[0x14:0x1C])
+                mft_entry = mft_ref_val & 0xFFFFFFFFFFFF
+                mft_sequence = mft_ref_val >> 48
+                if 0 < mft_entry < 2 ** 32:
+                    self.parsed_data['MFT_Entry_Number'] = str(mft_entry)
+                    self.parsed_data['MFT_Sequence_Number'] = str(mft_sequence)
+                    self.parsed_data['Property_Metadata']['ShellItem_MFT_Entry'] = str(mft_entry)
+                    self.parsed_data['Property_Metadata']['ShellItem_MFT_Sequence'] = str(mft_sequence)
+
+            # Long name, at an offset the version determines.
+            name_at = _beef0004_name_offset(ext_version)
+            if 0 < name_at < len(block):
+                raw = block[name_at:]
+                end = 0
+                while end + 1 < len(raw) and raw[end:end+2] != b'\x00\x00':
+                    end += 2
+                long_name = raw[:end].decode('utf-16-le', errors='ignore').strip()
+                if long_name:
+                    self.parsed_data['Property_Metadata']['ShellItem_LongName'] = long_name
+
+        except Exception as e:
+            # Requirement 1.8: Log warnings for malformed extension blocks
+            import logging
+            logger = logging.getLogger('A_CJL_LNK_Claw')
+            logger.debug(f"Failed to parse extension block at offset {ext_start}: {str(e)}")
 
 def extract_artifacts_from_file(filepath, appids=None, known_guids=None):
     """
@@ -1818,7 +2011,7 @@ def extract_artifacts_from_file(filepath, appids=None, known_guids=None):
     
     clean_entry = {
         'LNK_Class_ID': '', 'Time_Creation': '', 'Time_Access': '', 'Time_Modification': '',
-        'FileSize': '', 'IconIndex': '', 'Local_Path': '', 'Network_Share_Name': '',
+        'FileSize': '', 'IconIndex': '', 'Local_Path': '', 'Target_Source': '', 'Network_Share_Name': '',
         'Description': '', 'Relative_Path': '', 'Working_Directory': '', 'Command_Line_Arguments': '',
         'Icon_Location': '', 'Tracker_MAC': '', 'Tracker_NetBIOS': '',
         'AppID': '', 'AppType': '', 'AppDesc': '', 'Source_Name': filename, 'Source_Path': filepath,
@@ -2168,6 +2361,7 @@ def create_database(case_path=None):
             
             -- Target Information
             Local_Path TEXT,
+            Target_Source TEXT,
             Network_Share_Name TEXT,
             Common_Path TEXT,
             Relative_Path TEXT,
@@ -2241,6 +2435,7 @@ def create_database(case_path=None):
             
             -- Target Information (from embedded LNK)
             Local_Path TEXT,
+            Target_Source TEXT,
             Network_Share_Name TEXT,
             Common_Path TEXT,
             Relative_Path TEXT,
@@ -2343,6 +2538,7 @@ def create_database(case_path=None):
             
             -- Target Information (from embedded LNK)
             Local_Path TEXT,
+            Target_Source TEXT,
             Network_Share_Name TEXT,
             Common_Path TEXT,
             Relative_Path TEXT,
@@ -2412,7 +2608,7 @@ def insert_lnk_file_to_db(cursor, source_path, item, stat_info):
             Time_Access, Time_Creation, Time_Modification,
             LNK_Class_ID, Link_Flags, File_Attributes_Flags, FileSize, IconIndex,
             Show_Window_Command, Hot_Key_Flags, Hot_Key_Value,
-            Local_Path, Network_Share_Name, Common_Path, Relative_Path, Working_Directory,
+            Local_Path, Target_Source, Network_Share_Name, Common_Path, Relative_Path, Working_Directory,
             Command_Line_Arguments, Icon_Location, Description,
             Volume_Type, Volume_Serial, Volume_Label,
             MFT_Entry_Number, MFT_Sequence_Number,
@@ -2425,7 +2621,7 @@ def insert_lnk_file_to_db(cursor, source_path, item, stat_info):
             :Time_Access, :Time_Creation, :Time_Modification,
             :LNK_Class_ID, :Link_Flags, :File_Attributes_Flags, :FileSize, :IconIndex,
             :Show_Window_Command, :Hot_Key_Flags, :Hot_Key_Value,
-            :Local_Path, :Network_Share_Name, :Common_Path, :Relative_Path, :Working_Directory,
+            :Local_Path, :Target_Source, :Network_Share_Name, :Common_Path, :Relative_Path, :Working_Directory,
             :Command_Line_Arguments, :Icon_Location, :Description,
             :Volume_Type, :Volume_Serial, :Volume_Label,
             :MFT_Entry_Number, :MFT_Sequence_Number,
@@ -2453,6 +2649,7 @@ def insert_lnk_file_to_db(cursor, source_path, item, stat_info):
             "Hot_Key_Flags": item.get("Hot_Key_Flags", ""),
             "Hot_Key_Value": item.get("Hot_Key_Value", ""),
             "Local_Path": item.get("Local_Path", ""),
+            "Target_Source": item.get("Target_Source", ""),
             "Network_Share_Name": item.get("Network_Share_Name", ""),
             "Common_Path": item.get("Common_Path", ""),
             "Relative_Path": item.get("Relative_Path", ""),
@@ -2505,7 +2702,7 @@ def insert_automatic_jl_to_db(cursor, source_path, item, stat_info):
             Time_Access, Time_Creation, Time_Modification,
             LNK_Class_ID, Link_Flags, File_Attributes_Flags, FileSize, IconIndex,
             Show_Window_Command, Hot_Key_Flags, Hot_Key_Value,
-            Local_Path, Network_Share_Name, Common_Path, Relative_Path, Working_Directory,
+            Local_Path, Target_Source, Network_Share_Name, Common_Path, Relative_Path, Working_Directory,
             Command_Line_Arguments, Icon_Location, Description,
             Volume_Type, Volume_Serial, Volume_Label,
             MFT_Entry_Number, MFT_Sequence_Number,
@@ -2525,7 +2722,7 @@ def insert_automatic_jl_to_db(cursor, source_path, item, stat_info):
             :Time_Access, :Time_Creation, :Time_Modification,
             :LNK_Class_ID, :Link_Flags, :File_Attributes_Flags, :FileSize, :IconIndex,
             :Show_Window_Command, :Hot_Key_Flags, :Hot_Key_Value,
-            :Local_Path, :Network_Share_Name, :Common_Path, :Relative_Path, :Working_Directory,
+            :Local_Path, :Target_Source, :Network_Share_Name, :Common_Path, :Relative_Path, :Working_Directory,
             :Command_Line_Arguments, :Icon_Location, :Description,
             :Volume_Type, :Volume_Serial, :Volume_Label,
             :MFT_Entry_Number, :MFT_Sequence_Number,
@@ -2563,6 +2760,7 @@ def insert_automatic_jl_to_db(cursor, source_path, item, stat_info):
             "Hot_Key_Flags": item.get("Hot_Key_Flags", ""),
             "Hot_Key_Value": item.get("Hot_Key_Value", ""),
             "Local_Path": item.get("Local_Path", ""),
+            "Target_Source": item.get("Target_Source", ""),
             "Network_Share_Name": item.get("Network_Share_Name", ""),
             "Common_Path": item.get("Common_Path", ""),
             "Relative_Path": item.get("Relative_Path", ""),
@@ -2630,7 +2828,7 @@ def insert_custom_jl_to_db(cursor, source_path, item, stat_info):
             Time_Access, Time_Creation, Time_Modification,
             LNK_Class_ID, Link_Flags, File_Attributes_Flags, FileSize, IconIndex,
             Show_Window_Command, Hot_Key_Flags, Hot_Key_Value,
-            Local_Path, Network_Share_Name, Common_Path, Relative_Path, Working_Directory,
+            Local_Path, Target_Source, Network_Share_Name, Common_Path, Relative_Path, Working_Directory,
             Command_Line_Arguments, Icon_Location, Description,
             Volume_Type, Volume_Serial, Volume_Label,
             MFT_Entry_Number, MFT_Sequence_Number,
@@ -2646,7 +2844,7 @@ def insert_custom_jl_to_db(cursor, source_path, item, stat_info):
             :Time_Access, :Time_Creation, :Time_Modification,
             :LNK_Class_ID, :Link_Flags, :File_Attributes_Flags, :FileSize, :IconIndex,
             :Show_Window_Command, :Hot_Key_Flags, :Hot_Key_Value,
-            :Local_Path, :Network_Share_Name, :Common_Path, :Relative_Path, :Working_Directory,
+            :Local_Path, :Target_Source, :Network_Share_Name, :Common_Path, :Relative_Path, :Working_Directory,
             :Command_Line_Arguments, :Icon_Location, :Description,
             :Volume_Type, :Volume_Serial, :Volume_Label,
             :MFT_Entry_Number, :MFT_Sequence_Number,
@@ -2680,6 +2878,7 @@ def insert_custom_jl_to_db(cursor, source_path, item, stat_info):
             "Hot_Key_Flags": item.get("Hot_Key_Flags", ""),
             "Hot_Key_Value": item.get("Hot_Key_Value", ""),
             "Local_Path": item.get("Local_Path", ""),
+            "Target_Source": item.get("Target_Source", ""),
             "Network_Share_Name": item.get("Network_Share_Name", ""),
             "Common_Path": item.get("Common_Path", ""),
             "Relative_Path": item.get("Relative_Path", ""),
@@ -2824,7 +3023,7 @@ def parse_artifacts_directly(source_path, db_path, user=None, progress_callback=
             if progress_callback:
                 total_processed = counters['lnk'] + counters['auto'] + counters['custom']
                 progress_callback(counters['lnk'], counters['auto'], counters['custom'], 
-                                f"✓ Processed {total_processed} files from {os.path.basename(source_path) or source_path}")
+                                f"[OK] Processed {total_processed} files from {os.path.basename(source_path) or source_path}")
                 
     except Exception:
         if progress_callback:

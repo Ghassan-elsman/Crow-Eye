@@ -14,8 +14,8 @@ The **Ghassan Elsman Protocol (GEP)** defines *how an AI system should be used i
 forensics and incident response (DFIR)*. It is **vendor-neutral and tool-agnostic**: it applies
 to any AI — cloud model, local model, agent, or assistant — that reads, reasons over, or reports
 on digital evidence. It is **not** a product specification; it is a set of principles a conforming
-implementation must uphold so that AI-assisted findings remain **truthful, traceable, and
-court-defensible**, and so that the human investigator stays in control.
+implementation must uphold so that AI-assisted findings remain **truthful, traceable to source
+records, and backed by an auditable, tamper-evident chain**, and so that the human investigator stays in control.
 
 The GEP governs the *use of AI*, not the artifacts themselves. It says nothing about which
 operating system, file system, or tool is analyzed — only about how an AI must behave when it does.
@@ -86,8 +86,8 @@ any sampled result is flagged (not presented as complete).
 **Rule.** The AI **never modifies evidence**. **Exactly** what it analyzed and **every action** it
 took are recorded **tamper-evidently** (e.g. hash-chained) and are **reproducible/provable** after
 the fact.
-**Why.** Court-defensibility requires proving what the model saw and did, and that the record was
-not altered.
+**Why.** An auditable, tamper-evident chain requires proving what the model saw and did, and that
+the record was not altered.
 **Compliance.** Read-only access to evidence; an append-only, tamper-evident log of inputs + actions.
 **Verify.** Re-compute the integrity chain; any break or missing entry is detectable.
 
@@ -109,7 +109,7 @@ nothing irreversible happens without a path to human oversight.
 **Verify.** Each durable artifact shows its author and justification and can be rolled back/reviewed.
 
 ### GEP-10 — Defensibility
-**Rule.** Output is **objective, precise, legal-grade**, and structured for court or corporate
+**Rule.** Output is **objective, precise**, and structured for independent legal or corporate
 review — neutral language, standard terminology, clear exhibits.
 **Why.** Findings often end up in legal or disciplinary proceedings; tone and structure matter.
 **Compliance.** No editorializing; professional, structured reporting suitable for review.

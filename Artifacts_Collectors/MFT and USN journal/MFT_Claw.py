@@ -76,7 +76,8 @@ except ImportError:
 # Import time utilities for forensic timestamp formatting
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from utils.time_utils import format_forensic_timestamp, get_current_forensic_timestamp
+from utils.time_utils import (format_forensic_timestamp, get_current_forensic_timestamp,
+                              filetime_to_datetime)
 
 
 
@@ -364,9 +365,7 @@ class StandardInformationParser(MFTAttributeParser):
             if ft == 0:
                 return None
             
-            # Convert from 100-nanosecond intervals since 1601-01-01
-            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
-            return windows_epoch + datetime.timedelta(microseconds=ft / 10.0)
+            return filetime_to_datetime(ft)
         except (ValueError, OverflowError, OSError):
             return None
 
@@ -454,8 +453,7 @@ class FileNameParser(MFTAttributeParser):
             if ft == 0:
                 return None
             
-            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
-            return windows_epoch + datetime.timedelta(microseconds=ft / 10.0)
+            return filetime_to_datetime(ft)
         except (ValueError, OverflowError, OSError):
             return None
 

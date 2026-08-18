@@ -2,6 +2,8 @@
 
 This document contains the comprehensive schema for all parsed artifacts and correlation databases. Use this reference to write precise SQL queries without needing to call `get_schema` first.
 
+**`parsed_at` is parser bookkeeping** — it records when Crow-Eye parsed the artifact, not when the artifact activity occurred. Never use it as an event time. Case databases written by older Crow-Eye builds may still carry the legacy names `timestamp` (registry tables), `parsed_timestamp` (ShimCache), `parse_timestamp` (SRUM metadata) or `inserted_at` (USN); check the actual schema before querying an older case.
+
 
 ## Database: `amcache.db`
 
@@ -259,6 +261,22 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 
 ### Table: `LNK_Files`
 
+`Target_Source` names the structure the target was recovered from, because a shortcut does not have
+to record it the same way twice:
+
+- `LinkInfo` - a literal path, the classic case.
+- `EnvironmentVariableDataBlock` - the shortcut sets ForceNoLinkInfo and stores the target as a
+  variable reference, e.g. `%windir%\system32\mstsc.exe`. Most of a stock Start Menu is like this.
+  **The value is stored unexpanded**: expanding it would use the environment of the machine running
+  Crow-Eye, which for an image acquired elsewhere is the wrong machine.
+- `IDList` - reconstructed from the shell item chain, and only used when it reduces to a
+  drive-letter or UNC path. A shell-namespace path stays in `Property_Metadata.IDList_Path` rather
+  than being presented as a target.
+- empty - the entry records no recoverable target, e.g. a DestList row with no embedded shortcut.
+
+Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 106 exact matches,
+32 in variable form, none missing and none wrong.
+
 | Column | Type |
 |---|---|
 | `Source_Name` | TEXT |
@@ -281,6 +299,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `Hot_Key_Flags` | TEXT |
 | `Hot_Key_Value` | TEXT |
 | `Local_Path` | TEXT |
+| `Target_Source` | TEXT |
 | `Network_Share_Name` | TEXT |
 | `Common_Path` | TEXT |
 | `Relative_Path` | TEXT |
@@ -328,6 +347,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `Hot_Key_Flags` | TEXT |
 | `Hot_Key_Value` | TEXT |
 | `Local_Path` | TEXT |
+| `Target_Source` | TEXT |
 | `Network_Share_Name` | TEXT |
 | `Common_Path` | TEXT |
 | `Relative_Path` | TEXT |
@@ -392,6 +412,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `Hot_Key_Flags` | TEXT |
 | `Hot_Key_Value` | TEXT |
 | `Local_Path` | TEXT |
+| `Target_Source` | TEXT |
 | `Network_Share_Name` | TEXT |
 | `Common_Path` | TEXT |
 | `Relative_Path` | TEXT |
@@ -734,7 +755,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `registered_organization` | TEXT |
 | `product_id` | TEXT |
 | `installation_date` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `TimeZoneInfo`
@@ -746,7 +767,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `daylight_name` | TEXT |
 | `bias` | INTEGER |
 | `active_time_bias` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `NetworkInterfacesInfo`
@@ -761,7 +782,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `dhcp_server` | TEXT |
 | `dns_servers` | TEXT |
 | `mac_address` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `Auto`
@@ -772,7 +793,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `au_options` | INTEGER |
 | `scheduled_install_day` | INTEGER |
 | `scheduled_install_time` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `WindowsUpdateInfo`
@@ -784,7 +805,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `au_options` | INTEGER |
 | `scheduled_install_day` | INTEGER |
 | `scheduled_install_time` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `ShutdownInfo`
@@ -795,7 +816,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `shutdown_count` | INTEGER |
 | `shutdown_type` | TEXT |
 | `clean_shutdown` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `USBDevices`
@@ -843,7 +864,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `first_connected` | TEXT |
 | `last_connected` | TEXT |
 | `last_removed` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `USBStorageVolumes`
@@ -854,10 +875,18 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `volume_guid` | TEXT |
 | `volume_name` | TEXT |
 | `drive_letter` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `BrowserHistory`
+
+URLs typed into the Internet Explorer address bar, from `NTUSER\Software\Microsoft\Internet
+Explorer\TypedURLs`. Registry-derived only - this is not a full browser history, and modern Edge
+does not write here.
+
+`last_visit` comes from the sibling `TypedURLsTime` key, which pairs each `urlN` with a FILETIME.
+That key is Windows 8 and later, so an empty `last_visit` on an older system means the timestamp was
+never recorded, not that it was missed.
 
 | Column | Type |
 |---|---|
@@ -866,7 +895,8 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `title` | TEXT |
 | `visit_count` | INTEGER |
 | `last_visit` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
+| `user_name` | TEXT |
 
 
 ### Table: `InstalledSoftware`
@@ -879,7 +909,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `install_date` | TEXT |
 | `install_location` | TEXT |
 | `uninstall_string` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `SystemServices`
@@ -894,8 +924,149 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `service_type` | INTEGER |
 | `error_control` | INTEGER |
 | `status` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
+
+### Persistence / ASEP tables
+
+`winlogon`, `image_file_execution_options`, `appinit_dlls`, `appcert_dlls`, `active_setup`,
+`run_services`, `run_services_once`, `policies_explorer_run`, `user_shell_folders`, `lsa_packages`,
+`boot_execute`, `clsid_inprocserver32`, `command_processor`, `drivers32`,
+`shell_service_object_delay_load`, `browser_helper_objects`, `shared_task_scheduler`,
+`shell_icon_overlay_identifiers`, `credential_providers`, `netsh_helper_dlls`, `amsi_providers`,
+`security_providers`, `print_monitors`, `print_processors`, `network_providers`,
+`wmi_autorecover_mofs`, `windows_load_run`, `shell_open_command`.
+
+Auto-start extensibility points, one table per registry launch point. All share one schema, and
+anything naming an executable is also rolled up into `AutoStartPrograms`.
+
+Tables are named for the artifact, never for the technique that abuses it - `shell_open_command`,
+not "uac_bypass". `clsid_inprocserver32` was previously called `com_hijack`; case databases written
+before the rename still carry the old table name.
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Forensic coverage tables
+
+| Table | Key columns |
+|---|---|
+| `SecurityPosture` | `setting`, `value_raw`, `value_decoded`, `default_value`, `assessment`, `meaning`, `key_path`, `parsed_at` |
+| `DefenderExclusions` | `exclusion_type`, `value`, `source`, `key_path`, `parsed_at` |
+| `FirewallRules` | `rule_type`, `rule_name`, `display_name`, `action`, `direction`, `enabled`, `protocol`, `local_port`, `remote_port`, `application`, `service`, `profile`, `key_path`, `parsed_at` |
+| `NetworkShares` | `share_name`, `share_path`, `remark`, `raw`, `key_path`, `parsed_at` |
+| `ConnectedDevices` | `device_type`, `device_id`, `friendly_name`, `details`, `key_path`, `parsed_at` |
+| `MountPoints2` | `user_name`, `mount_id`, `mount_type`, `key_path`, `parsed_at` |
+| `RDPClientMRU` | `user_name`, `entry_type`, `server`, `username_hint`, `key_path`, `parsed_at` |
+| `OfficeDocuments` | `user_name`, `application`, `version`, `kind`, `document`, `raw`, `key_path`, `parsed_at` |
+| `FeatureUsage` | `user_name`, `usage_type`, `program`, `count`, `key_path`, `parsed_at` |
+| `CompatibilityAssistant` | `user_name`, `program_path`, `blob_size`, `key_path`, `parsed_at` |
+| `RecentApps` | `user_name`, `app_id`, `app_path`, `launch_count`, `last_accessed`, `key_path`, `parsed_at` |
+| `ApplicationArtifacts` | `user_name`, `application`, `artifact`, `name`, `value`, `key_path`, `parsed_at` |
+| `rdp_tcp` | `setting`, `value`, `default_value`, `meaning`, `key_path`, `parsed_at` |
+| `usbstor_start` | `setting`, `value`, `decoded`, `default_value`, `key_path`, `parsed_at` |
+| `windows_script_host` | `setting`, `value`, `default_value`, `meaning`, `key_path`, `parsed_at` |
+| `dnscache_parameters` | `name`, `value`, `key_path`, `parsed_at` |
+| `files_not_to_snapshot` | `entry`, `value`, `key_path`, `parsed_at` |
+| `winevt_channels` | `channel`, `source`, `enabled`, `max_size`, `retention`, `log_file`, `reason`, `key_path`, `parsed_at` |
+| `wpdbusenum` | `device_id`, `friendly_name`, `volume_guid`, `key_path`, `parsed_at` |
+| `device_classes` | `class_guid`, `class_name`, `device_instance`, `key_path`, `parsed_at` |
+| `volume_info_cache` | `drive_letter`, `volume_label`, `file_system`, `key_path`, `parsed_at` |
+| `machine_guid` | `name`, `value`, `key_path`, `parsed_at` |
+| `product_options` | `name`, `value`, `meaning`, `key_path`, `parsed_at` |
+| `os_install_history` | `name`, `value`, `key_path`, `parsed_at` |
+| `active_computer_name` | `name`, `value`, `key_path`, `parsed_at` |
+| `hivelist` | `hive`, `file_path`, `key_path`, `parsed_at` |
+| `system_environment` | `name`, `value`, `key_path`, `parsed_at` |
+| `network_adapters` | `adapter_guid`, `name`, `value`, `key_path`, `parsed_at` |
+| `group_policy_history` | `scope`, `gpo_id`, `name`, `value`, `key_path`, `parsed_at` |
+| `file_exts` | `user_name`, `extension`, `choice_type`, `progid`, `key_path`, `parsed_at` |
+| `cid_size_mru` | `user_name`, `position`, `application`, `key_path`, `parsed_at` |
+| `programs_cache` | `user_name`, `value_name`, `blob_size`, `key_path`, `parsed_at` |
+| `regedit_lastkey` | `user_name`, `name`, `value`, `key_path`, `parsed_at` |
+| `printer_connections` | `user_name`, `connection`, `server`, `printer`, `key_path`, `parsed_at` |
+| `explorer_advanced` | `user_name`, `setting`, `value`, `default_value`, `meaning`, `key_path`, `parsed_at` |
+| `local_groups` | `scope`, `rid`, `group_name`, `comment`, `member_sid`, `member_name`, `member_count`, `last_write`, `parsed_at` — PK (scope, rid, member_sid) |
+| `lsa_policy` | `name`, `key_path`, `value`, `meaning`, `last_write`, `parsed_at` — PK (name) |
+| `audit_policy` | `name`, `key_path`, `decoded`, `raw_hex`, `raw_size`, `last_write`, `note`, `parsed_at` — PK (name) |
+| `lsa_secrets` | `secret_name`, `key_path`, `value_kind`, `size_bytes`, `updated`, `last_write`, `parsed_at` — PK (secret_name, value_kind) |
+| `cached_domain_logons` | `slot`, `key_path`, `size_bytes`, `occupied`, `last_write`, `parsed_at` — PK (slot) |
+
+`assessment` in `SecurityPosture` is `default` / `hardened` / `weakened` / `informational`; only
+`weakened` is a finding. Rows are written even when the registry value is absent.
+
+`winevt_channels` merges two sources: `source` is `EventLog (classic)` for the legacy
+Security/System/Application logs under `Services\EventLog`, or `WINEVT` for Vista-era channels.
+Only classic logs, a watch list, and channels with a non-default `MaxSize` are recorded - `reason`
+says which. Dumping all ~1166 WINEVT channels would bury the finding.
+
+`active_computer_name` and `hivelist` come from **volatile** keys that Windows builds at runtime and
+never writes to a hive file. They populate on live acquisitions and are correctly empty for image or
+hive-set cases.
+
+`local_groups` holds **one row per group member**, and one row with an empty `member_sid` for a
+group with none — so an empty group and an unparsed one are distinguishable.
+
+The four LSA tables come from the SECURITY hive, which the live parser exports with
+`SeBackupPrivilege` because its root key denies Administrators. `audit_policy` stores the raw
+blob and decodes it only when it validates against the legacy layout — see
+`registry_knowledge.md`. `lsa_secrets` records secret names, sizes and update times, never
+plaintext. `cached_domain_logons` is empty when the `Cache` key is absent, which is the normal
+state for a machine no domain account has logged on to.
+
+### Table: `UserAccounts`
+
+Local accounts, SAM merged with ProfileList. The table that maps a SID to a person.
+
+| Column | Type |
+|---|---|
+| `user_sid` | TEXT (PK) |
+| `rid` | INTEGER |
+| `username` | TEXT |
+| `display_name` | TEXT |
+| `full_name` | TEXT |
+| `comment` | TEXT |
+| `account_type` | TEXT |
+| `well_known` | TEXT |
+| `account_enabled` | INTEGER |
+| `account_flags` | TEXT |
+| `last_logon` | TEXT |
+| `password_last_set` | TEXT |
+| `account_expires` | TEXT |
+| `last_incorrect_password` | TEXT |
+| `login_count` | INTEGER |
+| `bad_password_count` | INTEGER |
+| `profile_path` | TEXT |
+| `profile_loaded` | INTEGER |
+| `source` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `ScheduledTasks`
+
+Windows Task Scheduler entries, from `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache`.
+Persistence and execution evidence: what runs, as whom, when it last ran and whether it succeeded.
+
+| Column | Type |
+|---|---|
+| `task_path` | TEXT |
+| `task_guid` | TEXT |
+| `command` | TEXT |
+| `arguments` | TEXT |
+| `working_dir` | TEXT |
+| `run_context` | TEXT |
+| `triggers_index` | TEXT |
+| `task_registered` | TEXT |
+| `last_run` | TEXT |
+| `last_completed` | TEXT |
+| `last_result` | INTEGER |
+| `parsed_at` | TEXT |
 
 ### Table: `AutoStartPrograms`
 
@@ -904,7 +1075,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `location` | TEXT |
 | `program_name` | TEXT |
 | `command` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `DAM`
@@ -947,7 +1118,8 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `search_type` | TEXT |
 | `mru_position` | INTEGER |
 | `access_date` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
+| `user_name` | TEXT |
 
 
 ### Table: `UserAssist`
@@ -960,7 +1132,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `focus_count` | INTEGER |
 | `focus_time` | INTEGER |
 | `user_sid` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `Shellbags`
@@ -985,6 +1157,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `registry_path` | TEXT |
 | `parent_path` | TEXT |
 | `parsed_at` | TEXT |
+| `user_name` | TEXT |
 
 
 ### Table: `RunMRU`
@@ -994,17 +1167,29 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `command` | TEXT |
 | `mru_position` | INTEGER |
 | `access_date` | TEXT |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
+| `user_name` | TEXT |
 
 
 ### Table: `MUICache`
+
+Application display names Windows caches when a program is shown in the shell - an execution
+signal, from `MuiCache` and the older `ShellNoRoam\MUICache`.
+
+Windows stores one registry value per PROPERTY of an executable, named `<path>.FriendlyAppName`,
+`<path>.ApplicationCompany` and so on. Those are pivoted into **one row per executable**:
+`app_path` is the real path with the property suffix removed, `app_name` is the friendly name and
+`company` the publisher. Because `app_path` is the true path, it joins against Prefetch, Amcache,
+ShimCache and BAM, which all record the same path.
 
 | Column | Type |
 |---|---|
 | `app_path` | TEXT |
 | `app_name` | TEXT |
+| `company` | TEXT |
 | `file_extension` | TEXT |
 | `parsed_at` | TEXT |
+| `user_name` | TEXT |
 
 
 ### Table: `Network_list`
@@ -1035,6 +1220,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `access_date` | TEXT |
 | `row_data` | TEXT |
 | `parsed_at` | TEXT |
+| `user_name` | TEXT |
 
 
 ### Table: `LastSaveMRU`
@@ -1050,6 +1236,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `access_date` | TEXT |
 | `row_data` | TEXT |
 | `parsed_at` | TEXT |
+| `user_name` | TEXT |
 
 
 ### Table: `UserProfiles`
@@ -1061,44 +1248,869 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `profile_path` | TEXT |
 | `profile_image_path` | TEXT |
 | `profile_loaded` | INTEGER |
-| `timestamp` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `RecentDocs`
+
+Documents opened through Explorer, from `NTUSER\...\Explorer\RecentDocs`. The main key holds every
+recent item (`subkey` = `main`); one subkey per file extension holds the same items grouped by type,
+and `Folder` holds folders.
+
+`mru_position` is decoded from that key's `MRUListEx`: **0 is the most recently opened**, and the
+value `name` is only the entry's slot number, not its order. `key_last_write` is the containing key's
+own last-write time - for `.pdf` it is when a PDF was most recently opened, so the per-extension rows
+give a last-use time per file type. The registry stores no per-entry timestamp, so `key_last_write`
+tells you about the newest entry in that key, not about the row it sits on.
 
 | Column | Type |
 |---|---|
 | `subkey` | TEXT |
 | `name` | TEXT |
-| `data` | TEXT |
+| `row_data` | TEXT |
 | `type` | TEXT |
+| `user_name` | TEXT |
+| `mru_position` | INTEGER |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `TypedPaths`
 
+Paths typed into the Explorer address bar, from `NTUSER\...\Explorer\TypedPaths`. Strong evidence
+of intent: the user typed this rather than clicking to it, and entries survive after the location is
+gone.
+
+Values are named `url1`, `url2`, ... where **`url1` is the most recent**; `mru_position` normalises
+that to 0-based to match every other MRU table. There is no `MRUListEx` here. `key_last_write` is
+when the most recent path was typed - it applies to the key, so only the `mru_position = 0` row can
+be tied to it.
+
 | Column | Type |
 |---|---|
 | `name` | TEXT |
+| `row_data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `mru_position` | INTEGER |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `ApplicationArtifacts`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `application` | TEXT |
+| `artifact` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `CompatibilityAssistant`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `program_path` | TEXT |
+| `blob_size` | INTEGER |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `ConnectedDevices`
+
+| Column | Type |
+|---|---|
+| `device_type` | TEXT |
+| `device_id` | TEXT |
+| `friendly_name` | TEXT |
+| `details` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `DefenderExclusions`
+
+| Column | Type |
+|---|---|
+| `exclusion_type` | TEXT |
+| `value` | TEXT |
+| `source` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `FeatureUsage`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `usage_type` | TEXT |
+| `program` | TEXT |
+| `count` | INTEGER |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `FirewallRules`
+
+| Column | Type |
+|---|---|
+| `rule_type` | TEXT |
+| `rule_name` | TEXT |
+| `display_name` | TEXT |
+| `action` | TEXT |
+| `direction` | TEXT |
+| `enabled` | TEXT |
+| `protocol` | TEXT |
+| `local_port` | TEXT |
+| `remote_port` | TEXT |
+| `application` | TEXT |
+| `service` | TEXT |
+| `profile` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `MountPoints2`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `mount_id` | TEXT |
+| `mount_type` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `NetworkShares`
+
+| Column | Type |
+|---|---|
+| `share_name` | TEXT |
+| `share_path` | TEXT |
+| `remark` | TEXT |
+| `raw` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `OfficeDocuments`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `application` | TEXT |
+| `version` | TEXT |
+| `kind` | TEXT |
+| `document` | TEXT |
+| `raw` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `RDPClientMRU`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `entry_type` | TEXT |
+| `server` | TEXT |
+| `username_hint` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `RecentApps`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `app_id` | TEXT |
+| `app_path` | TEXT |
+| `launch_count` | INTEGER |
+| `last_accessed` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `SecurityPosture`
+
+| Column | Type |
+|---|---|
+| `setting` | TEXT |
+| `value_raw` | TEXT |
+| `value_decoded` | TEXT |
+| `default_value` | TEXT |
+| `assessment` | TEXT |
+| `meaning` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `active_computer_name`
+
+| Column | Type |
+|---|---|
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `active_setup`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
 | `data` | TEXT |
 | `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `amsi_providers`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `appcert_dlls`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `appinit_dlls`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `audit_policy`
+
+| Column | Type |
+|---|---|
+| `name` | TEXT |
+| `key_path` | TEXT |
+| `decoded` | TEXT |
+| `raw_hex` | TEXT |
+| `raw_size` | INTEGER |
+| `last_write` | TEXT |
+| `note` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `boot_execute`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `browser_helper_objects`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `cached_domain_logons`
+
+| Column | Type |
+|---|---|
+| `slot` | TEXT |
+| `key_path` | TEXT |
+| `size_bytes` | INTEGER |
+| `occupied` | INTEGER |
+| `last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `cid_size_mru`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `position` | INTEGER |
+| `application` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `clsid_inprocserver32`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `command_processor`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `credential_providers`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `device_classes`
+
+| Column | Type |
+|---|---|
+| `class_guid` | TEXT |
+| `class_name` | TEXT |
+| `device_instance` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `dnscache_parameters`
+
+| Column | Type |
+|---|---|
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `drivers32`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `explorer_advanced`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `setting` | TEXT |
+| `value` | TEXT |
+| `default_value` | TEXT |
+| `meaning` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `file_exts`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `extension` | TEXT |
+| `choice_type` | TEXT |
+| `progid` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `files_not_to_snapshot`
+
+| Column | Type |
+|---|---|
+| `entry` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `group_policy_history`
+
+| Column | Type |
+|---|---|
+| `scope` | TEXT |
+| `gpo_id` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `hivelist`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `file_path` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `image_file_execution_options`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `local_groups`
+
+| Column | Type |
+|---|---|
+| `scope` | TEXT |
+| `rid` | INTEGER |
+| `group_name` | TEXT |
+| `comment` | TEXT |
+| `member_sid` | TEXT |
+| `member_name` | TEXT |
+| `member_count` | INTEGER |
+| `last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `lsa_packages`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `lsa_policy`
+
+| Column | Type |
+|---|---|
+| `name` | TEXT |
+| `key_path` | TEXT |
+| `value` | TEXT |
+| `meaning` | TEXT |
+| `last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `lsa_secrets`
+
+| Column | Type |
+|---|---|
+| `secret_name` | TEXT |
+| `key_path` | TEXT |
+| `value_kind` | TEXT |
+| `size_bytes` | INTEGER |
+| `updated` | TEXT |
+| `last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `machine_guid`
+
+| Column | Type |
+|---|---|
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `netsh_helper_dlls`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `network_adapters`
+
+| Column | Type |
+|---|---|
+| `adapter_guid` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `network_providers`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `os_install_history`
+
+| Column | Type |
+|---|---|
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `policies_explorer_run`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `print_monitors`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `print_processors`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `printer_connections`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `connection` | TEXT |
+| `server` | TEXT |
+| `printer` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `product_options`
+
+| Column | Type |
+|---|---|
+| `name` | TEXT |
+| `value` | TEXT |
+| `meaning` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `programs_cache`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `value_name` | TEXT |
+| `blob_size` | INTEGER |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `rdp_tcp`
+
+| Column | Type |
+|---|---|
+| `setting` | TEXT |
+| `value` | TEXT |
+| `default_value` | TEXT |
+| `meaning` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `regedit_lastkey`
+
+| Column | Type |
+|---|---|
+| `user_name` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `run_services`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `run_services_once`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `security_providers`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `shared_task_scheduler`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `shell_icon_overlay_identifiers`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `shell_open_command`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `shell_service_object_delay_load`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `system_environment`
+
+| Column | Type |
+|---|---|
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `usbstor_start`
+
+| Column | Type |
+|---|---|
+| `setting` | TEXT |
+| `value` | TEXT |
+| `decoded` | TEXT |
+| `default_value` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `user_shell_folders`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `volume_info_cache`
+
+| Column | Type |
+|---|---|
+| `drive_letter` | TEXT |
+| `volume_label` | TEXT |
+| `file_system` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `windows_load_run`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `windows_script_host`
+
+| Column | Type |
+|---|---|
+| `setting` | TEXT |
+| `value` | TEXT |
+| `default_value` | TEXT |
+| `meaning` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `winevt_channels`
+
+| Column | Type |
+|---|---|
+| `channel` | TEXT |
+| `source` | TEXT |
+| `enabled` | TEXT |
+| `max_size` | TEXT |
+| `retention` | TEXT |
+| `log_file` | TEXT |
+| `reason` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `winlogon`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `wmi_autorecover_mofs`
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `key_path` | TEXT |
+| `name` | TEXT |
+| `data` | TEXT |
+| `type` | TEXT |
+| `user_name` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `wpdbusenum`
+
+| Column | Type |
+|---|---|
+| `device_id` | TEXT |
+| `friendly_name` | TEXT |
+| `volume_guid` | TEXT |
+| `key_path` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ## Database: `shimcache.db`
 
 ### Table: `shimcache_entries`
 
+Windows Application Compatibility Cache - evidence that a program was present, and on many builds
+that it ran. Read from `SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache`.
+
+**Not every entry names a file.** Store and UWP applications are recorded as seven tab-separated
+fields instead of a path, so each row carries `entry_type`:
+
+- `file` - `path` and `filename` are a real filesystem path, as before.
+- `packaged app` - `path` is empty and the identity is `package_family_name`
+  (`Claude_pzs8sxrjxfjjc`), with `package_version` and `architecture` decoded alongside. The
+  original record is kept verbatim in `raw_entry`.
+
+`package_family_name` is the column to join on for packaged applications - it is the same identifier
+Amcache and `Get-AppxPackage` use. On a live machine all 65 distinct family names matched an
+installed package exactly.
+
+`last_modified` is the file's modification time as the cache recorded it, not an execution time.
+
 | Column | Type |
 |---|---|
 | `id` | INTEGER |
 | `filename` | TEXT |
 | `path` | TEXT |
+| `entry_type` | TEXT |
+| `package_family_name` | TEXT |
+| `package_version` | TEXT |
+| `architecture` | TEXT |
+| `raw_entry` | TEXT |
 | `last_modified` | TEXT |
 | `last_modified_readable` | TEXT |
 | `data_size` | INTEGER |
 | `entry_size` | INTEGER |
 | `cache_entry_position` | INTEGER |
 | `entry_hash` | TEXT |
-| `parsed_timestamp` | TIMESTAMP |
+| `parsed_at` | TIMESTAMP |
 
 
 ### Table: `sqlite_sequence`
@@ -1112,6 +2124,22 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 ## Database: `srum_data.db`
 
 ### Table: `srum_application_usage`
+
+`user_sid` is a plain SID (`S-1-5-21-...`), decoded from the binary structure rather than through
+`win32security` - whose `str()` returns a Python repr (`PySID:S-1-5-...`) that matches nothing else
+in a case.
+
+SRUM records an application identity two ways, and which one a table uses decides how a shared host
+process is told apart.
+
+The resource and network tables use a device path, and Windows appends the hosted service to it -
+`\Device\HarddiskVolume3\Windows\System32\svchost.exe [DcomLaunch]`. 35546 of 221230 application
+usage rows carry a service that way, so svchost rows are distinguished by `app_path`; `app_name` is
+only the basename and reads `svchost.exe` for all of them.
+
+The `!!name!time!hex![services]` form is used exclusively by `srum_app_timeline`, which is why
+`hosted_services` exists only on that table. Adding the column to the four tables above produced a
+column empty on every row, because none of them reference an AppId of that form.
 
 | Column | Type |
 |---|---|
@@ -1195,12 +2223,57 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `cycle_count` | INTEGER |
 
 
+### Table: `srum_app_timeline`
+
+Application timeline provider. Records how an application was used, not only
+that it ran: seconds in focus, seconds of keyboard and mouse input. This is the
+only SRUM table whose AppId uses the `!!name!time!hash![services]` form, so it
+is the only one that carries `hosted_services` - the service list that tells one
+svchost.exe record from another.
+
+The interaction columns are sparse by nature. A service accrues CPU cycles for
+hours and never sees a keystroke, so a NULL there means no such activity in that
+window, not a failed decode.
+
+| Column | Type |
+|---|---|
+| `id` | INTEGER |
+| `timestamp` | TEXT |
+| `app_name` | TEXT |
+| `app_path` | TEXT |
+| `hosted_services` | TEXT |
+| `user_sid` | TEXT |
+| `user_name` | TEXT |
+| `end_time` | TEXT |
+| `duration_ms` | INTEGER |
+| `span_ms` | INTEGER |
+| `timeline_end` | INTEGER |
+| `flags` | INTEGER |
+| `in_focus_s` | INTEGER |
+| `psm_foreground_s` | INTEGER |
+| `user_input_s` | INTEGER |
+| `keyboard_input_s` | INTEGER |
+| `mouse_input_s` | INTEGER |
+| `display_required_s` | INTEGER |
+| `comp_rendered_s` | INTEGER |
+| `comp_dirtied_s` | INTEGER |
+| `comp_propagated_s` | INTEGER |
+| `audio_in_s` | INTEGER |
+| `audio_out_s` | INTEGER |
+| `cycles` | INTEGER |
+| `cycles_attr` | INTEGER |
+| `cycles_wob` | INTEGER |
+| `disk_raw` | INTEGER |
+| `network_bytes_raw` | INTEGER |
+| `network_tail_raw` | INTEGER |
+
+
 ### Table: `srum_metadata`
 
 | Column | Type |
 |---|---|
 | `id` | INTEGER |
-| `parse_timestamp` | TEXT |
+| `parsed_at` | TEXT |
 | `srudb_path` | TEXT |
 | `total_records_parsed` | INTEGER |
 | `parsing_duration_seconds` | REAL |
@@ -1226,7 +2299,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `security_id` | INTEGER |
 | `file_attributes` | TEXT |
 | `record_length` | INTEGER |
-| `inserted_at` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ### Table: `deleted_entries`
@@ -1242,7 +2315,7 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `next_valid_usn` | INTEGER |
 | `forensic_significance` | TEXT |
 | `potential_activity` | TEXT |
-| `inserted_at` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ## Database: `correlation_results.db`

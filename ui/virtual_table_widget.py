@@ -78,7 +78,7 @@ class _LazyArtifactModel(QAbstractTableModel):
                 return None
         col_name = self.w.columns[index.column()]
         value = rec.get(col_name)
-        text = "" if value is None else str(value)
+        text = self.w.format_for_display(col_name, value)
         # Inline enrichment on the chosen column only.
         if col_name == self.w.enrichment_column:
             dyn = rec.get('Dynamic_Key')
@@ -447,6 +447,102 @@ class VirtualTableWidget(QTableView, EnrichmentMixin):
         except Exception as e:
             self.logger.error(f"Error clearing filter: {e}")
             return False
+
+    # Columns whose stored value is a number but whose readable form is a size,
+    # a duration or a grouped integer. The database keeps the number so it can
+    # be compared and filtered - SQLite sorts every TEXT above every INTEGER, so
+    # storing "34.83 KB" made `bytes_sent > 1000000` match every row - and the
+    # formatting happens here, where it belongs. Formatters are the ones the
+    # SRUM parser already defines; nothing new is introduced.
+    DISPLAY_FORMATTERS = {
+        'bytes_sent': 'bytes',
+        'bytes_received': 'bytes',
+        'foreground_bytes_read': 'bytes',
+        'foreground_bytes_written': 'bytes',
+        'background_bytes_read': 'bytes',
+        'background_bytes_written': 'bytes',
+        'disk_raw': 'bytes',
+        'network_bytes_raw': 'bytes',
+        'network_tail_raw': 'bytes',
+        'connected_time': 'duration',
+        'charge_level': 'charge',
+        'foreground_cycle_time': 'cpu',
+        'background_cycle_time': 'cpu',
+        'face_time': 'cpu',
+        'interface_luid': 'number',
+        'l2_profile_id': 'number',
+        'l2_profile_flags': 'number',
+        'foreground_context_switches': 'number',
+        'background_context_switches': 'number',
+        'foreground_num_read_operations': 'number',
+        'foreground_num_write_operations': 'number',
+        'foreground_number_of_flushes': 'number',
+        'background_num_read_operations': 'number',
+        'background_num_write_operations': 'number',
+        'background_number_of_flushes': 'number',
+        'state_transition': 'number',
+        'cycle_count': 'number',
+        'duration_ms': 'number',
+        'span_ms': 'number',
+        'cycles': 'number',
+        'cycles_attr': 'number',
+        'cycles_wob': 'number',
+    }
+
+    def format_for_display(self, col_name, value):
+        """Render one cell. Falls back to str() for anything unmapped."""
+        if value is None:
+            return ""
+        kind = self.DISPLAY_FORMATTERS.get(col_name)
+        if kind is None or not self._is_srum_table():
+            return str(value)
+        try:
+            from Artifacts_Collectors.SRUM_Claw import (
+                format_bytes, format_number, format_cpu_time,
+                format_time_duration, format_charge_level,
+            )
+        except Exception:
+            return str(value)
+        try:
+            return {
+                'bytes': format_bytes,
+                'number': format_number,
+                'cpu': format_cpu_time,
+                'duration': format_time_duration,
+                'charge': format_charge_level,
+            }[kind](value)
+        except Exception:
+            return str(value)
+
+    def _is_srum_table(self):
+        return str(getattr(self, 'table_name', '') or '').startswith('srum_')
+
+    def clear_data(self):
+        """Drop every row and let go of the case database.
+
+        A new case used to leave these tables showing the previous one. The
+        clear-down walked findChildren(QTableWidget) and this is a QTableView,
+        so it was never found - and even when found, setRowCount(0) is not a
+        method it has. The model keeps a page cache and a rowid index, and the
+        widget keeps the loader, so all three have to be released or the old
+        case is still on screen and still open on disk.
+        """
+        try:
+            model = self._model
+            model.beginResetModel()
+            model._cache.clear()
+            model._page_order.clear()
+            model._rowids = None
+            model._total = 0
+            model.endResetModel()
+        except Exception as e:
+            self.logger.warning(f"clear_data: model reset failed: {e}")
+
+        self.data_loader = None
+        self.total_rows = 0
+        self.where_clause = None
+        self.where_params = ()
+        self._header_labels = None
 
     def set_order_by(self, order_by: Optional[str]):
         """Set the ORDER BY clause (applied on the next load)."""

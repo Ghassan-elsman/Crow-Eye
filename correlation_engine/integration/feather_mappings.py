@@ -316,7 +316,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'mft_usn_correlated',
         'artifact_type': 'MFT',
         'parent_type': 'MFT',
-        'exclude_last_column': True # Exclude created_at parsing timestamp
+        'exclude_last_column': True # Exclude created_at (correlator bookkeeping)
     },
     
     # ========== Prefetch (1 Feather) ==========
@@ -336,7 +336,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'recycle_bin_entries',
         'artifact_type': 'RecycleBin',
         'parent_type': 'RecycleBin',
-        'exclude_last_column': True # Exclude parsed_at parsing timestamp
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     
     # ========== Registry (12 Feathers) - Enhanced with specific subtypes ==========
@@ -346,7 +346,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'BAM',
         'artifact_type': 'BAM', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True # Exclude parsing timestamp
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     {
         'name': 'InstalledSoftware_CrowEyeFeather',
@@ -354,7 +354,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'InstalledSoftware',
         'artifact_type': 'InstalledSoftware', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True # Exclude timestamp
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     {
         'name': 'LastSaveMRU_CrowEyeFeather',
@@ -362,7 +362,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'LastSaveMRU',
         'artifact_type': 'LastSaveMRU', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True # Exclude analyzed date
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     {
         'name': 'MUICache_CrowEyeFeather',
@@ -370,7 +370,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'MUICache',
         'artifact_type': 'MUICache', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True # Exclude timestamp
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     {
         'name': 'OpenSaveMRU_CrowEyeFeather',
@@ -378,7 +378,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'OpenSaveMRU',
         'artifact_type': 'OpenSaveMRU', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True # Exclude last column
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     {
         'name': 'RecentDocs_CrowEyeFeather',
@@ -394,7 +394,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'Shellbags',
         'artifact_type': 'ShellBags', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True # Exclude analyzed date
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     {
         'name': 'SystemServices_CrowEyeFeather',
@@ -402,7 +402,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'SystemServices',
         'artifact_type': 'SystemServices', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True # Exclude timestamp
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     {
         'name': 'TypedPaths_CrowEyeFeather',
@@ -434,7 +434,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'AutoStartPrograms',
         'artifact_type': 'AutoStartPrograms', # Enhanced: specific subtype
         'parent_type': 'Registry',
-        'exclude_last_column': True # Exclude timestamp
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     },
     
     # ========== SRUM (2 Feathers) - Enhanced with specific subtypes ==========
@@ -462,7 +462,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         'source_table': 'shimcache_entries',
         'artifact_type': 'ShimCache',
         'parent_type': 'ShimCache',
-        'exclude_last_column': True # Exclude parsed timestamp
+        'exclude_last_column': True # Exclude parsed_at (parser bookkeeping)
     }
 ]
 

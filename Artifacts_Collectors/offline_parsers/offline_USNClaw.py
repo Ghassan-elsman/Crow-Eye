@@ -176,7 +176,7 @@ def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
                             
                             # Add to batch
                             record_count += 1
-                            inserted_at = get_current_forensic_timestamp()
+                            parsed_at = get_current_forensic_timestamp()
                             
                             batch_records.append((
                                 volume_letter,
@@ -191,7 +191,7 @@ def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
                                 rec["security_id"],
                                 rec["file_attributes"],
                                 rec["record_length"],
-                                inserted_at
+                                parsed_at
                             ))
                             
                             # Batch commit when batch size reached
@@ -202,7 +202,7 @@ def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
                                             "INSERT OR IGNORE INTO journal_events "
                                             "(volume_letter, filename, usn, major_version, frn, parent_frn, "
                                             "timestamp, reason, source_info, security_id, file_attributes, "
-                                            "record_length, inserted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                            "record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                             batch_records
                                         )
                                     batch_records.clear()
@@ -239,7 +239,7 @@ def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
                         "INSERT OR IGNORE INTO journal_events "
                         "(volume_letter, filename, usn, major_version, frn, parent_frn, "
                         "timestamp, reason, source_info, security_id, file_attributes, "
-                        "record_length, inserted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         batch_records
                     )
                 print(f"[Offline USN] Final batch: {len(batch_records)} records committed")

@@ -35,7 +35,7 @@ except ImportError:
     wintypes = None
 
 # Import time formatting utilities
-from utils.time_utils import format_forensic_timestamp
+from utils.time_utils import format_forensic_timestamp, filetime_to_datetime
 
 class Version(enum.IntEnum):
     """Enum representing Windows Prefetch file format versions.
@@ -864,7 +864,15 @@ class PrefetchFile:
                     creation_time_raw = struct.unpack_from("<Q", vol_data, 8)[0]
                     creation_time = self._filetime_to_datetime(creation_time_raw)
                     
-                    serial_number = hex(struct.unpack_from("<I", vol_data, 16)[0])[2:].upper()
+                    # Fixed width, because a volume serial is a 32-bit value and
+                    # its leading zeros are part of it. hex()[2:] produced
+                    # "DD366F" for 0x00DD366F, where Windows reports 00DD-366F
+                    # and the device name in this very record reads
+                    # \VOLUME{0000000000000000-00dd366f}. The LNK parser stores
+                    # 00DD366F for the same disk, so the short form made two
+                    # Crow-Eye parsers disagree about one volume and silently
+                    # broke any correlation keyed on the serial.
+                    serial_number = "%08X" % struct.unpack_from("<I", vol_data, 16)[0]
                     
                     if self.volumes_info_offset + vol_dev_offset + (vol_dev_num_char * 2) > len(self.raw_bytes):
                         print(f"Warning: Device name for volume {i+1} extends beyond file size")
@@ -952,8 +960,7 @@ class PrefetchFile:
             return None
 
         try:
-            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
-            return windows_epoch + datetime.timedelta(microseconds=filetime / 10.0)
+            return filetime_to_datetime(filetime)
         except (OverflowError, ValueError):
             return None
     def _format_paths_with_drive_letters(self, paths):

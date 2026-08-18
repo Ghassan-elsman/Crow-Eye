@@ -9,28 +9,28 @@ energy consumption data for timeline reconstruction and behavior analysis.
 
 Features:
 ---------
-• Multi-Version Support: Windows 8/8.1/10/11 and Server 2012/2016/2019/2022
-• ESE Database Parsing: Native support for Extensible Storage Engine format
-• Application Tracking: Resource usage metrics per application
-• Network Analysis: Connectivity and data usage patterns
-• Energy Monitoring: Power consumption and battery metrics
-• User Attribution: Links activity to specific user accounts via SID resolution
-• Database Integration: SQLite storage with indexed forensic metadata
+- Multi-Version Support: Windows 8/8.1/10/11 and Server 2012/2016/2019/2022
+- ESE Database Parsing: Native support for Extensible Storage Engine format
+- Application Tracking: Resource usage metrics per application
+- Network Analysis: Connectivity and data usage patterns
+- Energy Monitoring: Power consumption and battery metrics
+- User Attribution: Links activity to specific user accounts via SID resolution
+- Database Integration: SQLite storage with indexed forensic metadata
 
 Supported SRUM Tables:
 ---------------------
-• Application Resource Usage: CPU time, I/O operations, memory usage
-• Network Connectivity: Connection times, interface information
-• Network Data Usage: Bytes sent/received per application
-• Energy Usage: Battery consumption and charge levels
+- Application Resource Usage: CPU time, I/O operations, memory usage
+- Network Connectivity: Connection times, interface information
+- Network Data Usage: Bytes sent/received per application
+- Energy Usage: Battery consumption and charge levels
 
 Forensic Value:
 --------------
-• Evidence of program execution with detailed resource metrics
-• Network activity timeline reconstruction
-• User behavior analysis and attribution
-• Timeline correlation with other artifacts
-• Identification of suspicious resource consumption patterns
+- Evidence of program execution with detailed resource metrics
+- Network activity timeline reconstruction
+- User behavior analysis and attribution
+- Timeline correlation with other artifacts
+- Identification of suspicious resource consumption patterns
 
 Usage Examples:
 --------------
@@ -75,7 +75,8 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.raw_file_copy import copy_locked_file_raw
-from utils.time_utils import format_forensic_timestamp, get_current_forensic_timestamp, get_current_utc
+from utils.time_utils import (format_forensic_timestamp, get_current_forensic_timestamp,
+                              get_current_utc, filetime_to_datetime, ensure_utc)
 
 # Configure logging for forensic analysis
 logging.basicConfig(
@@ -247,6 +248,104 @@ except Exception as e:
 
 
 # SRUM Table GUID Mappings
+def decode_binary_sid(blob: bytes) -> str:
+    """A binary SID as S-1-... , decoded without pywin32.
+
+    SRUM records the user as a raw SID structure. The parser resolved it through
+    win32security and fell back to `blob.hex()`, which puts an unusable string
+    where a SID belongs on any build without pywin32 - including a frozen EXE
+    that does not bundle it.
+
+    The structure is fixed, so no API is needed:
+        0x00 revision (1) - 0x01 sub-authority count (1)
+        0x02 identifier authority (6, big-endian)
+        0x08 sub-authorities (4 each, little-endian)
+
+    Verified against this machine's SRUM data: S-1-5-18, S-1-5-19, S-1-5-20 and
+    S-1-5-90-0-1 all decode correctly.
+    """
+    try:
+        if not blob or len(blob) < 8:
+            return ""
+        revision = blob[0]
+        count = blob[1]
+        authority = int.from_bytes(blob[2:8], "big")
+        subs = []
+        for i in range(count):
+            start = 8 + (4 * i)
+            if start + 4 > len(blob):
+                break
+            subs.append(struct.unpack_from("<I", blob, start)[0])
+        if not subs:
+            return "S-%d-%d" % (revision, authority)
+        return "S-%d-%d-%s" % (revision, authority, "-".join(str(s) for s in subs))
+    except Exception:
+        return ""
+
+
+def srum_filetime(value) -> Optional[datetime.datetime]:
+    """Convert a SRUM Int64 timestamp column to a datetime.
+
+    ESE stores TimeStamp as JET_coltypDateTime, which the reader already turns
+    into a datetime. EventTimestamp, ConnectStartTime and EndTime are Int64
+    columns holding a Windows FILETIME, so the reader hands back a plain int.
+    Those were being tested with isinstance(datetime) and discarded, which is
+    why three columns were empty on every row.
+
+    A datetime is passed straight through, so a column that changes type does
+    not silently start returning None.
+    """
+    if isinstance(value, datetime.datetime):
+        return value
+    if not isinstance(value, int) or value <= 0:
+        return None
+    try:
+        converted = filetime_to_datetime(value)
+    except (ValueError, OverflowError, OSError):
+        return None
+    # A wrong offset yields a plausible date rather than an exception, so bound
+    # it to the range SRUM can actually describe instead of trusting the value.
+    if not (1980 <= converted.year <= 2200):
+        return None
+    return converted
+
+
+def parse_srum_app_id(raw: str) -> dict:
+    """Split a SRUM application identity into its parts.
+
+    SRUM does not always record a path. Many entries use an AppId form:
+
+        !!svchost.exe!2054/02/06:15:19:25!1642e![netsvcs] [Winmgmt]
+
+    Keeping only the executable name makes every svchost row identical, and the
+    hosted service list is the one thing that tells them apart. It is separated
+    out here so the timeline provider - the only table that uses this form - can
+    record it.
+
+    A plain path is left exactly as it is; only the `!!` form is split.
+    """
+    result = {"app_name": "", "app_path": "", "hosted_services": ""}
+    if not raw:
+        return result
+    raw = str(raw).rstrip("\x00")
+
+    if not raw.startswith("!!"):
+        result["app_path"] = raw
+        result["app_name"] = os.path.basename(raw) if raw else raw
+        return result
+
+    parts = raw[2:].split("!")
+    result["app_name"] = parts[0] if parts else raw
+    # The bracketed service list is the trailing field when present.
+    for part in reversed(parts[1:]):
+        if "[" in part:
+            result["hosted_services"] = part.strip()
+            break
+    # An AppId names no path; leaving app_path empty keeps that honest rather
+    # than repeating the executable name as though it were one.
+    return result
+
+
 # These GUIDs identify specific tables in the SRUDB.dat ESE database
 SRUM_TABLE_GUIDS = {
     'APPLICATION_RESOURCE_USAGE': '{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}',
@@ -254,7 +353,21 @@ SRUM_TABLE_GUIDS = {
     'NETWORK_CONNECTIVITY': '{DD6636C4-8929-4683-974E-22C046A43763}',
     'ENERGY_USAGE': '{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}',
     'ENERGY_USAGE_LONG_TERM': '{DA73FB89-2BEA-4DDC-86B8-6E048C6DA477}',
+    'APPLICATION_TIMELINE': '{5C8CF1C7-7257-4F13-B223-970EF5939312}',
 }
+
+# Named once so the batched and the trailing insert can never drift apart.
+APP_TIMELINE_INSERT = """
+    INSERT INTO srum_app_timeline (
+        timestamp, app_name, app_path, hosted_services, user_sid, user_name,
+        end_time, duration_ms, span_ms, timeline_end, flags,
+        in_focus_s, psm_foreground_s, user_input_s, keyboard_input_s,
+        mouse_input_s, display_required_s, comp_rendered_s, comp_dirtied_s,
+        comp_propagated_s, audio_in_s, audio_out_s,
+        cycles, cycles_attr, cycles_wob,
+        disk_raw, network_bytes_raw, network_tail_raw
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
 
 # Special System IDs that don't have entries in SruDbIdMapTable
 # These IDs have NULL IdBlob values and represent system-level entities
@@ -296,6 +409,15 @@ SRUM_KNOWN_COLUMNS = {
     'ENERGY_USAGE': [
         'AutoIncId', 'TimeStamp', 'AppId', 'UserId',
         'EventTimestamp', 'StateTransition', 'ChargeLevel', 'CycleCount'
+    ],
+    'APPLICATION_TIMELINE': [
+        'AutoIncId', 'TimeStamp', 'AppId', 'UserId',
+        'Flags', 'EndTime', 'DurationMS', 'SpanMS', 'TimelineEnd',
+        'InFocusS', 'PSMForegroundS', 'UserInputS', 'KeyboardInputS',
+        'MouseInputS', 'DisplayRequiredS', 'CompRenderedS', 'CompDirtiedS',
+        'CompPropagatedS', 'AudioInS', 'AudioOutS',
+        'Cycles', 'CyclesAttr', 'CyclesWOB',
+        'DiskRaw', 'NetworkBytesRaw', 'NetworkTailRaw'
     ]
 }
 
@@ -443,6 +565,59 @@ class SRUMEnergyRecord:
     cycle_count: int = 0
 
 
+@dataclass
+class SRUMAppTimelineRecord:
+    """Represents an application timeline record from SRUM.
+
+    Where the resource usage tables record that a process ran, this provider
+    records how it was used: seconds in focus, seconds of keyboard and mouse
+    input. Most of those are sparse because the underlying activity is rare -
+    a service accrues CPU cycles for hours and never sees a keystroke.
+
+    Attributes:
+        timestamp (datetime): Record timestamp
+        app_name (str): Application executable name
+        app_path (str): Full path to application, empty for the `!!` AppId form
+        hosted_services (str): Service list for a shared host process
+        user_sid (str): Windows Security Identifier
+        user_name (str): Resolved username
+        end_time (datetime): End of the measured window
+        duration_ms (int): Milliseconds the application was running
+        span_ms (int): Milliseconds spanned by the measured window
+        in_focus_s (int): Seconds the application held foreground focus
+        keyboard_input_s (int): Seconds with keyboard input
+        mouse_input_s (int): Seconds with mouse input
+    """
+    timestamp: datetime.datetime
+    app_name: str = ""
+    app_path: str = ""
+    hosted_services: str = ""
+    user_sid: str = ""
+    user_name: str = ""
+    end_time: Optional[datetime.datetime] = None
+    duration_ms: int = 0
+    span_ms: int = 0
+    timeline_end: int = 0
+    flags: int = 0
+    in_focus_s: int = 0
+    psm_foreground_s: int = 0
+    user_input_s: int = 0
+    keyboard_input_s: int = 0
+    mouse_input_s: int = 0
+    display_required_s: int = 0
+    comp_rendered_s: int = 0
+    comp_dirtied_s: int = 0
+    comp_propagated_s: int = 0
+    audio_in_s: int = 0
+    audio_out_s: int = 0
+    cycles: int = 0
+    cycles_attr: int = 0
+    cycles_wob: int = 0
+    disk_raw: int = 0
+    network_bytes_raw: int = 0
+    network_tail_raw: int = 0
+
+
 class ESERecord:
     """Represents a single record from an ESE table."""
     
@@ -528,11 +703,13 @@ class ESERecord:
             elif column_type == JET_coltypBinary or column_type == JET_coltypLongBinary:
                 return buffer.raw[:actual_size.value]
             elif column_type == JET_coltypDateTime:
-                # OLE Automation date
+                # OLE Automation date. Returned tz-aware in UTC so it cannot be
+                # compared against an aware datetime and raise - every other
+                # timestamp this parser produces comes back aware.
                 if actual_size.value >= 8:
                     ole_date = struct.unpack('d', buffer.raw[:8])[0]
-                    # Convert OLE date to datetime
-                    return datetime.datetime(1899, 12, 30) + datetime.timedelta(days=ole_date)
+                    return ensure_utc(datetime.datetime(1899, 12, 30)
+                                      + datetime.timedelta(days=ole_date))
             else:
                 return buffer.raw[:actual_size.value]
         except Exception as e:
@@ -807,11 +984,7 @@ class SRUMParser:
             return None
         
         try:
-            # FILETIME epoch is January 1, 1601
-            # Convert 100-nanosecond intervals to seconds
-            timestamp = filetime / 10000000.0
-            epoch = datetime.datetime(1601, 1, 1)
-            return epoch + datetime.timedelta(seconds=timestamp)
+            return filetime_to_datetime(filetime)
         except Exception as e:
             logger.debug(f"Error converting FILETIME {filetime}: {e}")
             return None
@@ -957,35 +1130,38 @@ class SRUMParser:
                     
                     value_str = None
                     
-                    # IdType 3 appears to be binary SID data
+                    # IdType 3 is binary SID data.
+                    #
+                    # Decoded from the structure, NOT through win32security.
+                    # str(win32security.SID(...)) returns "PySID:S-1-5-21-..."
+                    # - a Python repr, not a SID - and 123322 of 221259 rows
+                    # were stored that way while the rest, coming from the
+                    # hardcoded special IDs, were clean. One artifact held the
+                    # same user in two forms, and neither the PySID ones nor
+                    # anything downstream could join against the clean SIDs the
+                    # registry parser writes.
+                    #
+                    # The structural decode is deterministic, needs no
+                    # dependency, and was verified against this machine's SRUM
+                    # data before being relied on.
                     if id_type == 3 and isinstance(id_blob, bytes):
-                        # This is a SID in binary format - convert to string
-                        try:
-                            # Try to convert binary SID to string SID
-                            if WIN32_AVAILABLE:
-                                import win32security
-                                sid_obj = win32security.SID(id_blob)
-                                value_str = str(sid_obj)
-                            else:
-                                # Fallback: just store as hex
-                                value_str = id_blob.hex()
-                        except Exception as sid_error:
-                            logger.debug(f"Could not convert SID for ID {id_index}: {sid_error}")
-                            # Store as hex as fallback
-                            value_str = id_blob.hex()
-                    
-                    # IdType 0 appears to be application strings
-                    elif id_type == 0 and isinstance(id_blob, bytes):
-                        # Try UTF-16LE decoding (most common for Windows strings)
+                        value_str = decode_binary_sid(id_blob)
+                        if not value_str:
+                            logger.debug(f"Could not decode SID for ID {id_index}")
+
+                    # IdTypes 0, 1 and 2 all carry application identities.
+                    # Only type 0 used to get this handling, so types 1 and 2 -
+                    # 557 of the first 4000 entries on a live machine - were
+                    # stored in a different shape than the same kind of entity
+                    # under type 0.
+                    #
+                    # The string is stored RAW. Splitting happens in
+                    # parse_srum_app_id at resolve time, so the service list and
+                    # the recorded timestamp survive instead of being discarded
+                    # here.
+                    elif id_type in (0, 1, 2) and isinstance(id_blob, bytes):
                         try:
                             value_str = id_blob.decode('utf-16le', errors='ignore').rstrip('\x00')
-                            # Remove the special !! prefix and metadata if present
-                            if value_str.startswith('!!'):
-                                # Format is like: !!svchost.exe!2028/05/11:16:56:05!1513f![RPCSS]
-                                # Extract just the executable name (first part after !!)
-                                parts = value_str[2:].split('!')
-                                if parts:
-                                    value_str = parts[0]  # Just the exe name
                         except Exception as decode_error:
                             logger.debug(f"Could not decode app string for ID {id_index}: {decode_error}")
                             value_str = None
@@ -1023,30 +1199,43 @@ class SRUMParser:
             # Don't raise - we can continue without ID resolution
     
     def resolve_app_id(self, app_id: int) -> Tuple[str, str]:
-        """Resolve application ID to name and path.
-        
+        """Resolve application ID to (app_name, app_path).
+
         Args:
             app_id (int): Application ID from SRUM table
-            
+
         Returns:
-            tuple: (app_name, app_path) - both will be the ID if not found
+            tuple: (app_name, app_path)
+        """
+        name, path, _services = self.resolve_app_identity(app_id)
+        return (name, path)
+
+    def resolve_app_identity(self, app_id: int) -> Tuple[str, str, str]:
+        """Resolve application ID including any hosted service list.
+
+        Returns:
+            tuple: (app_name, app_path, hosted_services)
+
+        hosted_services is only ever set by the `!!` AppId form, which on this
+        format appears solely in the application timeline provider - the tables
+        keyed on a device path never carry one.
         """
         if not app_id:
-            return ("Unknown", "Unknown")
-        
+            return ("Unknown", "Unknown", "")
+
         # Check special system IDs first
         if app_id in SPECIAL_APP_IDS:
-            return SPECIAL_APP_IDS[app_id]
-        
+            name, path = SPECIAL_APP_IDS[app_id]
+            return (name, path, "")
+
         # Look up in ID table
         if app_id in self.id_lookup:
-            full_path = self.id_lookup[app_id]
-            # Extract just the filename for app_name
-            app_name = os.path.basename(full_path) if full_path else str(app_id)
-            return (app_name, full_path)
-        
+            parts = parse_srum_app_id(self.id_lookup[app_id])
+            return (parts["app_name"] or str(app_id), parts["app_path"],
+                    parts["hosted_services"])
+
         # Not found - return descriptive text
-        return (f"Unknown App (ID:{app_id})", f"Unknown (ID:{app_id})")
+        return (f"Unknown App (ID:{app_id})", f"Unknown (ID:{app_id})", "")
     
     def resolve_user_id(self, user_id: int) -> Tuple[str, str]:
         """Resolve user ID to SID and username.
@@ -1346,9 +1535,8 @@ class SRUMParser:
                     user_sid, user_name = self.resolve_user_id(user_id)
                     
                     # Extract network connectivity metrics
-                    connect_start = self._get_column_value(record, 'ConnectStartTime')
-                    if connect_start and not isinstance(connect_start, datetime.datetime):
-                        connect_start = None
+                    connect_start = srum_filetime(
+                        self._get_column_value(record, 'ConnectStartTime'))
                     
                     srum_record = SRUMNetworkConnectivityRecord(
                         timestamp=timestamp,
@@ -1477,9 +1665,8 @@ class SRUMParser:
                     user_sid, user_name = self.resolve_user_id(user_id)
                     
                     # Extract energy metrics
-                    event_timestamp = self._get_column_value(record, 'EventTimestamp')
-                    if event_timestamp and not isinstance(event_timestamp, datetime.datetime):
-                        event_timestamp = None
+                    event_timestamp = srum_filetime(
+                        self._get_column_value(record, 'EventTimestamp'))
                     
                     srum_record = SRUMEnergyRecord(
                         timestamp=timestamp,
@@ -1500,10 +1687,91 @@ class SRUMParser:
                     continue
             
             logger.info(f"Successfully parsed {len(records)} energy usage records")
-        
+
         except Exception as e:
             logger.error(f"Error parsing energy usage table: {e}")
-        
+
+        return records
+
+    def parse_app_timeline(self, table) -> List[SRUMAppTimelineRecord]:
+        """Parse Application Timeline table.
+
+        Args:
+            table: ESE table object for the application timeline provider
+
+        Returns:
+            list: List of SRUMAppTimelineRecord objects
+        """
+        records = []
+
+        if not table:
+            logger.warning("Application Timeline table not found")
+            return records
+
+        try:
+            num_records = table.get_number_of_records()
+            logger.info(f"Parsing {num_records} application timeline records")
+
+            for i in range(num_records):
+                try:
+                    record = table.get_record(i)
+
+                    timestamp = self._get_column_value(record, 'TimeStamp')
+
+                    if not timestamp or not isinstance(timestamp, datetime.datetime):
+                        continue
+
+                    app_id = self._get_column_value(record, 'AppId', 0)
+                    app_name, app_path, hosted_services = self.resolve_app_identity(app_id)
+
+                    user_id = self._get_column_value(record, 'UserId', 0)
+                    user_sid, user_name = self.resolve_user_id(user_id)
+
+                    # EndTime is an Int64 FILETIME, not an ESE DateTime.
+                    end_time = srum_filetime(self._get_column_value(record, 'EndTime'))
+
+                    srum_record = SRUMAppTimelineRecord(
+                        timestamp=timestamp,
+                        app_name=app_name,
+                        app_path=app_path,
+                        hosted_services=hosted_services,
+                        user_sid=user_sid,
+                        user_name=user_name,
+                        end_time=end_time,
+                        duration_ms=self._get_column_value(record, 'DurationMS', 0) or 0,
+                        span_ms=self._get_column_value(record, 'SpanMS', 0) or 0,
+                        timeline_end=self._get_column_value(record, 'TimelineEnd', 0) or 0,
+                        flags=self._get_column_value(record, 'Flags', 0) or 0,
+                        in_focus_s=self._get_column_value(record, 'InFocusS', 0) or 0,
+                        psm_foreground_s=self._get_column_value(record, 'PSMForegroundS', 0) or 0,
+                        user_input_s=self._get_column_value(record, 'UserInputS', 0) or 0,
+                        keyboard_input_s=self._get_column_value(record, 'KeyboardInputS', 0) or 0,
+                        mouse_input_s=self._get_column_value(record, 'MouseInputS', 0) or 0,
+                        display_required_s=self._get_column_value(record, 'DisplayRequiredS', 0) or 0,
+                        comp_rendered_s=self._get_column_value(record, 'CompRenderedS', 0) or 0,
+                        comp_dirtied_s=self._get_column_value(record, 'CompDirtiedS', 0) or 0,
+                        comp_propagated_s=self._get_column_value(record, 'CompPropagatedS', 0) or 0,
+                        audio_in_s=self._get_column_value(record, 'AudioInS', 0) or 0,
+                        audio_out_s=self._get_column_value(record, 'AudioOutS', 0) or 0,
+                        cycles=self._get_column_value(record, 'Cycles', 0) or 0,
+                        cycles_attr=self._get_column_value(record, 'CyclesAttr', 0) or 0,
+                        cycles_wob=self._get_column_value(record, 'CyclesWOB', 0) or 0,
+                        disk_raw=self._get_column_value(record, 'DiskRaw', 0) or 0,
+                        network_bytes_raw=self._get_column_value(record, 'NetworkBytesRaw', 0) or 0,
+                        network_tail_raw=self._get_column_value(record, 'NetworkTailRaw', 0) or 0,
+                    )
+
+                    records.append(srum_record)
+
+                except Exception as e:
+                    logger.debug(f"Error parsing application timeline record {i}: {e}")
+                    continue
+
+            logger.info(f"Successfully parsed {len(records)} application timeline records")
+
+        except Exception as e:
+            logger.error(f"Error parsing application timeline table: {e}")
+
         return records
 
     def create_database_schema(self):
@@ -1598,11 +1866,51 @@ class SRUMParser:
                 )
             """)
             
+            # Create application timeline table
+            #
+            # This is the provider that records how an application was used
+            # rather than only that it ran - focus time, keyboard and mouse
+            # input. It is also the only table whose AppId uses the `!!` form,
+            # so hosted_services lives here and nowhere else.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS srum_app_timeline (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    app_name TEXT,
+                    app_path TEXT,
+                    hosted_services TEXT,
+                    user_sid TEXT,
+                    user_name TEXT,
+                    end_time TEXT,
+                    duration_ms INTEGER,
+                    span_ms INTEGER,
+                    timeline_end INTEGER,
+                    flags INTEGER,
+                    in_focus_s INTEGER,
+                    psm_foreground_s INTEGER,
+                    user_input_s INTEGER,
+                    keyboard_input_s INTEGER,
+                    mouse_input_s INTEGER,
+                    display_required_s INTEGER,
+                    comp_rendered_s INTEGER,
+                    comp_dirtied_s INTEGER,
+                    comp_propagated_s INTEGER,
+                    audio_in_s INTEGER,
+                    audio_out_s INTEGER,
+                    cycles INTEGER,
+                    cycles_attr INTEGER,
+                    cycles_wob INTEGER,
+                    disk_raw INTEGER,
+                    network_bytes_raw INTEGER,
+                    network_tail_raw INTEGER
+                )
+            """)
+
             # Create metadata table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS srum_metadata (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    parse_timestamp TEXT NOT NULL,
+                    parsed_at TEXT NOT NULL,
                     srudb_path TEXT,
                     total_records_parsed INTEGER,
                     parsing_duration_seconds REAL,
@@ -1624,7 +1932,12 @@ class SRUMParser:
             
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_energy_timestamp ON srum_energy_usage(timestamp)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_energy_app_name ON srum_energy_usage(app_name)")
-            
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_app_timeline_timestamp ON srum_app_timeline(timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_app_timeline_app_name ON srum_app_timeline(app_name)")
+
+            self._drop_retired_columns(cursor)
+
             conn.commit()
             conn.close()
             
@@ -1634,6 +1947,42 @@ class SRUMParser:
             logger.error(f"Error creating database schema: {e}")
             raise
     
+    # Columns that were added on a miscount and can never carry data on these
+    # four tables: hosted_services only ever comes from the `!!` AppId form,
+    # which none of them reference, and app_id_raw repeated app_path verbatim.
+    RETIRED_COLUMNS = {
+        'srum_application_usage': ('hosted_services', 'app_id_raw'),
+        'srum_network_connectivity': ('hosted_services', 'app_id_raw'),
+        'srum_network_data_usage': ('hosted_services', 'app_id_raw'),
+        'srum_energy_usage': ('hosted_services', 'app_id_raw'),
+    }
+
+    def _drop_retired_columns(self, cursor) -> None:
+        """Remove retired columns from a database created by an earlier build.
+
+        Rows are appended rather than replaced on each parse, so an existing
+        database cannot simply be recreated - the columns are dropped in place
+        and every other column is left untouched.
+        """
+        for table, columns in self.RETIRED_COLUMNS.items():
+            try:
+                cursor.execute("PRAGMA table_info(%s)" % table)
+                present = {row[1] for row in cursor.fetchall()}
+            except sqlite3.Error:
+                continue
+            if not present:
+                continue
+            for column in columns:
+                if column not in present:
+                    continue
+                try:
+                    cursor.execute("ALTER TABLE %s DROP COLUMN %s" % (table, column))
+                    logger.info("Removed retired column %s.%s", table, column)
+                except sqlite3.Error as e:
+                    # DROP COLUMN needs SQLite 3.35+. Leaving the column in
+                    # place is harmless; losing the rows would not be.
+                    logger.warning("Could not drop %s.%s: %s", table, column, e)
+
     def save_to_database(self, parsed_data: Dict[str, List], metadata: Optional[Dict[str, any]] = None) -> None:
         """Save parsed SRUM data to SQLite database.
         
@@ -1669,21 +2018,21 @@ class SRUMParser:
                         record.app_path,
                         record.user_sid,
                         record.user_name,
-                        format_cpu_time(record.foreground_cycle_time),
-                        format_cpu_time(record.background_cycle_time),
-                        format_cpu_time(record.face_time),
-                        format_number(record.foreground_context_switches),
-                        format_number(record.background_context_switches),
-                        format_bytes(record.foreground_bytes_read),
-                        format_bytes(record.foreground_bytes_written),
-                        format_number(record.foreground_num_read_operations),
-                        format_number(record.foreground_num_write_operations),
-                        format_number(record.foreground_number_of_flushes),
-                        format_bytes(record.background_bytes_read),
-                        format_bytes(record.background_bytes_written),
-                        format_number(record.background_num_read_operations),
-                        format_number(record.background_num_write_operations),
-                        format_number(record.background_number_of_flushes),
+                        record.foreground_cycle_time,
+                        record.background_cycle_time,
+                        record.face_time,
+                        record.foreground_context_switches,
+                        record.background_context_switches,
+                        record.foreground_bytes_read,
+                        record.foreground_bytes_written,
+                        record.foreground_num_read_operations,
+                        record.foreground_num_write_operations,
+                        record.foreground_number_of_flushes,
+                        record.background_bytes_read,
+                        record.background_bytes_written,
+                        record.background_num_read_operations,
+                        record.background_num_write_operations,
+                        record.background_number_of_flushes,
                     ))
                     
                     # Commit in batches of 1000
@@ -1733,10 +2082,10 @@ class SRUMParser:
                         record.app_path,
                         record.user_sid,
                         record.user_name,
-                        format_number(record.interface_luid),
-                        format_number(record.l2_profile_id),
-                        format_number(record.l2_profile_flags),
-                        format_time_duration(record.connected_time),
+                        record.interface_luid,
+                        record.l2_profile_id,
+                        record.l2_profile_flags,
+                        record.connected_time,
                         format_forensic_timestamp(record.connect_start_time) if record.connect_start_time else None,
                     ))
                     
@@ -1775,10 +2124,10 @@ class SRUMParser:
                         record.app_path,
                         record.user_sid,
                         record.user_name,
-                        format_number(record.interface_luid),
-                        format_number(record.l2_profile_id),
-                        format_bytes(record.bytes_sent),
-                        format_bytes(record.bytes_received),
+                        record.interface_luid,
+                        record.l2_profile_id,
+                        record.bytes_sent,
+                        record.bytes_received,
                     ))
                     
                     if len(batch) >= 1000:
@@ -1815,9 +2164,9 @@ class SRUMParser:
                         record.user_sid,
                         record.user_name,
                         format_forensic_timestamp(record.event_timestamp) if record.event_timestamp else None,
-                        format_number(record.state_transition),
-                        format_charge_level(record.charge_level),
-                        format_number(record.cycle_count),
+                        record.state_transition,
+                        record.charge_level,
+                        record.cycle_count,
                     ))
                     
                     if len(batch) >= 1000:
@@ -1839,17 +2188,71 @@ class SRUMParser:
                     """, batch)
                     conn.commit()
             
+            # Save application timeline records
+            #
+            # Stored as raw integers, not through format_number. A comma makes
+            # the value TEXT, and SQLite sorts every TEXT above every INTEGER,
+            # so `duration_ms > 1000000` matches all 38359 formatted rows
+            # whatever the threshold - and a Wing filtering on one of these
+            # would be quietly wrong. Formatting belongs to the view.
+            if 'app_timeline' in parsed_data:
+                records = parsed_data['app_timeline']
+                total_records += len(records)
+                logger.info(f"Saving {len(records)} application timeline records")
+
+                batch = []
+                for record in records:
+                    batch.append((
+                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                        record.app_name,
+                        record.app_path,
+                        record.hosted_services,
+                        record.user_sid,
+                        record.user_name,
+                        format_forensic_timestamp(record.end_time) if record.end_time else None,
+                        record.duration_ms,
+                        record.span_ms,
+                        record.timeline_end,
+                        record.flags,
+                        record.in_focus_s,
+                        record.psm_foreground_s,
+                        record.user_input_s,
+                        record.keyboard_input_s,
+                        record.mouse_input_s,
+                        record.display_required_s,
+                        record.comp_rendered_s,
+                        record.comp_dirtied_s,
+                        record.comp_propagated_s,
+                        record.audio_in_s,
+                        record.audio_out_s,
+                        record.cycles,
+                        record.cycles_attr,
+                        record.cycles_wob,
+                        record.disk_raw,
+                        record.network_bytes_raw,
+                        record.network_tail_raw,
+                    ))
+
+                    if len(batch) >= 1000:
+                        cursor.executemany(APP_TIMELINE_INSERT, batch)
+                        conn.commit()
+                        batch = []
+
+                if batch:
+                    cursor.executemany(APP_TIMELINE_INSERT, batch)
+                    conn.commit()
+
             # Save parsing metadata
             if metadata:
                 logger.info("Saving parsing metadata")
                 try:
                     cursor.execute("""
                         INSERT INTO srum_metadata (
-                            parse_timestamp, srudb_path, total_records_parsed,
+                            parsed_at, srudb_path, total_records_parsed,
                             parsing_duration_seconds, windows_version, notes
                         ) VALUES (?, ?, ?, ?, ?, ?)
                     """, (
-                        metadata.get('parse_timestamp', get_current_forensic_timestamp()),
+                        metadata.get('parsed_at', get_current_forensic_timestamp()),
                         metadata.get('srudb_path', self.srudb_path),
                         metadata.get('total_records', total_records),
                         metadata.get('parsing_duration_seconds', 0.0),
@@ -1896,7 +2299,8 @@ class SRUMParser:
         
         Returns:
             dict: Dictionary containing parsed data organized by table type
-                Keys: 'application_usage', 'network_connectivity', 'network_data_usage', 'energy_usage', 'warnings'
+                Keys: 'application_usage', 'network_connectivity', 'network_data_usage',
+                      'energy_usage', 'app_timeline', 'warnings'
                 Values: Lists of corresponding record objects, and list of warning messages
         """
         parsed_data = {
@@ -1904,6 +2308,7 @@ class SRUMParser:
             'network_connectivity': [],
             'network_data_usage': [],
             'energy_usage': [],
+            'app_timeline': [],
             'warnings': [],  # Track warnings during parsing
         }
         
@@ -1996,7 +2401,24 @@ class SRUMParser:
                     warning_msg = "Energy Usage tables not found (not available on Windows 8 or older systems)"
                     logger.info(warning_msg)
                     parsed_data['warnings'].append(warning_msg)
-            
+
+            # Parse Application Timeline table (Windows 10+)
+            logger.info("Parsing Application Timeline table")
+            timeline_table = self.get_table_by_guid(SRUM_TABLE_GUIDS['APPLICATION_TIMELINE'])
+            if timeline_table:
+                tables_to_close.append(timeline_table)
+                parsed_data['app_timeline'] = self.parse_app_timeline(timeline_table)
+                if progress_callback:
+                    progress_callback(
+                        len(parsed_data['app_timeline']),
+                        len(parsed_data['app_timeline']),
+                        "Application Timeline"
+                    )
+            else:
+                warning_msg = "Application Timeline table not found (not available on Windows 8 or older systems)"
+                logger.info(warning_msg)
+                parsed_data['warnings'].append(warning_msg)
+
             # Close all opened tables
             for table in tables_to_close:
                 try:
@@ -2156,7 +2578,7 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         
         # Prepare metadata for database storage
         metadata = {
-            'parse_timestamp': get_current_forensic_timestamp(),
+            'parsed_at': get_current_forensic_timestamp(),
             'srudb_path': srudb_path,
             'total_records': total_records,
             'parsing_duration_seconds': duration,

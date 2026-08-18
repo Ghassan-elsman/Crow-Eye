@@ -163,6 +163,7 @@ class DatabaseSearchIntegration:
             'srum_network_connectivity': ('SRUM', 'SRUM_network_connectivity_table', None, 'id', ['app_name', 'app_path', 'timestamp', 'user_name']),
             'srum_network_data_usage': ('SRUM', 'SRUM_network_data_table', None, 'id', ['app_name', 'app_path', 'timestamp', 'user_name']),
             'srum_energy_usage': ('SRUM', 'SRUM_energy_usage_table', None, 'id', ['app_name', 'app_path', 'timestamp', 'user_name']),
+            'srum_app_timeline': ('SRUM', 'SRUM_app_timeline_table', None, 'id', ['app_name', 'app_path', 'hosted_services', 'timestamp', 'user_name']),
         }
     
     def show_search_dialog(self, case_directory: str):

@@ -224,7 +224,7 @@ def artifacts_dir(tmp_path):
         CREATE TABLE journal_events (volume_letter TEXT, filename TEXT, usn INTEGER,
             major_version INTEGER, frn TEXT, parent_frn TEXT, timestamp TEXT,
             reason TEXT, source_info TEXT, security_id TEXT, file_attributes TEXT,
-            record_length INTEGER, inserted_at TEXT);
+            record_length INTEGER, parsed_at TEXT);
     """, {
         "journal_events": _usn_rows(),
     })
@@ -351,40 +351,40 @@ def _usn_rows():
                      "timestamp": "2026-06-12 13:00:0{}".format(i),
                      "reason": "FILE_CREATE | CLOSE", "source_info": "",
                      "security_id": "", "file_attributes": "", "record_length": 0,
-                     "inserted_at": ""})
+                     "parsed_at": ""})
         usn += 1
     # a rename pair (old -> new)
     rows.append({"volume_letter": "C", "filename": "draft.txt", "usn": usn,
                  "major_version": 2, "frn": "100", "parent_frn": "100",
                  "timestamp": "2026-06-12 14:00:00", "reason": "RENAME_OLD_NAME",
                  "source_info": "", "security_id": "", "file_attributes": "",
-                 "record_length": 0, "inserted_at": ""})
+                 "record_length": 0, "parsed_at": ""})
     usn += 1
     rows.append({"volume_letter": "C", "filename": "final.txt", "usn": usn,
                  "major_version": 2, "frn": "100", "parent_frn": "100",
                  "timestamp": "2026-06-12 14:00:01", "reason": "RENAME_NEW_NAME | CLOSE",
                  "source_info": "", "security_id": "", "file_attributes": "",
-                 "record_length": 0, "inserted_at": ""})
+                 "record_length": 0, "parsed_at": ""})
     usn += 1
     # a soft delete: rename into $Recycle.Bin
     rows.append({"volume_letter": "C", "filename": "secret.doc", "usn": usn,
                  "major_version": 2, "frn": "300", "parent_frn": "300",
                  "timestamp": "2026-06-12 15:00:00", "reason": "RENAME_OLD_NAME",
                  "source_info": "", "security_id": "", "file_attributes": "",
-                 "record_length": 0, "inserted_at": ""})
+                 "record_length": 0, "parsed_at": ""})
     usn += 1
     rows.append({"volume_letter": "C", "filename": "$R123456.doc", "usn": usn,
                  "major_version": 2, "frn": "300", "parent_frn": "300",
                  "timestamp": "2026-06-12 15:00:01", "reason": "RENAME_NEW_NAME | CLOSE",
                  "source_info": "", "security_id": "", "file_attributes": "",
-                 "record_length": 0, "inserted_at": ""})
+                 "record_length": 0, "parsed_at": ""})
     usn += 1
     # pure noise row (should be skipped)
     rows.append({"volume_letter": "C", "filename": "x.tmp", "usn": usn,
                  "major_version": 2, "frn": "400", "parent_frn": "400",
                  "timestamp": "2026-06-12 16:00:00", "reason": "CLOSE",
                  "source_info": "", "security_id": "", "file_attributes": "",
-                 "record_length": 0, "inserted_at": ""})
+                 "record_length": 0, "parsed_at": ""})
     usn += 1
     # a THREE-name rename chain for one file (frn 500 -> /Users/Alice/Documents)
     for old, new in (("a.txt", "b.txt"), ("b.txt", "c.txt")):
@@ -393,13 +393,13 @@ def _usn_rows():
                      "timestamp": "2026-06-12 17:00:0{}".format(usn % 10),
                      "reason": "RENAME_OLD_NAME", "source_info": "",
                      "security_id": "", "file_attributes": "", "record_length": 0,
-                     "inserted_at": ""})
+                     "parsed_at": ""})
         usn += 1
         rows.append({"volume_letter": "C", "filename": new, "usn": usn,
                      "major_version": 2, "frn": "500", "parent_frn": "500",
                      "timestamp": "2026-06-12 17:00:0{}".format(usn % 10),
                      "reason": "RENAME_NEW_NAME | CLOSE", "source_info": "",
                      "security_id": "", "file_attributes": "", "record_length": 0,
-                     "inserted_at": ""})
+                     "parsed_at": ""})
         usn += 1
     return rows

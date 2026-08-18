@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QSplitter, QFormLayout, QMenu
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
+from .crow_eye_icons import CrowEyeIcons
 from PyQt5.QtGui import QIcon
 from .ui_styling import CorrelationEngineStyles
 
@@ -76,21 +77,52 @@ class PipelineBuilderWidget(QWidget):
 
     def set_config_manager(self, config_manager):
         """
-        Set Configuration Manager and connect signals.
-        
+        Set Configuration Manager and connect its live-update signals.
+
         Args:
-            config_manager: ConfigurationManager instance
+            config_manager: a ``config.configuration_manager.ConfigurationManager``
+                (the app-level QObject singleton). Anything else is accepted, but
+                only the parts of it that exist are wired up.
+
+        These signals drive REFRESH ONLY -- the builder is fully usable without
+        them, so a manager that does not provide them must not stop the window
+        from opening. It used to: connecting unconditionally meant a caller
+        passing correlation_engine.config.ConfigManager (a plain file-IO class
+        with no signals at all, and an easy name to confuse) raised
+        AttributeError, which the caller's try/except turned into "Failed to open
+        Pipeline Builder". Degrading to "no live updates" is always better than
+        losing the editor.
         """
         self.config_manager = config_manager
-        
-        # Connect signals for real-time updates
-        if self.config_manager:
-            self.config_manager.feather_added.connect(self._on_feather_added)
-            self.config_manager.feather_removed.connect(self._on_feather_removed)
-            self.config_manager.wing_added.connect(self._on_wing_added)
-            self.config_manager.wing_removed.connect(self._on_wing_removed)
-            self.config_manager.configurations_loaded.connect(self._on_configurations_loaded)
-            print("[Pipeline Builder] Connected to Configuration Manager signals")
+        if not self.config_manager:
+            return
+
+        connected, missing = [], []
+        for signal_name, handler in (
+            ("feather_added", self._on_feather_added),
+            ("feather_removed", self._on_feather_removed),
+            ("wing_added", self._on_wing_added),
+            ("wing_removed", self._on_wing_removed),
+            ("configurations_loaded", self._on_configurations_loaded),
+        ):
+            signal = getattr(self.config_manager, signal_name, None)
+            if signal is None or not hasattr(signal, "connect"):
+                missing.append(signal_name)
+                continue
+            try:
+                signal.connect(handler)
+                connected.append(signal_name)
+            except Exception as e:
+                missing.append(f"{signal_name} ({e})")
+
+        if connected:
+            print(f"[Pipeline Builder] Connected to Configuration Manager signals: "
+                  f"{', '.join(connected)}")
+        if missing:
+            # Named rather than swallowed: this is the symptom of being handed the
+            # wrong manager, and it should be obvious in the log.
+            print(f"[Pipeline Builder] No live updates for: {', '.join(missing)} "
+                  f"(manager is {type(self.config_manager).__name__})")
     
     def set_case_directory(self, case_directory: str):
         """
@@ -339,8 +371,10 @@ class PipelineBuilderWidget(QWidget):
     
     def _create_feathers_section(self) -> QGroupBox:
         """Create feathers list section"""
-        group = QGroupBox("Feathers")
+        group = QGroupBox()
         layout = QVBoxLayout()
+        from .crow_eye_icons import group_title_label
+        layout.addWidget(group_title_label("feather", "Feathers"))
         
         # Feathers list
         self.feathers_list = QListWidget()
@@ -353,10 +387,12 @@ class PipelineBuilderWidget(QWidget):
         buttons_layout = QHBoxLayout()
         
         self.add_feather_btn = QPushButton("Add Feather")
+        self.add_feather_btn.setIcon(CrowEyeIcons.feather())
         self.add_feather_btn.clicked.connect(self._add_feather)
         buttons_layout.addWidget(self.add_feather_btn)
         
         self.create_feather_btn = QPushButton("Create Feather")
+        self.create_feather_btn.setIcon(CrowEyeIcons.feather())
         self.create_feather_btn.clicked.connect(self._create_feather)
         buttons_layout.addWidget(self.create_feather_btn)
         
@@ -375,8 +411,10 @@ class PipelineBuilderWidget(QWidget):
     
     def _create_wings_section(self) -> QGroupBox:
         """Create wings list section"""
-        group = QGroupBox("Wings")
+        group = QGroupBox()
         layout = QVBoxLayout()
+        from .crow_eye_icons import group_title_label
+        layout.addWidget(group_title_label("wing", "Wings"))
         
         # Wings list
         self.wings_list = QListWidget()
@@ -389,10 +427,12 @@ class PipelineBuilderWidget(QWidget):
         buttons_layout = QHBoxLayout()
         
         self.add_wing_btn = QPushButton("Add Wing")
+        self.add_wing_btn.setIcon(CrowEyeIcons.wing())
         self.add_wing_btn.clicked.connect(self._add_wing)
         buttons_layout.addWidget(self.add_wing_btn)
         
         self.create_wing_btn = QPushButton("Create Wing")
+        self.create_wing_btn.setIcon(CrowEyeIcons.wing())
         self.create_wing_btn.clicked.connect(self._create_wing)
         buttons_layout.addWidget(self.create_wing_btn)
         
@@ -1632,6 +1672,13 @@ class PipelineBuilderWidget(QWidget):
     
     def _check_for_new_configs(self):
         """Check for new and modified feather and wing configs and auto-add/update them"""
+        # Assigned inside the feathers branch below but read unconditionally at
+        # the end. With no feathers directory yet - the normal state before a
+        # case is opened - that raised UnboundLocalError on every tick of the
+        # watch timer, and Qt swallowed it to stderr, so the watcher looked
+        # alive while doing nothing.
+        new_configs = set()
+
         # Check for new and modified feathers
         if self._feathers_watch_dir and self._feathers_watch_dir.exists():
             current_configs = set(f.stem for f in self._feathers_watch_dir.glob("*.json"))
@@ -1936,8 +1983,10 @@ class PipelineBuilderWidget(QWidget):
         """Handle configurations loaded signal from Configuration Manager."""
         print("[Pipeline Builder] Configurations loaded signal received")
         
-        # Load feathers from Configuration Manager
-        if self.config_manager:
+        # Load feathers from Configuration Manager. Guarded for the same reason as
+        # the signals above: get_all_feathers() belongs to the app-level
+        # ConfigurationManager, and a manager without it must not break the load.
+        if self.config_manager and hasattr(self.config_manager, "get_all_feathers"):
             try:
                 feathers = self.config_manager.get_all_feathers()
                 print(f"[Pipeline Builder] Loading {len(feathers)} feathers from Configuration Manager")

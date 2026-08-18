@@ -9,29 +9,29 @@ energy consumption data for timeline reconstruction and behavior analysis.
 
 Features:
 ---------
-• Offline Parsing: Parse collected SRUDB.dat files without Windows API access
-• ESE Database Support: Uses libesedb-python for Extensible Storage Engine format
-• Application Tracking: Resource usage metrics per application
-• Network Analysis: Connectivity and data usage patterns
-• Energy Monitoring: Power consumption and battery metrics
-• User Attribution: Links activity to specific user accounts via SID resolution
-• Database Integration: SQLite storage with indexed forensic metadata
-• Schema Compatibility: Identical output to live SRUM-Claw parser
+- Offline Parsing: Parse collected SRUDB.dat files without Windows API access
+- ESE Database Support: Uses libesedb-python for Extensible Storage Engine format
+- Application Tracking: Resource usage metrics per application
+- Network Analysis: Connectivity and data usage patterns
+- Energy Monitoring: Power consumption and battery metrics
+- User Attribution: Links activity to specific user accounts via SID resolution
+- Database Integration: SQLite storage with indexed forensic metadata
+- Schema Compatibility: Identical output to live SRUM-Claw parser
 
 Supported SRUM Tables:
 ---------------------
-• Application Resource Usage: CPU time, I/O operations, memory usage
-• Network Connectivity: Connection times, interface information
-• Network Data Usage: Bytes sent/received per application
-• Energy Usage: Battery consumption and charge levels
+- Application Resource Usage: CPU time, I/O operations, memory usage
+- Network Connectivity: Connection times, interface information
+- Network Data Usage: Bytes sent/received per application
+- Energy Usage: Battery consumption and charge levels
 
 Forensic Value:
 --------------
-• Evidence of program execution with detailed resource metrics
-• Network activity timeline reconstruction
-• User behavior analysis and attribution
-• Timeline correlation with other artifacts
-• Identification of suspicious resource consumption patterns
+- Evidence of program execution with detailed resource metrics
+- Network activity timeline reconstruction
+- User behavior analysis and attribution
+- Timeline correlation with other artifacts
+- Identification of suspicious resource consumption patterns
 
 Usage Examples:
 --------------
@@ -71,7 +71,12 @@ from pathlib import Path
 # Import time utilities for standardized forensic timestamp formatting
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
-from utils.time_utils import format_forensic_timestamp, get_current_forensic_timestamp, get_current_utc
+from utils.time_utils import (format_forensic_timestamp, get_current_forensic_timestamp,
+                              get_current_utc, filetime_to_datetime, ensure_utc)
+# Shared with the live parser so both split an AppId and decode an Int64
+# timestamp identically.
+from Artifacts_Collectors.SRUM_Claw import (parse_srum_app_id, srum_filetime,
+                                            decode_binary_sid)
 
 # Try to import Registry library for registry hive parsing
 try:
@@ -201,11 +206,46 @@ SCHEMA_ENERGY_USAGE = """
     )
 """
 
+# Application Timeline Table Schema
+SCHEMA_APP_TIMELINE = """
+    CREATE TABLE IF NOT EXISTS srum_app_timeline (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        app_name TEXT,
+        app_path TEXT,
+        hosted_services TEXT,
+        user_sid TEXT,
+        user_name TEXT,
+        end_time TEXT,
+        duration_ms INTEGER,
+        span_ms INTEGER,
+        timeline_end INTEGER,
+        flags INTEGER,
+        in_focus_s INTEGER,
+        psm_foreground_s INTEGER,
+        user_input_s INTEGER,
+        keyboard_input_s INTEGER,
+        mouse_input_s INTEGER,
+        display_required_s INTEGER,
+        comp_rendered_s INTEGER,
+        comp_dirtied_s INTEGER,
+        comp_propagated_s INTEGER,
+        audio_in_s INTEGER,
+        audio_out_s INTEGER,
+        cycles INTEGER,
+        cycles_attr INTEGER,
+        cycles_wob INTEGER,
+        disk_raw INTEGER,
+        network_bytes_raw INTEGER,
+        network_tail_raw INTEGER
+    )
+"""
+
 # Metadata Table Schema
 SCHEMA_METADATA = """
     CREATE TABLE IF NOT EXISTS srum_metadata (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        parse_timestamp TEXT NOT NULL,
+        parsed_at TEXT NOT NULL,
         srudb_path TEXT,
         total_records_parsed INTEGER,
         parsing_duration_seconds REAL,
@@ -225,6 +265,8 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_net_data_app_name ON srum_network_data_usage(app_name)",
     "CREATE INDEX IF NOT EXISTS idx_energy_timestamp ON srum_energy_usage(timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_energy_app_name ON srum_energy_usage(app_name)",
+    "CREATE INDEX IF NOT EXISTS idx_app_timeline_timestamp ON srum_app_timeline(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_app_timeline_app_name ON srum_app_timeline(app_name)",
 ]
 
 # ============================================================================
@@ -239,6 +281,7 @@ SRUM_TABLE_GUIDS = {
     'NETWORK_CONNECTIVITY': '{DD6636C4-8929-4683-974E-22C046A43763}',
     'ENERGY_USAGE': '{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}',
     'ENERGY_USAGE_LONG_TERM': '{DA73FB89-2BEA-4DDC-86B8-6E048C6DA477}',
+    'APPLICATION_TIMELINE': '{5C8CF1C7-7257-4F13-B223-970EF5939312}',
 }
 
 # Special System IDs that don't have entries in SruDbIdMapTable
@@ -344,6 +387,7 @@ def create_database(case_path: Optional[str] = None) -> Tuple[sqlite3.Connection
         cursor.execute(SCHEMA_NETWORK_CONNECTIVITY)
         cursor.execute(SCHEMA_NETWORK_DATA_USAGE)
         cursor.execute(SCHEMA_ENERGY_USAGE)
+        cursor.execute(SCHEMA_APP_TIMELINE)
         cursor.execute(SCHEMA_METADATA)
         
         # Create indexes for performance
@@ -521,17 +565,31 @@ class IDResolver:
         
         Requirements: 5.1, 5.4, 5.6
         """
+        app_name, app_path, _services = self.resolve_app_identity(app_id)
+        return (app_name, app_path)
+
+    def resolve_app_identity(self, app_id: int) -> Tuple[str, str, str]:
+        """
+        Resolve application ID including any hosted service list.
+
+        Returns:
+            Tuple of (app_name, app_path, hosted_services).
+
+        Splitting is delegated to the live parser's parse_srum_app_id so both
+        parsers divide an AppId the same way. A bare basename would return the
+        whole `!!svchost.exe!...![netsvcs]` string as an application name.
+        """
         if app_id in self.app_id_map:
-            app_path = self.app_id_map[app_id]
-            app_name = os.path.basename(app_path) if app_path else f"AppID_{app_id}"
-            return (app_name, app_path)
+            parts = parse_srum_app_id(self.app_id_map[app_id])
+            return (parts["app_name"] or f"AppID_{app_id}",
+                    parts["app_path"], parts["hosted_services"])
         else:
             # Log unresolved ID (debug level to avoid cluttering output)
             if app_id not in self.unresolved_app_ids:
                 self.unresolved_app_ids.add(app_id)
                 logger.debug(f"Unresolved App ID: {app_id}")
-            
-            return (f"AppID_{app_id}", f"AppID_{app_id}")
+
+            return (f"AppID_{app_id}", f"AppID_{app_id}", "")
     
     def resolve_sid(self, user_id: int) -> Tuple[str, str]:
         """
@@ -575,6 +633,42 @@ class IDResolver:
             
             return (f"UserID_{user_id}", f"UserID_{user_id}")
 
+
+
+def classify_id_blob(id_blob, id_type=None):
+    """Decode one SruDbIdMapTable blob into (value, 'user'|'app').
+
+    IdType 3 is a binary SID structure, not text. Decoding every blob as
+    UTF-16 and asking whether the result starts with "S-1-" therefore files
+    every user identity as an application path, which is why 123307 of 221230
+    offline rows read "UserID_11039" where the live parser wrote a real SID.
+
+    decode_binary_sid is the live parser's, so both sides produce the same
+    string for the same bytes.
+    """
+    raw = bytes(id_blob) if isinstance(id_blob, (bytes, bytearray)) else None
+
+    if id_type == 3 and raw:
+        sid = decode_binary_sid(raw)
+        if sid:
+            return (sid, 'user')
+
+    if raw is not None:
+        text = raw.decode('utf-16-le', errors='ignore').rstrip(chr(0))
+    else:
+        text = str(id_blob)
+
+    if text.startswith('S-1-'):
+        return (text, 'user')
+
+    # A binary SID that arrived without an IdType still must not be filed as
+    # an application path.
+    if id_type is None and raw and len(raw) >= 8 and raw[0] == 1:
+        sid = decode_binary_sid(raw)
+        if sid:
+            return (sid, 'user')
+
+    return (text, 'app')
 
 # ============================================================================
 # ESE DATABASE PARSER
@@ -818,20 +912,10 @@ class ESEDatabaseParser:
                     try:
                         id_index = record.get('IdIndex')
                         id_blob = record.get('IdBlob')
-                        
+                        id_type = record.get('IdType')
+
                         if id_index and id_blob:
-                            # Determine if it's an app or user ID based on blob content
-                            if isinstance(id_blob, bytes):
-                                blob_str = id_blob.decode('utf-16-le', errors='ignore').rstrip('\x00')
-                            else:
-                                blob_str = str(id_blob)
-                            
-                            if blob_str.startswith('S-1-'):
-                                # It's a SID
-                                id_map[id_index] = (blob_str, 'user')
-                            else:
-                                # It's an app path
-                                id_map[id_index] = (blob_str, 'app')
+                            id_map[id_index] = classify_id_blob(id_blob, id_type)
                     
                     except Exception as e:
                         logger.debug(f"Error parsing ID map record: {e}")
@@ -843,18 +927,11 @@ class ESEDatabaseParser:
                     try:
                         record = table.get_record(i)
                         id_index = record.get_value_data(0)  # IdIndex column
-                        id_blob = record.get_value_data(2)  # IdBlob column
-                        
+                        id_type = record.get_value_data(1)   # IdType column
+                        id_blob = record.get_value_data(2)   # IdBlob column
+
                         if id_index and id_blob:
-                            # Determine if it's an app or user ID based on blob content
-                            blob_str = id_blob.decode('utf-16-le', errors='ignore').rstrip('\x00')
-                            
-                            if blob_str.startswith('S-1-'):
-                                # It's a SID
-                                id_map[id_index] = (blob_str, 'user')
-                            else:
-                                # It's an app path
-                                id_map[id_index] = (blob_str, 'app')
+                            id_map[id_index] = classify_id_blob(id_blob, id_type)
                     
                     except Exception as e:
                         logger.debug(f"Error parsing ID map record {i}: {e}")
@@ -1078,7 +1155,7 @@ class ESEDatabaseParser:
 
                         # Extract network connectivity metrics
                         connect_start_time_raw = record.get('ConnectStartTime')
-                        connect_start_time = self._convert_filetime_to_datetime(connect_start_time_raw) if connect_start_time_raw else None
+                        connect_start_time = self._convert_int64_filetime(connect_start_time_raw)
 
                         parsed_record = {
                             'timestamp': format_forensic_timestamp(timestamp),
@@ -1134,7 +1211,7 @@ class ESEDatabaseParser:
                         l2_profile_flags = record.get_value_data(6)  # L2ProfileFlags
                         connected_time = record.get_value_data(7)  # ConnectedTime
                         connect_start_time_raw = record.get_value_data(8)  # ConnectStartTime
-                        connect_start_time = self._convert_filetime_to_datetime(connect_start_time_raw) if connect_start_time_raw else None
+                        connect_start_time = self._convert_int64_filetime(connect_start_time_raw)
 
                         # Create record dictionary
                         parsed_record = {
@@ -1209,24 +1286,40 @@ class ESEDatabaseParser:
                 timestamp_bytes = filetime_int.to_bytes(8, byteorder='little')
                 ole_date = struct.unpack('<d', timestamp_bytes)[0]
                 
-                # Convert OLE Date to datetime
+                # Convert OLE Date to datetime, and hand back a tz-aware UTC
+                # value so it cannot be compared against an aware one and raise.
                 # OLE Automation Date epoch is December 30, 1899
                 base_date = datetime.datetime(1899, 12, 30)
-                return base_date + datetime.timedelta(days=ole_date)
-            
+                return ensure_utc(base_date + datetime.timedelta(days=ole_date))
+
             else:
-                # pyesedb/libesedb use standard FILETIME format
-                # FILETIME epoch is January 1, 1601
-                # Convert 100-nanosecond intervals to seconds
-                # This matches the live parser's conversion exactly
-                timestamp = filetime_int / 10000000.0
-                epoch = datetime.datetime(1601, 1, 1)
-                return epoch + datetime.timedelta(seconds=timestamp)
+                # pyesedb/libesedb use standard FILETIME format.
+                # Shared with the live parser so both convert identically.
+                return filetime_to_datetime(filetime_int)
 
         except Exception as e:
             logger.debug(f"Error converting FILETIME {filetime}: {e}")
             return None
     
+    def _convert_int64_filetime(self, value):
+        """Convert an Int64 FILETIME column to a datetime.
+
+        _convert_filetime_to_datetime reads a value as an OLE Automation Date
+        under dissect, which is right for TimeStamp - a real ESE DateTime
+        column - and wrong for EventTimestamp, ConnectStartTime and EndTime.
+        Those are Int64 columns holding a FILETIME, and the OLE reading turns
+        them into 1899-12-30 rather than raising, so the error is invisible.
+
+        Delegates to the live parser so both agree on the same input.
+        """
+        if value is None:
+            return None
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return None
+        return srum_filetime(value)
+
     def _get_record_value(self, record, column_name_or_index, default=None):
         """
         Get a value from a record, handling both dissect.esedb and pyesedb APIs.
@@ -1426,7 +1519,7 @@ class ESEDatabaseParser:
 
                         # Extract energy usage metrics
                         event_timestamp_raw = record.get('EventTimestamp')
-                        event_timestamp = self._convert_filetime_to_datetime(event_timestamp_raw) if event_timestamp_raw else None
+                        event_timestamp = self._convert_int64_filetime(event_timestamp_raw)
 
                         parsed_record = {
                             'timestamp': format_forensic_timestamp(timestamp),
@@ -1477,7 +1570,7 @@ class ESEDatabaseParser:
 
                         # Extract energy usage metrics
                         event_timestamp_raw = record.get_value_data(4)  # EventTimestamp
-                        event_timestamp = self._convert_filetime_to_datetime(event_timestamp_raw) if event_timestamp_raw else None
+                        event_timestamp = self._convert_int64_filetime(event_timestamp_raw)
 
                         state_transition = record.get_value_data(5)  # StateTransition
                         charge_level = record.get_value_data(6)  # ChargeLevel
@@ -1509,7 +1602,123 @@ class ESEDatabaseParser:
 
         return records
 
+    # Column order of the application timeline provider, used only by the
+    # positional pyesedb path. Read by name where the library allows it.
+    APP_TIMELINE_FIELDS = (
+        ('flags', 'Flags'),
+        ('duration_ms', 'DurationMS'),
+        ('span_ms', 'SpanMS'),
+        ('timeline_end', 'TimelineEnd'),
+        ('in_focus_s', 'InFocusS'),
+        ('psm_foreground_s', 'PSMForegroundS'),
+        ('user_input_s', 'UserInputS'),
+        ('keyboard_input_s', 'KeyboardInputS'),
+        ('mouse_input_s', 'MouseInputS'),
+        ('display_required_s', 'DisplayRequiredS'),
+        ('comp_rendered_s', 'CompRenderedS'),
+        ('comp_dirtied_s', 'CompDirtiedS'),
+        ('comp_propagated_s', 'CompPropagatedS'),
+        ('audio_in_s', 'AudioInS'),
+        ('audio_out_s', 'AudioOutS'),
+        ('cycles', 'Cycles'),
+        ('cycles_attr', 'CyclesAttr'),
+        ('cycles_wob', 'CyclesWOB'),
+        ('disk_raw', 'DiskRaw'),
+        ('network_bytes_raw', 'NetworkBytesRaw'),
+        ('network_tail_raw', 'NetworkTailRaw'),
+    )
 
+    def parse_app_timeline(self, resolver: 'IDResolver') -> List[Dict]:
+        """
+        Parse the Application Timeline table from the SRUM database.
+
+        This provider records how an application was used rather than only
+        that it ran - focus time, keyboard and mouse input - and is the only
+        table whose AppId uses the `!!` form that carries a hosted service
+        list.
+
+        Args:
+            resolver: IDResolver instance for App ID and SID resolution
+
+        Returns:
+            List of dictionaries containing parsed application timeline records
+        """
+        records = []
+        table_guid = SRUM_TABLE_GUIDS['APPLICATION_TIMELINE']
+
+        try:
+            table = self.get_table_by_name(table_guid)
+            if not table:
+                logger.warning(f"Application Timeline table not found (GUID: {table_guid})")
+                return records
+
+            logger.info(f"Parsing Application Timeline table (GUID: {table_guid})")
+
+            if ESEDB_LIBRARY == "dissect":
+                rows = table.records()
+            else:
+                rows = (table.get_record(i) for i in range(table.get_number_of_records()))
+
+            # pyesedb addresses columns positionally, so build a name to index
+            # map from the table itself rather than hardcoding offsets that
+            # differ between Windows builds.
+            column_index = {}
+            if ESEDB_LIBRARY != "dissect":
+                try:
+                    for i in range(table.get_number_of_columns()):
+                        column_index[table.get_column(i).name] = i
+                except Exception as e:
+                    logger.debug(f"Could not map Application Timeline columns: {e}")
+
+            def value_of(record, name):
+                if ESEDB_LIBRARY == "dissect":
+                    return record.get(name)
+                if name not in column_index:
+                    return None
+                return record.get_value_data(column_index[name])
+
+            for record in rows:
+                try:
+                    timestamp = self._convert_filetime_to_datetime(value_of(record, 'TimeStamp'))
+                    if not timestamp:
+                        continue
+
+                    app_id = value_of(record, 'AppId')
+                    user_id = value_of(record, 'UserId')
+
+                    if app_id:
+                        app_name, app_path, hosted_services = resolver.resolve_app_identity(app_id)
+                    else:
+                        app_name, app_path, hosted_services = ("Unknown", "Unknown", "")
+                    user_sid, user_name = resolver.resolve_sid(user_id) if user_id else ("Unknown", "Unknown")
+
+                    end_time = self._convert_int64_filetime(value_of(record, 'EndTime'))
+
+                    parsed_record = {
+                        'timestamp': format_forensic_timestamp(timestamp),
+                        'app_name': app_name,
+                        'app_path': app_path,
+                        'hosted_services': hosted_services,
+                        'user_sid': user_sid,
+                        'user_name': user_name,
+                        'end_time': format_forensic_timestamp(end_time) if end_time else None,
+                    }
+                    for column, source in self.APP_TIMELINE_FIELDS:
+                        value = value_of(record, source)
+                        parsed_record[column] = value if value is not None else 0
+
+                    records.append(parsed_record)
+
+                except Exception as e:
+                    logger.debug(f"Error parsing Application Timeline record: {e}")
+                    continue
+
+            logger.info(f"Successfully parsed {len(records)} Application Timeline records")
+
+        except Exception as e:
+            logger.error(f"Error parsing Application Timeline table: {e}")
+
+        return records
 
 
 
@@ -1789,7 +1998,29 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 
                 conn.commit()
                 logger.info("Energy Usage records inserted successfully")
-            
+
+            # Parse Application Timeline table
+            timeline_records = parser.parse_app_timeline(resolver)
+            stats['app_timeline_records'] = len(timeline_records)
+            stats['total_records'] += len(timeline_records)
+
+            if timeline_records:
+                logger.info(f"Inserting {len(timeline_records)} Application Timeline records into database...")
+                columns = ['timestamp', 'app_name', 'app_path', 'hosted_services',
+                           'user_sid', 'user_name', 'end_time'] + \
+                          [column for column, _source in parser.APP_TIMELINE_FIELDS]
+                statement = "INSERT INTO srum_app_timeline (%s) VALUES (%s)" % (
+                    ", ".join(columns), ", ".join("?" * len(columns)))
+                for record in timeline_records:
+                    try:
+                        cursor.execute(statement, tuple(record[c] for c in columns))
+                    except Exception as e:
+                        logger.error(f"Error inserting Application Timeline record: {e}")
+                        stats['errors'] += 1
+
+                conn.commit()
+                logger.info("Application Timeline records inserted successfully")
+
             logger.info("SRUM parsing completed successfully")
             
             # Calculate duration
@@ -1798,14 +2029,19 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             
             # Insert metadata
             cursor.execute("""
-                INSERT INTO srum_metadata 
-                (parse_timestamp, srudb_path, total_records_parsed, parsing_duration_seconds, notes)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO srum_metadata
+                (parsed_at, srudb_path, total_records_parsed, parsing_duration_seconds,
+                 windows_version, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 get_current_forensic_timestamp(),
                 srudb_path,
                 stats['total_records'],
                 duration,
+                # The live parser writes "Unknown" here rather than leaving the
+                # column NULL; this is an image, so the analyst's own Windows
+                # version would be the wrong answer, not a better one.
+                'Unknown',
                 f"Parsed with {ESEDB_LIBRARY}"
             ))
             

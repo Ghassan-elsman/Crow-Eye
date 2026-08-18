@@ -1,5 +1,5 @@
 """
-NarrativeMapService — the Eye's persistent, court-defensible working memory.
+NarrativeMapService — the Eye's persistent, auditable, tamper-evident working memory.
 
 The Eye (a gemma-class LLM) is stateless between turns. The Narrative Map is the
 single place where "what we know and what we have concluded" lives for a case, as a

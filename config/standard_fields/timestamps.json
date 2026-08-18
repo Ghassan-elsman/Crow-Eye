@@ -147,6 +147,7 @@
     "bookkeeping": [
         "parsed_at",
         "parsed_timestamp",
+        "parse_timestamp",
         "inserted_at",
         "created_at"
     ]

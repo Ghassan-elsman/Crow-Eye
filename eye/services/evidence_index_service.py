@@ -6,7 +6,7 @@ forensic rows so the model can find candidate evidence by concept ("remote acces
 tools", "powershell download cradle") without authoring perfect SQL. It returns
 CANDIDATE rows with full `database:table:rowid` provenance that the model then
 **confirms with exact SQL** — semantic hits are approximate and never complete, so
-SQL stays the authoritative, court-defensible path.
+SQL stays the authoritative path, traceable to source records.
 
 Design constraints (OSS Crow-Eye):
 - Dependency-light: brute-force cosine over embeddings persisted on disk; no faiss/

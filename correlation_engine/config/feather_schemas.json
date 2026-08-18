@@ -42,7 +42,8 @@
   "shimcache_entries": {
     "artifact_type": "ShimCache",
     "primary_timestamp_column": "last_modified",
-    "identity_columns_preferred": ["filename", "path"],
+    "_comment": "package_family_name first: a fifth of AppCompatCache entries are Store/UWP applications, which record a package identity rather than a file path. Before those were decoded out of the path column they correlated on a raw tab-delimited record and could never match the same program elsewhere.",
+    "identity_columns_preferred": ["package_family_name", "filename", "path"],
     "table_kind": "execution_evidence"
   },
 
@@ -50,7 +51,8 @@
     "artifact_type": "LNK",
     "primary_timestamp_column": "Time_Modification",
     "secondary_timestamp_columns": ["Time_Creation", "Time_Access"],
-    "identity_columns_preferred": ["Source_Name", "Local_Path"],
+    "_comment": "Local_Path first: it is the target the shortcut points at, which is what matches the same program in Prefetch, Amcache and ShimCache. Source_Name is only the .lnk filename. Local_Path was empty on two thirds of shortcuts until the target was resolved from the environment block and IDList, so this ordering only became useful once that was fixed.",
+    "identity_columns_preferred": ["Local_Path", "Source_Name"],
     "table_kind": "user_activity"
   },
 
@@ -73,7 +75,7 @@
   "journal_events": {
     "artifact_type": "USN",
     "primary_timestamp_column": "timestamp",
-    "secondary_timestamp_columns": ["inserted_at"],
+    "secondary_timestamp_columns": ["parsed_at"],
     "identity_columns_preferred": ["filename"],
     "table_kind": "filesystem_metadata"
   },
@@ -164,7 +166,15 @@
 
   "TypedPaths": {
     "artifact_type": "Registry",
-    "identity_columns_preferred": ["data", "name"],
+    "_comment": "row_data is the current column; data is the name older case databases used. Both listed so a case parsed by an earlier build still resolves identity to the typed path rather than falling through to name, which is only the MRU index (url1, url2).",
+    "identity_columns_preferred": ["row_data", "data", "name"],
+    "table_kind": "user_activity"
+  },
+
+  "RecentDocs": {
+    "artifact_type": "Registry",
+    "_comment": "Same row_data/data history as TypedPaths.",
+    "identity_columns_preferred": ["row_data", "data", "name"],
     "table_kind": "user_activity"
   },
 

@@ -66,6 +66,10 @@ class ArtifactDetector:
             'exact': ['srum_network_data_usage', 'srum_network_usage', 'network_data_usage'],
             'partial': ['srum_network', 'network_usage']
         },
+        'SRUM_AppTimeline': {
+            'exact': ['srum_app_timeline', 'srum_application_timeline', 'app_timeline'],
+            'partial': ['srum_timeline', 'app_timeline']
+        },
         'AmCache': {
             'exact': ['amcache', 'amcache_entries', 'application_cache'],
             'partial': ['amcache', 'cache']
@@ -388,7 +392,51 @@ class ArtifactDetector:
             # Registry subtypes
             'UserAssist', 'ShellBags', 'MUICache', 'RecentDocs', 'OpenSaveMRU', 
             'LastSaveMRU', 'TypedPaths', 'WordWheelQuery', 'BAM', 'InstalledSoftware',
-            'SystemServices', 'AutoStartPrograms',
+            'SystemServices', 'AutoStartPrograms', 'ScheduledTasks',
+            'UserAccounts',
+
+            # Forensic coverage: posture, exposure, devices, activity
+            'SecurityPosture', 'DefenderExclusions', 'FirewallRules',
+            'NetworkShares', 'ConnectedDevices', 'MountPoints2',
+            'RDPClientMRU', 'OfficeDocuments', 'FeatureUsage',
+            'CompatibilityAssistant', 'RecentApps', 'ApplicationArtifacts',
+
+            # SRUM application timeline: focus, keyboard and mouse seconds.
+            'SRUM_AppTimeline',
+
+            # Persistence / ASEP subtypes - one table per registry launch point.
+            # Named for the artifact, never for the technique that abuses it:
+            # shell_open_command, not "uac_bypass".
+            'winlogon', 'image_file_execution_options', 'appinit_dlls', 'appcert_dlls',
+            'active_setup', 'run_services', 'run_services_once', 'policies_explorer_run',
+            'user_shell_folders', 'lsa_packages', 'boot_execute',
+            'clsid_inprocserver32', 'command_processor', 'drivers32',
+            'shell_service_object_delay_load', 'browser_helper_objects',
+            'shared_task_scheduler', 'shell_icon_overlay_identifiers',
+            'credential_providers', 'netsh_helper_dlls', 'amsi_providers',
+            'security_providers', 'print_monitors', 'print_processors',
+            'network_providers', 'wmi_autorecover_mofs', 'windows_load_run',
+            'shell_open_command',
+
+            # Security posture and anti-forensics, one key per table
+            'rdp_tcp', 'usbstor_start', 'windows_script_host',
+            'dnscache_parameters', 'files_not_to_snapshot', 'winevt_channels',
+
+            # Device attribution
+            'wpdbusenum', 'device_classes', 'volume_info_cache',
+
+            # Host identity
+            'machine_guid', 'product_options', 'os_install_history',
+            'active_computer_name', 'hivelist', 'system_environment',
+            'network_adapters', 'group_policy_history',
+
+            # Per-user activity
+            'file_exts', 'cid_size_mru', 'programs_cache', 'regedit_lastkey',
+            'printer_connections', 'explorer_advanced',
+
+            # SAM group membership and the SECURITY hive
+            'local_groups', 'lsa_policy', 'audit_policy', 'lsa_secrets',
+            'cached_domain_logons',
 
             # SRUM subtypes 
             'SRUM_ApplicationUsage', 'SRUM_NetworkDataUsage',

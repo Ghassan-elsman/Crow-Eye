@@ -9,19 +9,19 @@ complete deleted file reconstruction.
 
 Features:
 ---------
-• Multi-Version Support: Windows Vista/7/8/10/11 $I/$R file formats
-• Metadata Extraction: Original filename, full path, deletion timestamp, file size
-• User Attribution: Correlates deleted files with user SIDs
-• File Type Analysis: Identifies file types through binary signature analysis
-• Recovery Assessment: Determines file recovery possibility and integrity status
-• Database Integration: SQLite storage with comprehensive forensic metadata
+- Multi-Version Support: Windows Vista/7/8/10/11 $I/$R file formats
+- Metadata Extraction: Original filename, full path, deletion timestamp, file size
+- User Attribution: Correlates deleted files with user SIDs
+- File Type Analysis: Identifies file types through binary signature analysis
+- Recovery Assessment: Determines file recovery possibility and integrity status
+- Database Integration: SQLite storage with comprehensive forensic metadata
 
 Supported Artifacts:
 -------------------
-• $I Files: Metadata containers with original file information
-• $R Files: Actual deleted file content for recovery analysis
-• User SID Mapping: Links deleted files to specific user accounts
-• Timestamp Analysis: Precise deletion time tracking
+- $I Files: Metadata containers with original file information
+- $R Files: Actual deleted file content for recovery analysis
+- User SID Mapping: Links deleted files to specific user accounts
+- Timestamp Analysis: Precise deletion time tracking
 
 Usage Examples:
 --------------
@@ -77,7 +77,8 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from file_signature_detector import FileSignatureDetector, get_detector
-from time_utils import get_current_utc, format_forensic_timestamp, get_current_forensic_timestamp
+from time_utils import (get_current_utc, format_forensic_timestamp,
+                        get_current_forensic_timestamp, filetime_to_datetime)
 
 # Helper function to run PowerShell without showing window
 def run_powershell_hidden(command: str, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -735,8 +736,7 @@ class RecycleBinParser:
             if filetime == 0 or filetime < 0:
                 return None
 
-            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
-            dt = windows_epoch + datetime.timedelta(microseconds=filetime / 10.0)
+            dt = filetime_to_datetime(filetime)
 
             # Basic sanity check: year between 1601 and 3000
             if dt.year < 1601 or dt.year > 3000:
@@ -834,7 +834,7 @@ class RecycleBinParser:
         try:
             # Check if $R file/directory exists
             if not os.path.exists(file_path):
-                return "❌ Not found - permanently deleted"
+                return "[FAIL] Not found - permanently deleted"
             
             # Check if it's a directory (deleted folder)
             if os.path.isdir(file_path):
@@ -852,19 +852,19 @@ class RecycleBinParser:
                                 pass
                     
                     if file_count == 0:
-                        return "📁 Empty folder - can be restored"
+                        return "[DIR] Empty folder - can be restored"
                     elif original_size > 0:
                         recovery_percentage = (total_size / original_size) * 100
                         if recovery_percentage >= 95:
-                            return f"✅ Folder intact ({file_count} files) - full recovery possible"
+                            return f"[OK] Folder intact ({file_count} files) - full recovery possible"
                         elif recovery_percentage >= 50:
-                            return f"⚠️ Folder partial ({file_count} files, {recovery_percentage:.1f}%)"
+                            return f"[WARN] Folder partial ({file_count} files, {recovery_percentage:.1f}%)"
                         else:
-                            return f"⚠️ Folder incomplete ({file_count} files, {recovery_percentage:.1f}%)"
+                            return f"[WARN] Folder incomplete ({file_count} files, {recovery_percentage:.1f}%)"
                     else:
-                        return f"✅ Folder available ({file_count} files) - can be restored"
+                        return f"[OK] Folder available ({file_count} files) - can be restored"
                 except Exception as e:
-                    return f"📁 Folder exists - recovery possible (scan error)"
+                    return f"[DIR] Folder exists - recovery possible (scan error)"
             
             # It's a file - check size
             current_size = os.path.getsize(file_path)
@@ -877,31 +877,31 @@ class RecycleBinParser:
             
             # Enhanced status assessment for files
             if current_size == 0:
-                return "❌ Zero bytes - overwritten/corrupted"
+                return "[FAIL] Zero bytes - overwritten/corrupted"
             elif current_size == original_size:
                 # Additional checks for file integrity
                 if self._check_file_integrity(file_path, original_size):
-                    return "✅ Full recovery possible - file intact"
+                    return "[OK] Full recovery possible - file intact"
                 else:
-                    return "⚠️ Full size but may be corrupted"
+                    return "[WARN] Full size but may be corrupted"
             elif current_size < original_size:
                 if recovery_percentage >= 90:
-                    return f"⚠️ Nearly complete ({recovery_percentage:.1f}%) - good recovery chance"
+                    return f"[WARN] Nearly complete ({recovery_percentage:.1f}%) - good recovery chance"
                 elif recovery_percentage >= 50:
-                    return f"⚠️ Partial recovery possible ({recovery_percentage:.1f}%)"
+                    return f"[WARN] Partial recovery possible ({recovery_percentage:.1f}%)"
                 elif recovery_percentage >= 10:
-                    return f"❌ Limited recovery ({recovery_percentage:.1f}%) - mostly overwritten"
+                    return f"[FAIL] Limited recovery ({recovery_percentage:.1f}%) - mostly overwritten"
                 else:
-                    return "❌ Minimal data remaining - poor recovery chance"
+                    return "[FAIL] Minimal data remaining - poor recovery chance"
             else:
                 # File is larger than expected
                 size_diff = current_size - original_size
-                return f"⚠️ Size mismatch (+{self.format_file_size(size_diff)}) - may be corrupted"
+                return f"[WARN] Size mismatch (+{self.format_file_size(size_diff)}) - may be corrupted"
                 
         except PermissionError:
-            return "❌ Access denied - cannot assess recovery"
+            return "[FAIL] Access denied - cannot assess recovery"
         except Exception as e:
-            return f"❌ Assessment failed: {str(e)[:50]}"
+            return f"[FAIL] Assessment failed: {str(e)[:50]}"
     
     def _check_file_integrity(self, file_path: str, expected_size: int) -> bool:
         """Basic file integrity check.

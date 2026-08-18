@@ -14,6 +14,112 @@ from utils.time_utils import format_forensic_timestamp, filetime_to_datetime, sy
 logger = logging.getLogger(__name__)
 
 
+# MUICache stores one registry value per property of an executable, named
+# "<path>.<PropertyName>". Longest first, so ".ApplicationCompany" is matched
+# before any shorter suffix that could also match.
+MUICACHE_PROPERTY_SUFFIXES = (
+    '.ApplicationCompany',
+    '.FriendlyAppName',
+    '.FileDescription',
+    '.ProductVersion',
+    '.ApplicationName',
+    '.ProductName',
+    '.CompanyName',
+    '.FileVersion',
+)
+
+
+# Shell items store localised folder names as a resource reference into a DLL
+# rather than as text, so a decoded path reads
+# "C:\shell32.dll,-21813\Ghass\shell32.dll,-21798" instead of
+# "C:\Users\Ghass\Desktop".
+#
+# Resolved from a table, not through SHLoadIndirectString: the API answers about
+# the machine running Crow-Eye, in its language, which is the same mistake
+# user_identity exists to prevent - an image acquired from another machine would
+# be described using the analyst's folder names. A table gives live and offline
+# the same answer, and the raw reference is kept beside the resolved one.
+MUI_RESOURCE_NAMES = {
+    'shell32.dll,-21769': 'Documents',
+    'shell32.dll,-21770': 'Music',
+    'shell32.dll,-21779': 'Pictures',
+    'shell32.dll,-21787': 'Videos',
+    'shell32.dll,-21798': 'Desktop',
+    'shell32.dll,-21813': 'Users',
+    'shell32.dll,-21815': 'Downloads',
+    'windows.storage.dll,-21769': 'Documents',
+    'windows.storage.dll,-21770': 'Music',
+    'windows.storage.dll,-21779': 'Pictures',
+    'windows.storage.dll,-21787': 'Videos',
+    'windows.storage.dll,-21798': 'Desktop',
+    'windows.storage.dll,-21813': 'Users',
+    'windows.storage.dll,-21815': 'Downloads',
+    'windows.storage.dll,-21823': 'Screenshots',
+}
+
+
+def resolve_mui_reference(component: str) -> str:
+    """Folder name for a MUI resource reference, or the component unchanged.
+
+    Matching is case-insensitive and ignores any leading '@', which is how the
+    reference appears in some shell items.
+    """
+    if not component:
+        return component
+    key = component.lstrip('@').strip().lower()
+    for ref, name in MUI_RESOURCE_NAMES.items():
+        if key == ref.lower():
+            return name
+    return component
+
+
+def resolve_mui_path(path: str) -> str:
+    """Apply resolve_mui_reference to every component of a backslash path."""
+    if not path or ',' not in path:
+        return path
+    return '\\'.join(resolve_mui_reference(p) for p in path.split('\\'))
+
+
+# Characters Windows does not allow in a file or folder name. A candidate
+# containing one of these did not come from a name field.
+_ILLEGAL_NAME_CHARS = set('<>:"/|?*') | {chr(c) for c in range(0x20)}
+
+
+def is_plausible_mft_record(entry: int) -> bool:
+    """Whether a shell item's file reference can be an NTFS MFT record number.
+
+    A shell item carries this field whatever filesystem the volume uses. On
+    exFAT - common on external and secondary drives - it holds a directory
+    entry value, and reporting that as an MFT record gives the analyst a number
+    that looks authoritative and resolves to nothing.
+
+    NTFS addresses records in 1 KB units, so even a 4 TB volume stays well
+    under 2**32. Values above that did not come from an MFT.
+    """
+    return 0 < entry < 2 ** 32
+
+
+def is_plausible_name(candidate: str) -> bool:
+    """Whether a decoded string can be a real file or folder name.
+
+    Only the shell item types that define where their name lives are read
+    structurally; everything else is a guess, and a guess that yields control
+    bytes or `}D"pN` must be dropped rather than stored. An empty cell is an
+    acknowledged gap; a fabricated folder name is a wrong answer an analyst
+    cannot tell from a right one.
+    """
+    if not candidate:
+        return False
+    text = candidate.strip()
+    if len(text) < 2:
+        return False
+    if any(ch in _ILLEGAL_NAME_CHARS for ch in text):
+        return False
+    # Real names are mostly letters, digits and the usual punctuation.
+    ordinary = sum(1 for ch in text if ch.isalnum() or ch in " .-_()[]{}'&+,~#@!$%^=;")
+    return ordinary / len(text) >= 0.8
+
+
 def extract_unicode_string(binary_data: bytes, offset: int = 0) -> str:
     """
     Extract null-terminated Unicode (UTF-16-LE) string from binary data.
@@ -223,7 +329,11 @@ def parse_shell_item_id(binary_data: bytes) -> dict:
                     guid_str = _format_guid(guid_bytes)
                     special_folder_name = _SPECIAL_FOLDER_GUIDS.get(guid_str, '')
                     result['special_folder'] = special_folder_name
-                    result['file_name'] = special_folder_name  # Use special folder name as file_name
+                    # An unrecognised known-folder GUID is recorded as the GUID.
+                    # It is a fact the analyst can look up, and it keeps the
+                    # folder chain rooted; the previous fallback let a byte scan
+                    # invent a name for it instead.
+                    result['file_name'] = special_folder_name or '{%s}' % guid_str
             
             # File system object (0x30-0x3F range)
             elif 0x30 <= type_indicator <= 0x3F:
@@ -234,6 +344,11 @@ def parse_shell_item_id(binary_data: bytes) -> dict:
                 result['long_name'] = names.get('long_name', '')
                 # Prioritize long name over short name
                 result['file_name'] = result['long_name'] if result['long_name'] else result['short_name']
+                # A localised folder is stored as a resource reference
+                # ("windows.storage.dll,-21779"), which is not a usable name on
+                # a report. Resolved from the static table; short_name still
+                # carries what the registry literally held.
+                result['file_name'] = resolve_mui_reference(result['file_name'])
                 
                 # Extract extension blocks if present
                 if len(item_data) > 0x4E:
@@ -260,11 +375,17 @@ def parse_shell_item_id(binary_data: bytes) -> dict:
                 result['drive_letter'] = drive_letter
                 result['file_name'] = drive_letter  # Use drive letter as file_name
             
-            # Try to extract any readable string from other types
+            # Any other shell item type. The name is only taken when the item
+            # actually carries one: a byte scan over an unrecognised structure
+            # invents names like }D"pN and S"M, and a fabricated folder name is
+            # worse evidence than an acknowledged gap.
             else:
-                generic_name = _extract_generic_path(item_data)
-                if generic_name:
-                    result['file_name'] = generic_name
+                names = _extract_filesystem_names(item_data)
+                candidate = names.get('long_name', '')
+                if is_plausible_name(candidate):
+                    result['short_name'] = names.get('short_name', '')
+                    result['long_name'] = candidate
+                    result['file_name'] = resolve_mui_reference(candidate)
         
         return result
         
@@ -304,104 +425,124 @@ def _extract_filesystem_path(item_data: bytes) -> str:
         return ""
 
 
+def find_extension_block(item_data: bytes, signature: int = 0xBEEF0004):
+    """Locate a Shell Item extension block by its signature.
+
+    The last two bytes of a file-entry item hold the offset of its first
+    extension block; each block starts [size:2][version:2][signature:4] and the
+    blocks run consecutively from there.
+
+    Returns (offset, size, version) or (None, 0, 0).
+
+    Located by signature, never by an assumed offset. Assuming the layout is
+    what produced the name bug this replaced: a shell item's fields move with
+    its version and its name length, so a fixed offset is right only by luck.
+    """
+    try:
+        if len(item_data) < 8:
+            return (None, 0, 0)
+        first = struct.unpack_from('<H', item_data, len(item_data) - 2)[0]
+        offset = first
+        # Walk the chain rather than trusting the first block to be the one we
+        # want - 0xBEEF0026 (a date block) commonly precedes 0xBEEF0004.
+        while 0 < offset < len(item_data) - 8:
+            size, version, sig = struct.unpack_from('<HHI', item_data, offset)
+            if size < 8:
+                break
+            if sig == signature:
+                return (offset, size, version)
+            offset += size
+        return (None, 0, 0)
+    except Exception as e:
+        logger.debug(f"Extension block scan failed: {e}")
+        return (None, 0, 0)
+
+
+def _beef0004_name_offset(version: int) -> int:
+    """Where the long name starts inside a 0xBEEF0004 block, by version.
+
+    The header grows with the version, so the name offset is computed, not
+    guessed. Verified against live data: a version 9 block puts the name at
+    0x2E, which is where `4orensics.case2` actually sits.
+
+        0x00 size, 0x02 version, 0x04 signature
+        0x08 creation (FAT, 4), 0x0C last access (FAT, 4), 0x10 unknown (2)
+        v >= 7: unknown (2) + file reference (8) + unknown (8)
+        v >= 3: long string size (2)
+        v >= 9: unknown (4)
+        v >= 8: unknown (4)
+        then the UTF-16 name
+    """
+    offset = 0x24 if version >= 7 else 0x12
+    if version >= 3:
+        offset += 2
+    if version >= 9:
+        offset += 4
+    if version >= 8:
+        offset += 4
+    return offset
+
+
 def _extract_filesystem_names(item_data: bytes) -> dict:
     """
-    Extract both short and long names from filesystem Shell Item ID.
-    
+    Extract both short and long names from a filesystem Shell Item ID.
+
     Args:
         item_data: Binary data for a single Shell Item ID
-    
+
     Returns:
         Dictionary containing:
             - 'short_name': 8.3 format name (if available)
             - 'long_name': Unicode long name (if available)
+
+    Both names are read from where the structure says they are. The previous
+    implementation scanned from offset 0x40 in 2-byte steps, scored whatever
+    looked filename-like, and kept the best guess - which produced names that
+    did not match the disk. It could only start a candidate on A-Z/a-z, so
+    `4orensics.case2` was stored as `orensics.case2`; a compensating "skip a
+    character if it looks like xName" rule pushed other names the other way
+    (`extracted_artifacts` gained a leading backtick), and raw structure bytes
+    such as `S"M` and `}D"pN` could outscore the real name entirely.
     """
     try:
         result = {'short_name': '', 'long_name': ''}
-        
-        # File system items typically have name at offset 0x04 or later
-        # Structure: [size:2][type:1][flags:1][...metadata...][short_name][...][long_name]
-        
-        # Extract short name (8.3 format) - usually ASCII at offset 0x0E
-        short_name = ""
-        if len(item_data) > 0x10:
-            # Try to extract short name at offset 0x0E (common location)
-            short_name_offset = 0x0E
-            for i in range(short_name_offset, min(len(item_data), short_name_offset + 12)):
-                if item_data[i] == 0:
-                    break
-                if 0x20 <= item_data[i] <= 0x7E:  # Printable ASCII
-                    short_name += chr(item_data[i])
-        
-        if short_name and len(short_name) > 1:
-            result['short_name'] = short_name.strip()
-        
-        # Try to find long name (Unicode) - usually after offset 0x40
-        # The long name is typically preceded by a size marker
-        best_unicode = ""
-        best_score = 0
-        
-        for offset in range(0x40, len(item_data) - 8, 2):
-            # Look for potential Unicode string start
-            if item_data[offset] != 0 and item_data[offset + 1] == 0:
-                # Check if this is a printable ASCII character (most filenames start with these)
-                if 0x41 <= item_data[offset] <= 0x7A:  # A-Z or a-z
-                    # Check if the previous 2 bytes are also a letter (might be part of the same string)
-                    if offset >= 2:
-                        prev_byte = item_data[offset - 2]
-                        prev_null = item_data[offset - 1]
-                        # If previous is also a letter in UTF-16-LE format, skip this offset
-                        if prev_null == 0 and 0x41 <= prev_byte <= 0x7A:
-                            continue
-                    
-                    # Potential Unicode string
-                    unicode_str = extract_unicode_string(item_data, offset)
-                    if unicode_str and len(unicode_str) > 3:  # Must be at least 4 chars to avoid single-char artifacts
-                        # Check if this looks like "xName" pattern where x is lowercase and Name starts with uppercase
-                        # This often indicates the first character is an artifact
-                        if (len(unicode_str) > 1 and 
-                            unicode_str[0].islower() and 
-                            unicode_str[1].isupper()):
-                            # Try extracting from 2 bytes later (skip the first character)
-                            alt_offset = offset + 2
-                            if alt_offset < len(item_data) - 4:
-                                alt_str = extract_unicode_string(item_data, alt_offset)
-                                if alt_str and len(alt_str) > 3:
-                                    unicode_str = alt_str
-                        
-                        # Score this string based on how "filename-like" it is
-                        # Higher score = more likely to be the actual filename
-                        score = 0
-                        
-                        # Prefer strings that start with uppercase (more common for folder names)
-                        if unicode_str[0].isupper():
-                            score += 15
-                        elif unicode_str[0].isalnum():
-                            score += 10
-                        
-                        # Prefer longer strings
-                        score += len(unicode_str)
-                        
-                        # Prefer strings with high ratio of valid filename characters
-                        valid_chars = sum(1 for c in unicode_str if c.isalnum() or c in ' .-_()[]{}')
-                        if len(unicode_str) > 0:
-                            char_ratio = valid_chars / len(unicode_str)
-                            score += int(char_ratio * 20)
-                        
-                        # Penalize strings with control characters
-                        control_chars = sum(1 for c in unicode_str if ord(c) < 32)
-                        score -= control_chars * 5
-                        
-                        if score > best_score:
-                            best_score = score
-                            best_unicode = unicode_str
-        
-        # Store the best Unicode match as long name
-        if best_unicode and best_score > 10:
-            result['long_name'] = best_unicode.strip()
-        
+
+        # Primary name at 0x0E, NUL-terminated. ASCII unless the item's
+        # attribute flags mark it Unicode.
+        if len(item_data) > 0x0E:
+            unicode_name = bool(len(item_data) > 0x0D and (item_data[0x0C] & 0x04))
+            body = item_data[0x0E:]
+            if unicode_name:
+                end = 0
+                while end + 1 < len(body) and body[end:end + 2] != b'\x00\x00':
+                    end += 2
+                primary = body[:end].decode('utf-16-le', errors='ignore')
+            else:
+                primary = body.split(b'\x00')[0].decode('ascii', errors='ignore')
+            primary = primary.strip()
+            if primary:
+                result['short_name'] = primary
+
+        # Long name from the 0xBEEF0004 extension block.
+        offset, size, version = find_extension_block(item_data, 0xBEEF0004)
+        if offset is not None:
+            block = item_data[offset:offset + size]
+            name_at = _beef0004_name_offset(version)
+            if 0 < name_at < len(block):
+                raw = block[name_at:]
+                end = 0
+                while end + 1 < len(raw) and raw[end:end + 2] != b'\x00\x00':
+                    end += 2
+                long_name = raw[:end].decode('utf-16-le', errors='ignore').strip()
+                if long_name:
+                    result['long_name'] = long_name
+
+        # No extension block (older items) - the primary name is the only name.
+        if not result['long_name']:
+            result['long_name'] = result['short_name']
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Error extracting filesystem names: {e}")
         return {'short_name': '', 'long_name': ''}
@@ -1025,9 +1166,36 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
             else:
                 logger.warning(f"UserAssist Version 6 data too short: expected 72 bytes, got {len(binary_data)}")
         
+        elif len(binary_data) >= 68:
+            # Any other version number, but the Windows 7+ record shape.
+            #
+            # The version DWORD was allow-listed against 3, 5, 6 and 63, so a
+            # build reporting anything else fell through here and every field
+            # was discarded - silently, because the entry still produced a row.
+            # Windows 11 writes version 26 (0x1A) with the identical 72-byte
+            # layout: run count at 0x04, focus count at 0x08, focus time at
+            # 0x0C, float padding at 0x10, FILETIME at 0x3C. Verified against
+            # 316 live entries, 234 of which carry a timestamp that lands in a
+            # plausible range and matches observed use.
+            #
+            # Trust the record length, not the version number: a version we have
+            # never seen is far more likely to share this shape than to be
+            # unreadable, and reading it costs nothing if the values are zero.
+            result['run_count'] = struct.unpack('<I', binary_data[4:8])[0]
+            result['focus_count'] = struct.unpack('<I', binary_data[8:12])[0]
+            result['focus_time'] = struct.unpack('<I', binary_data[12:16])[0]
+            result['last_execution'] = parse_filetime(binary_data[60:68])
+            logger.info(
+                f"  Parsed UserAssist version {version} using the 72-byte "
+                f"layout: count={result['run_count']}, "
+                f"focus_count={result['focus_count']}, "
+                f"last_exec={result['last_execution']}")
+
         else:
-            logger.warning(f"Unknown UserAssist version: {version}")
-        
+            logger.warning(
+                f"Unknown UserAssist version {version} and unusable length "
+                f"{len(binary_data)}")
+
         logger.debug(f"Parsed UserAssist entry: path={program_path}, count={result['run_count']}, execution={result['last_execution']}")
         return result
         
@@ -1137,59 +1305,48 @@ def _extract_extension_blocks(item_data: bytes) -> dict:
         if len(item_data) <= 0x4E:
             return result
         
-        # Extract FILETIME timestamps at known offsets
-        # NOTE: Only extract from documented Shell Item extension block offsets
-        # Validation: 1980-2100 range (reasonable for forensic analysis)
-        # FILETIME for 1980-01-01: 119600064000000000
-        # FILETIME for 2100-12-31: 159017088000000000
-        
-        # Offset 0x18: Creation time (8 bytes, FILETIME format)
-        if len(item_data) >= 0x20:
+        # Everything below comes from the LOCATED 0xBEEF0004 block, not from
+        # assumed offsets into the item.
+        #
+        # The previous version read 8-byte FILETIMEs at item offsets 0x18/0x20/
+        # 0x28. The block stores creation and last-access as 4-byte FAT
+        # date-times at block offsets 0x08 and 0x0C, and the item's own fields
+        # move with its name length - so those reads landed inside the filename
+        # and the 1980-2100 sanity range then discarded the result. That is why
+        # creation_time was empty on 750 of 750 Shellbags rows and access_time
+        # on 748: the check was rejecting garbage rather than the parse working.
+        blk_off, blk_size, blk_ver = find_extension_block(item_data, 0xBEEF0004)
+        if blk_off is None:
+            return result
+
+        block = item_data[blk_off:blk_off + blk_size]
+
+        # 0x08 creation (FAT), 0x0C last access (FAT)
+        if len(block) >= 0x10:
             try:
-                filetime_value = struct.unpack('<Q', item_data[0x18:0x20])[0]
-                # Validate timestamp is reasonable (between 1980 and 2100)
-                # Also check it's not zero or 0xFFFFFFFFFFFFFFFF (invalid markers)
-                if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
-                    if 119600064000000000 < filetime_value < 159017088000000000:
-                        result['creation_time'] = parse_filetime(item_data[0x18:0x20])
-            except:
+                created = struct.unpack_from('<I', block, 0x08)[0]
+                accessed = struct.unpack_from('<I', block, 0x0C)[0]
+                result['creation_time'] = _convert_dos_datetime(created)
+                result['access_time'] = _convert_dos_datetime(accessed)
+            except Exception:
                 pass
-        
-        # Offset 0x20: Access time (8 bytes, FILETIME format)
-        if len(item_data) >= 0x28:
+
+        # NTFS file reference: version 7 and later only, at block offset 0x14.
+        # 6 bytes record number + 2 bytes sequence.
+        #
+        # Only recorded when it can actually BE an NTFS reference. The field is
+        # present whatever the volume's filesystem, and on exFAT it holds a
+        # directory-entry value instead - storing that as mft_record_number
+        # labelled 22 of 618 Shellbags rows on this machine with a number that
+        # is not an MFT record and cannot be looked up as one.
+        if blk_ver >= 7 and len(block) >= 0x1C:
             try:
-                filetime_value = struct.unpack('<Q', item_data[0x20:0x28])[0]
-                # Validate timestamp is reasonable
-                if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
-                    if 119600064000000000 < filetime_value < 159017088000000000:
-                        result['access_time'] = parse_filetime(item_data[0x20:0x28])
-            except:
-                pass
-        
-        # Offset 0x28: Write time (8 bytes, FILETIME format)
-        if len(item_data) >= 0x30:
-            try:
-                filetime_value = struct.unpack('<Q', item_data[0x28:0x30])[0]
-                # Validate timestamp is reasonable
-                if filetime_value > 0 and filetime_value != 0xFFFFFFFFFFFFFFFF:
-                    if 119600064000000000 < filetime_value < 159017088000000000:
-                        result['write_time'] = parse_filetime(item_data[0x28:0x30])
-            except:
-                pass
-        
-        # Extract NTFS file reference (8 bytes: 6 bytes record number + 2 bytes sequence)
-        # Offset 0x30: NTFS file reference
-        if len(item_data) >= 0x38:
-            try:
-                # Extract 6-byte MFT record number (little-endian)
-                mft_record_bytes = item_data[0x30:0x36] + b'\x00\x00'  # Pad to 8 bytes
-                mft_record = struct.unpack('<Q', mft_record_bytes)[0]
-                result['mft_record'] = mft_record
-                
-                # Extract 2-byte sequence number
-                mft_sequence = struct.unpack('<H', item_data[0x36:0x38])[0]
-                result['mft_sequence'] = mft_sequence
-            except:
+                mft_record = struct.unpack('<Q', block[0x14:0x1A] + b'\x00\x00')[0]
+                mft_sequence = struct.unpack_from('<H', block, 0x1A)[0]
+                if is_plausible_mft_record(mft_record):
+                    result['mft_record'] = mft_record
+                    result['mft_sequence'] = mft_sequence
+            except Exception:
                 pass
         
         return result
@@ -1346,6 +1503,35 @@ _SPECIAL_FOLDER_GUIDS = {
     '645FF040-5081-101B-9F08-00AA002F954E': 'Recycle Bin',
     '871C5380-42A0-1069-A2EA-08002B30309D': 'Internet Explorer',
     'F02C1A0D-BE21-4350-88B0-7367FC96EF3C': 'Network',
+    # Known folders a BagMRU tree actually roots on. Without these the root
+    # item resolved to nothing, the folder chain lost its absolute start, and
+    # the name fell through to a byte scan that produced strings like }D"pN.
+    'B4BFCC3A-DB2C-424C-B029-7FE99A87C641': 'Desktop',
+    '59031A47-3F72-44A7-89C5-5595FE6B30EE': 'UsersFiles',
+    '5E6C858F-0E22-4760-9AFE-EA3317B67173': 'User Profile',
+    '374DE290-123F-4565-9164-39C4925E467B': 'Downloads',
+    '088E3905-0323-4B02-9826-5D99428E115F': 'Downloads',
+    '33E28130-4E1E-4676-835A-98395C3BC3BB': 'Pictures',
+    '3ADD1653-EB32-4CB0-BBD7-DFA0ABB5ACCA': 'Pictures',
+    'A0953C92-50DC-43BF-BE83-3742FED03C9C': 'Videos',
+    'A65D0A4E-C3A0-4C60-8C21-1F9C1F0F1F2A': 'Videos',
+    '4BD8D571-6D19-48D3-BE97-422220080E43': 'Music',
+    '3DFDF296-DBEC-4FB4-81D1-6A3438BCF4DE': 'Music',
+    'FDD39AD0-238F-46AF-ADB4-6C85480369C7': 'Documents',
+    'D3162B92-9365-467A-956B-92703ACA08AF': 'Documents',
+    '1CF1260C-4DD0-4EBB-811F-33C572699FDE': 'Music',
+    '24AD3AD4-A569-4530-98E1-AB02F9417AA8': 'Pictures',
+    'F86FA3AB-70D2-4FC7-9C99-FCBF05467F3A': 'Videos',
+    '0762D272-C50A-4BB0-A382-697DCD729B80': 'Users',
+    '6D809377-6AF0-444B-8957-A3773F02200E': 'Program Files (x64)',
+    '7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E': 'Program Files (x86)',
+    'F38BF404-1D43-42F2-9305-67DE0B28FC23': 'Windows',
+    '1AC14E77-02E7-4E5D-B744-2EB1AE5198B7': 'System32',
+    '9E3995AB-1F9C-4F13-B827-48B24B6C7174': 'User Pinned',
+    '679F85CB-0220-4080-B29B-5540CC05AAB6': 'Quick Access',
+    '18989B1D-99B5-455B-841C-AB7C74E4DDFC': 'Videos',
+    'D34A6CA6-62C2-4C34-8A7C-14709C1AD938': 'Common Places',
+    '5B934B42-522B-4C34-BBFE-37A3EF7B9C90': 'This Device',
 }
 
 
@@ -1659,9 +1845,23 @@ def parse_muicache_entry(value_name: str, value_data: str) -> dict:
                 'file_extension': ''
             }
         
-        # Extract application path (value name)
+        # Extract application path (value name).
+        #
+        # A MUICache value name is "<path>.<PropertyName>", not a bare path -
+        # Windows stores one value per property of the same executable. Leaving
+        # the suffix on made every app_path point at a file that does not exist
+        # (0 of 309 resolved on a live machine), turned file_extension into
+        # "friendlyappname", stored each program twice, and left MUICache unable
+        # to correlate with Prefetch, Amcache, ShimCache or BAM, all of which
+        # record the real path.
         app_path = value_name.strip()
-        
+        muicache_property = ''
+        for suffix in MUICACHE_PROPERTY_SUFFIXES:
+            if app_path.lower().endswith(suffix.lower()):
+                muicache_property = app_path[-len(suffix):].lstrip('.')
+                app_path = app_path[:-len(suffix)]
+                break
+
         # Extract application display name (value data)
         app_name = value_data.strip() if value_data else ''
         
@@ -1692,18 +1892,20 @@ def parse_muicache_entry(value_name: str, value_data: str) -> dict:
         result = {
             'app_path': app_path,
             'app_name': app_name,
-            'file_extension': file_extension
+            'file_extension': file_extension,
+            'muicache_property': muicache_property
         }
-        
+
         logger.debug(f"Parsed MUICache entry: path={app_path}, name={app_name}, ext={file_extension}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error parsing MUICache entry: {e}")
         return {
             'app_path': value_name if value_name else '',
             'app_name': value_data if value_data else '',
-            'file_extension': ''
+            'file_extension': '',
+            'muicache_property': ''
         }
 
 
@@ -1840,219 +2042,273 @@ def _categorize_search_term(search_term: str) -> str:
 
 def parse_user_account_v_value(binary_data: bytes) -> dict:
     r"""
-    Parse SAM V value structure containing user account metadata.
-    
-    The V value in SAM\SAM\Domains\Account\Users\<RID> contains comprehensive
-    user account information including timestamps, login counts, and account flags.
-    
-    Structure (offsets are approximate and may vary by Windows version):
-    - 0x00-0x0C: Header information
-    - 0x0C-0x10: Username offset
-    - 0x10-0x14: Username length
-    - 0x18-0x20: Last login timestamp (FILETIME)
-    - 0x20-0x28: Password last set timestamp (FILETIME)
-    - 0x28-0x30: Account expires timestamp (FILETIME)
-    - 0x30-0x38: Last incorrect password timestamp (FILETIME)
-    - 0x38-0x3C: User account control flags
-    - 0x40-0x44: Login count
-    - 0x44-0x48: Bad password count
-    
+    Parse the SAM V value: the account's STRING fields.
+
+    V (SAM\SAM\Domains\Account\Users\<RID>\V) is a descriptor table, not a flat
+    record. It begins with a series of 12-byte entries, each holding
+    (offset, length, unknown); the offset is relative to 0xCC, where the string
+    data begins. Only the strings live here.
+
+    | entry | at     | field     |
+    |-------|--------|-----------|
+    | 1     | 0x0C   | username  |
+    | 2     | 0x18   | full name |
+    | 3     | 0x24   | comment   |
+
+    Timestamps, login counts and account flags are NOT in V - they are in F, via
+    parse_user_account_f_value(). An earlier version of this function read them
+    from V offsets 0x08/0x18/0x20/0x28/0x38/0x40, which are descriptor entries,
+    and produced plausible-looking garbage (last_login = 1601-01-02 05:06:37 for
+    every account) rather than raising.
+
     Args:
-        binary_data: Binary data from SAM V value
-    
+        binary_data: Binary data from the SAM V value
+
     Returns:
-        Dictionary containing:
-            - 'username': Account username
-            - 'last_login': Last successful login timestamp
-            - 'password_last_set': Last password change timestamp
-            - 'account_expires': Account expiration timestamp
-            - 'last_bad_password': Last failed login timestamp
-            - 'login_count': Number of successful logins
-            - 'bad_password_count': Number of failed login attempts
-            - 'account_disabled': Account disabled flag
-            - 'account_locked': Account locked flag
+        Dictionary with 'username', 'full_name', 'comment' (empty strings when
+        a field is absent, which is normal - most accounts have no full name).
     """
+    empty = {'username': '', 'full_name': '', 'comment': ''}
     try:
-        if not binary_data or len(binary_data) < 0x50:
-            logger.warning(f"Invalid SAM V value data: expected at least 80 bytes, got {len(binary_data) if binary_data else 0}")
-            return {
-                'username': '',
-                'last_login': '',
-                'password_last_set': '',
-                'account_expires': '',
-                'last_bad_password': '',
-                'login_count': 0,
-                'bad_password_count': 0,
-                'account_disabled': 0,
-                'account_locked': 0
-            }
-        
-        result = {}
-        
-        # Extract username
-        # Username offset and length are at specific positions
-        try:
-            username_offset = struct.unpack('<I', binary_data[0x0C:0x10])[0]
-            username_length = struct.unpack('<I', binary_data[0x10:0x14])[0]
-            
-            if username_offset > 0 and username_length > 0:
-                # Add offset to base (0xCC is common base offset)
-                actual_offset = username_offset + 0xCC
-                if actual_offset + username_length <= len(binary_data):
-                    username_bytes = binary_data[actual_offset:actual_offset + username_length]
-                    result['username'] = username_bytes.decode('utf-16-le', errors='ignore').strip('\x00')
-                else:
-                    result['username'] = ''
-            else:
-                result['username'] = ''
-        except Exception as e:
-            logger.debug(f"Error extracting username from SAM V value: {e}")
-            result['username'] = ''
-        
-        # Extract timestamps
-        # Last login (offset 0x08 in newer versions, 0x18 in older)
-        try:
-            if len(binary_data) >= 0x20:
-                last_login_bytes = binary_data[0x08:0x10]
-                result['last_login'] = parse_filetime(last_login_bytes)
-        except Exception as e:
-            logger.debug(f"Error parsing last login timestamp: {e}")
-            result['last_login'] = ''
-        
-        # Password last set (offset varies, typically around 0x18-0x20)
-        try:
-            if len(binary_data) >= 0x28:
-                pwd_set_bytes = binary_data[0x18:0x20]
-                result['password_last_set'] = parse_filetime(pwd_set_bytes)
-        except Exception as e:
-            logger.debug(f"Error parsing password last set timestamp: {e}")
-            result['password_last_set'] = ''
-        
-        # Account expires
-        try:
-            if len(binary_data) >= 0x30:
-                expires_bytes = binary_data[0x20:0x28]
-                result['account_expires'] = parse_filetime(expires_bytes)
-        except Exception as e:
-            logger.debug(f"Error parsing account expires timestamp: {e}")
-            result['account_expires'] = ''
-        
-        # Last bad password
-        try:
-            if len(binary_data) >= 0x38:
-                bad_pwd_bytes = binary_data[0x28:0x30]
-                result['last_bad_password'] = parse_filetime(bad_pwd_bytes)
-        except Exception as e:
-            logger.debug(f"Error parsing last bad password timestamp: {e}")
-            result['last_bad_password'] = ''
-        
-        # Login count
-        try:
-            if len(binary_data) >= 0x44:
-                login_count = struct.unpack('<I', binary_data[0x40:0x44])[0]
-                result['login_count'] = login_count
-        except Exception as e:
-            logger.debug(f"Error parsing login count: {e}")
-            result['login_count'] = 0
-        
-        # Bad password count
-        try:
-            if len(binary_data) >= 0x48:
-                bad_pwd_count = struct.unpack('<I', binary_data[0x44:0x48])[0]
-                result['bad_password_count'] = bad_pwd_count
-        except Exception as e:
-            logger.debug(f"Error parsing bad password count: {e}")
-            result['bad_password_count'] = 0
-        
-        # Account control flags (offset varies, typically around 0x38)
-        try:
-            if len(binary_data) >= 0x3C:
-                flags = struct.unpack('<I', binary_data[0x38:0x3C])[0]
-                # Common flags:
-                # 0x0001 = Account disabled
-                # 0x0010 = Account locked
-                result['account_disabled'] = 1 if (flags & 0x0001) else 0
-                result['account_locked'] = 1 if (flags & 0x0010) else 0
-        except Exception as e:
-            logger.debug(f"Error parsing account flags: {e}")
-            result['account_disabled'] = 0
-            result['account_locked'] = 0
-        
-        logger.debug(f"Parsed SAM V value: username={result.get('username', '')}")
+        if not binary_data or len(binary_data) < 0x30:
+            logger.warning(
+                f"Invalid SAM V value: expected at least 48 bytes, got "
+                f"{len(binary_data) if binary_data else 0}")
+            return dict(empty)
+
+        def _string_at(entry_offset):
+            """Read the descriptor entry at entry_offset and return its string."""
+            try:
+                off = struct.unpack('<I', binary_data[entry_offset:entry_offset + 4])[0]
+                ln = struct.unpack('<I', binary_data[entry_offset + 4:entry_offset + 8])[0]
+                if ln <= 0:
+                    return ''
+                start = off + 0xCC
+                end = start + ln
+                if start < 0 or end > len(binary_data):
+                    return ''
+                return binary_data[start:end].decode('utf-16-le', errors='ignore').strip('\x00')
+            except Exception as e:
+                logger.debug(f"SAM V descriptor at 0x{entry_offset:02X}: {e}")
+                return ''
+
+        result = {
+            'username': _string_at(0x0C),
+            'full_name': _string_at(0x18),
+            'comment': _string_at(0x24),
+        }
+        logger.debug(f"Parsed SAM V value: username={result['username']}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error parsing SAM V value: {e}")
-        return {
-            'username': '',
-            'last_login': '',
-            'password_last_set': '',
-            'account_expires': '',
-            'last_bad_password': '',
-            'login_count': 0,
-            'bad_password_count': 0,
-            'account_disabled': 0,
-            'account_locked': 0
-        }
+        return dict(empty)
+
+
+# SAM F value account-control bits (ACB_*). Documented in MS-SAMR.
+SAM_ACCOUNT_FLAGS = (
+    (0x0001, 'DISABLED'),
+    (0x0002, 'HOME_DIR_REQUIRED'),
+    (0x0004, 'PWD_NOT_REQUIRED'),
+    (0x0008, 'TEMP_DUPLICATE'),
+    (0x0010, 'NORMAL_ACCOUNT'),
+    (0x0020, 'MNS_LOGON'),
+    (0x0040, 'INTERDOMAIN_TRUST'),
+    (0x0080, 'WORKSTATION_TRUST'),
+    (0x0100, 'SERVER_TRUST'),
+    (0x0200, 'PWD_NEVER_EXPIRES'),
+    (0x0400, 'AUTO_LOCKED'),
+)
 
 
 def parse_user_account_f_value(binary_data: bytes) -> dict:
     r"""
-    Parse SAM F value structure containing additional user account data.
-    
-    The F value in SAM\SAM\Domains\Account\Users\<RID> contains supplementary
-    account information including account creation time and additional flags.
-    
-    Structure (offsets are approximate):
-    - 0x00-0x08: Account creation timestamp (FILETIME)
-    - 0x08-0x10: Last logoff timestamp (FILETIME)
-    - Various other metadata fields
-    
+    Parse the SAM F value: account timestamps, counters and control flags.
+
+    F (SAM\SAM\Domains\Account\Users\<RID>\F) is a fixed 80-byte record:
+
+    | offset | field                        |
+    |--------|------------------------------|
+    | 0x08   | last logon (FILETIME)        |
+    | 0x18   | password last set (FILETIME) |
+    | 0x20   | account expires (FILETIME)   |
+    | 0x28   | last incorrect password      |
+    | 0x30   | RID (DWORD)                  |
+    | 0x38   | ACB account-control flags    |
+    | 0x40   | bad password count (WORD)    |
+    | 0x42   | logon count (WORD)           |
+
+    The RID at 0x30 is the alignment check: it must equal the <RID> key name the
+    value came from. If it does not, the offsets are wrong for this hive - every
+    other field in this record should then be treated as unreliable.
+
+    A previous version read 0x00 as "account created" (that range is reserved)
+    and labelled 0x08 "last logoff" when it is in fact the last LOGON.
+
     Args:
-        binary_data: Binary data from SAM F value
-    
+        binary_data: Binary data from the SAM F value
+
     Returns:
-        Dictionary containing:
-            - 'account_created': Account creation timestamp
-            - 'last_logoff': Last logoff timestamp
+        Dictionary with 'rid', 'last_logon', 'password_last_set',
+        'account_expires', 'last_incorrect_password', 'login_count',
+        'bad_password_count', 'account_flags', 'account_disabled',
+        'account_locked', 'account_enabled'. Timestamps are '' when never set,
+        which is a real finding - a built-in account that has never logged on.
     """
+    empty = {
+        'rid': 0, 'last_logon': '', 'password_last_set': '', 'account_expires': '',
+        'last_incorrect_password': '', 'login_count': 0, 'bad_password_count': 0,
+        'account_flags': '', 'account_disabled': 0, 'account_locked': 0,
+        'account_enabled': 0,
+    }
     try:
-        if not binary_data or len(binary_data) < 0x10:
-            logger.warning(f"Invalid SAM F value data: expected at least 16 bytes, got {len(binary_data) if binary_data else 0}")
-            return {
-                'account_created': '',
-                'last_logoff': ''
-            }
-        
-        result = {}
-        
-        # Extract account creation timestamp
-        try:
-            if len(binary_data) >= 0x08:
-                created_bytes = binary_data[0x00:0x08]
-                result['account_created'] = parse_filetime(created_bytes)
-        except Exception as e:
-            logger.debug(f"Error parsing account creation timestamp: {e}")
-            result['account_created'] = ''
-        
-        # Extract last logoff timestamp
-        try:
-            if len(binary_data) >= 0x10:
-                logoff_bytes = binary_data[0x08:0x10]
-                result['last_logoff'] = parse_filetime(logoff_bytes)
-        except Exception as e:
-            logger.debug(f"Error parsing last logoff timestamp: {e}")
-            result['last_logoff'] = ''
-        
-        logger.debug(f"Parsed SAM F value: created={result.get('account_created', '')}")
+        if not binary_data or len(binary_data) < 0x44:
+            logger.warning(
+                f"Invalid SAM F value: expected at least 68 bytes, got "
+                f"{len(binary_data) if binary_data else 0}")
+            return dict(empty)
+
+        def _ts(off):
+            # Two sentinels, neither of which is a real date:
+            #   0                  -> never happened (never logged on)
+            #   0x7FFFFFFFFFFFFFFF -> never expires (the usual account_expires)
+            # Rendering either would be wrong, and the second overflows datetime,
+            # so parse_filetime logs "date value out of range" for every account.
+            raw = binary_data[off:off + 8]
+            if len(raw) < 8:
+                return ''
+            val = struct.unpack('<Q', raw)[0]
+            if val == 0 or val == 0x7FFFFFFFFFFFFFFF:
+                return ''
+            return parse_filetime(raw)
+
+        flags = struct.unpack('<I', binary_data[0x38:0x3C])[0]
+        names = [n for bit, n in SAM_ACCOUNT_FLAGS if flags & bit]
+
+        result = {
+            'rid': struct.unpack('<I', binary_data[0x30:0x34])[0],
+            'last_logon': _ts(0x08),
+            'password_last_set': _ts(0x18),
+            'account_expires': _ts(0x20),
+            'last_incorrect_password': _ts(0x28),
+            'bad_password_count': struct.unpack('<H', binary_data[0x40:0x42])[0],
+            'login_count': struct.unpack('<H', binary_data[0x42:0x44])[0],
+            'account_flags': '|'.join(names),
+            'account_disabled': 1 if (flags & 0x0001) else 0,
+            'account_locked': 1 if (flags & 0x0400) else 0,
+        }
+        result['account_enabled'] = 0 if result['account_disabled'] else 1
+
+        logger.debug(f"Parsed SAM F value: rid={result['rid']} flags={result['account_flags']}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error parsing SAM F value: {e}")
+        return dict(empty)
+
+
+def binary_sid_to_string(binary_data: bytes, offset: int = 0):
+    """(S-1-5-21-... , bytes consumed) for a binary SID, or (None, 0).
+
+    Sub-authorities are little-endian; the 6-byte identifier authority is
+    big-endian. Getting that backwards yields a plausible-looking SID rather
+    than an error, so both are explicit here.
+    """
+    try:
+        if binary_data is None or len(binary_data) - offset < 8:
+            return None, 0
+        revision = binary_data[offset]
+        sub_count = binary_data[offset + 1]
+        size = 8 + 4 * sub_count
+        if revision != 1 or sub_count > 15 or len(binary_data) - offset < size:
+            return None, 0
+        authority = int.from_bytes(binary_data[offset + 2:offset + 8], 'big')
+        subs = [struct.unpack_from('<I', binary_data, offset + 8 + 4 * i)[0]
+                for i in range(sub_count)]
+        return 'S-%d-%d%s' % (revision, authority,
+                              ''.join('-%d' % s for s in subs)), size
+    except Exception as e:
+        logger.debug(f"binary SID decode failed at offset {offset}: {e}")
+        return None, 0
+
+
+def parse_alias_c_value(binary_data: bytes) -> dict:
+    """Decode a SAM alias (local group) C value.
+
+    Layout, verified against `net localgroup` for both a Builtin alias
+    (Administrators) and a machine-local one (docker-users):
+
+        0x00  DWORD  RID
+        0x10  DWORD  name offset      ] all offsets are relative to 0x34,
+        0x14  DWORD  name length      ] not to the start of the value
+        0x1C  DWORD  comment offset
+        0x20  DWORD  comment length
+        0x28  DWORD  member SID array offset
+        0x2C  DWORD  member SID array length, in bytes
+        0x30  DWORD  member count
+
+    Lengths are byte counts, so a UTF-16 name of 28 bytes is 14 characters.
+    The member array is a run of variable-length binary SIDs; walking it by a
+    fixed stride would silently mis-read any group holding a well-known SID,
+    which is shorter than a machine-relative one.
+
+    Returns {} when the blob is too short or self-inconsistent, rather than a
+    partly-filled record - an empty group and an unparsed one must not look
+    the same.
+    """
+    empty: dict = {}
+    try:
+        if not isinstance(binary_data, (bytes, bytearray)) or len(binary_data) < 0x34:
+            return dict(empty)
+        b = bytes(binary_data)
+        base = 0x34
+
+        def _u32(off):
+            return struct.unpack_from('<I', b, off)[0]
+
+        def _text(off_field, len_field):
+            off = base + _u32(off_field)
+            ln = _u32(len_field)
+            if ln == 0 or off < base or off + ln > len(b):
+                return ''
+            return b[off:off + ln].decode('utf-16-le', errors='replace').rstrip('\x00')
+
+        rid = _u32(0x00)
+        members_off = base + _u32(0x28)
+        members_len = _u32(0x2C)
+        member_count = _u32(0x30)
+
+        members = []
+        if members_len and members_off + members_len <= len(b):
+            pos = members_off
+            end = members_off + members_len
+            while pos < end and len(members) < member_count:
+                sid, consumed = binary_sid_to_string(b, pos)
+                if not sid:
+                    break
+                members.append(sid)
+                pos += consumed
+
+        if len(members) != member_count:
+            # Say so rather than returning a short list that reads as a
+            # smaller group than the one that actually exists.
+            logger.warning(
+                "SAM alias RID %d declares %d members but %d SIDs parsed - "
+                "offsets do not fit this hive", rid, member_count, len(members))
+
         return {
-            'account_created': '',
-            'last_logoff': ''
+            'rid': rid,
+            'name': _text(0x10, 0x14),
+            'comment': _text(0x1C, 0x20),
+            'member_count': member_count,
+            'members': members,
+            'members_parsed': len(members),
+            'trusted': len(members) == member_count,
         }
+
+    except Exception as e:
+        logger.error(f"Error parsing SAM alias C value: {e}")
+        return dict(empty)
 
 
 def _reconstruct_pidl_path(binary_data: bytes) -> dict:
@@ -2147,9 +2403,13 @@ def _reconstruct_pidl_path(binary_data: bytes) -> dict:
                         path_components.append(network_path)
                         logger.debug(f"Added network component: {network_path}")
                 
-                # Unknown type - try generic extraction
+                # Unknown type - try generic extraction. Guarded, because this
+                # is a byte scan: unguarded it contributed components like
+                # `S"M` and `}D"pN` to otherwise correct paths.
                 else:
                     generic_path = _extract_generic_path(item_data)
+                    if generic_path and not is_plausible_name(generic_path.replace('\\', '')):
+                        generic_path = ''
                     if generic_path and len(generic_path) > 1:
                         # Check if it contains a drive letter
                         if len(generic_path) >= 2 and generic_path[1] == ':' and generic_path[0].isalpha():
@@ -2249,7 +2509,9 @@ def parse_opensavemru_entry(binary_data: bytes) -> dict:
         pidl_data = _reconstruct_pidl_path(binary_data)
         
         if pidl_data['path']:
-            result['file_path'] = pidl_data['path']
+            # Localised folders arrive as resource references; resolve every
+            # component so the stored path reads as a path.
+            result['file_path'] = resolve_mui_path(pidl_data['path'])
             result['drive_letter'] = pidl_data['drive_letter']
             
             # Extract file name (last component)
@@ -2431,3 +2693,132 @@ def parse_susclientid_validation(binary_data: bytes) -> str:
     except Exception as e:
         logger.error(f"Error parsing SusClientIdValidation: {e}")
         return str(binary_data)[:100]
+
+
+# ---------------------------------------------------------------------------
+# Scheduled Tasks (TaskCache)
+#
+# SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\{GUID}
+# holds two binary values worth decoding. Note the hive: there IS a
+# SYSTEM\CurrentControlSet\Services\Schedule key, but it carries no TaskCache,
+# so aiming there returns nothing at all rather than an error.
+# ---------------------------------------------------------------------------
+
+# Action blob magics. 0x6666 (exec) is the one that carries a command line;
+# the rest are named so an unexpected one is reported instead of silently
+# dropped. 0x0000 is trailing padding, not an action.
+TASK_ACTION_EXEC = 0x6666
+TASK_ACTION_NAMES = {
+    TASK_ACTION_EXEC: "exec",
+    0x7777: "com-handler",
+    0x8888: "email",
+    0x9999: "message-box",
+}
+
+
+def _task_filetime(raw: bytes):
+    """8 bytes of FILETIME -> forensic UTC string, or None for 'never'.
+
+    A zero FILETIME means the event has not happened; rendering it as
+    1601-01-01 would invent an event that never occurred.
+    """
+    if len(raw) < 8:
+        return None
+    (value,) = struct.unpack('<Q', raw[:8])
+    if value == 0:
+        return None
+    try:
+        return format_forensic_timestamp(filetime_to_datetime(value))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def parse_taskcache_dynamic_info(binary_data: bytes) -> dict:
+    """Decode a TaskCache DynamicInfo blob: registration and run history.
+
+    The structure grew across Windows versions (0x1c, 0x24 and 0x2c are all
+    seen in the wild), so each field past the first three is read only when the
+    blob is long enough rather than assuming one fixed size.
+
+    Returns keys: version, task_registered, last_run, last_result,
+    last_completed. Missing fields are simply absent.
+    """
+    out = {}
+    try:
+        if not binary_data or len(binary_data) < 0x14:
+            return out
+        out['version'] = struct.unpack_from('<I', binary_data, 0x00)[0]
+        out['task_registered'] = _task_filetime(binary_data[0x04:0x0C])
+        out['last_run'] = _task_filetime(binary_data[0x0C:0x14])
+        if len(binary_data) >= 0x1C:
+            # 0x18, NOT 0x14. Verified across 285 live tasks: the DWORD at 0x14
+            # is zero on every one of them, while 0x18 carries real HRESULTs
+            # (0x80070002 file-not-found, 0x8007045B shutdown-in-progress) that
+            # match Get-ScheduledTaskInfo's LastTaskResult exactly.
+            # 0 is success; anything else is the task's last result code.
+            out['last_result'] = struct.unpack_from('<I', binary_data, 0x18)[0]
+        if len(binary_data) >= 0x24:
+            # 0x1C, NOT 0x18. Reading this off the 0x18 DWORD boundary decodes
+            # as a valid-looking but absurd FILETIME (year 6916), which is the
+            # kind of wrong that survives a smoke test - verified against real
+            # blobs, where this equals the run time for tasks that completed.
+            out['last_completed'] = _task_filetime(binary_data[0x1C:0x24])
+    except Exception as e:
+        logger.error(f"Error parsing TaskCache DynamicInfo: {e}")
+    return out
+
+
+def _task_lpwstr(blob: bytes, pos: int):
+    """Read a DWORD-length-prefixed UTF-16LE string. Returns (text, new_pos)."""
+    if pos + 4 > len(blob):
+        return '', len(blob)
+    (nbytes,) = struct.unpack_from('<I', blob, pos)
+    pos += 4
+    if nbytes == 0 or pos + nbytes > len(blob):
+        return '', pos
+    text = blob[pos:pos + nbytes].decode('utf-16-le', errors='replace').rstrip('\x00')
+    return text, pos + nbytes
+
+
+def parse_taskcache_actions(binary_data: bytes) -> dict:
+    """Decode a TaskCache Actions blob: what the task actually runs.
+
+    Layout: WORD version, a length-prefixed context string, then one or more
+    actions each introduced by a magic WORD. Only the exec action carries a
+    command line, which is the part that matters for triage.
+
+    Returns {'context': str, 'actions': [{'type','id','command','arguments',
+    'working_dir'}], 'unknown_magics': [...]}.
+    """
+    out = {'context': '', 'actions': []}
+    try:
+        if not binary_data or len(binary_data) < 6:
+            return out
+        pos = 0
+        out['version'] = struct.unpack_from('<H', binary_data, pos)[0]
+        pos += 2
+        out['context'], pos = _task_lpwstr(binary_data, pos)
+
+        while pos + 2 <= len(binary_data):
+            (magic,) = struct.unpack_from('<H', binary_data, pos)
+            pos += 2
+            if magic == 0x0000:
+                break  # trailing padding / terminator
+            name = TASK_ACTION_NAMES.get(magic)
+            if name is None:
+                out.setdefault('unknown_magics', []).append(hex(magic))
+                break
+            if magic != TASK_ACTION_EXEC:
+                out['actions'].append({'type': name})
+                break  # only the exec layout is decoded field by field
+            action_id, pos = _task_lpwstr(binary_data, pos)
+            command, pos = _task_lpwstr(binary_data, pos)
+            arguments, pos = _task_lpwstr(binary_data, pos)
+            working_dir, pos = _task_lpwstr(binary_data, pos)
+            out['actions'].append({
+                'type': name, 'id': action_id, 'command': command,
+                'arguments': arguments, 'working_dir': working_dir,
+            })
+    except Exception as e:
+        logger.error(f"Error parsing TaskCache Actions: {e}")
+    return out

@@ -25,16 +25,20 @@ def filetime_to_datetime(filetime: int) -> datetime.datetime:
     
     Args:
         filetime: Windows FILETIME as 64-bit integer (100-nanosecond intervals since 1601-01-01)
-        
+
     Returns:
         datetime: UTC datetime object
     """
     if not filetime or filetime == 0:
         raise ValueError("Invalid FILETIME value")
-    
-    # Convert 100-nanosecond intervals to seconds and add to Windows epoch
-    seconds = filetime / HUNDRED_NANOSECONDS
-    return WINDOWS_EPOCH + datetime.timedelta(seconds=seconds)
+
+    # Divide in integers, not floating point. A FILETIME is around 1.3e17, and
+    # float64 carries about 15-16 significant digits, so `filetime / 1e7` loses
+    # the last microsecond. Forensic output is formatted to whole seconds, so
+    # that error is invisible until it lands on a second boundary and moves the
+    # displayed time by a full second: 132000000009999999 is 18:40:00.999999
+    # exactly, and came out as 18:40:01.
+    return WINDOWS_EPOCH + datetime.timedelta(microseconds=filetime // 10)
 
 
 def datetime_to_filetime(dt: datetime.datetime) -> int:

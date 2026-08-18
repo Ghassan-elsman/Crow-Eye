@@ -101,6 +101,7 @@ class TimestampIndexer:
             ('srum_network_connectivity', 'timestamp', 'various', 'Network connectivity timestamp'),
             ('srum_network_data_usage', 'timestamp', 'various', 'Network data usage timestamp'),
             ('srum_energy_usage', 'timestamp', 'various', 'Energy usage timestamp'),
+            ('srum_app_timeline', 'timestamp', 'various', 'Application timeline timestamp'),
         ],
         'USN': [
             ('journal_events', 'timestamp', 'various', 'USN journal entry timestamp'),

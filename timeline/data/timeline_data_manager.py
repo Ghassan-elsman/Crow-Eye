@@ -209,6 +209,7 @@ class TimelineDataManager:
             ('srum_network_connectivity', 'timestamp', 'various'),
             ('srum_network_data_usage', 'timestamp', 'various'),
             ('srum_energy_usage', 'timestamp', 'various'),
+            ('srum_app_timeline', 'timestamp', 'various'),
         ],
         'USN': [
             ('journal_events', 'timestamp', 'various'),

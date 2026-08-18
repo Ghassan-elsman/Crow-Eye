@@ -5,7 +5,7 @@
 </p>
 
 <p align="center"><strong>A forensic time machine for Windows.</strong><br/>
-Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a court-defensible verdict.</p>
+Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a verdict traceable to its source records.</p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 ![Version](https://img.shields.io/badge/version-0.12.6-brightgreen.svg)
@@ -62,7 +62,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 - **Reconstruction over detection.** Correlates every artifact into one navigable, per-entity story instead of a pile of alerts.
 - **Integrated end to end** — acquisition → correlation → timeline → behavioral analytics → AI → sealed case memory: a full pipeline no single incumbent tool spans.
 - **Artifact-deep, not log-shallow.** Prefetch, Amcache, ShimCache, SRUM, MFT, USN, LNK/JumpLists and more survive the log clearing and "living-off-the-land" tricks that blind log-only tools.
-- **The Eye AI assistant** — natural-language forensic investigation with a court-defensible chain of custody, runnable in the cloud, on a private server, or fully offline.
+- **The Eye AI assistant** — natural-language forensic investigation with an auditable, tamper-evident chain of custody, runnable in the cloud, on a private server, or fully offline.
 - **User Behavior Analytics (UBA)** — turns raw artifacts into a plain-English, HR/examiner-readable activity story.
 - **Free & open-source (GPL-3.0)** — auditable by anyone, with an active research and documentation effort.
 
@@ -615,7 +615,7 @@ Identity: malware.exe
 
 > **A powerful assistant, not a replacement.** Eye automates and *verifies* an investigator's hypotheses — it never makes the call for you.
 
-**Eye** is Crow-Eye's built-in forensics AI assistant: a skilled forensic investigator backed by a real knowledge base of Windows artifacts. It gives you a natural-language interface to query, correlate, and document everything in a case — Prefetch, MFT, Registry, Event Logs, AmCache, ShimCache, SRUM, and more — while keeping a court-defensible record of exactly what it did. Eye can run entirely on your own hardware (including **fully air-gapped**), in keeping with Crow-Eye's **"0 ms data sent off-device"** privacy stance. Full architecture: [`eye/README.md`](eye/README.md).
+**Eye** is Crow-Eye's built-in forensics AI assistant: a skilled forensic investigator backed by a real knowledge base of Windows artifacts. It gives you a natural-language interface to query, correlate, and document everything in a case — Prefetch, MFT, Registry, Event Logs, AmCache, ShimCache, SRUM, and more — while keeping an auditable, tamper-evident record of exactly what it did. Eye can run entirely on your own hardware (including **fully air-gapped**), in keeping with Crow-Eye's **"0 ms data sent off-device"** privacy stance. Full architecture: [`eye/README.md`](eye/README.md).
 
 | Capability | What it means for you |
 |---|---|
@@ -630,7 +630,7 @@ Eye turns conversational questions ("show me what executed from `C:\Temp` after 
 
 ### The Ghassan Elsman Protocol (GEP)
 
-Everything Eye does is anchored to the **Ghassan Elsman Protocol (GEP)** — a **vendor-neutral, tool-agnostic standard** for *how any AI should be used in digital forensics*. It is **10 principles** a conforming system must uphold so AI-assisted findings stay **truthful, traceable, and court-defensible**, with the human investigator in control:
+Everything Eye does is anchored to the **Ghassan Elsman Protocol (GEP)** — a **vendor-neutral, tool-agnostic standard** for *how any AI should be used in digital forensics*. It is **10 principles** a conforming system must uphold so AI-assisted findings stay **truthful, traceable to source records, and backed by an auditable, tamper-evident chain**, with the human investigator in control:
 
 | # | Principle | In one line |
 |---|---|---|
@@ -643,7 +643,7 @@ Everything Eye does is anchored to the **Ghassan Elsman Protocol (GEP)** — a *
 | **GEP-7** | Integrity & Non-Repudiation | Never modify evidence; record what was seen and done, tamper-evidently. |
 | **GEP-8** | Transparency & Explainability | Reasoning, tools used, and data seen are visible and auditable. |
 | **GEP-9** | Human Authority | The investigator decides; durable actions are attributable. |
-| **GEP-10** | Defensibility | Output is objective, precise, legal-grade, and court-ready. |
+| **GEP-10** | Defensibility | Output is objective, precise, and structured for independent review. |
 
 Crow-Eye's Eye is the **reference implementation** of the GEP; the in-product behaviors that uphold it are **Operating Rules**. 📜 Read the standard: [`eye/docs/GEP_standard.md`](eye/docs/GEP_standard.md).
 
@@ -749,7 +749,7 @@ If the irreducible **evidence core** (pinned + tool results + the current questi
 
 ### 🗺️ Narrative Map — The Eye's Persistent Case Memory
 
-The Eye is **stateless between turns** — so the **Narrative Map** is where "what we know and what we've concluded" lives for a case. It is the Eye's **persistent, court-defensible working memory**, and its contents are **injected into the Eye's prompt on every turn** (the map literally *is* the memory).
+The Eye is **stateless between turns** — so the **Narrative Map** is where "what we know and what we've concluded" lives for a case. It is the Eye's **persistent, auditable, tamper-evident working memory**, and its contents are **injected into the Eye's prompt on every turn** (the map literally *is* the memory).
 
 - 🧭 **Verdict → Narrative → Evidence.** A strict hierarchy: one case **Verdict**, the **Narratives** beneath it (claims, each with a state — `proven` · `open` · `negative` · `needs` · `absolute`), and the artifact-backed **Evidence** beneath those.
 - 🪟 **Its own window.** Opens from the **"Narrative Map"** button in the Eye chat window, so you can watch the chat, the living report, and the case memory side by side; it live-refreshes as things change.

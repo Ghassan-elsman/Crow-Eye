@@ -149,6 +149,33 @@ class SearchUtils:
         return tables
     
     @staticmethod
+    def find_all_virtual_tables(parent_obj):
+        """Find the virtualised tables, which are QTableView, not QTableWidget.
+
+        Kept separate from find_all_table_widgets on purpose: that one feeds
+        code which connects itemDoubleClicked and walks items, both of which
+        only exist on QTableWidget. Widening it would break those callers, so
+        the two kinds are found separately and handled with their own API.
+        """
+        tables = []
+        try:
+            from ui.virtual_table_widget import VirtualTableWidget
+        except Exception:
+            return tables
+
+        if hasattr(parent_obj, 'findChildren'):
+            tables = parent_obj.findChildren(VirtualTableWidget)
+        else:
+            for attr_name in dir(parent_obj):
+                try:
+                    attr = getattr(parent_obj, attr_name)
+                    if isinstance(attr, VirtualTableWidget):
+                        tables.append(attr)
+                except Exception:
+                    pass
+        return tables
+
+    @staticmethod
     def get_table_names(parent_obj):
         """
         Get names of all table widgets in the parent object.

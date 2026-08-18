@@ -3,7 +3,7 @@
 This document describes how the **Eye** AI assistant routes prompts to a model
 backend, how it **adapts** an outgoing payload to fit a model's context window,
 and how every byte it drops is captured — the **real content and its offsets**,
-not just hashes — into a court-defensible **Evidence Seal** and surfaced in the
+not just hashes — into an auditable, tamper-evident **Evidence Seal** and surfaced in the
 **Compliance UI**.
 
 ## Why this exists

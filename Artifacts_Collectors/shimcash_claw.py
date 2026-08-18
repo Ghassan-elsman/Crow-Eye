@@ -26,7 +26,7 @@ import json
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
-from utils.time_utils import format_forensic_timestamp
+from utils.time_utils import format_forensic_timestamp, filetime_to_datetime
 
 try:
     from winreg import HKEY_LOCAL_MACHINE, OpenKey, QueryValueEx, CloseKey
@@ -50,6 +50,15 @@ class ShimCacheEntry:
         entry_hash (str): MD5 hash of the entry for duplicate detection
     """
     
+    # PE machine types seen in a packaged-app cache record. The same constants
+    # IMAGE_FILE_MACHINE_* uses, which is what identifies the field.
+    MACHINE_TYPES = {
+        "8664": "x64",
+        "014c": "x86",
+        "01c0": "ARM",
+        "aa64": "ARM64",
+    }
+
     def __init__(self):
         self.path = ""
         self.filename = ""
@@ -59,21 +68,100 @@ class ShimCacheEntry:
         self.entry_size = 0
         self.cache_entry_position = 0
         self.entry_hash = ""
-    
+        # Packaged (Store/UWP) applications, see classify() below.
+        self.entry_type = "file"
+        self.package_family_name = ""
+        self.package_version = ""
+        self.architecture = ""
+        self.raw_entry = ""
+
     def generate_hash(self) -> str:
         """
         Generate MD5 hash of path, timestamp, and metadata for robust duplicate detection.
-        
+
         Returns:
             str: MD5 hash of the entry
         """
-        # Include data_size and position to handle files that might have been 
+        # Include data_size and position to handle files that might have been
         # executed multiple times but share a timestamp (rare but possible in some OS versions)
-        hash_input = f"{self.path}_{self.last_modified}_{self.data_size}_{self.cache_entry_position}".encode('utf-8')
+        # raw_entry keeps packaged-app records distinct from one another: their
+        # path is empty, so without it two entries for the same package would
+        # collapse into one hash.
+        hash_input = (f"{self.path}_{self.raw_entry}_{self.last_modified}_"
+                      f"{self.data_size}_{self.cache_entry_position}").encode('utf-8')
         return hashlib.md5(hash_input).hexdigest()
-    
+
+    def classify(self):
+        """Split a packaged-application record out of the path field.
+
+        Not every AppCompatCache entry names a file. Store and UWP applications
+        are recorded as seven tab-separated fields instead:
+
+            flags, version, unknown, machine type, package name, publisher id, ''
+
+        Stored whole, that string sat in `path` and `filename` - 209 of 1024
+        entries on this machine - so the ShimCache tab showed a packed record
+        where a path belongs, and correlation, which keys on filename then path,
+        could never match the same program in Amcache or Prefetch.
+
+        Fields 1, 3, 4 and 5 are decoded because each was confirmed against
+        Get-AppxPackage on a live machine: 4 and 5 joined with '_' reproduce the
+        installed PackageFamilyName exactly, 1 is the package version as four
+        big-endian 16-bit values, and 3 is the PE machine type. Field 2 varies
+        between entries of one package and is NOT decoded - it stays in
+        raw_entry rather than being given a meaning it has not earned.
+        """
+        # Idempotent: the parse loop classifies each entry and run() classifies
+        # again over the whole list. Without this guard the second pass saw an
+        # already-emptied path, found no tab, and reset every packaged entry
+        # back to "file".
+        if self.entry_type == "packaged app":
+            return
+
+        if "\t" not in (self.path or ""):
+            self.entry_type = "file"
+            return
+
+        self.raw_entry = self.path
+        fields = self.path.split("\t")
+        self.entry_type = "packaged app"
+        self.path = ""
+
+        name = fields[4].strip() if len(fields) > 4 else ""
+        publisher = fields[5].strip() if len(fields) > 5 else ""
+        if name and publisher:
+            self.package_family_name = "%s_%s" % (name, publisher)
+        elif name:
+            self.package_family_name = name
+        self.filename = name or "UNKNOWN"
+
+        if len(fields) > 3:
+            self.architecture = self.MACHINE_TYPES.get(
+                fields[3].strip().lower(), fields[3].strip())
+
+        if len(fields) > 1:
+            self.package_version = self._decode_version(fields[1].strip())
+
+    @staticmethod
+    def _decode_version(field: str) -> str:
+        """Four big-endian 16-bit values as a dotted version, or '' if unreadable.
+
+        `0025007265910000` is 37.114.25969.0 - which Get-AppxPackage reports as
+        37.114.26001.0 for the same package, the same major.minor with an older
+        build. That is what a record of a past execution should hold.
+        """
+        if len(field) != 16:
+            return ""
+        try:
+            parts = [int(field[i:i + 4], 16) for i in range(0, 16, 4)]
+        except ValueError:
+            return ""
+        return ".".join(str(p) for p in parts)
+
     def extract_filename(self):
         """Extract filename from full path and handle edge cases."""
+        if self.entry_type == "packaged app":
+            return          # classify() already set the display name
         if self.path:
             try:
                 self.filename = Path(self.path).name
@@ -137,33 +225,60 @@ class ShimCacheParser:
         """
         conn = sqlite3.connect(self.database_path)
         cursor = conn.cursor()
-        
-        # Create main table with improved schema
+
+        # A database written before packaged-app entries were decoded is
+        # REBUILT, not migrated. Its rows carry the tab record in `path` and it
+        # declares UNIQUE(path, last_modified) - which packaged entries, whose
+        # path is now empty, would collide on. SQLite cannot alter a constraint
+        # and CREATE TABLE IF NOT EXISTS would silently leave the old one in
+        # place, so the table is dropped and re-parsed from the cache, the same
+        # way create_correlated_database handles a pre-fix table.
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                       "AND name='shimcache_entries'")
+        if cursor.fetchone():
+            cursor.execute("PRAGMA table_info(shimcache_entries)")
+            existing = [c[1] for c in cursor.fetchall()]
+            if "entry_type" not in existing:
+                print("[OK] Rebuilding shimcache_entries for the packaged-app schema")
+                cursor.execute("DROP TABLE shimcache_entries")
+
+        # Create main table with improved schema.
+        #
+        # entry_hash is the single dedup key. It is built from path, raw_entry,
+        # timestamp, size and cache position, so it distinguishes every entry -
+        # including packaged apps, which share an empty path. The old
+        # UNIQUE(path, last_modified) is gone because it cannot: 209 entries
+        # with no path would collide with each other.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS shimcache_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 filename TEXT NOT NULL,
                 path TEXT NOT NULL,
+                entry_type TEXT DEFAULT 'file',
+                package_family_name TEXT,
+                package_version TEXT,
+                architecture TEXT,
+                raw_entry TEXT,
                 last_modified TEXT,
                 last_modified_readable TEXT,
                 data_size INTEGER DEFAULT 0,
                 entry_size INTEGER DEFAULT 0,
                 cache_entry_position INTEGER DEFAULT 0,
                 entry_hash TEXT UNIQUE,
-                parsed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(path, last_modified)
+                parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
+
         # Create indexes for faster searches and duplicate detection
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_path ON shimcache_entries(path)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_filename ON shimcache_entries(filename)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_last_modified ON shimcache_entries(last_modified)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_entry_hash ON shimcache_entries(entry_hash)')
-        
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_package_family ON shimcache_entries(package_family_name)')
+
         conn.commit()
         conn.close()
-        print(f"✓ Database initialized: {self.database_path}")
+        print(f"[OK] Database initialized: {self.database_path}")
     
     def filetime_to_datetime(self, filetime: int) -> Optional[datetime.datetime]:
         """
@@ -181,9 +296,7 @@ class ShimCacheParser:
         try:
             if filetime == 0:
                 return None
-            # Convert 100-nanosecond intervals to seconds and add to Windows epoch
-            windows_epoch = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
-            return windows_epoch + datetime.timedelta(microseconds=filetime / 10.0)
+            return filetime_to_datetime(filetime)
         except (ValueError, OSError, OverflowError) as e:
             print(f"Warning: Invalid FILETIME value {filetime}: {e}")
             return None    
@@ -238,7 +351,7 @@ class ShimCacheParser:
         index = 52  # Skip 52-byte header
         entry_count = 0
         
-        print("📊 Parsing Windows 10/11 format...")
+        print("[STATS] Parsing Windows 10/11 format...")
         
         while index < len(data) - 20:  # Ensure minimum entry size
             try:
@@ -278,6 +391,10 @@ class ShimCacheParser:
                     entry.path = "DECODE_ERROR"
                 index += path_length
                 
+                # Split a packaged-app record out of `path` before anything
+                # downstream treats that field as a filesystem path.
+                entry.classify()
+
                 # Extract filename
                 entry.extract_filename()
                 
@@ -307,14 +424,14 @@ class ShimCacheParser:
                 entry_count += 1
                 
                 if entry_count % 100 == 0:
-                    print(f"  📝 Parsed {entry_count} entries...")
+                    print(f"  [NOTE] Parsed {entry_count} entries...")
                 
             except (struct.error, UnicodeDecodeError, IndexError) as e:
-                print(f"⚠️  Error parsing entry at offset {index}: {e}")
+                print(f"[WARN] Error parsing entry at offset {index}: {e}")
                 index += 1
                 continue
         
-        print(f"✓ Successfully parsed {len(entries)} Windows 10/11 entries")
+        print(f"[OK] Successfully parsed {len(entries)} Windows 10/11 entries")
         return entries
     
     def parse_windows_7(self, data: bytes) -> List[ShimCacheEntry]:
@@ -334,7 +451,7 @@ class ShimCacheParser:
         """
         entries = []
         
-        print("📊 Parsing Windows 7 format...")
+        print("[STATS] Parsing Windows 7 format...")
         
         try:
             # Get number of entries (first 4 bytes after header)
@@ -342,7 +459,7 @@ class ShimCacheParser:
                 return entries
                 
             num_entries = struct.unpack('<I', data[4:8])[0]
-            print(f"  📋 Found {num_entries} entries in Windows 7 format")
+            print(f"  [LIST] Found {num_entries} entries in Windows 7 format")
             
             index = 8  # Start after header
             
@@ -394,6 +511,9 @@ class ShimCacheParser:
                     else:
                         entry.path = "INVALID_OFFSET"
                     
+                    # Split a packaged-app record out of `path` first.
+                    entry.classify()
+
                     # Extract filename
                     entry.extract_filename()
                     
@@ -403,16 +523,16 @@ class ShimCacheParser:
                     entries.append(entry)
                     
                     if (i + 1) % 100 == 0:
-                        print(f"  📝 Parsed {i + 1}/{num_entries} entries...")
+                        print(f"  [NOTE] Parsed {i + 1}/{num_entries} entries...")
                         
                 except (struct.error, UnicodeDecodeError, IndexError) as e:
-                    print(f"⚠️  Error parsing Windows 7 entry {i}: {e}")
+                    print(f"[WARN] Error parsing Windows 7 entry {i}: {e}")
                     continue
                     
         except Exception as e:
-            print(f"❌ Error parsing Windows 7 format: {e}")
+            print(f"[FAIL] Error parsing Windows 7 format: {e}")
         
-        print(f"✓ Successfully parsed {len(entries)} Windows 7 entries")
+        print(f"[OK] Successfully parsed {len(entries)} Windows 7 entries")
         return entries
     
     def parse_shimcache_data(self, data: bytes) -> List[ShimCacheEntry]:
@@ -426,18 +546,18 @@ class ShimCacheParser:
             List[ShimCacheEntry]: All parsed cache entries
         """
         if not data or len(data) < 20:
-            print("❌ Invalid or empty ShimCache data")
+            print("[FAIL] Invalid or empty ShimCache data")
             return []
         
         version = self.detect_windows_version(data)
-        print(f"🔍 Detected Windows version: {version}")
+        print(f"[SCAN] Detected Windows version: {version}")
         
         if version == "Windows 10/11":
             return self.parse_windows_10_11(data)
         elif version == "Windows 7":
             return self.parse_windows_7(data)
         else:
-            print("⚠️  Unknown Windows version, attempting Windows 10/11 parsing...")
+            print("[WARN] Unknown Windows version, attempting Windows 10/11 parsing...")
             return self.parse_windows_10_11(data)
     
     def get_live_registry_data(self) -> Optional[bytes]:
@@ -450,7 +570,7 @@ class ShimCacheParser:
             bytes: Raw ShimCache data or None if failed
         """
         if not LIVE_REGISTRY_AVAILABLE:
-            print("❌ Live registry access not available on this platform")
+            print("[FAIL] Live registry access not available on this platform")
             return None
         
         try:
@@ -466,19 +586,19 @@ class ShimCacheParser:
                     key = OpenKey(HKEY_LOCAL_MACHINE, path)
                     data, _ = QueryValueEx(key, "AppCompatCache")
                     CloseKey(key)
-                    print(f"✓ Successfully read ShimCache data from {path}")
+                    print(f"[OK] Successfully read ShimCache data from {path}")
                     return data
                 except FileNotFoundError:
                     continue
                 except Exception as e:
-                    print(f"⚠️  Error reading from {path}: {e}")
+                    print(f"[WARN] Error reading from {path}: {e}")
                     continue
             
-            print("❌ Could not find ShimCache data in any control set")
+            print("[FAIL] Could not find ShimCache data in any control set")
             return None
             
         except Exception as e:
-            print(f"❌ Error accessing live registry: {e}")
+            print(f"[FAIL] Error accessing live registry: {e}")
             return None
     
     def check_duplicate_exists(self, entry: ShimCacheEntry) -> bool:
@@ -512,7 +632,7 @@ class ShimCacheParser:
             entries (List[ShimCacheEntry]): Entries to save
         """
         if not entries:
-            print("📝 No entries to save")
+            print("[NOTE] No entries to save")
             return
         
         conn = sqlite3.connect(self.database_path)
@@ -523,7 +643,7 @@ class ShimCacheParser:
         new_entries = 0
         duplicates = 0
         
-        print(f"💾 Saving {len(entries)} entries to database...")
+        print(f"[SAVE] Saving {len(entries)} entries to database...")
         
         for entry in entries:
             # Check for duplicates
@@ -546,12 +666,18 @@ class ShimCacheParser:
                 
                 cursor.execute('''
                     INSERT INTO shimcache_entries 
-                    (filename, path, last_modified, last_modified_readable, data_size, 
-                     entry_size, cache_entry_position, entry_hash)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (filename, path, entry_type, package_family_name, package_version,
+                     architecture, raw_entry, last_modified, last_modified_readable,
+                     data_size, entry_size, cache_entry_position, entry_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     entry.filename,
                     entry.path,
+                    entry.entry_type,
+                    entry.package_family_name,
+                    entry.package_version,
+                    entry.architecture,
+                    entry.raw_entry,
                     last_modified_str,
                     entry.last_modified_readable,
                     entry.data_size,
@@ -567,10 +693,10 @@ class ShimCacheParser:
         conn.commit()
         conn.close()
         
-        print(f"✓ Database update complete:")
-        print(f"  📝 New entries added: {new_entries}")
-        print(f"  🔄 Duplicates skipped: {duplicates}")
-        print(f"  💾 Database: {self.database_path}")
+        print(f"[OK] Database update complete:")
+        print(f"  [NOTE] New entries added: {new_entries}")
+        print(f"  [SYNC] Duplicates skipped: {duplicates}")
+        print(f"  [SAVE] Database: {self.database_path}")
     
     def print_summary(self, entries: List[ShimCacheEntry]):
         """
@@ -580,7 +706,7 @@ class ShimCacheParser:
             entries (List[ShimCacheEntry]): Entries to summarize
         """
         if not entries:
-            print("📊 No entries found")
+            print("[STATS] No entries found")
             return
         
         total = len(entries)
@@ -605,14 +731,14 @@ class ShimCacheParser:
         else:
             oldest = newest = None
         
-        print(f"\n🎯 === ShimCache Analysis Summary ===")
-        print(f"📊 Total entries parsed: {total}")
-        print(f"💾 Database: {self.database_path}")
+        print(f"\n[TARGET] === ShimCache Analysis Summary ===")
+        print(f"[STATS] Total entries parsed: {total}")
+        print(f"[SAVE] Database: {self.database_path}")
         
         if timestamps:
-            print(f"📅 Time range: {format_forensic_timestamp(oldest).split(' ')[0]} to {format_forensic_timestamp(newest).split(' ')[0]}")
+            print(f"[DATE] Time range: {format_forensic_timestamp(oldest).split(' ')[0]} to {format_forensic_timestamp(newest).split(' ')[0]}")
         
-        print(f"\n🔧 Top file extensions:")
+        print(f"\n[TOOL] Top file extensions:")
         for ext, count in sorted(extensions.items(), key=lambda x: x[1], reverse=True)[:10]:
             print(f"  .{ext}: {count} files")
     
@@ -620,25 +746,26 @@ class ShimCacheParser:
         """
         Main execution function with comprehensive error handling.
         """
-        print("🚀 ShimCache Enhanced Parser Starting...")
+        print("[START] ShimCache Enhanced Parser Starting...")
         print("=" * 50)
         
         try:
             # Get data from live registry
             data = self.get_live_registry_data()
             if not data:
-                print("❌ Failed to retrieve ShimCache data")
+                print("[FAIL] Failed to retrieve ShimCache data")
                 return
             
-            print(f"📊 Retrieved {len(data):,} bytes of ShimCache data")
+            print(f"[STATS] Retrieved {len(data):,} bytes of ShimCache data")
             
             # Parse the data
             entries = self.parse_shimcache_data(data)
             
             if entries:
                 # Process entries (extract filenames, format timestamps)
-                print("🔄 Processing entries...")
+                print("[SYNC] Processing entries...")
                 for entry in entries:
+                    entry.classify()
                     entry.extract_filename()
                     entry.format_timestamp()
                 
@@ -648,13 +775,13 @@ class ShimCacheParser:
                 # Print summary
                 self.print_summary(entries)
                 
-                print(f"\n✅ Analysis complete! Check database: {self.database_path}")
+                print(f"\n[OK] Analysis complete! Check database: {self.database_path}")
                 
             else:
-                print("❌ No entries were successfully parsed")
+                print("[FAIL] No entries were successfully parsed")
                 
         except Exception as e:
-            print(f"❌ Critical error during execution: {e}")
+            print(f"[FAIL] Critical error during execution: {e}")
             import traceback
             traceback.print_exc()
 

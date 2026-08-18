@@ -1,5 +1,5 @@
 """
-EvidenceSeal — court-defensible chain of custody for what the AI actually saw.
+EvidenceSeal — auditable, tamper-evident chain of custody for what the AI actually saw.
 
 Every payload the Eye sends to an LLM is sealed here: the SHA-256 of the EXACT
 bytes injected into the prompt, the token count, the model + its context limit,

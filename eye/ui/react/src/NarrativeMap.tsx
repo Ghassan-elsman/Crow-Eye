@@ -1,7 +1,7 @@
 /**
  * NarrativeMap
  *
- * The Eye's persistent, court-defensible working memory for a case, rendered as an
+ * The Eye's persistent, auditable, tamper-evident working memory for a case, rendered as an
  * interactive board. The Eye (a gemma-class LLM) is stateless between turns, so this
  * map is the single place where "what we know and what we have concluded" lives — and
  * its contents are injected into the Eye's prompt every turn.

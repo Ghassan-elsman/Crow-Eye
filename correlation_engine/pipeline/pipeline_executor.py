@@ -281,6 +281,9 @@ class PipelineExecutor:
             # Detect circular dependencies and missing references
             dep_report = self._detect_circular_dependencies(feather_paths)
             
+            unsatisfiable = self._unsatisfiable_wings(feather_paths)
+            runnable = len(self.config.wing_configs) - len(unsatisfiable)
+
             if dep_report['errors']:
                 if self.verbose:
                     print(" Dependency validation errors:")
@@ -288,9 +291,15 @@ class PipelineExecutor:
                         print(f" [FAIL] {error}")
                 for error in dep_report['errors']:
                     self.errors.append(error)
+
+            if dep_report['errors'] and not runnable:
+                # Nothing can run. This is the case the halt was written for.
                 if self.verbose:
-                    print(" Halting execution due to missing feather references")
+                    print(" Halting execution: no wing has all of its feathers")
             else:
+                if unsatisfiable and self.verbose:
+                    print(f" Skipping {len(unsatisfiable)} wing(s) with missing feathers; "
+                          f"running the remaining {runnable}")
                 # Generate dependency graph
                 if self.config.output_directory:
                     dot_graph = self._generate_dependency_graph_dot(feather_paths)
@@ -571,16 +580,22 @@ class PipelineExecutor:
         """
         # Pre-execution validation report
         validation_report = self._validate_feather_wing_linkages(feather_paths)
-        
+
+        # Wings missing a feather are skipped individually below rather than
+        # taken as a reason to abandon the run.
+        unsatisfiable = self._unsatisfiable_wings(feather_paths)
+
         if validation_report['errors']:
             if self.verbose:
                 print(" Pre-execution validation errors:")
                 for error in validation_report['errors']:
                     print(f" [FAIL] {error}")
             for error in validation_report['errors']:
-                self.errors.append(error)
-            return
-        
+                if error not in self.errors:
+                    self.errors.append(error)
+            if len(unsatisfiable) >= len(self.config.wing_configs):
+                return
+
         if validation_report['warnings']:
             if self.verbose:
                 print(" Pre-execution validation warnings:")
@@ -590,6 +605,17 @@ class PipelineExecutor:
                 self.warnings.append(warning)
         
         for i, wing_config in enumerate(self.config.wing_configs, 1):
+            if wing_config.wing_name in unsatisfiable:
+                absent = ", ".join(unsatisfiable[wing_config.wing_name])
+                message = (f"Wing '{wing_config.wing_name}' skipped: this case has no "
+                           f"{absent}")
+                if message not in self.warnings:
+                    self.warnings.append(message)
+                if self.verbose:
+                    print(f"\n [{i}/{len(self.config.wing_configs)}] Skipping Wing: "
+                          f"{wing_config.wing_name} (missing {absent})")
+                continue
+
             if self.verbose:
                 print(f"\n [{i}/{len(self.config.wing_configs)}] Executing Wing: {wing_config.wing_name}")
                 print(f" Wing ID: {wing_config.wing_id}")
@@ -821,6 +847,28 @@ class PipelineExecutor:
         
         return report
     
+    def _unsatisfiable_wings(self, feather_paths: Dict[str, str]) -> Dict[str, list]:
+        """Wings that cannot run, mapped to the feathers they are missing.
+
+        A wing needs every feather it references. One that is missing used to
+        stop the whole pipeline: `sync_and_augment_pipeline_wings` injects every
+        shipped default wing into whatever case is opened, so a new default wing
+        referencing a feather an older case never parsed silently disabled that
+        case's entire correlation run - including wings that were complete.
+        Skipping just the wing keeps the diagnostic and loses only the analysis
+        that genuinely cannot be done.
+        """
+        missing = {}
+        for wing_config in self.config.wing_configs:
+            absent = [
+                ref.feather_config_name
+                for ref in wing_config.feathers
+                if ref.feather_config_name and ref.feather_config_name not in feather_paths
+            ]
+            if absent:
+                missing[wing_config.wing_name] = absent
+        return missing
+
     def _detect_circular_dependencies(self, feather_paths: Dict[str, str]) -> Dict[str, Any]:
         """
         Detect circular dependencies and missing feather references.

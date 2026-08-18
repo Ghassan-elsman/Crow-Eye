@@ -45,7 +45,7 @@ License: GPL-3.0
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.12.6"  # Single source of truth — read by the About menu, the update
+__version__ = "0.12.7"  # Single source of truth — read by the About menu, the update
                         # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
 
@@ -432,157 +432,110 @@ def check_and_install_requirements():
 check_and_install_requirements()
 
 
-def ensure_timeline_built():
-    """Ensure the React timeline frontend is built and ready."""
-    timeline_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'timeline', 'react-timeline')
-    dist_dir = os.path.join(timeline_dir, 'dist')
-    
-    index_html = os.path.join(dist_dir, 'index.html')
-    src_dir = os.path.join(timeline_dir, 'src')
-    
-    # Check if we need to rebuild (if index.html is missing OR older than source files)
-    node_modules_dir = os.path.join(timeline_dir, 'node_modules')
-    should_rebuild = not os.path.exists(index_html) or not os.path.exists(node_modules_dir)
-    
-    if not should_rebuild and os.path.exists(src_dir):
-        # Check if any file in src/ is newer than index.html
-        build_mtime = os.path.getmtime(index_html)
-        for root_dir, _, files in os.walk(src_dir):
-            for f in files:
-                f_path = os.path.join(root_dir, f)
-                try:
-                    if os.path.getmtime(f_path) > build_mtime:
-                        should_rebuild = True
-                        print(f" -> Detected change in {f}, triggering rebuild...")
-                        break
-                except OSError:
-                    continue
-            if should_rebuild: break
-            
-    if should_rebuild:
-        print('\n' + '-'*40)
-        print('[STARTING] Building Timeline React Application...')
-        print('-'*40)
-        
-        # First, ensure Node.js and npm are installed
-        try:
-            from utils.nodejs_installer import ensure_nodejs_installed
-            
-            if not ensure_nodejs_installed():
-                print(Fore.YELLOW + " -> Node.js installation failed or incomplete" + Fore.RESET)
-                print(Fore.YELLOW + " -> Timeline feature will not be available" + Fore.RESET)
-                print(Fore.YELLOW + " -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
-                return
-        except ImportError as e:
-            print(Fore.RED + f" -> [ERROR] Failed to import Node.js installer: {e}" + Fore.RESET)
-            print(Fore.YELLOW + " -> Please verify that 'utils/nodejs_installer.py' exists." + Fore.RESET)
-            return
-        except Exception as e:
-            print(Fore.RED + f" -> [ERROR] Unexpected error during Node.js check: {e}" + Fore.RESET)
-            return
-        
-        # Now build the timeline with npm
-        try:
-            print(" -> Installing NPM dependencies (this may take a minute)...")
-            # Explicitly pass current environment to ensure Node.js is in PATH
-            npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
-            subprocess.run([npm_cmd, 'install'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            
-            print(" -> Building React application...")
-            subprocess.run([npm_cmd, 'run', 'build'], cwd=timeline_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            # Apply patches for compatibility
-            try:
-                from eye.ui.react.patch_eye_ui import patch_file
-                patch_file(os.path.join(dist_dir, 'index.html'))
-                print(" -> Applied browser compatibility patches to Timeline")
-            except:
-                pass
-                
-            print(Fore.GREEN + " -> [FINISHED] Timeline built successfully!" + Fore.RESET)
-            print('-'*40 + '\n')
-                
-        except subprocess.CalledProcessError as e:
-            print(Fore.RED + f" -> Failed to build Timeline. Exit code: {e.returncode}" + Fore.RESET)
-            print(Fore.YELLOW + " -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
-            print(Fore.YELLOW + f" {timeline_dir}" + Fore.RESET)
-        except FileNotFoundError:
-            print(Fore.RED + " -> NPM not found. Please install Node.js to use the Timeline feature." + Fore.RESET)
-    else:
-        print(" -> Timeline React application already built")
+def _react_ui_needs_build(ui_dir, index_html):
+    """Decide whether a React UI has to be built before it can be used.
 
-def ensure_eye_ui_built():
-    """Ensure the Eye AI React frontend is built and ready."""
-    eye_ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eye', 'ui', 'react')
-    dist_dir = os.path.join(eye_ui_dir, 'dist')
-    
-    index_html = os.path.join(dist_dir, 'index.html')
-    src_dir = os.path.join(eye_ui_dir, 'src')
-    
-    # Check if we need to rebuild (if index.html is missing OR older than source files)
-    node_modules_dir = os.path.join(eye_ui_dir, 'node_modules')
-    should_rebuild = not os.path.exists(index_html) or not os.path.exists(node_modules_dir)
-    
-    if not should_rebuild and os.path.exists(src_dir):
-        # Check if any file in src/ is newer than index.html
-        build_mtime = os.path.getmtime(index_html)
-        for root_dir, _, files in os.walk(src_dir):
-            for f in files:
-                f_path = os.path.join(root_dir, f)
-                try:
-                    if os.path.getmtime(f_path) > build_mtime:
-                        should_rebuild = True
-                        print(f" -> Detected change in {f}, triggering rebuild...")
-                        break
-                except OSError:
-                    continue
-            if should_rebuild: break
-            
-    if should_rebuild:
-        print('\n' + '-'*40)
-        print('[STARTING] Building Eye AI React Application...')
-        print('-'*40)
-        
-        # First, ensure Node.js and npm are installed
-        try:
-            from utils.nodejs_installer import ensure_nodejs_installed
-            
-            if not ensure_nodejs_installed():
-                print(Fore.YELLOW + " -> Node.js installation failed or incomplete" + Fore.RESET)
-                print(Fore.YELLOW + " -> Eye AI Assistant features will not be available" + Fore.RESET)
-                print(Fore.YELLOW + " -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
-                return
-        except ImportError as e:
-            print(Fore.RED + f" -> Failed to import Node.js installer: {e}" + Fore.RESET)
-            print(Fore.YELLOW + " -> Please manually install Node.js from https://nodejs.org/" + Fore.RESET)
-            return
-        
-        # Now build the Eye UI with npm
-        try:
-            print(" -> Installing NPM dependencies for Eye AI...")
-            npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
-            subprocess.run([npm_cmd, 'install'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            
-            print(" -> Building Eye AI React application...")
-            subprocess.run([npm_cmd, 'run', 'build'], cwd=eye_ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
-            
-            # Apply patches for compatibility
+    Three situations, and they are not the same person:
+
+    - No build at all -> build it. Needs Node, and there is no alternative.
+    - A build, but no node_modules -> USE IT. Someone with no node_modules is
+      running Crow-Eye, not developing it, and the build they have was shipped
+      with the release. Rebuilding here is what made a fresh clone try to
+      download Node just to regenerate a file it already had — and on an
+      air-gapped forensic workstation that download cannot succeed, so the
+      feature was simply lost.
+    - A build AND node_modules -> that is a developer; rebuild when anything in
+      src/ is newer, so their edits show up.
+    """
+    if not os.path.exists(index_html):
+        return True
+
+    node_modules_dir = os.path.join(ui_dir, 'node_modules')
+    if not os.path.exists(node_modules_dir):
+        return False
+
+    src_dir = os.path.join(ui_dir, 'src')
+    if not os.path.exists(src_dir):
+        return False
+
+    build_mtime = os.path.getmtime(index_html)
+    for root_dir, _, files in os.walk(src_dir):
+        for f in files:
             try:
-                from eye.ui.react.patch_eye_ui import patch_file
-                patch_file(os.path.join(dist_dir, 'index.html'))
-                print(" -> Applied browser compatibility patches to Eye UI")
-            except Exception as e:
-                print(f" -> Patching failed: {e}")
-                
-            print(Fore.GREEN + " -> [FINISHED] Eye AI built successfully!" + Fore.RESET)
-            print('-'*40 + '\n')
-        except subprocess.CalledProcessError as e:
-            print(Fore.RED + f" -> Failed to build Eye AI. Exit code: {e.returncode}" + Fore.RESET)
-            print(Fore.YELLOW + " -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
-            print(Fore.YELLOW + f" {eye_ui_dir}" + Fore.RESET)
-        except FileNotFoundError:
-            print(Fore.RED + " -> NPM not found. Please install Node.js to use the Eye AI feature." + Fore.RESET)
-    else:
-        print(" -> Eye AI React application already built")
+                if os.path.getmtime(os.path.join(root_dir, f)) > build_mtime:
+                    print(f" -> Detected change in {f}, triggering rebuild...")
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def ensure_react_ui_built(label, *ui_path_parts):
+    """Build one of Crow-Eye's React front-ends if it isn't ready.
+
+    `label` names the feature in the console output; `ui_path_parts` locate its
+    folder relative to this file (the one holding package.json, src/ and dist/).
+
+    One function for all three UIs. It used to be two near-identical copies, and
+    the cost of that showed: when UBA was added, nobody wrote the third copy, so
+    the UBA interface was never built by anything and the window could only ever
+    report its own build as missing.
+    """
+    ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), *ui_path_parts)
+    dist_dir = os.path.join(ui_dir, 'dist')
+    index_html = os.path.join(dist_dir, 'index.html')
+
+    if not _react_ui_needs_build(ui_dir, index_html):
+        print(f" -> {label} React application already built")
+        return
+
+    print('\n' + '-'*40)
+    print(f'[STARTING] Building {label} React Application...')
+    print('-'*40)
+
+    # First, ensure Node.js and npm are installed
+    try:
+        from utils.nodejs_installer import ensure_nodejs_installed
+
+        if not ensure_nodejs_installed():
+            print(Fore.YELLOW + " -> Node.js installation failed or incomplete" + Fore.RESET)
+            print(Fore.YELLOW + f" -> {label} feature will not be available" + Fore.RESET)
+            print(Fore.YELLOW + " -> You can manually install Node.js from https://nodejs.org/" + Fore.RESET)
+            return
+    except ImportError as e:
+        print(Fore.RED + f" -> [ERROR] Failed to import Node.js installer: {e}" + Fore.RESET)
+        print(Fore.YELLOW + " -> Please verify that 'utils/nodejs_installer.py' exists." + Fore.RESET)
+        return
+    except Exception as e:
+        print(Fore.RED + f" -> [ERROR] Unexpected error during Node.js check: {e}" + Fore.RESET)
+        return
+
+    try:
+        print(f" -> Installing NPM dependencies for {label} (this may take a minute)...")
+        # Explicitly pass current environment to ensure Node.js is in PATH
+        npm_cmd = 'npm.cmd' if IS_WINDOWS else 'npm'
+        subprocess.run([npm_cmd, 'install'], cwd=ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
+
+        print(f" -> Building {label} React application...")
+        subprocess.run([npm_cmd, 'run', 'build'], cwd=ui_dir, check=True, shell=IS_WINDOWS, env=os.environ)
+
+        # Apply patches for compatibility
+        try:
+            from eye.ui.react.patch_eye_ui import patch_file
+            patch_file(index_html)
+            print(f" -> Applied browser compatibility patches to {label}")
+        except Exception as e:
+            print(f" -> Patching failed: {e}")
+
+        print(Fore.GREEN + f" -> [FINISHED] {label} built successfully!" + Fore.RESET)
+        print('-'*40 + '\n')
+
+    except subprocess.CalledProcessError as e:
+        print(Fore.RED + f" -> Failed to build {label}. Exit code: {e.returncode}" + Fore.RESET)
+        print(Fore.YELLOW + " -> Tip: Try running 'npm install && npm run build' manually in the folder:" + Fore.RESET)
+        print(Fore.YELLOW + f" {ui_dir}" + Fore.RESET)
+    except FileNotFoundError:
+        print(Fore.RED + f" -> NPM not found. Please install Node.js to use the {label} feature." + Fore.RESET)
 
 
 # Handle pywin32 post-install if needed (Windows only)
@@ -677,11 +630,11 @@ print('='*60)
 print('[STEP 5/5] Node.js and React Build Pipeline...')
 print('='*60)
 
-# Build the Timeline if necessary
-ensure_timeline_built()
-
-# Build the Eye AI if necessary
-ensure_eye_ui_built()
+# Build each React front-end if necessary. UBA belongs here too — it was the one
+# that was missing, which is why its window could only report a missing build.
+ensure_react_ui_built('Timeline', 'timeline', 'react-timeline')
+ensure_react_ui_built('Eye AI', 'eye', 'ui', 'react')
+ensure_react_ui_built('UBA', 'uba', 'react-uba')
 
 print('[STEP 5/5] Complete!\n')
 
@@ -838,6 +791,36 @@ try:
 except ImportError as e:
     print(Fore.RED + f"[-] Failed to import PartitionWindow: {str(e)}" + Fore.RESET)
     PartitionWindow = None
+
+# Parser-bookkeeping column helpers. Parsers now write `parsed_at`; older case
+# databases carry legacy names (timestamp / parsed_timestamp / inserted_at) and
+# are never rewritten, so read paths resolve and relabel instead.
+try:
+    from utils.parse_time_column import (
+        PARSE_TIME_LABEL, is_parse_time_column,
+        nice_headers as nice_column_headers,
+    )
+except ImportError as e:
+    print(Fore.RED + f"[-] Failed to import parse_time_column helpers: {str(e)}" + Fore.RESET)
+    PARSE_TIME_LABEL = "Parsed At"
+
+    def is_parse_time_column(column, table=None):
+        return bool(column) and str(column).strip().lower() in (
+            "parsed_at", "parsed_timestamp", "parse_timestamp", "inserted_at")
+
+    _HEADER_ACRONYMS = frozenset({
+        "id", "sid", "dll", "guid", "uuid", "url", "uri", "pid", "mru", "usb",
+        "utc", "clsid", "ip", "mac", "os", "wmi", "dns", "uac", "exe", "lnk",
+        "ntfs", "cpu", "api", "sql", "http", "https", "rdp", "smb", "vpn",
+    })
+
+    def nice_column_headers(columns, table=None):
+        def label(c):
+            if is_parse_time_column(c, table):
+                return PARSE_TIME_LABEL
+            return " ".join(w.upper() if w.lower() in _HEADER_ACRONYMS else w.title()
+                            for w in str(c).replace("_", " ").split())
+        return [label(c) for c in columns]
 
 
 # Comprehensive dependency validation with automatic recovery
@@ -1298,6 +1281,24 @@ class _EyeInstantSplash(QtWidgets.QWidget):
 class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just a plain object
     def __init__(self, parent=None):
         super().__init__(parent)
+
+    def _mft_usn_status(self, status=None, log=None):
+        """Show a correlator notice on the loading screen.
+
+        Only the status line is set here. The correlator also prints its `log`
+        sentence, and the loading dialog captures stdout — so adding it again
+        would show the same explanation twice.
+
+        Guarded throughout: a display that cannot draw must never stop a
+        correlation that is already running.
+        """
+        dialog = getattr(self, '_current_loading_dialog', None)
+        if not dialog or not status:
+            return
+        try:
+            dialog.set_status(status)
+        except Exception as e:
+            print(f"[MFT-USN] Could not update the loading screen: {e}")
 
     def _on_generic_heartbeat(self):
         """Process events to keep GUI responsive during long-running background tasks."""
@@ -1845,7 +1846,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     "MRU Position", "Created Date", "Modified Date", "Accessed Date",
                     "Attributes", "File Size", "Special Folder", "Network Share",
                     "Server Name", "Share Name", "Drive Letter", "MFT Record", 
-                    "Registry Path", "Analyzing Date"
+                    "Registry Path", "Parsed At"
                 ]
                 self.Shellbags_table.setColumnCount(len(headers))
                 self.Shellbags_table.setHorizontalHeaderLabels(headers)
@@ -2030,7 +2031,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         30: "Network_Share_Name", 32: "File_Permission", 33: "Num_Hard_Links",
                         34: "Device_ID", 35: "Inode_Number", 40: "MFT_Entry_Number",
                         41: "MFT_Sequence_Number", 42: "Property_Metadata", 43: "Darwin_ID",
-                        44: "Environment_Variables", 45: "Known_Folder_GUID"
+                        44: "Environment_Variables", 45: "Known_Folder_GUID",
+                        48: "Target_Source"
                     }
                     
                     self.LNK_table.setUpdatesEnabled(False)
@@ -2079,7 +2081,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         32: "File_Permission", 33: "Num_Hard_Links", 34: "Device_ID",
                         35: "Inode_Number", 40: "MFT_Entry_Number", 41: "MFT_Sequence_Number",
                         42: "Property_Metadata", 43: "Darwin_ID", 44: "Environment_Variables",
-                        45: "Known_Folder_GUID", 46: "DestList_Last_ID", 47: "DestList_Actions_Count"
+                        45: "Known_Folder_GUID", 46: "DestList_Last_ID", 47: "DestList_Actions_Count",
+                        48: "Target_Source"
                     }
                     
                     self.AJL_table.setUpdatesEnabled(False)
@@ -2151,7 +2154,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         15: "Local_Path", 16: "LNK_Class_ID", 17: "Volume_Type",
                         18: "Volume_Serial", 19: "Volume_Label", 20: "Command_Line_Arguments",
                         21: "MFT_Entry_Number", 22: "MFT_Sequence_Number", 23: "Property_Metadata",
-                        24: "Darwin_ID", 25: "Environment_Variables", 26: "Known_Folder_GUID"
+                        24: "Darwin_ID", 25: "Environment_Variables", 26: "Known_Folder_GUID",
+                        27: "Target_Source"
                     }
                     
                     self.Clj_table.setUpdatesEnabled(False)
@@ -2693,8 +2697,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.UserProfiles_table.setRowCount(0)
                 
                 # Set headers based on user request and DB schema
-                # DB Schema: user_sid, username, profile_path, profile_image_path, profile_loaded, timestamp
-                headers = ["Username", "SID", "Profile Image Path", "Profiles Loaded", "Parsed Timestamp"]
+                # DB Schema: user_sid, username, profile_path, profile_image_path, profile_loaded, parsed_at
+                headers = ["Username", "SID", "Profile Image Path", "Profiles Loaded", "Parsed At"]
                 self.UserProfiles_table.setColumnCount(len(headers))
                 self.UserProfiles_table.setHorizontalHeaderLabels(headers)
                 
@@ -2720,7 +2724,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     self.UserProfiles_table.setItem(row_index, 2, QtWidgets.QTableWidgetItem(str(row[3]) if row[3] is not None else ""))
                     # Profiles Loaded
                     self.UserProfiles_table.setItem(row_index, 3, QtWidgets.QTableWidgetItem(str(row[4]) if row[4] is not None else ""))
-                    # Parsed Timestamp
+                    # Parsed At
                     self.UserProfiles_table.setItem(row_index, 4, QtWidgets.QTableWidgetItem(str(row[5]) if row[5] is not None else ""))
                         
                 self.UserProfiles_table.setUpdatesEnabled(True)
@@ -2956,7 +2960,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         usn_headers = [
             "Volume Letter", "Filename", "USN", "Major Version", "FRN", "Parent FRN", 
             "Timestamp", "Reason", "Source Info", "Security ID", "File Attributes", 
-            "Record Length", "Inserted At"
+            "Record Length", "Parsed At"
         ]
         self.USN_table.setColumnCount(len(usn_headers))
         for i, header in enumerate(usn_headers):
@@ -3909,6 +3913,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     parent=self.USN_tab
                 )
                 
+                # Show friendly header labels. The model keeps using the real
+                # column names for SQL, so this also renders the bookkeeping
+                # column as "Parsed At" on databases written by older builds,
+                # where it is still stored as `inserted_at`.
+                self.USN_table.setHorizontalHeaderLabels(
+                    self.get_nice_usn_headers(columns))
+
                 # Set default ordering
                 self.USN_table.set_order_by('usn ASC')
                 
@@ -4463,9 +4474,25 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     conn.close()
                     return None
                     
-                # Query to get all ShimCache entries
-                cursor.execute("""SELECT filename, path, last_modified, last_modified_readable, parsed_timestamp 
-                              FROM shimcache_entries ORDER BY last_modified DESC""")
+                # Query to get all ShimCache entries. The parse-time column was
+                # renamed to parsed_at; resolve it so databases written by older
+                # Crow-Eye builds (parsed_timestamp) still load without a rewrite.
+                from utils.parse_time_column import resolve_parse_time_column
+                parse_col = resolve_parse_time_column(conn, "shimcache_entries") or "NULL"
+                # entry_type and the package_* columns exist only on databases
+                # written since packaged-app records were decoded out of `path`;
+                # fall back for an older case rather than failing to load it.
+                cursor.execute("PRAGMA table_info(shimcache_entries)")
+                _sc_cols = [c[1] for c in cursor.fetchall()]
+                if "entry_type" in _sc_cols:
+                    cursor.execute(f"""SELECT filename, path, entry_type,
+                                      package_family_name, package_version, architecture,
+                                      last_modified, last_modified_readable, {parse_col}
+                                  FROM shimcache_entries ORDER BY last_modified DESC""")
+                else:
+                    cursor.execute(f"""SELECT filename, path, '', '', '', '',
+                                      last_modified, last_modified_readable, {parse_col}
+                                  FROM shimcache_entries ORDER BY last_modified DESC""")
                 rows = cursor.fetchall()
                 conn.close()
                 
@@ -4514,9 +4541,11 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.ShimCache_main_table.setUpdatesEnabled(False)
                 
                 # Set column headers if not already set
-                if self.ShimCache_main_table.columnCount() != 5:
-                    self.ShimCache_main_table.setColumnCount(5)
-                    headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+                if self.ShimCache_main_table.columnCount() != 9:
+                    self.ShimCache_main_table.setColumnCount(9)
+                    headers = ["Filename", "Path", "Entry Type", "Package Family Name",
+                               "Package Version", "Architecture",
+                               "Last Modified (Epoch)", "Last Modified", "Parsed At"]
                     self.ShimCache_main_table.setHorizontalHeaderLabels(headers)
                 
                 # Clear existing rows
@@ -5711,7 +5740,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             tables_to_load = [
                 ("SystemLogs", "System Logs"),
                 ("ApplicationLogs", "Application Logs"),
-                ("SecurityLogs", "Security Logs")
+                ("SecurityLogs", "Security Logs"),
             ]
             
             total_tables = len(tables_to_load)
@@ -6144,11 +6173,35 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "computer_Name", "time_zone", "TimeZoneInfo", "network_interfaces",
                 "NetworkInterfacesInfo", "Network_list", "SystemServices", "machine_run",
                 "machine_run_once", "user_run", "user_run_once", "RunMRU",
+                "ScheduledTasks", "AutoStartPrograms",
                 "Windows_lastupdate", "WindowsUpdateInfo", "ShutdownInfo", "BrowserHistory",
                 "USBDevices", "USBInstances", "USBProperties", "USBStorageDevices",
                 "USBStorageVolumes", "RecentDocs", "OpenSaveMRU", "LastSaveMRU",
                 "TypedPaths", "BAM", "DAM", "InstalledSoftware", "Shellbags",
-                "UserAssist", "MUICache", "WordWheelQuery", "UserProfiles"
+                "UserAssist", "MUICache", "WordWheelQuery", "UserProfiles",
+                "winlogon", "image_file_execution_options", "appinit_dlls", "appcert_dlls",
+                "active_setup", "run_services", "run_services_once", "policies_explorer_run",
+                "user_shell_folders", "lsa_packages", "boot_execute", "clsid_inprocserver32",
+                "UserAccounts", "ComputerNameInfo", "shutdown_information", "Windows_lastupdate_subkeys",
+                "SecurityPosture", "DefenderExclusions", "FirewallRules",
+                "NetworkShares", "ConnectedDevices", "MountPoints2",
+                "RDPClientMRU", "OfficeDocuments", "FeatureUsage",
+                "CompatibilityAssistant", "RecentApps", "ApplicationArtifacts",
+                "command_processor", "drivers32", "shell_service_object_delay_load",
+                "browser_helper_objects", "shared_task_scheduler",
+                "shell_icon_overlay_identifiers", "credential_providers",
+                "netsh_helper_dlls", "amsi_providers", "security_providers",
+                "print_monitors", "print_processors", "network_providers",
+                "wmi_autorecover_mofs", "windows_load_run", "shell_open_command",
+                "file_exts", "cid_size_mru", "programs_cache", "regedit_lastkey",
+                "printer_connections", "explorer_advanced",
+                "rdp_tcp", "usbstor_start", "windows_script_host",
+                "dnscache_parameters", "files_not_to_snapshot", "winevt_channels",
+                "wpdbusenum", "device_classes", "volume_info_cache",
+                "machine_guid", "product_options", "os_install_history",
+                "active_computer_name", "hivelist", "system_environment",
+                "network_adapters", "group_policy_history",
+                "local_groups", "lsa_policy", "audit_policy", "lsa_secrets", "cached_domain_logons"
             ]
             
             conn = sqlite3.connect(db_path)
@@ -6261,11 +6314,41 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         table_mapping = {
             "computer_Name": self.computerName_table,
             "time_zone": self.TimeZone_table,
-            "TimeZoneInfo": self.TimeZone_table,
+            "TimeZoneInfo": self.TimeZoneInfo_table,
             "network_interfaces": self.NetworkInterface_table,
-            "NetworkInterfacesInfo": self.NetworkInterface_table,
+            "NetworkInterfacesInfo": self.NetworkInterfacesInfo_table,
             "Network_list": self.NetworkLists_table,
             "SystemServices": self.SystemServices_table,
+            "ScheduledTasks": self.ScheduledTasks_table,
+            "winlogon": self.winlogon_table,
+            "image_file_execution_options": self.image_file_execution_options_table,
+            "appinit_dlls": self.appinit_dlls_table,
+            "appcert_dlls": self.appcert_dlls_table,
+            "active_setup": self.active_setup_table,
+            "run_services": self.run_services_table,
+            "run_services_once": self.run_services_once_table,
+            "policies_explorer_run": self.policies_explorer_run_table,
+            "user_shell_folders": self.user_shell_folders_table,
+            "lsa_packages": self.lsa_packages_table,
+            "boot_execute": self.boot_execute_table,
+            "clsid_inprocserver32": self.clsid_inprocserver32_table,
+            "UserAccounts": self.UserAccounts_table,
+            "ComputerNameInfo": self.ComputerNameInfo_table,
+            "SecurityPosture": self.SecurityPosture_table,
+            "DefenderExclusions": self.DefenderExclusions_table,
+            "FirewallRules": self.FirewallRules_table,
+            "NetworkShares": self.NetworkShares_table,
+            "ConnectedDevices": self.ConnectedDevices_table,
+            "MountPoints2": self.MountPoints2_table,
+            "RDPClientMRU": self.RDPClientMRU_table,
+            "OfficeDocuments": self.OfficeDocuments_table,
+            "FeatureUsage": self.FeatureUsage_table,
+            "CompatibilityAssistant": self.CompatibilityAssistant_table,
+            "RecentApps": self.RecentApps_table,
+            "ApplicationArtifacts": self.ApplicationArtifacts_table,
+            "shutdown_information": self.ShutdownRaw_table,
+            "Windows_lastupdate_subkeys": self.LastUpdateSubkeys_table,
+            "AutoStartPrograms": self.AutoStartPrograms_table,
             "machine_run": self.MachineRun_table,
             "machine_run_once": self.MachineRunOnce_table,
             "user_run": self.UserRun_table,
@@ -6292,6 +6375,50 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "MUICache": self.MUICache_table,
             "WordWheelQuery": self.WordWheelQuery_table,
             "UserProfiles": self.UserProfiles_table,
+            "local_groups": self.local_groups_table,
+            "lsa_policy": self.lsa_policy_table,
+            "audit_policy": self.audit_policy_table,
+            "lsa_secrets": self.lsa_secrets_table,
+            "cached_domain_logons": self.cached_domain_logons_table,
+            "command_processor": self.command_processor_table,
+            "drivers32": self.drivers32_table,
+            "shell_service_object_delay_load": self.shell_service_object_delay_load_table,
+            "browser_helper_objects": self.browser_helper_objects_table,
+            "shared_task_scheduler": self.shared_task_scheduler_table,
+            "shell_icon_overlay_identifiers": self.shell_icon_overlay_identifiers_table,
+            "credential_providers": self.credential_providers_table,
+            "netsh_helper_dlls": self.netsh_helper_dlls_table,
+            "amsi_providers": self.amsi_providers_table,
+            "security_providers": self.security_providers_table,
+            "print_monitors": self.print_monitors_table,
+            "print_processors": self.print_processors_table,
+            "network_providers": self.network_providers_table,
+            "wmi_autorecover_mofs": self.wmi_autorecover_mofs_table,
+            "windows_load_run": self.windows_load_run_table,
+            "shell_open_command": self.shell_open_command_table,
+            "file_exts": self.file_exts_table,
+            "cid_size_mru": self.cid_size_mru_table,
+            "programs_cache": self.programs_cache_table,
+            "regedit_lastkey": self.regedit_lastkey_table,
+            "printer_connections": self.printer_connections_table,
+            "explorer_advanced": self.explorer_advanced_table,
+            "rdp_tcp": self.rdp_tcp_table,
+            "usbstor_start": self.usbstor_start_table,
+            "windows_script_host": self.windows_script_host_table,
+            "dnscache_parameters": self.dnscache_parameters_table,
+            "files_not_to_snapshot": self.files_not_to_snapshot_table,
+            "winevt_channels": self.winevt_channels_table,
+            "wpdbusenum": self.wpdbusenum_table,
+            "device_classes": self.device_classes_table,
+            "volume_info_cache": self.volume_info_cache_table,
+            "machine_guid": self.machine_guid_table,
+            "product_options": self.product_options_table,
+            "os_install_history": self.os_install_history_table,
+            "active_computer_name": self.active_computer_name_table,
+            "hivelist": self.hivelist_table,
+            "system_environment": self.system_environment_table,
+            "network_adapters": self.network_adapters_table,
+            "group_policy_history": self.group_policy_history_table,
         }
 
         # Populate each table
@@ -6307,10 +6434,32 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             was_updates_enabled = gui_table.updatesEnabled()
             gui_table.setUpdatesEnabled(False)
 
-            # Set columns
+            # Set columns, then name them. The naming used to happen only when
+            # the column count disagreed with the schema, which meant a widget
+            # whose static headers were never set in retranslateUi kept whatever
+            # setup_standard_table left behind - and that is nothing, because it
+            # calls clear() and setColumnCount(), so Qt paints the section
+            # number instead. 24 registry tabs rendered "1 2 3" that way, while
+            # 13 others were correct only because their declared count happened
+            # to be wrong. Ask the header items directly instead: a widget that
+            # has them keeps its curated labels, one that does not gets the
+            # column names.
+            missing_labels = any(gui_table.horizontalHeaderItem(i) is None
+                                 for i in range(len(columns)))
             if gui_table.columnCount() != len(columns):
                 gui_table.setColumnCount(len(columns))
-                gui_table.setHorizontalHeaderLabels(columns)
+                missing_labels = True
+            if missing_labels:
+                gui_table.setHorizontalHeaderLabels(nice_column_headers(columns, db_table))
+
+            # Force the parser-bookkeeping column to read "Parsed At" whatever
+            # it is stored as. Case databases written by older builds still
+            # carry the legacy name (`timestamp`) and are never rewritten, so
+            # the label has to be applied on the read side.
+            for c_idx, col in enumerate(columns):
+                if is_parse_time_column(col, db_table):
+                    header_item = QtWidgets.QTableWidgetItem(PARSE_TIME_LABEL)
+                    gui_table.setHorizontalHeaderItem(c_idx, header_item)
 
             # Set row count
             gui_table.setRowCount(len(rows))
@@ -6895,6 +7044,692 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.SystemServices_table.setObjectName("SystemServices_table")
         self.verticalLayout_33.addWidget(self.SystemServices_table)
         self.Registry_widget.addTab(self.SystemServices, "")
+        # Scheduled Tasks (TaskCache) and the autostart roll-up it feeds.
+        # Both sit next to the Run keys because all three are persistence.
+        self.ScheduledTasks_tab = QtWidgets.QWidget()
+        self.ScheduledTasks_tab.setObjectName("ScheduledTasks_tab")
+        self.verticalLayout_ScheduledTasks = QtWidgets.QVBoxLayout(self.ScheduledTasks_tab)
+        self.verticalLayout_ScheduledTasks.setObjectName("verticalLayout_ScheduledTasks")
+        self.ScheduledTasks_table = QtWidgets.QTableWidget(self.ScheduledTasks_tab)
+        self.setup_standard_table(self.ScheduledTasks_table, 12, False, 300, 190)
+        self.ScheduledTasks_table.setObjectName("ScheduledTasks_table")
+        self.verticalLayout_ScheduledTasks.addWidget(self.ScheduledTasks_table)
+        self.Registry_widget.addTab(self.ScheduledTasks_tab, "")
+        self.winlogon_tab = QtWidgets.QWidget()
+        self.winlogon_tab.setObjectName("winlogon_tab")
+        self.verticalLayout_winlogon = QtWidgets.QVBoxLayout(self.winlogon_tab)
+        self.verticalLayout_winlogon.setObjectName("verticalLayout_winlogon")
+        self.winlogon_table = QtWidgets.QTableWidget(self.winlogon_tab)
+        self.setup_standard_table(self.winlogon_table, 7, False, 300, 190)
+        self.winlogon_table.setObjectName("winlogon_table")
+        self.verticalLayout_winlogon.addWidget(self.winlogon_table)
+        self.Registry_widget.addTab(self.winlogon_tab, "")
+        self.image_file_execution_options_tab = QtWidgets.QWidget()
+        self.image_file_execution_options_tab.setObjectName("image_file_execution_options_tab")
+        self.verticalLayout_image_file_execution_options = QtWidgets.QVBoxLayout(self.image_file_execution_options_tab)
+        self.verticalLayout_image_file_execution_options.setObjectName("verticalLayout_image_file_execution_options")
+        self.image_file_execution_options_table = QtWidgets.QTableWidget(self.image_file_execution_options_tab)
+        self.setup_standard_table(self.image_file_execution_options_table, 7, False, 300, 190)
+        self.image_file_execution_options_table.setObjectName("image_file_execution_options_table")
+        self.verticalLayout_image_file_execution_options.addWidget(self.image_file_execution_options_table)
+        self.Registry_widget.addTab(self.image_file_execution_options_tab, "")
+        self.appinit_dlls_tab = QtWidgets.QWidget()
+        self.appinit_dlls_tab.setObjectName("appinit_dlls_tab")
+        self.verticalLayout_appinit_dlls = QtWidgets.QVBoxLayout(self.appinit_dlls_tab)
+        self.verticalLayout_appinit_dlls.setObjectName("verticalLayout_appinit_dlls")
+        self.appinit_dlls_table = QtWidgets.QTableWidget(self.appinit_dlls_tab)
+        self.setup_standard_table(self.appinit_dlls_table, 7, False, 300, 190)
+        self.appinit_dlls_table.setObjectName("appinit_dlls_table")
+        self.verticalLayout_appinit_dlls.addWidget(self.appinit_dlls_table)
+        self.Registry_widget.addTab(self.appinit_dlls_tab, "")
+        self.appcert_dlls_tab = QtWidgets.QWidget()
+        self.appcert_dlls_tab.setObjectName("appcert_dlls_tab")
+        self.verticalLayout_appcert_dlls = QtWidgets.QVBoxLayout(self.appcert_dlls_tab)
+        self.verticalLayout_appcert_dlls.setObjectName("verticalLayout_appcert_dlls")
+        self.appcert_dlls_table = QtWidgets.QTableWidget(self.appcert_dlls_tab)
+        self.setup_standard_table(self.appcert_dlls_table, 7, False, 300, 190)
+        self.appcert_dlls_table.setObjectName("appcert_dlls_table")
+        self.verticalLayout_appcert_dlls.addWidget(self.appcert_dlls_table)
+        self.Registry_widget.addTab(self.appcert_dlls_tab, "")
+        self.active_setup_tab = QtWidgets.QWidget()
+        self.active_setup_tab.setObjectName("active_setup_tab")
+        self.verticalLayout_active_setup = QtWidgets.QVBoxLayout(self.active_setup_tab)
+        self.verticalLayout_active_setup.setObjectName("verticalLayout_active_setup")
+        self.active_setup_table = QtWidgets.QTableWidget(self.active_setup_tab)
+        self.setup_standard_table(self.active_setup_table, 7, False, 300, 190)
+        self.active_setup_table.setObjectName("active_setup_table")
+        self.verticalLayout_active_setup.addWidget(self.active_setup_table)
+        self.Registry_widget.addTab(self.active_setup_tab, "")
+        self.run_services_tab = QtWidgets.QWidget()
+        self.run_services_tab.setObjectName("run_services_tab")
+        self.verticalLayout_run_services = QtWidgets.QVBoxLayout(self.run_services_tab)
+        self.verticalLayout_run_services.setObjectName("verticalLayout_run_services")
+        self.run_services_table = QtWidgets.QTableWidget(self.run_services_tab)
+        self.setup_standard_table(self.run_services_table, 7, False, 300, 190)
+        self.run_services_table.setObjectName("run_services_table")
+        self.verticalLayout_run_services.addWidget(self.run_services_table)
+        self.Registry_widget.addTab(self.run_services_tab, "")
+        self.run_services_once_tab = QtWidgets.QWidget()
+        self.run_services_once_tab.setObjectName("run_services_once_tab")
+        self.verticalLayout_run_services_once = QtWidgets.QVBoxLayout(self.run_services_once_tab)
+        self.verticalLayout_run_services_once.setObjectName("verticalLayout_run_services_once")
+        self.run_services_once_table = QtWidgets.QTableWidget(self.run_services_once_tab)
+        self.setup_standard_table(self.run_services_once_table, 7, False, 300, 190)
+        self.run_services_once_table.setObjectName("run_services_once_table")
+        self.verticalLayout_run_services_once.addWidget(self.run_services_once_table)
+        self.Registry_widget.addTab(self.run_services_once_tab, "")
+        self.policies_explorer_run_tab = QtWidgets.QWidget()
+        self.policies_explorer_run_tab.setObjectName("policies_explorer_run_tab")
+        self.verticalLayout_policies_explorer_run = QtWidgets.QVBoxLayout(self.policies_explorer_run_tab)
+        self.verticalLayout_policies_explorer_run.setObjectName("verticalLayout_policies_explorer_run")
+        self.policies_explorer_run_table = QtWidgets.QTableWidget(self.policies_explorer_run_tab)
+        self.setup_standard_table(self.policies_explorer_run_table, 7, False, 300, 190)
+        self.policies_explorer_run_table.setObjectName("policies_explorer_run_table")
+        self.verticalLayout_policies_explorer_run.addWidget(self.policies_explorer_run_table)
+        self.Registry_widget.addTab(self.policies_explorer_run_tab, "")
+        self.user_shell_folders_tab = QtWidgets.QWidget()
+        self.user_shell_folders_tab.setObjectName("user_shell_folders_tab")
+        self.verticalLayout_user_shell_folders = QtWidgets.QVBoxLayout(self.user_shell_folders_tab)
+        self.verticalLayout_user_shell_folders.setObjectName("verticalLayout_user_shell_folders")
+        self.user_shell_folders_table = QtWidgets.QTableWidget(self.user_shell_folders_tab)
+        self.setup_standard_table(self.user_shell_folders_table, 7, False, 300, 190)
+        self.user_shell_folders_table.setObjectName("user_shell_folders_table")
+        self.verticalLayout_user_shell_folders.addWidget(self.user_shell_folders_table)
+        self.Registry_widget.addTab(self.user_shell_folders_tab, "")
+        self.lsa_packages_tab = QtWidgets.QWidget()
+        self.lsa_packages_tab.setObjectName("lsa_packages_tab")
+        self.verticalLayout_lsa_packages = QtWidgets.QVBoxLayout(self.lsa_packages_tab)
+        self.verticalLayout_lsa_packages.setObjectName("verticalLayout_lsa_packages")
+        self.lsa_packages_table = QtWidgets.QTableWidget(self.lsa_packages_tab)
+        self.setup_standard_table(self.lsa_packages_table, 7, False, 300, 190)
+        self.lsa_packages_table.setObjectName("lsa_packages_table")
+        self.verticalLayout_lsa_packages.addWidget(self.lsa_packages_table)
+        self.Registry_widget.addTab(self.lsa_packages_tab, "")
+        self.boot_execute_tab = QtWidgets.QWidget()
+        self.boot_execute_tab.setObjectName("boot_execute_tab")
+        self.verticalLayout_boot_execute = QtWidgets.QVBoxLayout(self.boot_execute_tab)
+        self.verticalLayout_boot_execute.setObjectName("verticalLayout_boot_execute")
+        self.boot_execute_table = QtWidgets.QTableWidget(self.boot_execute_tab)
+        self.setup_standard_table(self.boot_execute_table, 7, False, 300, 190)
+        self.boot_execute_table.setObjectName("boot_execute_table")
+        self.verticalLayout_boot_execute.addWidget(self.boot_execute_table)
+        self.Registry_widget.addTab(self.boot_execute_tab, "")
+        self.clsid_inprocserver32_tab = QtWidgets.QWidget()
+        self.clsid_inprocserver32_tab.setObjectName("clsid_inprocserver32_tab")
+        self.verticalLayout_clsid_inprocserver32 = QtWidgets.QVBoxLayout(self.clsid_inprocserver32_tab)
+        self.verticalLayout_clsid_inprocserver32.setObjectName("verticalLayout_clsid_inprocserver32")
+        self.clsid_inprocserver32_table = QtWidgets.QTableWidget(self.clsid_inprocserver32_tab)
+        self.setup_standard_table(self.clsid_inprocserver32_table, 7, False, 300, 190)
+        self.clsid_inprocserver32_table.setObjectName("clsid_inprocserver32_table")
+        self.verticalLayout_clsid_inprocserver32.addWidget(self.clsid_inprocserver32_table)
+        self.Registry_widget.addTab(self.clsid_inprocserver32_tab, "")
+        self.command_processor_tab = QtWidgets.QWidget()
+        self.command_processor_tab.setObjectName("command_processor_tab")
+        self.verticalLayout_command_processor = QtWidgets.QVBoxLayout(self.command_processor_tab)
+        self.verticalLayout_command_processor.setObjectName("verticalLayout_command_processor")
+        self.command_processor_table = QtWidgets.QTableWidget(self.command_processor_tab)
+        self.setup_standard_table(self.command_processor_table, 7, False, 300, 190)
+        self.command_processor_table.setObjectName("command_processor_table")
+        self.verticalLayout_command_processor.addWidget(self.command_processor_table)
+        self.Registry_widget.addTab(self.command_processor_tab, "")
+        self.drivers32_tab = QtWidgets.QWidget()
+        self.drivers32_tab.setObjectName("drivers32_tab")
+        self.verticalLayout_drivers32 = QtWidgets.QVBoxLayout(self.drivers32_tab)
+        self.verticalLayout_drivers32.setObjectName("verticalLayout_drivers32")
+        self.drivers32_table = QtWidgets.QTableWidget(self.drivers32_tab)
+        self.setup_standard_table(self.drivers32_table, 7, False, 300, 190)
+        self.drivers32_table.setObjectName("drivers32_table")
+        self.verticalLayout_drivers32.addWidget(self.drivers32_table)
+        self.Registry_widget.addTab(self.drivers32_tab, "")
+        self.shell_service_object_delay_load_tab = QtWidgets.QWidget()
+        self.shell_service_object_delay_load_tab.setObjectName("shell_service_object_delay_load_tab")
+        self.verticalLayout_shell_service_object_delay_load = QtWidgets.QVBoxLayout(self.shell_service_object_delay_load_tab)
+        self.verticalLayout_shell_service_object_delay_load.setObjectName("verticalLayout_shell_service_object_delay_load")
+        self.shell_service_object_delay_load_table = QtWidgets.QTableWidget(self.shell_service_object_delay_load_tab)
+        self.setup_standard_table(self.shell_service_object_delay_load_table, 7, False, 300, 190)
+        self.shell_service_object_delay_load_table.setObjectName("shell_service_object_delay_load_table")
+        self.verticalLayout_shell_service_object_delay_load.addWidget(self.shell_service_object_delay_load_table)
+        self.Registry_widget.addTab(self.shell_service_object_delay_load_tab, "")
+        self.browser_helper_objects_tab = QtWidgets.QWidget()
+        self.browser_helper_objects_tab.setObjectName("browser_helper_objects_tab")
+        self.verticalLayout_browser_helper_objects = QtWidgets.QVBoxLayout(self.browser_helper_objects_tab)
+        self.verticalLayout_browser_helper_objects.setObjectName("verticalLayout_browser_helper_objects")
+        self.browser_helper_objects_table = QtWidgets.QTableWidget(self.browser_helper_objects_tab)
+        self.setup_standard_table(self.browser_helper_objects_table, 7, False, 300, 190)
+        self.browser_helper_objects_table.setObjectName("browser_helper_objects_table")
+        self.verticalLayout_browser_helper_objects.addWidget(self.browser_helper_objects_table)
+        self.Registry_widget.addTab(self.browser_helper_objects_tab, "")
+        self.shared_task_scheduler_tab = QtWidgets.QWidget()
+        self.shared_task_scheduler_tab.setObjectName("shared_task_scheduler_tab")
+        self.verticalLayout_shared_task_scheduler = QtWidgets.QVBoxLayout(self.shared_task_scheduler_tab)
+        self.verticalLayout_shared_task_scheduler.setObjectName("verticalLayout_shared_task_scheduler")
+        self.shared_task_scheduler_table = QtWidgets.QTableWidget(self.shared_task_scheduler_tab)
+        self.setup_standard_table(self.shared_task_scheduler_table, 7, False, 300, 190)
+        self.shared_task_scheduler_table.setObjectName("shared_task_scheduler_table")
+        self.verticalLayout_shared_task_scheduler.addWidget(self.shared_task_scheduler_table)
+        self.Registry_widget.addTab(self.shared_task_scheduler_tab, "")
+        self.shell_icon_overlay_identifiers_tab = QtWidgets.QWidget()
+        self.shell_icon_overlay_identifiers_tab.setObjectName("shell_icon_overlay_identifiers_tab")
+        self.verticalLayout_shell_icon_overlay_identifiers = QtWidgets.QVBoxLayout(self.shell_icon_overlay_identifiers_tab)
+        self.verticalLayout_shell_icon_overlay_identifiers.setObjectName("verticalLayout_shell_icon_overlay_identifiers")
+        self.shell_icon_overlay_identifiers_table = QtWidgets.QTableWidget(self.shell_icon_overlay_identifiers_tab)
+        self.setup_standard_table(self.shell_icon_overlay_identifiers_table, 7, False, 300, 190)
+        self.shell_icon_overlay_identifiers_table.setObjectName("shell_icon_overlay_identifiers_table")
+        self.verticalLayout_shell_icon_overlay_identifiers.addWidget(self.shell_icon_overlay_identifiers_table)
+        self.Registry_widget.addTab(self.shell_icon_overlay_identifiers_tab, "")
+        self.credential_providers_tab = QtWidgets.QWidget()
+        self.credential_providers_tab.setObjectName("credential_providers_tab")
+        self.verticalLayout_credential_providers = QtWidgets.QVBoxLayout(self.credential_providers_tab)
+        self.verticalLayout_credential_providers.setObjectName("verticalLayout_credential_providers")
+        self.credential_providers_table = QtWidgets.QTableWidget(self.credential_providers_tab)
+        self.setup_standard_table(self.credential_providers_table, 7, False, 300, 190)
+        self.credential_providers_table.setObjectName("credential_providers_table")
+        self.verticalLayout_credential_providers.addWidget(self.credential_providers_table)
+        self.Registry_widget.addTab(self.credential_providers_tab, "")
+        self.netsh_helper_dlls_tab = QtWidgets.QWidget()
+        self.netsh_helper_dlls_tab.setObjectName("netsh_helper_dlls_tab")
+        self.verticalLayout_netsh_helper_dlls = QtWidgets.QVBoxLayout(self.netsh_helper_dlls_tab)
+        self.verticalLayout_netsh_helper_dlls.setObjectName("verticalLayout_netsh_helper_dlls")
+        self.netsh_helper_dlls_table = QtWidgets.QTableWidget(self.netsh_helper_dlls_tab)
+        self.setup_standard_table(self.netsh_helper_dlls_table, 7, False, 300, 190)
+        self.netsh_helper_dlls_table.setObjectName("netsh_helper_dlls_table")
+        self.verticalLayout_netsh_helper_dlls.addWidget(self.netsh_helper_dlls_table)
+        self.Registry_widget.addTab(self.netsh_helper_dlls_tab, "")
+        self.amsi_providers_tab = QtWidgets.QWidget()
+        self.amsi_providers_tab.setObjectName("amsi_providers_tab")
+        self.verticalLayout_amsi_providers = QtWidgets.QVBoxLayout(self.amsi_providers_tab)
+        self.verticalLayout_amsi_providers.setObjectName("verticalLayout_amsi_providers")
+        self.amsi_providers_table = QtWidgets.QTableWidget(self.amsi_providers_tab)
+        self.setup_standard_table(self.amsi_providers_table, 7, False, 300, 190)
+        self.amsi_providers_table.setObjectName("amsi_providers_table")
+        self.verticalLayout_amsi_providers.addWidget(self.amsi_providers_table)
+        self.Registry_widget.addTab(self.amsi_providers_tab, "")
+        self.security_providers_tab = QtWidgets.QWidget()
+        self.security_providers_tab.setObjectName("security_providers_tab")
+        self.verticalLayout_security_providers = QtWidgets.QVBoxLayout(self.security_providers_tab)
+        self.verticalLayout_security_providers.setObjectName("verticalLayout_security_providers")
+        self.security_providers_table = QtWidgets.QTableWidget(self.security_providers_tab)
+        self.setup_standard_table(self.security_providers_table, 7, False, 300, 190)
+        self.security_providers_table.setObjectName("security_providers_table")
+        self.verticalLayout_security_providers.addWidget(self.security_providers_table)
+        self.Registry_widget.addTab(self.security_providers_tab, "")
+        self.print_monitors_tab = QtWidgets.QWidget()
+        self.print_monitors_tab.setObjectName("print_monitors_tab")
+        self.verticalLayout_print_monitors = QtWidgets.QVBoxLayout(self.print_monitors_tab)
+        self.verticalLayout_print_monitors.setObjectName("verticalLayout_print_monitors")
+        self.print_monitors_table = QtWidgets.QTableWidget(self.print_monitors_tab)
+        self.setup_standard_table(self.print_monitors_table, 7, False, 300, 190)
+        self.print_monitors_table.setObjectName("print_monitors_table")
+        self.verticalLayout_print_monitors.addWidget(self.print_monitors_table)
+        self.Registry_widget.addTab(self.print_monitors_tab, "")
+        self.print_processors_tab = QtWidgets.QWidget()
+        self.print_processors_tab.setObjectName("print_processors_tab")
+        self.verticalLayout_print_processors = QtWidgets.QVBoxLayout(self.print_processors_tab)
+        self.verticalLayout_print_processors.setObjectName("verticalLayout_print_processors")
+        self.print_processors_table = QtWidgets.QTableWidget(self.print_processors_tab)
+        self.setup_standard_table(self.print_processors_table, 7, False, 300, 190)
+        self.print_processors_table.setObjectName("print_processors_table")
+        self.verticalLayout_print_processors.addWidget(self.print_processors_table)
+        self.Registry_widget.addTab(self.print_processors_tab, "")
+        self.network_providers_tab = QtWidgets.QWidget()
+        self.network_providers_tab.setObjectName("network_providers_tab")
+        self.verticalLayout_network_providers = QtWidgets.QVBoxLayout(self.network_providers_tab)
+        self.verticalLayout_network_providers.setObjectName("verticalLayout_network_providers")
+        self.network_providers_table = QtWidgets.QTableWidget(self.network_providers_tab)
+        self.setup_standard_table(self.network_providers_table, 7, False, 300, 190)
+        self.network_providers_table.setObjectName("network_providers_table")
+        self.verticalLayout_network_providers.addWidget(self.network_providers_table)
+        self.Registry_widget.addTab(self.network_providers_tab, "")
+        self.wmi_autorecover_mofs_tab = QtWidgets.QWidget()
+        self.wmi_autorecover_mofs_tab.setObjectName("wmi_autorecover_mofs_tab")
+        self.verticalLayout_wmi_autorecover_mofs = QtWidgets.QVBoxLayout(self.wmi_autorecover_mofs_tab)
+        self.verticalLayout_wmi_autorecover_mofs.setObjectName("verticalLayout_wmi_autorecover_mofs")
+        self.wmi_autorecover_mofs_table = QtWidgets.QTableWidget(self.wmi_autorecover_mofs_tab)
+        self.setup_standard_table(self.wmi_autorecover_mofs_table, 7, False, 300, 190)
+        self.wmi_autorecover_mofs_table.setObjectName("wmi_autorecover_mofs_table")
+        self.verticalLayout_wmi_autorecover_mofs.addWidget(self.wmi_autorecover_mofs_table)
+        self.Registry_widget.addTab(self.wmi_autorecover_mofs_tab, "")
+        self.windows_load_run_tab = QtWidgets.QWidget()
+        self.windows_load_run_tab.setObjectName("windows_load_run_tab")
+        self.verticalLayout_windows_load_run = QtWidgets.QVBoxLayout(self.windows_load_run_tab)
+        self.verticalLayout_windows_load_run.setObjectName("verticalLayout_windows_load_run")
+        self.windows_load_run_table = QtWidgets.QTableWidget(self.windows_load_run_tab)
+        self.setup_standard_table(self.windows_load_run_table, 7, False, 300, 190)
+        self.windows_load_run_table.setObjectName("windows_load_run_table")
+        self.verticalLayout_windows_load_run.addWidget(self.windows_load_run_table)
+        self.Registry_widget.addTab(self.windows_load_run_tab, "")
+        self.shell_open_command_tab = QtWidgets.QWidget()
+        self.shell_open_command_tab.setObjectName("shell_open_command_tab")
+        self.verticalLayout_shell_open_command = QtWidgets.QVBoxLayout(self.shell_open_command_tab)
+        self.verticalLayout_shell_open_command.setObjectName("verticalLayout_shell_open_command")
+        self.shell_open_command_table = QtWidgets.QTableWidget(self.shell_open_command_tab)
+        self.setup_standard_table(self.shell_open_command_table, 7, False, 300, 190)
+        self.shell_open_command_table.setObjectName("shell_open_command_table")
+        self.verticalLayout_shell_open_command.addWidget(self.shell_open_command_table)
+        self.Registry_widget.addTab(self.shell_open_command_tab, "")
+        self.file_exts_tab = QtWidgets.QWidget()
+        self.file_exts_tab.setObjectName("file_exts_tab")
+        self.verticalLayout_file_exts = QtWidgets.QVBoxLayout(self.file_exts_tab)
+        self.verticalLayout_file_exts.setObjectName("verticalLayout_file_exts")
+        self.file_exts_table = QtWidgets.QTableWidget(self.file_exts_tab)
+        self.setup_standard_table(self.file_exts_table, 6, False, 300, 190)
+        self.file_exts_table.setObjectName("file_exts_table")
+        self.verticalLayout_file_exts.addWidget(self.file_exts_table)
+        self.Registry_widget.addTab(self.file_exts_tab, "")
+        self.cid_size_mru_tab = QtWidgets.QWidget()
+        self.cid_size_mru_tab.setObjectName("cid_size_mru_tab")
+        self.verticalLayout_cid_size_mru = QtWidgets.QVBoxLayout(self.cid_size_mru_tab)
+        self.verticalLayout_cid_size_mru.setObjectName("verticalLayout_cid_size_mru")
+        self.cid_size_mru_table = QtWidgets.QTableWidget(self.cid_size_mru_tab)
+        self.setup_standard_table(self.cid_size_mru_table, 5, False, 300, 190)
+        self.cid_size_mru_table.setObjectName("cid_size_mru_table")
+        self.verticalLayout_cid_size_mru.addWidget(self.cid_size_mru_table)
+        self.Registry_widget.addTab(self.cid_size_mru_tab, "")
+        self.programs_cache_tab = QtWidgets.QWidget()
+        self.programs_cache_tab.setObjectName("programs_cache_tab")
+        self.verticalLayout_programs_cache = QtWidgets.QVBoxLayout(self.programs_cache_tab)
+        self.verticalLayout_programs_cache.setObjectName("verticalLayout_programs_cache")
+        self.programs_cache_table = QtWidgets.QTableWidget(self.programs_cache_tab)
+        self.setup_standard_table(self.programs_cache_table, 5, False, 300, 190)
+        self.programs_cache_table.setObjectName("programs_cache_table")
+        self.verticalLayout_programs_cache.addWidget(self.programs_cache_table)
+        self.Registry_widget.addTab(self.programs_cache_tab, "")
+        self.regedit_lastkey_tab = QtWidgets.QWidget()
+        self.regedit_lastkey_tab.setObjectName("regedit_lastkey_tab")
+        self.verticalLayout_regedit_lastkey = QtWidgets.QVBoxLayout(self.regedit_lastkey_tab)
+        self.verticalLayout_regedit_lastkey.setObjectName("verticalLayout_regedit_lastkey")
+        self.regedit_lastkey_table = QtWidgets.QTableWidget(self.regedit_lastkey_tab)
+        self.setup_standard_table(self.regedit_lastkey_table, 5, False, 300, 190)
+        self.regedit_lastkey_table.setObjectName("regedit_lastkey_table")
+        self.verticalLayout_regedit_lastkey.addWidget(self.regedit_lastkey_table)
+        self.Registry_widget.addTab(self.regedit_lastkey_tab, "")
+        self.printer_connections_tab = QtWidgets.QWidget()
+        self.printer_connections_tab.setObjectName("printer_connections_tab")
+        self.verticalLayout_printer_connections = QtWidgets.QVBoxLayout(self.printer_connections_tab)
+        self.verticalLayout_printer_connections.setObjectName("verticalLayout_printer_connections")
+        self.printer_connections_table = QtWidgets.QTableWidget(self.printer_connections_tab)
+        self.setup_standard_table(self.printer_connections_table, 6, False, 300, 190)
+        self.printer_connections_table.setObjectName("printer_connections_table")
+        self.verticalLayout_printer_connections.addWidget(self.printer_connections_table)
+        self.Registry_widget.addTab(self.printer_connections_tab, "")
+        self.explorer_advanced_tab = QtWidgets.QWidget()
+        self.explorer_advanced_tab.setObjectName("explorer_advanced_tab")
+        self.verticalLayout_explorer_advanced = QtWidgets.QVBoxLayout(self.explorer_advanced_tab)
+        self.verticalLayout_explorer_advanced.setObjectName("verticalLayout_explorer_advanced")
+        self.explorer_advanced_table = QtWidgets.QTableWidget(self.explorer_advanced_tab)
+        self.setup_standard_table(self.explorer_advanced_table, 7, False, 300, 190)
+        self.explorer_advanced_table.setObjectName("explorer_advanced_table")
+        self.verticalLayout_explorer_advanced.addWidget(self.explorer_advanced_table)
+        self.Registry_widget.addTab(self.explorer_advanced_tab, "")
+        self.rdp_tcp_tab = QtWidgets.QWidget()
+        self.rdp_tcp_tab.setObjectName("rdp_tcp_tab")
+        self.verticalLayout_rdp_tcp = QtWidgets.QVBoxLayout(self.rdp_tcp_tab)
+        self.verticalLayout_rdp_tcp.setObjectName("verticalLayout_rdp_tcp")
+        self.rdp_tcp_table = QtWidgets.QTableWidget(self.rdp_tcp_tab)
+        self.setup_standard_table(self.rdp_tcp_table, 6, False, 300, 190)
+        self.rdp_tcp_table.setObjectName("rdp_tcp_table")
+        self.verticalLayout_rdp_tcp.addWidget(self.rdp_tcp_table)
+        self.Registry_widget.addTab(self.rdp_tcp_tab, "")
+        self.usbstor_start_tab = QtWidgets.QWidget()
+        self.usbstor_start_tab.setObjectName("usbstor_start_tab")
+        self.verticalLayout_usbstor_start = QtWidgets.QVBoxLayout(self.usbstor_start_tab)
+        self.verticalLayout_usbstor_start.setObjectName("verticalLayout_usbstor_start")
+        self.usbstor_start_table = QtWidgets.QTableWidget(self.usbstor_start_tab)
+        self.setup_standard_table(self.usbstor_start_table, 6, False, 300, 190)
+        self.usbstor_start_table.setObjectName("usbstor_start_table")
+        self.verticalLayout_usbstor_start.addWidget(self.usbstor_start_table)
+        self.Registry_widget.addTab(self.usbstor_start_tab, "")
+        self.windows_script_host_tab = QtWidgets.QWidget()
+        self.windows_script_host_tab.setObjectName("windows_script_host_tab")
+        self.verticalLayout_windows_script_host = QtWidgets.QVBoxLayout(self.windows_script_host_tab)
+        self.verticalLayout_windows_script_host.setObjectName("verticalLayout_windows_script_host")
+        self.windows_script_host_table = QtWidgets.QTableWidget(self.windows_script_host_tab)
+        self.setup_standard_table(self.windows_script_host_table, 6, False, 300, 190)
+        self.windows_script_host_table.setObjectName("windows_script_host_table")
+        self.verticalLayout_windows_script_host.addWidget(self.windows_script_host_table)
+        self.Registry_widget.addTab(self.windows_script_host_tab, "")
+        self.dnscache_parameters_tab = QtWidgets.QWidget()
+        self.dnscache_parameters_tab.setObjectName("dnscache_parameters_tab")
+        self.verticalLayout_dnscache_parameters = QtWidgets.QVBoxLayout(self.dnscache_parameters_tab)
+        self.verticalLayout_dnscache_parameters.setObjectName("verticalLayout_dnscache_parameters")
+        self.dnscache_parameters_table = QtWidgets.QTableWidget(self.dnscache_parameters_tab)
+        self.setup_standard_table(self.dnscache_parameters_table, 4, False, 300, 190)
+        self.dnscache_parameters_table.setObjectName("dnscache_parameters_table")
+        self.verticalLayout_dnscache_parameters.addWidget(self.dnscache_parameters_table)
+        self.Registry_widget.addTab(self.dnscache_parameters_tab, "")
+        self.files_not_to_snapshot_tab = QtWidgets.QWidget()
+        self.files_not_to_snapshot_tab.setObjectName("files_not_to_snapshot_tab")
+        self.verticalLayout_files_not_to_snapshot = QtWidgets.QVBoxLayout(self.files_not_to_snapshot_tab)
+        self.verticalLayout_files_not_to_snapshot.setObjectName("verticalLayout_files_not_to_snapshot")
+        self.files_not_to_snapshot_table = QtWidgets.QTableWidget(self.files_not_to_snapshot_tab)
+        self.setup_standard_table(self.files_not_to_snapshot_table, 4, False, 300, 190)
+        self.files_not_to_snapshot_table.setObjectName("files_not_to_snapshot_table")
+        self.verticalLayout_files_not_to_snapshot.addWidget(self.files_not_to_snapshot_table)
+        self.Registry_widget.addTab(self.files_not_to_snapshot_tab, "")
+        self.winevt_channels_tab = QtWidgets.QWidget()
+        self.winevt_channels_tab.setObjectName("winevt_channels_tab")
+        self.verticalLayout_winevt_channels = QtWidgets.QVBoxLayout(self.winevt_channels_tab)
+        self.verticalLayout_winevt_channels.setObjectName("verticalLayout_winevt_channels")
+        self.winevt_channels_table = QtWidgets.QTableWidget(self.winevt_channels_tab)
+        self.setup_standard_table(self.winevt_channels_table, 9, False, 300, 190)
+        self.winevt_channels_table.setObjectName("winevt_channels_table")
+        self.verticalLayout_winevt_channels.addWidget(self.winevt_channels_table)
+        self.Registry_widget.addTab(self.winevt_channels_tab, "")
+        self.wpdbusenum_tab = QtWidgets.QWidget()
+        self.wpdbusenum_tab.setObjectName("wpdbusenum_tab")
+        self.verticalLayout_wpdbusenum = QtWidgets.QVBoxLayout(self.wpdbusenum_tab)
+        self.verticalLayout_wpdbusenum.setObjectName("verticalLayout_wpdbusenum")
+        self.wpdbusenum_table = QtWidgets.QTableWidget(self.wpdbusenum_tab)
+        self.setup_standard_table(self.wpdbusenum_table, 5, False, 300, 190)
+        self.wpdbusenum_table.setObjectName("wpdbusenum_table")
+        self.verticalLayout_wpdbusenum.addWidget(self.wpdbusenum_table)
+        self.Registry_widget.addTab(self.wpdbusenum_tab, "")
+        self.device_classes_tab = QtWidgets.QWidget()
+        self.device_classes_tab.setObjectName("device_classes_tab")
+        self.verticalLayout_device_classes = QtWidgets.QVBoxLayout(self.device_classes_tab)
+        self.verticalLayout_device_classes.setObjectName("verticalLayout_device_classes")
+        self.device_classes_table = QtWidgets.QTableWidget(self.device_classes_tab)
+        self.setup_standard_table(self.device_classes_table, 5, False, 300, 190)
+        self.device_classes_table.setObjectName("device_classes_table")
+        self.verticalLayout_device_classes.addWidget(self.device_classes_table)
+        self.Registry_widget.addTab(self.device_classes_tab, "")
+        self.volume_info_cache_tab = QtWidgets.QWidget()
+        self.volume_info_cache_tab.setObjectName("volume_info_cache_tab")
+        self.verticalLayout_volume_info_cache = QtWidgets.QVBoxLayout(self.volume_info_cache_tab)
+        self.verticalLayout_volume_info_cache.setObjectName("verticalLayout_volume_info_cache")
+        self.volume_info_cache_table = QtWidgets.QTableWidget(self.volume_info_cache_tab)
+        self.setup_standard_table(self.volume_info_cache_table, 5, False, 300, 190)
+        self.volume_info_cache_table.setObjectName("volume_info_cache_table")
+        self.verticalLayout_volume_info_cache.addWidget(self.volume_info_cache_table)
+        self.Registry_widget.addTab(self.volume_info_cache_tab, "")
+        self.machine_guid_tab = QtWidgets.QWidget()
+        self.machine_guid_tab.setObjectName("machine_guid_tab")
+        self.verticalLayout_machine_guid = QtWidgets.QVBoxLayout(self.machine_guid_tab)
+        self.verticalLayout_machine_guid.setObjectName("verticalLayout_machine_guid")
+        self.machine_guid_table = QtWidgets.QTableWidget(self.machine_guid_tab)
+        self.setup_standard_table(self.machine_guid_table, 4, False, 300, 190)
+        self.machine_guid_table.setObjectName("machine_guid_table")
+        self.verticalLayout_machine_guid.addWidget(self.machine_guid_table)
+        self.Registry_widget.addTab(self.machine_guid_tab, "")
+        self.product_options_tab = QtWidgets.QWidget()
+        self.product_options_tab.setObjectName("product_options_tab")
+        self.verticalLayout_product_options = QtWidgets.QVBoxLayout(self.product_options_tab)
+        self.verticalLayout_product_options.setObjectName("verticalLayout_product_options")
+        self.product_options_table = QtWidgets.QTableWidget(self.product_options_tab)
+        self.setup_standard_table(self.product_options_table, 5, False, 300, 190)
+        self.product_options_table.setObjectName("product_options_table")
+        self.verticalLayout_product_options.addWidget(self.product_options_table)
+        self.Registry_widget.addTab(self.product_options_tab, "")
+        self.os_install_history_tab = QtWidgets.QWidget()
+        self.os_install_history_tab.setObjectName("os_install_history_tab")
+        self.verticalLayout_os_install_history = QtWidgets.QVBoxLayout(self.os_install_history_tab)
+        self.verticalLayout_os_install_history.setObjectName("verticalLayout_os_install_history")
+        self.os_install_history_table = QtWidgets.QTableWidget(self.os_install_history_tab)
+        self.setup_standard_table(self.os_install_history_table, 4, False, 300, 190)
+        self.os_install_history_table.setObjectName("os_install_history_table")
+        self.verticalLayout_os_install_history.addWidget(self.os_install_history_table)
+        self.Registry_widget.addTab(self.os_install_history_tab, "")
+        self.active_computer_name_tab = QtWidgets.QWidget()
+        self.active_computer_name_tab.setObjectName("active_computer_name_tab")
+        self.verticalLayout_active_computer_name = QtWidgets.QVBoxLayout(self.active_computer_name_tab)
+        self.verticalLayout_active_computer_name.setObjectName("verticalLayout_active_computer_name")
+        self.active_computer_name_table = QtWidgets.QTableWidget(self.active_computer_name_tab)
+        self.setup_standard_table(self.active_computer_name_table, 4, False, 300, 190)
+        self.active_computer_name_table.setObjectName("active_computer_name_table")
+        self.verticalLayout_active_computer_name.addWidget(self.active_computer_name_table)
+        self.Registry_widget.addTab(self.active_computer_name_tab, "")
+        self.hivelist_tab = QtWidgets.QWidget()
+        self.hivelist_tab.setObjectName("hivelist_tab")
+        self.verticalLayout_hivelist = QtWidgets.QVBoxLayout(self.hivelist_tab)
+        self.verticalLayout_hivelist.setObjectName("verticalLayout_hivelist")
+        self.hivelist_table = QtWidgets.QTableWidget(self.hivelist_tab)
+        self.setup_standard_table(self.hivelist_table, 4, False, 300, 190)
+        self.hivelist_table.setObjectName("hivelist_table")
+        self.verticalLayout_hivelist.addWidget(self.hivelist_table)
+        self.Registry_widget.addTab(self.hivelist_tab, "")
+        self.system_environment_tab = QtWidgets.QWidget()
+        self.system_environment_tab.setObjectName("system_environment_tab")
+        self.verticalLayout_system_environment = QtWidgets.QVBoxLayout(self.system_environment_tab)
+        self.verticalLayout_system_environment.setObjectName("verticalLayout_system_environment")
+        self.system_environment_table = QtWidgets.QTableWidget(self.system_environment_tab)
+        self.setup_standard_table(self.system_environment_table, 4, False, 300, 190)
+        self.system_environment_table.setObjectName("system_environment_table")
+        self.verticalLayout_system_environment.addWidget(self.system_environment_table)
+        self.Registry_widget.addTab(self.system_environment_tab, "")
+        self.network_adapters_tab = QtWidgets.QWidget()
+        self.network_adapters_tab.setObjectName("network_adapters_tab")
+        self.verticalLayout_network_adapters = QtWidgets.QVBoxLayout(self.network_adapters_tab)
+        self.verticalLayout_network_adapters.setObjectName("verticalLayout_network_adapters")
+        self.network_adapters_table = QtWidgets.QTableWidget(self.network_adapters_tab)
+        self.setup_standard_table(self.network_adapters_table, 5, False, 300, 190)
+        self.network_adapters_table.setObjectName("network_adapters_table")
+        self.verticalLayout_network_adapters.addWidget(self.network_adapters_table)
+        self.Registry_widget.addTab(self.network_adapters_tab, "")
+        self.group_policy_history_tab = QtWidgets.QWidget()
+        self.group_policy_history_tab.setObjectName("group_policy_history_tab")
+        self.verticalLayout_group_policy_history = QtWidgets.QVBoxLayout(self.group_policy_history_tab)
+        self.verticalLayout_group_policy_history.setObjectName("verticalLayout_group_policy_history")
+        self.group_policy_history_table = QtWidgets.QTableWidget(self.group_policy_history_tab)
+        self.setup_standard_table(self.group_policy_history_table, 6, False, 300, 190)
+        self.group_policy_history_table.setObjectName("group_policy_history_table")
+        self.verticalLayout_group_policy_history.addWidget(self.group_policy_history_table)
+        self.Registry_widget.addTab(self.group_policy_history_tab, "")
+        self.local_groups_tab = QtWidgets.QWidget()
+        self.local_groups_tab.setObjectName("local_groups_tab")
+        self.verticalLayout_local_groups = QtWidgets.QVBoxLayout(self.local_groups_tab)
+        self.verticalLayout_local_groups.setObjectName("verticalLayout_local_groups")
+        self.local_groups_table = QtWidgets.QTableWidget(self.local_groups_tab)
+        self.setup_standard_table(self.local_groups_table, 9, False, 300, 190)
+        self.local_groups_table.setObjectName("local_groups_table")
+        self.verticalLayout_local_groups.addWidget(self.local_groups_table)
+        self.Registry_widget.addTab(self.local_groups_tab, "")
+        self.lsa_policy_tab = QtWidgets.QWidget()
+        self.lsa_policy_tab.setObjectName("lsa_policy_tab")
+        self.verticalLayout_lsa_policy = QtWidgets.QVBoxLayout(self.lsa_policy_tab)
+        self.verticalLayout_lsa_policy.setObjectName("verticalLayout_lsa_policy")
+        self.lsa_policy_table = QtWidgets.QTableWidget(self.lsa_policy_tab)
+        self.setup_standard_table(self.lsa_policy_table, 6, False, 300, 190)
+        self.lsa_policy_table.setObjectName("lsa_policy_table")
+        self.verticalLayout_lsa_policy.addWidget(self.lsa_policy_table)
+        self.Registry_widget.addTab(self.lsa_policy_tab, "")
+        self.audit_policy_tab = QtWidgets.QWidget()
+        self.audit_policy_tab.setObjectName("audit_policy_tab")
+        self.verticalLayout_audit_policy = QtWidgets.QVBoxLayout(self.audit_policy_tab)
+        self.verticalLayout_audit_policy.setObjectName("verticalLayout_audit_policy")
+        self.audit_policy_table = QtWidgets.QTableWidget(self.audit_policy_tab)
+        self.setup_standard_table(self.audit_policy_table, 8, False, 300, 190)
+        self.audit_policy_table.setObjectName("audit_policy_table")
+        self.verticalLayout_audit_policy.addWidget(self.audit_policy_table)
+        self.Registry_widget.addTab(self.audit_policy_tab, "")
+        self.lsa_secrets_tab = QtWidgets.QWidget()
+        self.lsa_secrets_tab.setObjectName("lsa_secrets_tab")
+        self.verticalLayout_lsa_secrets = QtWidgets.QVBoxLayout(self.lsa_secrets_tab)
+        self.verticalLayout_lsa_secrets.setObjectName("verticalLayout_lsa_secrets")
+        self.lsa_secrets_table = QtWidgets.QTableWidget(self.lsa_secrets_tab)
+        self.setup_standard_table(self.lsa_secrets_table, 7, False, 300, 190)
+        self.lsa_secrets_table.setObjectName("lsa_secrets_table")
+        self.verticalLayout_lsa_secrets.addWidget(self.lsa_secrets_table)
+        self.Registry_widget.addTab(self.lsa_secrets_tab, "")
+        self.cached_domain_logons_tab = QtWidgets.QWidget()
+        self.cached_domain_logons_tab.setObjectName("cached_domain_logons_tab")
+        self.verticalLayout_cached_domain_logons = QtWidgets.QVBoxLayout(self.cached_domain_logons_tab)
+        self.verticalLayout_cached_domain_logons.setObjectName("verticalLayout_cached_domain_logons")
+        self.cached_domain_logons_table = QtWidgets.QTableWidget(self.cached_domain_logons_tab)
+        self.setup_standard_table(self.cached_domain_logons_table, 6, False, 300, 190)
+        self.cached_domain_logons_table.setObjectName("cached_domain_logons_table")
+        self.verticalLayout_cached_domain_logons.addWidget(self.cached_domain_logons_table)
+        self.Registry_widget.addTab(self.cached_domain_logons_tab, "")
+        self.UserAccounts_tab = QtWidgets.QWidget()
+        self.UserAccounts_tab.setObjectName("UserAccounts_tab")
+        self.verticalLayout_UserAccounts = QtWidgets.QVBoxLayout(self.UserAccounts_tab)
+        self.verticalLayout_UserAccounts.setObjectName("verticalLayout_UserAccounts")
+        self.UserAccounts_table = QtWidgets.QTableWidget(self.UserAccounts_tab)
+        self.setup_standard_table(self.UserAccounts_table, 20, False, 300, 190)
+        self.UserAccounts_table.setObjectName("UserAccounts_table")
+        self.verticalLayout_UserAccounts.addWidget(self.UserAccounts_table)
+        self.Registry_widget.addTab(self.UserAccounts_tab, "")
+        self.ComputerNameInfo_tab = QtWidgets.QWidget()
+        self.ComputerNameInfo_tab.setObjectName("ComputerNameInfo_tab")
+        self.verticalLayout_ComputerNameInfo = QtWidgets.QVBoxLayout(self.ComputerNameInfo_tab)
+        self.verticalLayout_ComputerNameInfo.setObjectName("verticalLayout_ComputerNameInfo")
+        self.ComputerNameInfo_table = QtWidgets.QTableWidget(self.ComputerNameInfo_tab)
+        self.setup_standard_table(self.ComputerNameInfo_table, 6, False, 300, 190)
+        self.ComputerNameInfo_table.setObjectName("ComputerNameInfo_table")
+        self.verticalLayout_ComputerNameInfo.addWidget(self.ComputerNameInfo_table)
+        self.Registry_widget.addTab(self.ComputerNameInfo_tab, "")
+        self.ShutdownRaw_tab = QtWidgets.QWidget()
+        self.ShutdownRaw_tab.setObjectName("ShutdownRaw_tab")
+        self.verticalLayout_ShutdownRaw = QtWidgets.QVBoxLayout(self.ShutdownRaw_tab)
+        self.verticalLayout_ShutdownRaw.setObjectName("verticalLayout_ShutdownRaw")
+        self.ShutdownRaw_table = QtWidgets.QTableWidget(self.ShutdownRaw_tab)
+        self.setup_standard_table(self.ShutdownRaw_table, 3, False, 300, 190)
+        self.ShutdownRaw_table.setObjectName("ShutdownRaw_table")
+        self.verticalLayout_ShutdownRaw.addWidget(self.ShutdownRaw_table)
+        self.Registry_widget.addTab(self.ShutdownRaw_tab, "")
+        self.LastUpdateSubkeys_tab = QtWidgets.QWidget()
+        self.LastUpdateSubkeys_tab.setObjectName("LastUpdateSubkeys_tab")
+        self.verticalLayout_LastUpdateSubkeys = QtWidgets.QVBoxLayout(self.LastUpdateSubkeys_tab)
+        self.verticalLayout_LastUpdateSubkeys.setObjectName("verticalLayout_LastUpdateSubkeys")
+        self.LastUpdateSubkeys_table = QtWidgets.QTableWidget(self.LastUpdateSubkeys_tab)
+        self.setup_standard_table(self.LastUpdateSubkeys_table, 4, False, 300, 190)
+        self.LastUpdateSubkeys_table.setObjectName("LastUpdateSubkeys_table")
+        self.verticalLayout_LastUpdateSubkeys.addWidget(self.LastUpdateSubkeys_table)
+        self.Registry_widget.addTab(self.LastUpdateSubkeys_tab, "")
+        self.TimeZoneInfo_tab = QtWidgets.QWidget()
+        self.TimeZoneInfo_tab.setObjectName("TimeZoneInfo_tab")
+        self.verticalLayout_TimeZoneInfo = QtWidgets.QVBoxLayout(self.TimeZoneInfo_tab)
+        self.verticalLayout_TimeZoneInfo.setObjectName("verticalLayout_TimeZoneInfo")
+        self.TimeZoneInfo_table = QtWidgets.QTableWidget(self.TimeZoneInfo_tab)
+        self.setup_standard_table(self.TimeZoneInfo_table, 6, False, 300, 190)
+        self.TimeZoneInfo_table.setObjectName("TimeZoneInfo_table")
+        self.verticalLayout_TimeZoneInfo.addWidget(self.TimeZoneInfo_table)
+        self.Registry_widget.addTab(self.TimeZoneInfo_tab, "")
+        self.NetworkInterfacesInfo_tab = QtWidgets.QWidget()
+        self.NetworkInterfacesInfo_tab.setObjectName("NetworkInterfacesInfo_tab")
+        self.verticalLayout_NetworkInterfacesInfo = QtWidgets.QVBoxLayout(self.NetworkInterfacesInfo_tab)
+        self.verticalLayout_NetworkInterfacesInfo.setObjectName("verticalLayout_NetworkInterfacesInfo")
+        self.NetworkInterfacesInfo_table = QtWidgets.QTableWidget(self.NetworkInterfacesInfo_tab)
+        self.setup_standard_table(self.NetworkInterfacesInfo_table, 8, False, 300, 190)
+        self.NetworkInterfacesInfo_table.setObjectName("NetworkInterfacesInfo_table")
+        self.verticalLayout_NetworkInterfacesInfo.addWidget(self.NetworkInterfacesInfo_table)
+        self.Registry_widget.addTab(self.NetworkInterfacesInfo_tab, "")
+        self.SecurityPosture_tab = QtWidgets.QWidget()
+        self.SecurityPosture_tab.setObjectName("SecurityPosture_tab")
+        self.verticalLayout_SecurityPosture = QtWidgets.QVBoxLayout(self.SecurityPosture_tab)
+        self.verticalLayout_SecurityPosture.setObjectName("verticalLayout_SecurityPosture")
+        self.SecurityPosture_table = QtWidgets.QTableWidget(self.SecurityPosture_tab)
+        self.setup_standard_table(self.SecurityPosture_table, 8, False, 300, 190)
+        self.SecurityPosture_table.setObjectName("SecurityPosture_table")
+        self.verticalLayout_SecurityPosture.addWidget(self.SecurityPosture_table)
+        self.Registry_widget.addTab(self.SecurityPosture_tab, "")
+        self.DefenderExclusions_tab = QtWidgets.QWidget()
+        self.DefenderExclusions_tab.setObjectName("DefenderExclusions_tab")
+        self.verticalLayout_DefenderExclusions = QtWidgets.QVBoxLayout(self.DefenderExclusions_tab)
+        self.verticalLayout_DefenderExclusions.setObjectName("verticalLayout_DefenderExclusions")
+        self.DefenderExclusions_table = QtWidgets.QTableWidget(self.DefenderExclusions_tab)
+        self.setup_standard_table(self.DefenderExclusions_table, 5, False, 300, 190)
+        self.DefenderExclusions_table.setObjectName("DefenderExclusions_table")
+        self.verticalLayout_DefenderExclusions.addWidget(self.DefenderExclusions_table)
+        self.Registry_widget.addTab(self.DefenderExclusions_tab, "")
+        self.FirewallRules_tab = QtWidgets.QWidget()
+        self.FirewallRules_tab.setObjectName("FirewallRules_tab")
+        self.verticalLayout_FirewallRules = QtWidgets.QVBoxLayout(self.FirewallRules_tab)
+        self.verticalLayout_FirewallRules.setObjectName("verticalLayout_FirewallRules")
+        self.FirewallRules_table = QtWidgets.QTableWidget(self.FirewallRules_tab)
+        self.setup_standard_table(self.FirewallRules_table, 14, False, 300, 190)
+        self.FirewallRules_table.setObjectName("FirewallRules_table")
+        self.verticalLayout_FirewallRules.addWidget(self.FirewallRules_table)
+        self.Registry_widget.addTab(self.FirewallRules_tab, "")
+        self.NetworkShares_tab = QtWidgets.QWidget()
+        self.NetworkShares_tab.setObjectName("NetworkShares_tab")
+        self.verticalLayout_NetworkShares = QtWidgets.QVBoxLayout(self.NetworkShares_tab)
+        self.verticalLayout_NetworkShares.setObjectName("verticalLayout_NetworkShares")
+        self.NetworkShares_table = QtWidgets.QTableWidget(self.NetworkShares_tab)
+        self.setup_standard_table(self.NetworkShares_table, 6, False, 300, 190)
+        self.NetworkShares_table.setObjectName("NetworkShares_table")
+        self.verticalLayout_NetworkShares.addWidget(self.NetworkShares_table)
+        self.Registry_widget.addTab(self.NetworkShares_tab, "")
+        self.ConnectedDevices_tab = QtWidgets.QWidget()
+        self.ConnectedDevices_tab.setObjectName("ConnectedDevices_tab")
+        self.verticalLayout_ConnectedDevices = QtWidgets.QVBoxLayout(self.ConnectedDevices_tab)
+        self.verticalLayout_ConnectedDevices.setObjectName("verticalLayout_ConnectedDevices")
+        self.ConnectedDevices_table = QtWidgets.QTableWidget(self.ConnectedDevices_tab)
+        self.setup_standard_table(self.ConnectedDevices_table, 6, False, 300, 190)
+        self.ConnectedDevices_table.setObjectName("ConnectedDevices_table")
+        self.verticalLayout_ConnectedDevices.addWidget(self.ConnectedDevices_table)
+        self.Registry_widget.addTab(self.ConnectedDevices_tab, "")
+        self.MountPoints2_tab = QtWidgets.QWidget()
+        self.MountPoints2_tab.setObjectName("MountPoints2_tab")
+        self.verticalLayout_MountPoints2 = QtWidgets.QVBoxLayout(self.MountPoints2_tab)
+        self.verticalLayout_MountPoints2.setObjectName("verticalLayout_MountPoints2")
+        self.MountPoints2_table = QtWidgets.QTableWidget(self.MountPoints2_tab)
+        self.setup_standard_table(self.MountPoints2_table, 5, False, 300, 190)
+        self.MountPoints2_table.setObjectName("MountPoints2_table")
+        self.verticalLayout_MountPoints2.addWidget(self.MountPoints2_table)
+        self.Registry_widget.addTab(self.MountPoints2_tab, "")
+        self.RDPClientMRU_tab = QtWidgets.QWidget()
+        self.RDPClientMRU_tab.setObjectName("RDPClientMRU_tab")
+        self.verticalLayout_RDPClientMRU = QtWidgets.QVBoxLayout(self.RDPClientMRU_tab)
+        self.verticalLayout_RDPClientMRU.setObjectName("verticalLayout_RDPClientMRU")
+        self.RDPClientMRU_table = QtWidgets.QTableWidget(self.RDPClientMRU_tab)
+        self.setup_standard_table(self.RDPClientMRU_table, 6, False, 300, 190)
+        self.RDPClientMRU_table.setObjectName("RDPClientMRU_table")
+        self.verticalLayout_RDPClientMRU.addWidget(self.RDPClientMRU_table)
+        self.Registry_widget.addTab(self.RDPClientMRU_tab, "")
+        self.OfficeDocuments_tab = QtWidgets.QWidget()
+        self.OfficeDocuments_tab.setObjectName("OfficeDocuments_tab")
+        self.verticalLayout_OfficeDocuments = QtWidgets.QVBoxLayout(self.OfficeDocuments_tab)
+        self.verticalLayout_OfficeDocuments.setObjectName("verticalLayout_OfficeDocuments")
+        self.OfficeDocuments_table = QtWidgets.QTableWidget(self.OfficeDocuments_tab)
+        self.setup_standard_table(self.OfficeDocuments_table, 8, False, 300, 190)
+        self.OfficeDocuments_table.setObjectName("OfficeDocuments_table")
+        self.verticalLayout_OfficeDocuments.addWidget(self.OfficeDocuments_table)
+        self.Registry_widget.addTab(self.OfficeDocuments_tab, "")
+        self.FeatureUsage_tab = QtWidgets.QWidget()
+        self.FeatureUsage_tab.setObjectName("FeatureUsage_tab")
+        self.verticalLayout_FeatureUsage = QtWidgets.QVBoxLayout(self.FeatureUsage_tab)
+        self.verticalLayout_FeatureUsage.setObjectName("verticalLayout_FeatureUsage")
+        self.FeatureUsage_table = QtWidgets.QTableWidget(self.FeatureUsage_tab)
+        self.setup_standard_table(self.FeatureUsage_table, 6, False, 300, 190)
+        self.FeatureUsage_table.setObjectName("FeatureUsage_table")
+        self.verticalLayout_FeatureUsage.addWidget(self.FeatureUsage_table)
+        self.Registry_widget.addTab(self.FeatureUsage_tab, "")
+        self.CompatibilityAssistant_tab = QtWidgets.QWidget()
+        self.CompatibilityAssistant_tab.setObjectName("CompatibilityAssistant_tab")
+        self.verticalLayout_CompatibilityAssistant = QtWidgets.QVBoxLayout(self.CompatibilityAssistant_tab)
+        self.verticalLayout_CompatibilityAssistant.setObjectName("verticalLayout_CompatibilityAssistant")
+        self.CompatibilityAssistant_table = QtWidgets.QTableWidget(self.CompatibilityAssistant_tab)
+        self.setup_standard_table(self.CompatibilityAssistant_table, 5, False, 300, 190)
+        self.CompatibilityAssistant_table.setObjectName("CompatibilityAssistant_table")
+        self.verticalLayout_CompatibilityAssistant.addWidget(self.CompatibilityAssistant_table)
+        self.Registry_widget.addTab(self.CompatibilityAssistant_tab, "")
+        self.RecentApps_tab = QtWidgets.QWidget()
+        self.RecentApps_tab.setObjectName("RecentApps_tab")
+        self.verticalLayout_RecentApps = QtWidgets.QVBoxLayout(self.RecentApps_tab)
+        self.verticalLayout_RecentApps.setObjectName("verticalLayout_RecentApps")
+        self.RecentApps_table = QtWidgets.QTableWidget(self.RecentApps_tab)
+        self.setup_standard_table(self.RecentApps_table, 7, False, 300, 190)
+        self.RecentApps_table.setObjectName("RecentApps_table")
+        self.verticalLayout_RecentApps.addWidget(self.RecentApps_table)
+        self.Registry_widget.addTab(self.RecentApps_tab, "")
+        self.ApplicationArtifacts_tab = QtWidgets.QWidget()
+        self.ApplicationArtifacts_tab.setObjectName("ApplicationArtifacts_tab")
+        self.verticalLayout_ApplicationArtifacts = QtWidgets.QVBoxLayout(self.ApplicationArtifacts_tab)
+        self.verticalLayout_ApplicationArtifacts.setObjectName("verticalLayout_ApplicationArtifacts")
+        self.ApplicationArtifacts_table = QtWidgets.QTableWidget(self.ApplicationArtifacts_tab)
+        self.setup_standard_table(self.ApplicationArtifacts_table, 7, False, 300, 190)
+        self.ApplicationArtifacts_table.setObjectName("ApplicationArtifacts_table")
+        self.verticalLayout_ApplicationArtifacts.addWidget(self.ApplicationArtifacts_table)
+        self.Registry_widget.addTab(self.ApplicationArtifacts_tab, "")
+        self.AutoStartPrograms_tab = QtWidgets.QWidget()
+        self.AutoStartPrograms_tab.setObjectName("AutoStartPrograms_tab")
+        self.verticalLayout_AutoStart = QtWidgets.QVBoxLayout(self.AutoStartPrograms_tab)
+        self.verticalLayout_AutoStart.setObjectName("verticalLayout_AutoStart")
+        self.AutoStartPrograms_table = QtWidgets.QTableWidget(self.AutoStartPrograms_tab)
+        self.setup_standard_table(self.AutoStartPrograms_table, 4, False, 300, 190)
+        self.AutoStartPrograms_table.setObjectName("AutoStartPrograms_table")
+        self.verticalLayout_AutoStart.addWidget(self.AutoStartPrograms_table)
+        self.Registry_widget.addTab(self.AutoStartPrograms_tab, "")
         self.MachineRun = QtWidgets.QWidget()
         self.MachineRun.setObjectName("MachineRun")
         self.verticalLayout_11 = QtWidgets.QVBoxLayout(self.MachineRun)
@@ -7301,7 +8136,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Create ShimCache table
         self.ShimCache_main_table = QtWidgets.QTableWidget(self.ShimCache_main_tab)
         self.ShimCache_main_table.setMinimumSize(QtCore.QSize(2, 2))
-        self.setup_standard_table(self.ShimCache_main_table, 5, False, 300, 190)
+        self.setup_standard_table(self.ShimCache_main_table, 9, False, 300, 190)
         self.ShimCache_main_table.setObjectName("ShimCache_main_table")
         self.verticalLayout_shimcache_main.addWidget(self.ShimCache_main_table)
         
@@ -7429,7 +8264,19 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.SRUM_energy_usage_table.setObjectName("SRUM_energy_usage_table")
         self.verticalLayout_srum_energy.addWidget(self.SRUM_energy_usage_table)
         self.SRUM_tab_widget.addTab(self.SRUM_energy_usage_tab, "")
-        
+
+        self.SRUM_app_timeline_tab = QtWidgets.QWidget()
+        self.SRUM_app_timeline_tab.setObjectName("SRUM_app_timeline_tab")
+        self.verticalLayout_srum_timeline = QtWidgets.QVBoxLayout(self.SRUM_app_timeline_tab)
+        self.verticalLayout_srum_timeline.setObjectName("verticalLayout_srum_timeline")
+
+        self.SRUM_app_timeline_table = QtWidgets.QTableWidget(self.SRUM_app_timeline_tab)
+        self.SRUM_app_timeline_table.setMinimumSize(QtCore.QSize(2, 2))
+        self.setup_standard_table(self.SRUM_app_timeline_table, 29, False, 300, 190)
+        self.SRUM_app_timeline_table.setObjectName("SRUM_app_timeline_table")
+        self.verticalLayout_srum_timeline.addWidget(self.SRUM_app_timeline_table)
+        self.SRUM_tab_widget.addTab(self.SRUM_app_timeline_tab, "")
+
         self.verticalLayout_srum_main.addWidget(self.SRUM_tab_widget)
         self.main_tab.addTab(self.SRUM_main_tab, "")
         
@@ -7571,13 +8418,633 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 _translate("Crow_Eye", "User Profiles")
             )
             
+        # Set tab text for Scheduled Tasks / AutoStart Programs
+        if hasattr(self, 'winlogon_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.winlogon_tab),
+                _translate("Crow_Eye", "Winlogon")
+            )
+        if hasattr(self, 'winlogon_table'):
+            self.winlogon_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'image_file_execution_options_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.image_file_execution_options_tab),
+                _translate("Crow_Eye", "IFEO")
+            )
+        if hasattr(self, 'image_file_execution_options_table'):
+            self.image_file_execution_options_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'appinit_dlls_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.appinit_dlls_tab),
+                _translate("Crow_Eye", "AppInit DLLs")
+            )
+        if hasattr(self, 'appinit_dlls_table'):
+            self.appinit_dlls_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'appcert_dlls_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.appcert_dlls_tab),
+                _translate("Crow_Eye", "AppCert DLLs")
+            )
+        if hasattr(self, 'appcert_dlls_table'):
+            self.appcert_dlls_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'active_setup_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.active_setup_tab),
+                _translate("Crow_Eye", "Active Setup")
+            )
+        if hasattr(self, 'active_setup_table'):
+            self.active_setup_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'run_services_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.run_services_tab),
+                _translate("Crow_Eye", "RunServices")
+            )
+        if hasattr(self, 'run_services_table'):
+            self.run_services_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'run_services_once_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.run_services_once_tab),
+                _translate("Crow_Eye", "RunServicesOnce")
+            )
+        if hasattr(self, 'run_services_once_table'):
+            self.run_services_once_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'policies_explorer_run_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.policies_explorer_run_tab),
+                _translate("Crow_Eye", "Policies Run")
+            )
+        if hasattr(self, 'policies_explorer_run_table'):
+            self.policies_explorer_run_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'user_shell_folders_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.user_shell_folders_tab),
+                _translate("Crow_Eye", "User Shell Folders")
+            )
+        if hasattr(self, 'user_shell_folders_table'):
+            self.user_shell_folders_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'lsa_packages_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.lsa_packages_tab),
+                _translate("Crow_Eye", "LSA Packages")
+            )
+        if hasattr(self, 'lsa_packages_table'):
+            self.lsa_packages_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'boot_execute_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.boot_execute_tab),
+                _translate("Crow_Eye", "Boot Execute")
+            )
+        if hasattr(self, 'boot_execute_table'):
+            self.boot_execute_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'clsid_inprocserver32_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.clsid_inprocserver32_tab),
+                _translate("Crow_Eye", "CLSID InprocServer32")
+            )
+        if hasattr(self, 'clsid_inprocserver32_table'):
+            self.clsid_inprocserver32_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'command_processor_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.command_processor_tab),
+                _translate("Crow_Eye", "Command Processor")
+            )
+        if hasattr(self, 'command_processor_table'):
+            self.command_processor_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'drivers32_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.drivers32_tab),
+                _translate("Crow_Eye", "Drivers32")
+            )
+        if hasattr(self, 'drivers32_table'):
+            self.drivers32_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'shell_service_object_delay_load_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.shell_service_object_delay_load_tab),
+                _translate("Crow_Eye", "SSODL")
+            )
+        if hasattr(self, 'shell_service_object_delay_load_table'):
+            self.shell_service_object_delay_load_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'browser_helper_objects_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.browser_helper_objects_tab),
+                _translate("Crow_Eye", "Browser Helper Objects")
+            )
+        if hasattr(self, 'browser_helper_objects_table'):
+            self.browser_helper_objects_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'shared_task_scheduler_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.shared_task_scheduler_tab),
+                _translate("Crow_Eye", "SharedTaskScheduler")
+            )
+        if hasattr(self, 'shared_task_scheduler_table'):
+            self.shared_task_scheduler_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'shell_icon_overlay_identifiers_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.shell_icon_overlay_identifiers_tab),
+                _translate("Crow_Eye", "Shell Icon Overlays")
+            )
+        if hasattr(self, 'shell_icon_overlay_identifiers_table'):
+            self.shell_icon_overlay_identifiers_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'credential_providers_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.credential_providers_tab),
+                _translate("Crow_Eye", "Credential Providers")
+            )
+        if hasattr(self, 'credential_providers_table'):
+            self.credential_providers_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'netsh_helper_dlls_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.netsh_helper_dlls_tab),
+                _translate("Crow_Eye", "Netsh Helper DLLs")
+            )
+        if hasattr(self, 'netsh_helper_dlls_table'):
+            self.netsh_helper_dlls_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'amsi_providers_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.amsi_providers_tab),
+                _translate("Crow_Eye", "AMSI Providers")
+            )
+        if hasattr(self, 'amsi_providers_table'):
+            self.amsi_providers_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'security_providers_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.security_providers_tab),
+                _translate("Crow_Eye", "Security Providers")
+            )
+        if hasattr(self, 'security_providers_table'):
+            self.security_providers_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'print_monitors_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.print_monitors_tab),
+                _translate("Crow_Eye", "Print Monitors")
+            )
+        if hasattr(self, 'print_monitors_table'):
+            self.print_monitors_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'print_processors_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.print_processors_tab),
+                _translate("Crow_Eye", "Print Processors")
+            )
+        if hasattr(self, 'print_processors_table'):
+            self.print_processors_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'network_providers_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.network_providers_tab),
+                _translate("Crow_Eye", "Network Providers")
+            )
+        if hasattr(self, 'network_providers_table'):
+            self.network_providers_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'wmi_autorecover_mofs_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.wmi_autorecover_mofs_tab),
+                _translate("Crow_Eye", "WMI Autorecover MOFs")
+            )
+        if hasattr(self, 'wmi_autorecover_mofs_table'):
+            self.wmi_autorecover_mofs_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'windows_load_run_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.windows_load_run_tab),
+                _translate("Crow_Eye", "Windows Load/Run")
+            )
+        if hasattr(self, 'windows_load_run_table'):
+            self.windows_load_run_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'shell_open_command_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.shell_open_command_tab),
+                _translate("Crow_Eye", "Shell Open Command")
+            )
+        if hasattr(self, 'shell_open_command_table'):
+            self.shell_open_command_table.setHorizontalHeaderLabels([
+                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+            ])
+        if hasattr(self, 'file_exts_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.file_exts_tab),
+                _translate("Crow_Eye", "File Extensions")
+            )
+        if hasattr(self, 'file_exts_table'):
+            self.file_exts_table.setHorizontalHeaderLabels([
+                "User", "Extension", "Choice Type", "ProgID", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'cid_size_mru_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.cid_size_mru_tab),
+                _translate("Crow_Eye", "CIDSizeMRU")
+            )
+        if hasattr(self, 'cid_size_mru_table'):
+            self.cid_size_mru_table.setHorizontalHeaderLabels([
+                "User", "Position", "Application", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'programs_cache_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.programs_cache_tab),
+                _translate("Crow_Eye", "ProgramsCache")
+            )
+        if hasattr(self, 'programs_cache_table'):
+            self.programs_cache_table.setHorizontalHeaderLabels([
+                "User", "Value Name", "Blob Size", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'regedit_lastkey_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.regedit_lastkey_tab),
+                _translate("Crow_Eye", "Regedit LastKey")
+            )
+        if hasattr(self, 'regedit_lastkey_table'):
+            self.regedit_lastkey_table.setHorizontalHeaderLabels([
+                "User", "Name", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'printer_connections_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.printer_connections_tab),
+                _translate("Crow_Eye", "Printer Connections")
+            )
+        if hasattr(self, 'printer_connections_table'):
+            self.printer_connections_table.setHorizontalHeaderLabels([
+                "User", "Connection", "Server", "Printer", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'explorer_advanced_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.explorer_advanced_tab),
+                _translate("Crow_Eye", "Explorer Advanced")
+            )
+        if hasattr(self, 'explorer_advanced_table'):
+            self.explorer_advanced_table.setHorizontalHeaderLabels([
+                "User", "Setting", "Value", "Default", "Meaning", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'rdp_tcp_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.rdp_tcp_tab),
+                _translate("Crow_Eye", "RDP-Tcp")
+            )
+        if hasattr(self, 'rdp_tcp_table'):
+            self.rdp_tcp_table.setHorizontalHeaderLabels([
+                "Setting", "Value", "Default", "Meaning", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'usbstor_start_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.usbstor_start_tab),
+                _translate("Crow_Eye", "USBSTOR Start")
+            )
+        if hasattr(self, 'usbstor_start_table'):
+            self.usbstor_start_table.setHorizontalHeaderLabels([
+                "Setting", "Value", "Decoded", "Default", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'windows_script_host_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.windows_script_host_tab),
+                _translate("Crow_Eye", "Windows Script Host")
+            )
+        if hasattr(self, 'windows_script_host_table'):
+            self.windows_script_host_table.setHorizontalHeaderLabels([
+                "Setting", "Value", "Default", "Meaning", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'dnscache_parameters_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.dnscache_parameters_tab),
+                _translate("Crow_Eye", "DNS Cache Parameters")
+            )
+        if hasattr(self, 'dnscache_parameters_table'):
+            self.dnscache_parameters_table.setHorizontalHeaderLabels([
+                "Name", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'files_not_to_snapshot_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.files_not_to_snapshot_tab),
+                _translate("Crow_Eye", "FilesNotToSnapshot")
+            )
+        if hasattr(self, 'files_not_to_snapshot_table'):
+            self.files_not_to_snapshot_table.setHorizontalHeaderLabels([
+                "Entry", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'winevt_channels_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.winevt_channels_tab),
+                _translate("Crow_Eye", "Event Log Channels")
+            )
+        if hasattr(self, 'winevt_channels_table'):
+            self.winevt_channels_table.setHorizontalHeaderLabels([
+                "Channel", "Source", "Enabled", "Max Size", "Retention", "Log File", "Reason", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'wpdbusenum_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.wpdbusenum_tab),
+                _translate("Crow_Eye", "WPDBUSENUM")
+            )
+        if hasattr(self, 'wpdbusenum_table'):
+            self.wpdbusenum_table.setHorizontalHeaderLabels([
+                "Device ID", "Friendly Name", "Volume GUID", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'device_classes_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.device_classes_tab),
+                _translate("Crow_Eye", "Device Classes")
+            )
+        if hasattr(self, 'device_classes_table'):
+            self.device_classes_table.setHorizontalHeaderLabels([
+                "Class GUID", "Class", "Device Instance", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'volume_info_cache_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.volume_info_cache_tab),
+                _translate("Crow_Eye", "Volume Info Cache")
+            )
+        if hasattr(self, 'volume_info_cache_table'):
+            self.volume_info_cache_table.setHorizontalHeaderLabels([
+                "Drive", "Volume Label", "File System", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'machine_guid_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.machine_guid_tab),
+                _translate("Crow_Eye", "Machine GUID")
+            )
+        if hasattr(self, 'machine_guid_table'):
+            self.machine_guid_table.setHorizontalHeaderLabels([
+                "Name", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'product_options_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.product_options_tab),
+                _translate("Crow_Eye", "Product Options")
+            )
+        if hasattr(self, 'product_options_table'):
+            self.product_options_table.setHorizontalHeaderLabels([
+                "Name", "Value", "Meaning", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'os_install_history_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.os_install_history_tab),
+                _translate("Crow_Eye", "OS Install History")
+            )
+        if hasattr(self, 'os_install_history_table'):
+            self.os_install_history_table.setHorizontalHeaderLabels([
+                "Name", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'active_computer_name_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.active_computer_name_tab),
+                _translate("Crow_Eye", "Active Computer Name")
+            )
+        if hasattr(self, 'active_computer_name_table'):
+            self.active_computer_name_table.setHorizontalHeaderLabels([
+                "Name", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'hivelist_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.hivelist_tab),
+                _translate("Crow_Eye", "Hive List")
+            )
+        if hasattr(self, 'hivelist_table'):
+            self.hivelist_table.setHorizontalHeaderLabels([
+                "Hive", "File Path", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'system_environment_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.system_environment_tab),
+                _translate("Crow_Eye", "System Environment")
+            )
+        if hasattr(self, 'system_environment_table'):
+            self.system_environment_table.setHorizontalHeaderLabels([
+                "Name", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'network_adapters_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.network_adapters_tab),
+                _translate("Crow_Eye", "Network Adapters")
+            )
+        if hasattr(self, 'network_adapters_table'):
+            self.network_adapters_table.setHorizontalHeaderLabels([
+                "Adapter GUID", "Name", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'group_policy_history_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.group_policy_history_tab),
+                _translate("Crow_Eye", "Group Policy History")
+            )
+        if hasattr(self, 'group_policy_history_table'):
+            self.group_policy_history_table.setHorizontalHeaderLabels([
+                "Scope", "GPO ID", "Name", "Value", "Key Path", "Parsed At"
+            ])
+        if hasattr(self, 'local_groups_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.local_groups_tab),
+                _translate("Crow_Eye", "Local Groups")
+            )
+        if hasattr(self, 'local_groups_table'):
+            self.local_groups_table.setHorizontalHeaderLabels([
+                "Scope", "RID", "Group", "Comment", "Member SID", "Member", "Members", "Last Write", "Parsed At"
+            ])
+        if hasattr(self, 'lsa_policy_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.lsa_policy_tab),
+                _translate("Crow_Eye", "LSA Policy")
+            )
+        if hasattr(self, 'lsa_policy_table'):
+            self.lsa_policy_table.setHorizontalHeaderLabels([
+                "Name", "Key Path", "Value", "Meaning", "Last Write", "Parsed At"
+            ])
+        if hasattr(self, 'audit_policy_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.audit_policy_tab),
+                _translate("Crow_Eye", "Audit Policy")
+            )
+        if hasattr(self, 'audit_policy_table'):
+            self.audit_policy_table.setHorizontalHeaderLabels([
+                "Name", "Key Path", "Decoded", "Raw (hex)", "Size", "Last Write", "Note", "Parsed At"
+            ])
+        if hasattr(self, 'lsa_secrets_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.lsa_secrets_tab),
+                _translate("Crow_Eye", "LSA Secrets")
+            )
+        if hasattr(self, 'lsa_secrets_table'):
+            self.lsa_secrets_table.setHorizontalHeaderLabels([
+                "Secret", "Key Path", "Value", "Size", "Updated", "Last Write", "Parsed At"
+            ])
+        if hasattr(self, 'cached_domain_logons_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.cached_domain_logons_tab),
+                _translate("Crow_Eye", "Cached Domain Logons")
+            )
+        if hasattr(self, 'cached_domain_logons_table'):
+            self.cached_domain_logons_table.setHorizontalHeaderLabels([
+                "Slot", "Key Path", "Size", "Occupied", "Last Write", "Parsed At"
+            ])
+        if hasattr(self, 'SecurityPosture_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.SecurityPosture_tab),
+                _translate("Crow_Eye", "Security Posture")
+            )
+        if hasattr(self, 'DefenderExclusions_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.DefenderExclusions_tab),
+                _translate("Crow_Eye", "Defender Exclusions")
+            )
+        if hasattr(self, 'FirewallRules_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.FirewallRules_tab),
+                _translate("Crow_Eye", "Firewall Rules")
+            )
+        if hasattr(self, 'NetworkShares_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.NetworkShares_tab),
+                _translate("Crow_Eye", "Network Shares")
+            )
+        if hasattr(self, 'ConnectedDevices_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.ConnectedDevices_tab),
+                _translate("Crow_Eye", "Connected Devices")
+            )
+        if hasattr(self, 'MountPoints2_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.MountPoints2_tab),
+                _translate("Crow_Eye", "Mount Points")
+            )
+        if hasattr(self, 'RDPClientMRU_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RDPClientMRU_tab),
+                _translate("Crow_Eye", "RDP Client")
+            )
+        if hasattr(self, 'OfficeDocuments_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.OfficeDocuments_tab),
+                _translate("Crow_Eye", "Office Documents")
+            )
+        if hasattr(self, 'FeatureUsage_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.FeatureUsage_tab),
+                _translate("Crow_Eye", "Feature Usage")
+            )
+        if hasattr(self, 'CompatibilityAssistant_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.CompatibilityAssistant_tab),
+                _translate("Crow_Eye", "Compat Assistant")
+            )
+        if hasattr(self, 'RecentApps_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RecentApps_tab),
+                _translate("Crow_Eye", "Recent Apps")
+            )
+        if hasattr(self, 'ApplicationArtifacts_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.ApplicationArtifacts_tab),
+                _translate("Crow_Eye", "App Artifacts")
+            )
+        if hasattr(self, 'ComputerNameInfo_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.ComputerNameInfo_tab),
+                _translate("Crow_Eye", "Computer Info")
+            )
+        if hasattr(self, 'ShutdownRaw_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.ShutdownRaw_tab),
+                _translate("Crow_Eye", "Shutdown (raw)")
+            )
+        if hasattr(self, 'LastUpdateSubkeys_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.LastUpdateSubkeys_tab),
+                _translate("Crow_Eye", "Update Subkeys")
+            )
+        if hasattr(self, 'TimeZoneInfo_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.TimeZoneInfo_tab),
+                _translate("Crow_Eye", "Time Zone Info")
+            )
+        if hasattr(self, 'NetworkInterfacesInfo_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.NetworkInterfacesInfo_tab),
+                _translate("Crow_Eye", "Interfaces Info")
+            )
+        if hasattr(self, 'UserAccounts_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.UserAccounts_tab),
+                _translate("Crow_Eye", "User Accounts")
+            )
+        if hasattr(self, 'UserAccounts_table'):
+            self.UserAccounts_table.setHorizontalHeaderLabels([
+                "SID", "RID", "Username", "Display Name", "Full Name", "Comment", "Type", "Well Known", "Enabled", "Flags", "Last Logon", "Password Set", "Expires", "Last Bad Password", "Logons", "Bad Logons", "Profile Path", "Loaded", "Source", "Parsed At"
+            ])
+        if hasattr(self, 'ScheduledTasks_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.ScheduledTasks_tab),
+                _translate("Crow_Eye", "Scheduled Tasks")
+            )
+        if hasattr(self, 'AutoStartPrograms_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.AutoStartPrograms_tab),
+                _translate("Crow_Eye", "AutoStart Programs")
+            )
+        if hasattr(self, 'ScheduledTasks_table'):
+            self.ScheduledTasks_table.setHorizontalHeaderLabels([
+                "Task Path", "GUID", "Command", "Arguments", "Working Dir",
+                "Run Context", "Triggers", "Registered", "Last Run",
+                "Last Completed", "Last Result", "Parsed At"
+            ])
+        if hasattr(self, 'AutoStartPrograms_table'):
+            self.AutoStartPrograms_table.setHorizontalHeaderLabels([
+                "Location", "Program Name", "Command", "Parsed At"
+            ])
+
         # Initialize SystemServices_table headers if it exists
         # Initialize SystemServices_table headers if it exists
         if hasattr(self, 'SystemServices_table'):
             headers = [
                 "Service Name", "Display Name", "Description",
                 "Image Path", "Start type", "Service Type",
-                "Error Control", "Status", "Analysis time"
+                "Error Control", "Status", "Parsed At"
             ]
             self.SystemServices_table.setColumnCount(len(headers))
             for i, header in enumerate(headers):
@@ -7641,7 +9108,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize ShimCache_table headers if it exists (for Registry widget)
         if hasattr(self, 'ShimCache_table'):
             self.ShimCache_table.setColumnCount(5)
-            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShimCache_table.setHorizontalHeaderItem(i, item)
@@ -7650,7 +9117,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize ShimCache_main_table headers for main tab
         if hasattr(self, 'ShimCache_main_table'):
             self.ShimCache_main_table.setColumnCount(5)
-            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed Timestamp"]
+            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShimCache_main_table.setHorizontalHeaderItem(i, item)
@@ -7778,7 +9245,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     self.SRUM_tab_widget.indexOf(self.SRUM_energy_usage_tab),
                     _translate("Crow_Eye", "Energy Usage")
                 )
-            
+            if hasattr(self, 'SRUM_app_timeline_tab'):
+                self.SRUM_tab_widget.setTabText(
+                    self.SRUM_tab_widget.indexOf(self.SRUM_app_timeline_tab),
+                    _translate("Crow_Eye", "App Timeline")
+                )
+
         # Set tab text for ShimCache tab (in Registry widget)
         if hasattr(self, 'ShimCache_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -7851,7 +9323,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize Browser_history_table headers if it exists
         if hasattr(self, 'Browser_history_table'):
             self.Browser_history_table.setColumnCount(6)
-            headers = ["Browser", "URL", "Title", "Visit count", "Last visit", "Time stamp"]
+            headers = ["Browser", "URL", "Title", "Visit count", "Last visit", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.Browser_history_table.setHorizontalHeaderItem(i, item)
@@ -7867,7 +9339,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize ShimCache_table headers if it exists
         if hasattr(self, 'ShimCache_table'):
             self.ShimCache_table.setColumnCount(5)
-            headers = ["Filename", "Path", "Last Modified", "Last Modified (Readable)", "Parsed Timestamp"]
+            headers = ["Filename", "Path", "Last Modified", "Last Modified (Readable)", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShimCache_table.setHorizontalHeaderItem(i, item)
@@ -8160,7 +9632,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.tableWidget.setColumnCount(7)
             headers = [
                 "Name", "Version", "Publisher", "Install Date",
-                "Install Location", "Uninstall String", "Analyzing Date"
+                "Install Location", "Uninstall String", "Parsed At"
             ]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
@@ -8212,7 +9684,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize LNK_table headers if it exists
         if hasattr(self, 'LNK_table'):
             self.LNK_table.setSortingEnabled(True)
-            self.LNK_table.setColumnCount(48) # Extended to include forensic metadata
+            self.LNK_table.setColumnCount(49) # Extended: +Target Source
             headers = [
                 "Source_Name", "Source_path", "Owner UID", "Owner GID", "Time_Access",
                 "Time_Creation", "Time_modefication", "app_Type", "App_ID",
@@ -8229,7 +9701,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "Volume Type (Ext)", "Volume Serial (Ext)", "Volume Label (Ext)",
                 "Forensic CLI Args", "MFT Entry Num", "MFT Sequence Num",
                 "Property Metadata", "Darwin ID", "Env Variables",
-                "Known Folder GUID", "DestList Last ID", "DestList Actions"
+                "Known Folder GUID", "DestList Last ID", "DestList Actions",
+                "Target Source"
             ]
             for i, header in enumerate(headers):
                 if i < self.LNK_table.columnCount():
@@ -8266,7 +9739,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize AJL_table headers if it exists
         if hasattr(self, 'AJL_table'):
             self.AJL_table.setSortingEnabled(True)
-            self.AJL_table.setColumnCount(48) # Same as LNK table
+            self.AJL_table.setColumnCount(49) # Same as LNK table, +Target Source
             headers = [
                 "Source_Name", "Source_path", "Owner UID", "Owner GID", "Time_Access",
                 "Time_Creation", "Time_modefication", "app_Type", "App_ID",
@@ -8283,7 +9756,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "Volume Type (Ext)", "Volume Serial (Ext)", "Volume Label (Ext)",
                 "Forensic CLI Args", "MFT Entry Num", "MFT Sequence Num",
                 "Property Metadata", "Darwin ID", "Env Variables",
-                "Known Folder GUID", "DestList Last ID", "DestList Actions"
+                "Known Folder GUID", "DestList Last ID", "DestList Actions",
+                "Target Source"
             ]
             for i, header in enumerate(headers):
                 if i < self.AJL_table.columnCount():
@@ -8294,7 +9768,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize Clj_table headers if it exists
         if hasattr(self, 'Clj_table'):
             self.Clj_table.setSortingEnabled(True)
-            self.Clj_table.setColumnCount(27) # Corrected to 27 (14 base + 13 extensions)
+            self.Clj_table.setColumnCount(28) # 27 + Target Source
             headers = [
                 "File name", "File Directory", "Owner UID", "Owner GID", "Access time",
                 "Creation Time", "Modification Time", "File Size", "File permission", "File Type",
@@ -8305,7 +9779,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "Volume Type", "Volume Serial", "Volume Label",
                 "CLI Arguments", "MFT Entry Num", "MFT Sequence Num",
                 "Property Metadata", "Darwin ID", "Env Variables",
-                "Known Folder GUID"
+                "Known Folder GUID", "Target Source"
             ]
             for i, header in enumerate(headers):
                 if i < self.Clj_table.columnCount():
@@ -9073,8 +10547,15 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # 1. Clear search results first
             self.clear_search_results()
             
-            # 2. Find all tables and clear them
-            tables = self.find_all_table_widgets()
+            # 2. Find all tables and clear them.
+            #
+            # Search from main_window, not from self. The tables are children of
+            # the window; this class is a QObject that merely holds references
+            # to them, so findChildren(self) matched nothing and this loop was
+            # clearing zero tables of the 144 that exist - which is why a new
+            # case kept showing the previous one.
+            root = getattr(self, 'main_window', None) or self
+            tables = SearchUtils.find_all_table_widgets(root)
             for table in tables:
                 try:
                     # Clear contents
@@ -9083,7 +10564,30 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     table.clearSpans()
                 except Exception as e:
                     print(f"[Warning] Failed to clear table {table.objectName()}: {str(e)}")
-            
+
+            # 2b. The virtualised tables are QTableView, so they are neither
+            # found by the call above nor cleared by setRowCount. They also hold
+            # the loader open on the old case's database.
+            virtual = SearchUtils.find_all_virtual_tables(root)
+            for table in virtual:
+                try:
+                    table.clear_data()
+                except Exception as e:
+                    print(f"[Warning] Failed to clear virtual table "
+                          f"{table.objectName()}: {str(e)}")
+
+            print(f"[System] Cleared {len(tables)} tables and {len(virtual)} virtual tables")
+
+            # 2c. Drop the cached loaders so nothing can repopulate a tab from
+            # the case that was just closed.
+            for attr in ('mft_loader', 'usn_loader', 'corr_loader', 'srum_loader',
+                         'registry_loader'):
+                if hasattr(self, attr):
+                    try:
+                        setattr(self, attr, None)
+                    except Exception:
+                        pass
+
             # 3. Reset internal state variables
             self.case_paths = None
             self.search_results = []
@@ -10301,7 +11805,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 from mft_usn_correlator import MFTUSNCorrelator
                 
                 # Initialize the correlator with case directory
-                correlator = MFTUSNCorrelator(case_directory=case_root)
+                correlator = MFTUSNCorrelator(case_directory=case_root,
+                                              status_callback=self._mft_usn_status)
                 
                 # Run the complete correlation analysis (correlator will check for empty databases and run parsers if needed)
                 correlator.run_correlation_for_case()
@@ -10609,7 +12114,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             from mft_usn_correlator import MFTUSNCorrelator
             
             # Initialize the correlator with case directory
-            correlator = MFTUSNCorrelator(case_directory=case_root)
+            correlator = MFTUSNCorrelator(case_directory=case_root,
+                                          status_callback=self._mft_usn_status)
             
             # Run the complete correlation analysis
             correlator.run_correlation_for_case()
@@ -10728,6 +12234,32 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             import traceback
             traceback.print_exc()
     
+    def get_nice_usn_headers(self, columns):
+        """Map journal_events column names to UI header labels.
+
+        Used by the USN VirtualTableWidget, which is built from the live DB
+        columns rather than the static header list. `parsed_at` and its legacy
+        alias `inserted_at` both render as "Parsed At"; `timestamp` is left
+        alone because in the USN journal it is a real event time.
+        """
+        mapping = {
+            "volume_letter": "Volume Letter",
+            "filename": "Filename",
+            "usn": "USN",
+            "major_version": "Major Version",
+            "frn": "FRN",
+            "parent_frn": "Parent FRN",
+            "timestamp": "Timestamp",
+            "reason": "Reason",
+            "source_info": "Source Info",
+            "security_id": "Security ID",
+            "file_attributes": "File Attributes",
+            "record_length": "Record Length",
+        }
+        return [mapping.get(col, PARSE_TIME_LABEL if is_parse_time_column(col, 'journal_events')
+                            else col.replace('_', ' ').title())
+                for col in columns]
+
     def get_nice_srum_headers(self, columns):
         """Map SQLite snake_case column names to nice title-cased UI header labels"""
         mapping = {
@@ -10760,9 +12292,33 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "bytes_sent": "Bytes Sent",
             "bytes_received": "Bytes Received",
             "event_timestamp": "Event Timestamp",
+            "parsed_at": "Parsed At",
             "state_transition": "State Transition",
             "charge_level": "Charge Level",
-            "cycle_count": "Cycle Count"
+            "cycle_count": "Cycle Count",
+            "hosted_services": "Hosted Services",
+            "end_time": "End Time",
+            "duration_ms": "Duration (ms)",
+            "span_ms": "Span (ms)",
+            "timeline_end": "Timeline End",
+            "flags": "Flags",
+            "in_focus_s": "In Focus (s)",
+            "psm_foreground_s": "PSM Foreground (s)",
+            "user_input_s": "User Input (s)",
+            "keyboard_input_s": "Keyboard Input (s)",
+            "mouse_input_s": "Mouse Input (s)",
+            "display_required_s": "Display Required (s)",
+            "comp_rendered_s": "Composition Rendered (s)",
+            "comp_dirtied_s": "Composition Dirtied (s)",
+            "comp_propagated_s": "Composition Propagated (s)",
+            "audio_in_s": "Audio In (s)",
+            "audio_out_s": "Audio Out (s)",
+            "cycles": "CPU Cycles",
+            "cycles_attr": "CPU Cycles Attributed",
+            "cycles_wob": "CPU Cycles Without Break",
+            "disk_raw": "Disk Bytes",
+            "network_bytes_raw": "Network Bytes",
+            "network_tail_raw": "Network Tail Bytes"
         }
         return [mapping.get(col, col.replace('_', ' ').title()) for col in columns]
 
@@ -10809,6 +12365,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.load_srum_network_connectivity(srum_loader)
             self.load_srum_network_data_usage(srum_loader)
             self.load_srum_energy_usage(srum_loader)
+            self.load_srum_app_timeline(srum_loader)
             
             print("[SRUM] All SRUM data loaded successfully")
         except Exception as e:
@@ -11079,7 +12636,73 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print(f"[SRUM] Error loading energy usage: {str(e)}")
             import traceback
             traceback.print_exc()
-    
+
+    def load_srum_app_timeline(self, srum_loader):
+        """Load SRUM Application Timeline data using VirtualTableWidget"""
+        try:
+            print("[SRUM] Starting application timeline loading...")
+            if not srum_loader.table_exists('srum_app_timeline'):
+                print("[SRUM] srum_app_timeline table not found")
+                return
+
+            # Replace the old table with VirtualTableWidget on the fly
+            if hasattr(self, 'SRUM_app_timeline_table'):
+                columns = srum_loader.get_columns('srum_app_timeline')
+
+                from ui.virtual_table_widget import VirtualTableWidget
+                if not isinstance(self.SRUM_app_timeline_table, VirtualTableWidget):
+                    old_table = self.SRUM_app_timeline_table
+                    layout = self.verticalLayout_srum_timeline
+                    layout.removeWidget(old_table)
+                    old_table.deleteLater()
+
+                    self.SRUM_app_timeline_table = VirtualTableWidget(
+                        data_loader=srum_loader,
+                        table_name='srum_app_timeline',
+                        columns=columns,
+                        page_size=5000,
+                        buffer_size=10000,
+                        parent=self.SRUM_app_timeline_tab
+                    )
+
+                    self.SRUM_app_timeline_table.set_order_by('id ASC')
+                    from styles import CrowEyeStyles
+                    CrowEyeStyles.apply_table_styles(self.SRUM_app_timeline_table)
+                    layout.addWidget(self.SRUM_app_timeline_table)
+
+                # Set nice header labels
+                nice_headers = self.get_nice_srum_headers(columns)
+                self.SRUM_app_timeline_table.setHorizontalHeaderLabels(nice_headers)
+
+                # Set up loading overlay if not exists
+                if not hasattr(self, 'SRUM_app_timeline_overlay'):
+                    from ui.progress_indicator import TableLoadingOverlay
+                    self.SRUM_app_timeline_overlay = TableLoadingOverlay(self.SRUM_app_timeline_table)
+
+                    self.SRUM_app_timeline_table.loading_started.connect(
+                        lambda: self.SRUM_app_timeline_overlay.show_loading("Loading application timeline data...")
+                    )
+                    self.SRUM_app_timeline_table.loading_finished.connect(
+                        lambda: self.SRUM_app_timeline_overlay.hide_loading()
+                    )
+
+                # Load initial data chunk
+                self.SRUM_app_timeline_overlay.show_loading("Loading application timeline records...")
+                success = self.SRUM_app_timeline_table.load_initial_data()
+                self.SRUM_app_timeline_overlay.hide_loading()
+
+                if success:
+                    total_rows = self.SRUM_app_timeline_table.get_total_rows()
+                    print(f"[SRUM] Successfully loaded {total_rows:,} application timeline records (virtual scrolling enabled)")
+                else:
+                    print("[SRUM] Failed to load initial application timeline data")
+            else:
+                print("[SRUM] SRUM_app_timeline_table widget not found")
+        except Exception as e:
+            print(f"[SRUM] Error loading application timeline: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
     def parse_offline_lnk_files(self):
         """Parse offline LNK files and Jump Lists"""
         try:
@@ -12873,8 +14496,18 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.loading_movie.start()
             self.clear_search_results()
 
-            # Get tables and filter settings
-            tables = SearchUtils.find_all_table_widgets(self)
+            # Get tables and filter settings.
+            #
+            # Search from main_window, not from self: the widgets are children
+            # of the window, and this class is a QObject that only holds
+            # references to them. findChildren(self) matched nothing, so the
+            # worker was handed an empty list and every search reported no
+            # matches - the same defect that stopped New Case clearing anything.
+            #
+            # SearchWorker skips anything without rowCount/columnCount, so the
+            # virtualised QTableView tables pass through harmlessly.
+            tables = SearchUtils.find_all_table_widgets(
+                getattr(self, 'main_window', None) or self)
             include_tables, exclude_tables = self.get_filtered_tables()
             
             # Get time filter settings if available
