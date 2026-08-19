@@ -1827,7 +1827,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     mru_position, created_date, modified_date, accessed_date, 
                     attributes, file_size, special_folder, network_share, 
                     server_name, share_name, drive_letter, mft_record_number, 
-                    registry_path, parsed_at
+                    registry_path, parent_path, user_name, parsed_at
                 FROM Shellbags 
                 ORDER BY 
                     CASE 
@@ -1846,7 +1846,11 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     "MRU Position", "Created Date", "Modified Date", "Accessed Date",
                     "Attributes", "File Size", "Special Folder", "Network Share",
                     "Server Name", "Share Name", "Drive Letter", "MFT Record", 
-                    "Registry Path", "Parsed At"
+                    # parent_path is where the folder sat in the shell tree and
+                    # user_name is whose hive it came from - the two columns that
+                    # tell a multi-user case apart. Both were parsed and stored
+                    # and neither reached the screen.
+                    "Registry Path", "Parent Path", "User Name", "Parsed At"
                 ]
                 self.Shellbags_table.setColumnCount(len(headers))
                 self.Shellbags_table.setHorizontalHeaderLabels(headers)
@@ -2696,9 +2700,16 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             if hasattr(self, 'UserProfiles_table'):
                 self.UserProfiles_table.setRowCount(0)
                 
-                # Set headers based on user request and DB schema
-                # DB Schema: user_sid, username, profile_path, profile_image_path, profile_loaded, parsed_at
-                headers = ["Username", "SID", "Profile Image Path", "Profiles Loaded", "Parsed At"]
+                # Headers in the order SELECT * returns the columns:
+                # user_sid, username, profile_path, profile_image_path,
+                # profile_loaded, parsed_at.
+                #
+                # There were five labels for six columns, and the first two were
+                # the wrong way round - the SID column was headed "Username" and
+                # the username column "SID". Every label after that was off by
+                # one, so "Parsed At" was showing profile_loaded.
+                headers = ["User SID", "Username", "Profile Path",
+                           "Profile Image Path", "Profile Loaded", "Parsed At"]
                 self.UserProfiles_table.setColumnCount(len(headers))
                 self.UserProfiles_table.setHorizontalHeaderLabels(headers)
                 
@@ -8404,8 +8415,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
         # Initialize UserProfiles_table headers
         if hasattr(self, 'UserProfiles_table'):
-            self.UserProfiles_table.setColumnCount(7)
-            headers = ["Username", "SID", "Profile Path", "Date Created", "Last Login", "Last Logout", "Login Count"]
+            # Same table as the loader populates. Date Created, Last Login,
+            # Last Logout and Login Count are not columns of UserProfiles - that
+            # is SAM's account data, in UserAccounts.
+            self.UserProfiles_table.setColumnCount(6)
+            headers = ["User SID", "Username", "Profile Path",
+                       "Profile Image Path", "Profile Loaded", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.UserProfiles_table.setHorizontalHeaderItem(i, item)
@@ -9370,8 +9385,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize USBInstances_table headers if it exists (USB Instance)
         if hasattr(self, 'USBInstances_table'):
-            self.USBInstances_table.setColumnCount(6)
-            headers = ["Device ID", "Instance ID", "Parent ID", "Service", "Status", "Description"]
+            self.USBInstances_table.setColumnCount(5)
+            headers = ["Device ID", "Instance ID", "Parent ID", "Service", "Status"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.USBInstances_table.setHorizontalHeaderItem(i, item)
@@ -9443,10 +9458,17 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 _translate("Crow_Eye", "Registry")
             )
         
+        # Every column count below is the table's real column count, checked
+        # against the database rather than counted by hand. They had drifted as
+        # columns were added: RecentDocs showed 4 of 8, RunMRU 3 of 6,
+        # WordWheelQuery 4 of 7 - so user_name, key_last_write and mru_position
+        # were in the case and not on screen. setItem past columnCount is a
+        # silent no-op and setColumnCount larger than the data just paints empty
+        # columns, so neither direction reports anything.
         # Initialize RecentDocs_table headers if it exists
         if hasattr(self, 'RecentDocs_table'):
-            self.RecentDocs_table.setColumnCount(4)
-            headers = ["Sub Key Name", "Service", "Data", "Data Type"]
+            self.RecentDocs_table.setColumnCount(8)
+            headers = ["Subkey", "Name", "Row Data", "Type", "User Name", "MRU Position", "Key Last Write", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.RecentDocs_table.setHorizontalHeaderItem(i, item)
@@ -9462,8 +9484,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
 
         # Initialize OpenSaveMRU_table headers if it exists
         if hasattr(self, 'OpenSaveMRU_table'):
-            self.OpenSaveMRU_table.setColumnCount(10)
-            headers = ["Subkey", "Name", "Type", "File Path", "File Name", "Extension", "Drive Letter", "Access Date", "Row data", "Parsed at"]
+            # Twelve columns, in the order SELECT * returns them. The count was
+            # 10 against 11 real columns, so user_name never rendered, and
+            # key_last_write - the only timestamp this artifact has - would have
+            # been the second column written past the end. setItem beyond
+            # columnCount is a silent no-op, so the tab looks complete either way.
+            self.OpenSaveMRU_table.setColumnCount(12)
+            headers = ["Subkey", "Name", "Type", "File Path", "File Name", "Extension", "Drive Letter", "Access Date", "Key Last Write", "Row data", "Parsed at", "User Name"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.OpenSaveMRU_table.setHorizontalHeaderItem(i, item)
@@ -9478,8 +9505,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize LastSaveMRU_table headers if it exists
         if hasattr(self, 'LastSaveMRU_table'):
-            self.LastSaveMRU_table.setColumnCount(9)
-            headers = ["MRU Number", "Type", "Application", "Folder Path", "Folder Name", "Drive Letter", "Access Date", "Row data", "Parsed at"]
+            # Eleven columns, same reason as OpenSaveMRU above.
+            self.LastSaveMRU_table.setColumnCount(11)
+            headers = ["MRU Number", "Type", "Application", "Folder Path", "Folder Name", "Drive Letter", "Access Date", "Key Last Write", "Row data", "Parsed at", "User Name"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.LastSaveMRU_table.setHorizontalHeaderItem(i, item)
@@ -9542,8 +9570,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize UserAssist_table headers if it exists
         if hasattr(self, 'UserAssist_table'):
-            self.UserAssist_table.setColumnCount(6)
-            headers = ["Program Path", "Run Count", "Last Execution", "Focus Count", "Focus Time", "User SID"]
+            self.UserAssist_table.setColumnCount(7)
+            headers = ["Program Path", "Run Count", "Last Execution", "Focus Count", "Focus Time", "User SID", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.UserAssist_table.setHorizontalHeaderItem(i, item)
@@ -9558,8 +9586,17 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize Shellbags_table headers if it exists
         if hasattr(self, 'Shellbags_table'):
-            self.Shellbags_table.setColumnCount(6)
-            headers = ["Folder Path", "Folder Name", "Type", "MRU Position", "Access Date", "Registry Path"]
+            # Matches what the loader sets and what Shellbags actually holds.
+            # This block named six columns that the table does not have -
+            # "Folder Path", "Access Date" - so an empty tab described a
+            # different artifact until the first case was loaded over it.
+            self.Shellbags_table.setColumnCount(19)
+            headers = ["File Name", "Short Name", "Type", "MRU Position",
+                       "Created Date", "Modified Date", "Accessed Date",
+                       "Attributes", "File Size", "Special Folder",
+                       "Network Share", "Server Name", "Share Name",
+                       "Drive Letter", "MFT Record", "Registry Path",
+                       "Parent Path", "User Name", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.Shellbags_table.setHorizontalHeaderItem(i, item)
@@ -9574,8 +9611,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize RunMRU_table headers if it exists
         if hasattr(self, 'RunMRU_table'):
-            self.RunMRU_table.setColumnCount(3)
-            headers = ["Command", "MRU Position", "Access Date"]
+            self.RunMRU_table.setColumnCount(6)
+            headers = ["Command", "MRU Position", "Access Date", "Key Last Write", "Parsed At", "User Name"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.RunMRU_table.setHorizontalHeaderItem(i, item)
@@ -9590,8 +9627,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize MUICache_table headers if it exists
         if hasattr(self, 'MUICache_table'):
-            self.MUICache_table.setColumnCount(4)
-            headers = ["Application Path", "Application Name", "File Extension", "Parsed at"]
+            self.MUICache_table.setColumnCount(6)
+            headers = ["App Path", "App Name", "Company", "File Extension", "Parsed At", "User Name"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.MUICache_table.setHorizontalHeaderItem(i, item)
@@ -9606,8 +9643,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize WordWheelQuery_table headers if it exists
         if hasattr(self, 'WordWheelQuery_table'):
-            self.WordWheelQuery_table.setColumnCount(4)
-            headers = ["Search Term", "Search Type", "MRU Position", "Access Date"]
+            self.WordWheelQuery_table.setColumnCount(7)
+            headers = ["Search Term", "Search Type", "MRU Position", "Access Date", "Key Last Write", "Parsed At", "User Name"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.WordWheelQuery_table.setHorizontalHeaderItem(i, item)

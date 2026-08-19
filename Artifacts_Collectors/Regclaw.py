@@ -748,6 +748,7 @@ def main_live_reg(db_filename='registry_data.db'):
             extension TEXT,
             drive_letter TEXT,
             access_date TEXT,
+            key_last_write TEXT,
             row_data TEXT,
             parsed_at TEXT,
             user_name TEXT
@@ -762,6 +763,7 @@ def main_live_reg(db_filename='registry_data.db'):
             folder_name TEXT,
             drive_letter TEXT,
             access_date TEXT,
+            key_last_write TEXT,
             row_data TEXT,
             parsed_at TEXT,
             user_name TEXT
@@ -973,8 +975,16 @@ def main_live_reg(db_filename='registry_data.db'):
                                     focus_count = parsed_data.get('focus_count', 0)
                                     focus_time_ms = parsed_data.get('focus_time', 0)
                                     
-                                    # Convert focus time to readable format before saving
-                                    focus_time_formatted = format_focus_time(focus_time_ms)
+                                    # focus_time is an INTEGER column, and
+                                    # format_focus_time returns "2.47h" / "0.00s".
+                                    # SQLite stores an unconvertible string as
+                                    # TEXT, and TEXT sorts above every integer -
+                                    # so ordering by focus time, or asking for the
+                                    # sessions above a threshold, was meaningless.
+                                    # The readable form belongs to the display
+                                    # layer, which now renders it there; the
+                                    # offline parser has always stored the number.
+                                    focus_time_formatted = int(focus_time_ms or 0)
                                    
                                     # Use actual user SID if available, otherwise fall back to GUID
                                     user_sid = current_user_sid if current_user_sid else guid_name
@@ -1507,6 +1517,18 @@ def main_live_reg(db_filename='registry_data.db'):
                             except Exception:
                                 pass
 
+                    # Same up-front read for the gateway MAC, and for the same
+                    # reason. It was filled inside the value loop below, so only
+                    # the rows written after DefaultGatewayMac happened to be
+                    # reached carried it - 20 rows of this table had the MAC and
+                    # the rest of the same key's rows did not.
+                    for _mn, (_md, _mt) in values.items():
+                        if _mn.lower() == 'defaultgatewaymac' and isinstance(_md, bytes) and len(_md) >= 6:
+                            try:
+                                gateway_mac = registry_binary_parser.format_mac_address(_md)
+                            except Exception:
+                                gateway_mac = str(_md)
+
                     # Extract network name
                     first_network_value = values.get('FirstNetwork', ('N/A', None))[0]
                     if first_network_value != 'N/A':
@@ -1543,14 +1565,6 @@ def main_live_reg(db_filename='registry_data.db'):
                             except Exception as e:
                                 logging.debug(f"Error accessing profile {profile_path}: {e}")
                        
-                        elif name.lower() == 'defaultgatewaymac':
-                            # Format MAC address for readability
-                            try:
-                                if isinstance(data, bytes) and len(data) >= 6:
-                                    gateway_mac = registry_binary_parser.format_mac_address(data)
-                            except:
-                                gateway_mac = str(data)
-                        
                         # Parse binary timestamps if applicable
                         if name.lower() in ['datecreated', 'datelastconnected'] and isinstance(data, bytes) and len(data) >= 16:
                             try:
@@ -1661,6 +1675,12 @@ def main_live_reg(db_filename='registry_data.db'):
         product_id = ""
         install_date = ""
         for name, (data, _) in ComputerName_reg_key.items():
+            # winreg reports a key's default value as an empty name. "(Default)"
+            # is what this codebase calls it - see offline_RegClaw._default_name,
+            # which exists for exactly this - so an unnamed row does not appear
+            # under two spellings depending on how the case was acquired.
+            if not name:
+                name = "(Default)"
             if name.lower() == "computername":
                 computer_name = str(data)
                 logging.debug(f"Extracted ComputerName: {computer_name}")
@@ -1746,7 +1766,24 @@ def main_live_reg(db_filename='registry_data.db'):
         networkInterface_path = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces"
         network_interfaces_sub_key = get_subkeys_live(HKEY_LOCAL_MACHINE, networkInterface_path)
         # Process each network interface
+        def _mval(data):
+            """A REG_MULTI_SZ value as text, not as a Python list literal.
+
+            IPAddress, SubnetMask, DefaultGateway and NameServer are all
+            MULTI_SZ, so str() on them wrote "['192.168.56.1']" into columns an
+            analyst filters on. The trailing empty strings are the value's NUL
+            terminators and are dropped, the same way _fmt does it for the
+            autostart tables.
+            """
+            if isinstance(data, (list, tuple)):
+                items = [str(x) for x in data]
+                while items and items[-1] == "":
+                    items.pop()
+                return ", ".join(items)
+            return str(data)
+
         for interface_id, values in network_interfaces_sub_key.items():
+            static_ip = dhcp_ip = static_mask = dhcp_mask = ""
             ip_address = ""
             subnet_mask = ""
             default_gateway = ""
@@ -1755,12 +1792,20 @@ def main_live_reg(db_filename='registry_data.db'):
             dns_servers = ""
             mac_address = ""
             for name, (data, value_type) in values.items():
-                if name.lower() == "ipaddress" or name.lower() == "dhcpipaddress":
-                    ip_address = str(data)
+                # Collected here, resolved after the loop. Accepting either
+                # name in one branch meant whichever value enumerated last won,
+                # so the same interface could report a different address on two
+                # runs of the same parser.
+                if name.lower() == "ipaddress":
+                    static_ip = _mval(data)
+                elif name.lower() == "dhcpipaddress":
+                    dhcp_ip = _mval(data)
                 elif name.lower() == "subnetmask":
-                    subnet_mask = str(data)
+                    static_mask = _mval(data)
+                elif name.lower() == "dhcpsubnetmask":
+                    dhcp_mask = _mval(data)
                 elif name.lower() == "defaultgateway":
-                    default_gateway = str(data)
+                    default_gateway = _mval(data)
                 elif name.lower() == "enabledhcp":
                     try:
                         dhcp_enabled = int(data)
@@ -1769,7 +1814,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 elif name.lower() == "dhcpserver":
                     dhcp_server = str(data)
                 elif name.lower() == "nameserver":
-                    dns_servers = str(data)
+                    dns_servers = _mval(data)
                 elif name.lower() == "macaddress":
                     mac_address = str(data)
                 # The static NameServer/DefaultGateway values exist on almost
@@ -1781,10 +1826,10 @@ def main_live_reg(db_filename='registry_data.db'):
                 # configured address still wins.
                 elif name.lower() == "dhcpnameserver":
                     if not dns_servers:
-                        dns_servers = str(data)
+                        dns_servers = _mval(data)
                 elif name.lower() == "dhcpdefaultgateway":
                     if not default_gateway:
-                        default_gateway = ", ".join(str(x) for x in data)                             if isinstance(data, (list, tuple)) else str(data)
+                        default_gateway = _mval(data)
                 # Keyed on (subkey, name) - one row per registry value, which is
                 # what the offline parser has always done. With row_data in the
                 # key, a value that legitimately changes between parses (the
@@ -1793,8 +1838,17 @@ def main_live_reg(db_filename='registry_data.db'):
                 if check_exists(cursor, 'network_interfaces', ['subkey', 'name'], (str(interface_id), name)):
                     logging.info(f"Skipping duplicate network_interfaces entry: {interface_id}/{name}")
                     continue
+                # _mval, not str(). A MULTI_SZ value reached this raw dump as a
+                # Python list literal, and the two parsers disagreed on the
+                # terminators inside it - winreg drops them, python-registry
+                # keeps them - so the same interface read "['192.168.56.1']"
+                # live and "['192.168.56.1', '', '']" from the hive.
                 cursor.execute('INSERT OR IGNORE INTO network_interfaces (subkey, name, row_data, type) VALUES (?, ?, ?, ?)',
-                              (str(interface_id), name, str(data), value_type))
+                              (str(interface_id), name, _mval(data), value_type))
+            # Static wins over DHCP, the order Windows resolves them and the
+            # order the offline parser uses.
+            ip_address = static_ip or dhcp_ip
+            subnet_mask = static_mask or dhcp_mask
             # Insert into the enhanced table
             if not check_exists(cursor, 'NetworkInterfacesInfo', ['interface_id', 'ip_address'], (interface_id, ip_address)):
                 cursor.execute('''
@@ -1818,7 +1872,20 @@ def main_live_reg(db_filename='registry_data.db'):
         clean_shutdown = 0
         for name, (data, value_type) in shutdown_reg_key.items():
             if name.lower() == "shutdowntime":
+                # ShutdownTime is an 8-byte FILETIME, not a string. str()
+                # on the blob wrote its Python bytes repr into a column
+                # an analyst reads as a shutdown time, and it sorted as
+                # text beside the decoded timestamps every other table
+                # produces. The offline parser decoded it all along.
                 shutdown_time = str(data)
+                if isinstance(data, bytes) and len(data) >= 8:
+                    try:
+                        ft = int.from_bytes(data[:8], 'little')
+                        if ft:
+                            shutdown_time = format_forensic_timestamp(
+                                filetime_to_datetime(ft))
+                    except Exception as _e:
+                        logging.error("Error parsing ShutdownTime: %s" % _e)
             elif name.lower() == "shutdowncount":
                 try:
                     shutdown_count = int(data)
@@ -2046,11 +2113,16 @@ def main_live_reg(db_filename='registry_data.db'):
                         if mru_order and entry_index in mru_order:
                             # Position in MRU list (0 = most recent)
                             mru_position = mru_order.index(entry_index)
-                            if mru_position == 0 and most_recent_access:
-                                # Most recent entry gets the key's last write time
-                                # Mark it as such for forensic clarity
-                                access_date = f"{most_recent_access} (Registry Key LastWrite)"
-                            # For other entries, leave access_date empty
+                            # access_date stays empty. An MRU list carries no
+                            # per-entry time, so giving the key's last-write to
+                            # whichever entry is at position 0 attributes a key
+                            # fact to one row that may not have caused it. It
+                            # was also written as
+                            # "2026-08-18 08:48:37 (Registry Key LastWrite)" -
+                            # text appended to a timestamp column, which stops
+                            # it sorting or comparing as a time at all. The fact
+                            # is kept, in key_last_write, where RunMRU and
+                            # WordWheelQuery already keep it.
                     except (ValueError, TypeError):
                         pass # Name is not a number
                     # Try to extract file path from MRU data using specialized parser
@@ -2084,8 +2156,8 @@ def main_live_reg(db_filename='registry_data.db'):
                     if check_exists(cursor, 'OpenSaveMRU', ['subkey', 'name', 'row_data', 'type'], (subkey, name, str(data), value_type)):
                         logging.info(f"Skipping duplicate OpenSaveMRU entry: {subkey}/{name}")
                         continue
-                    cursor.execute('INSERT INTO OpenSaveMRU (subkey, name, type, file_path, file_name, extension, drive_letter, access_date, row_data, parsed_at, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                  (subkey, name, value_type, file_path, file_name, extension, drive_letter, access_date, str(data), format_forensic_timestamp(get_current_utc()), _live_user))
+                    cursor.execute('INSERT INTO OpenSaveMRU (subkey, name, type, file_path, file_name, extension, drive_letter, access_date, key_last_write, row_data, parsed_at, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                  (subkey, name, value_type, file_path, file_name, extension, drive_letter, access_date, most_recent_access, str(data), format_forensic_timestamp(get_current_utc()), _live_user))
             print("OpenSaveMRU subkeys data inserted into database successfully with enhanced information.")
         except Exception as e:
             logging.error(f"Error accessing OpenSavePidlMRU: {e}")
@@ -2165,23 +2237,24 @@ def main_live_reg(db_filename='registry_data.db'):
                         except:
                             pass
                 
-                # Determine access order/recency - use most_recent_access for most recent entry
+                # Determine access order/recency.
+                #
+                # access_date stays empty, for the same reason as OpenSaveMRU
+                # above: the key's last-write is a fact about the key, not about
+                # whichever entry happens to sit at MRU position 0. It is
+                # recorded in key_last_write instead.
                 try:
                     entry_index = int(name)
                     if mru_order and entry_index in mru_order:
                         mru_position = mru_order.index(entry_index)
-                        if mru_position == 0 and most_recent_access:
-                            # Most recent entry gets the actual timestamp
-                            access_date = most_recent_access
-                        # For other entries, leave access_date empty instead of showing position
                 except (ValueError, TypeError):
                     pass
                
                 if check_exists(cursor, 'LastSaveMRU', ['mru_number', 'row_data', 'type'], (name, str(data), value_type)):
                     logging.info(f"Skipping duplicate LastSaveMRU entry: {name}")
                     continue
-                cursor.execute('INSERT INTO LastSaveMRU (mru_number, type, application, folder_path, folder_name, drive_letter, access_date, row_data, parsed_at, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                              (name, value_type, application, folder_path, folder_name, drive_letter, access_date, str(data), format_forensic_timestamp(get_current_utc()), _live_user))
+                cursor.execute('INSERT INTO LastSaveMRU (mru_number, type, application, folder_path, folder_name, drive_letter, access_date, key_last_write, row_data, parsed_at, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                              (name, value_type, application, folder_path, folder_name, drive_letter, access_date, most_recent_access, str(data), format_forensic_timestamp(get_current_utc()), _live_user))
             print("LastSaveMRU has been inserted into database successfully with enhanced information.")
         except Exception as e:
             logging.error(f"Error accessing LastVisitedPidlMRU: {e}")
@@ -2581,15 +2654,24 @@ def main_live_reg(db_filename='registry_data.db'):
                     status = ""
                     try:
                         for name, (data, _) in instance_values.items():
-                            if name.lower() == "parent":
+                            # ParentIdPrefix is the value the instance key
+                            # actually holds. "Parent" is a devnode property,
+                            # not a registry value, so this matched nothing and
+                            # left parent_id empty on every row while the
+                            # offline parser filled twelve of them.
+                            if name.lower() == "parentidprefix":
                                 parent_id = str(data)
                             elif name.lower() == "service":
                                 service = str(data)
-                        # Determine status based on available information
-                        if "removed" in instance_id.lower():
-                            status = "Removed"
-                        else:
-                            status = "Present"
+                            elif name.lower() == "status":
+                                status = str(data)
+                        # status is whatever the key says, which is usually
+                        # nothing. It used to be derived - "Removed" if the
+                        # instance id contained that word, "Present" otherwise -
+                        # which wrote "Present" on all 21 rows. That is a claim
+                        # that the device is attached now, and an Enum key cannot
+                        # support it: it records that a device was enumerated
+                        # once, not that it is plugged in.
                         cursor.execute('''
                         INSERT OR IGNORE INTO USBInstances
                         (device_id, instance_id, parent_id, service, status)
@@ -2633,9 +2715,13 @@ def main_live_reg(db_filename='registry_data.db'):
                     for name, (data, value_type) in profile_values.items():
                         if name.lower() == "profileimagepath":
                             profile_image_path = str(data)
-                            # Extract just the profile directory name (username)
-                            if '\\' in profile_image_path:
-                                profile_path = profile_image_path.split('\\')[-1]
+                            # profile_path is the profile's path. It held the leaf
+                            # directory name instead, so a column an analyst reads
+                            # as a location said "Ghass", and the service profiles
+                            # under ServiceProfiles were indistinguishable from a
+                            # user account of the same name. The leaf name is what
+                            # username wants, and it is derived from the path below.
+                            profile_path = profile_image_path
                         elif name.lower() == "state":
                             # State 0 = loaded, 256 = unloaded
                             try:
@@ -2645,7 +2731,10 @@ def main_live_reg(db_filename='registry_data.db'):
                                 pass
                     
                     # Use profile directory name as username
-                    username = profile_path if profile_path else "Unknown"
+                    username = (profile_image_path.rsplit('\\', 1)[-1]
+                                if profile_image_path else "")
+                    if not username:
+                        username = "Unknown"
                     
                     # Insert user profile data into database
                     cursor.execute('''
@@ -2871,8 +2960,16 @@ def main_live_reg(db_filename='registry_data.db'):
                 # REG_MULTI_SZ arrives as a Python list. Storing repr() would put
                 # "['msv1_0', 'SshdPinAuthLsa']" in the cell; join it instead so the
                 # column stays greppable. reg.exe shows the same value NUL-separated.
+                #
+                # Trailing empties are the NUL terminator, not data. winreg drops
+                # them and python-registry keeps them, so without this the same
+                # value reads "autocheck autochk *" live and
+                # "autocheck autochk *; ; " offline.
                 if isinstance(data, list):
-                    return "; ".join(str(x) for x in data)
+                    items = [str(x) for x in data]
+                    while items and items[-1] == "":
+                        items.pop()
+                    return "; ".join(items)
                 return str(data)
 
             def _read_key(root, path, names=None):
@@ -2886,12 +2983,23 @@ def main_live_reg(db_filename='registry_data.db'):
                 try:
                     with winreg.OpenKey(root, path, 0, RD64) as k:
                         if names:
-                            for n in names:
+                            # Enumerate and match case-insensitively rather than
+                            # QueryValueEx by name, so the STORED name is what
+                            # gets recorded. QueryValueEx is case-insensitive and
+                            # returns the value whatever case you ask in, and the
+                            # old code then wrote the name it had asked for -
+                            # Winlogon really stores "VMApplet" and the case
+                            # database ended up holding "VmApplet", a name that
+                            # exists nowhere in the registry and does not match
+                            # what the offline parser reads from the same key.
+                            wanted = {str(n).lower(): n for n in names}
+                            for i in range(winreg.QueryInfoKey(k)[1]):
                                 try:
-                                    d, t = winreg.QueryValueEx(k, n)
+                                    n, d, t = winreg.EnumValue(k, i)
+                                except OSError:
+                                    continue
+                                if (n or '').lower() in wanted:
                                     out.append((n, d, t))
-                                except FileNotFoundError:
-                                    pass
                         else:
                             for i in range(winreg.QueryInfoKey(k)[1]):
                                 try:
@@ -3481,6 +3589,26 @@ def main_live_reg(db_filename='registry_data.db'):
                       _why, _path, cov_stamp),
                      ["setting", "key_path"])
 
+            # PrefetchParameters. 0 means prefetch is off, so an absent
+            # Prefetch directory is configuration rather than an anti-forensic
+            # wipe - which is the whole reason to record it. The offline parser
+            # has always read this; the live one never did.
+            _PFP = (r"SYSTEM\CurrentControlSet\Control\Session Manager"
+                    r"\Memory Management\PrefetchParameters")
+            for _n, _why in (("EnablePrefetcher",
+                              "0 off, 1 app, 2 boot, 3 both (default)"),
+                             ("EnableSuperfetch", "SysMain/Superfetch state")):
+                _v, _p = _cv(HKLM_R, _PFP, _n)
+                if not _p:
+                    continue
+                _ins("SecurityPosture",
+                     ["setting", "value_raw", "value_decoded", "default_value",
+                      "assessment", "meaning", "key_path", "parsed_at"],
+                     (_n, str(_v), str(_v), "3",
+                      "weakened" if str(_v) == "0" else "informational",
+                      _why, _PFP, cov_stamp),
+                     ["setting", "key_path"])
+
             # SafeBoot: which services survive a safe-mode boot. Malware that adds
             # itself here keeps running when an analyst boots to safe mode.
             # r-strings cannot end in a backslash, so these paths are joined.
@@ -3617,6 +3745,18 @@ def main_live_reg(db_filename='registry_data.db'):
                      ["device_type", "device_id", "friendly_name", "details",
                       "key_path", "parsed_at"],
                      ("Printer", s, s, "port: %s" % (port or ""), PRN, cov_stamp),
+                     ["device_type", "device_id"])
+            # The SOFTWARE copy of the same list. On a live machine this mostly
+            # repeats the SYSTEM one, but it is the only copy that exists in a
+            # hive file, so reading both keeps the two parsers on the same
+            # evidence rather than on the same code path.
+            PRN_SW = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Print\Printers"
+            for s in _csubs(HKLM_R, PRN_SW):
+                port, _p = _cv(HKLM_R, PRN_SW + "\\" + s, "Port")
+                _ins("ConnectedDevices",
+                     ["device_type", "device_id", "friendly_name", "details",
+                      "key_path", "parsed_at"],
+                     ("Printer", s, s, "port: %s" % (port or ""), PRN_SW, cov_stamp),
                      ["device_type", "device_id"])
 
             # ------------------------------------------------- per-user artifacts
@@ -4319,7 +4459,7 @@ def main_live_reg(db_filename='registry_data.db'):
             # no per-entry time, so access_date stays empty and this records the
             # key's own last-write instead - a fact about the key, not a guess
             # about which entry it belongs to.
-            for _t in ("RunMRU", "WordWheelQuery"):
+            for _t in ("RunMRU", "WordWheelQuery", "OpenSaveMRU", "LastSaveMRU"):
                 cursor.execute(f"PRAGMA table_info({_t})")
                 _cols = [c[1] for c in cursor.fetchall()]
                 if _cols and "key_last_write" not in _cols:
@@ -4371,7 +4511,13 @@ def main_live_reg(db_filename='registry_data.db'):
 
             other_rows = 0
             for sid in other_sids:
-                uname = sid_names.get(sid) or sid
+                # MACHINE\username, the form user_identity.display_owner
+                # defines as canonical and the offline parser writes. The
+                # ProfileList basename alone produced "HKU\Ghass Active Setup"
+                # beside "HKU\CROW-PC\Ghass User Shell Folders" - the same
+                # user under two labels, in one table, from one parser.
+                uname = (get_username_from_sid(sid)
+                         or sid_names.get(sid) or sid)
                 base = sid + "\\Software\\Microsoft\\Windows\\CurrentVersion"
 
                 # Run / RunOnce -> AutoStartPrograms, keyed by user so two users
@@ -4636,7 +4782,13 @@ def main_live_reg(db_filename='registry_data.db'):
             if _cu_sid and _cu_sid not in _asep_sids:
                 _asep_sids.append(_cu_sid)
             for sid in _asep_sids:
-                uname = sid_names.get(sid) or sid
+                # MACHINE\username, the form user_identity.display_owner
+                # defines as canonical and the offline parser writes. The
+                # ProfileList basename alone produced "HKU\Ghass Active Setup"
+                # beside "HKU\CROW-PC\Ghass User Shell Folders" - the same
+                # user under two labels, in one table, from one parser.
+                uname = (get_username_from_sid(sid)
+                         or sid_names.get(sid) or sid)
             # Per-user autostart locations.
             #
             # The persistence block walks HKLM only, so these tables held
@@ -4651,6 +4803,12 @@ def main_live_reg(db_filename='registry_data.db'):
             # its nested helpers do not exist and this pass would die with a
             # NameError instead of collecting anything.
             def _u_type(t):
+                # reg_Claw_live already converts the type to its name, so this
+                # receives 'REG_SZ', not winreg.REG_SZ. Looking a string up in
+                # an int-keyed map missed every time and the fallback wrote
+                # "REG_TYPE_REG_SZ" into the type column.
+                if isinstance(t, str):
+                    return t
                 return {winreg.REG_SZ: "REG_SZ",
                         winreg.REG_EXPAND_SZ: "REG_EXPAND_SZ",
                         winreg.REG_MULTI_SZ: "REG_MULTI_SZ",

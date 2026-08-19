@@ -1218,10 +1218,15 @@ ShimCache and BAM, which all record the same path.
 | `extension` | TEXT |
 | `drive_letter` | TEXT |
 | `access_date` | TEXT |
+| `key_last_write` | TEXT |
 | `row_data` | TEXT |
 | `parsed_at` | TEXT |
 | `user_name` | TEXT |
 
+`access_date` is empty by design. An MRU list carries no per-entry timestamp,
+so the only time this artifact holds is the key's own last-write, in
+`key_last_write` - a fact about the key, not about whichever entry sits at MRU
+position 0. `mru_position` gives the recency order.
 
 ### Table: `LastSaveMRU`
 
@@ -1234,10 +1239,13 @@ ShimCache and BAM, which all record the same path.
 | `folder_name` | TEXT |
 | `drive_letter` | TEXT |
 | `access_date` | TEXT |
+| `key_last_write` | TEXT |
 | `row_data` | TEXT |
 | `parsed_at` | TEXT |
 | `user_name` | TEXT |
 
+`access_date` is empty for the same reason as `OpenSaveMRU` above; the key's
+own last-write is in `key_last_write`.
 
 ### Table: `UserProfiles`
 

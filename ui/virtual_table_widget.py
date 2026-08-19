@@ -489,12 +489,30 @@ class VirtualTableWidget(QTableView, EnrichmentMixin):
         'cycles_wob': 'number',
     }
 
+    # Registry columns that store a raw number and read better rendered.
+    # Separate from DISPLAY_FORMATTERS because that map is SRUM-only: a column
+    # named bytes_sent means something specific in a SRUM table and nothing in
+    # a registry one.
+    REGISTRY_FORMATTERS = {
+        'focus_time': 'focus_ms',
+    }
+
     def format_for_display(self, col_name, value):
         """Render one cell. Falls back to str() for anything unmapped."""
         if value is None:
             return ""
+        if not self._is_srum_table():
+            if self.REGISTRY_FORMATTERS.get(col_name) == 'focus_ms':
+                # UserAssist stores focus time as milliseconds, so the column
+                # sorts and compares as a number. "2.47h" is for reading.
+                try:
+                    from Artifacts_Collectors.Regclaw import format_focus_time
+                    return format_focus_time(int(value))
+                except Exception:
+                    return str(value)
+            return str(value)
         kind = self.DISPLAY_FORMATTERS.get(col_name)
-        if kind is None or not self._is_srum_table():
+        if kind is None:
             return str(value)
         try:
             from Artifacts_Collectors.SRUM_Claw import (

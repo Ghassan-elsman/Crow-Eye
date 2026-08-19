@@ -133,6 +133,9 @@ HEADER_ACRONYMS = frozenset({
     "id", "sid", "dll", "guid", "uuid", "url", "uri", "pid", "mru", "usb",
     "utc", "clsid", "ip", "mac", "os", "wmi", "dns", "uac", "exe", "lnk",
     "ntfs", "cpu", "api", "sql", "http", "https", "rdp", "smb", "vpn",
+    # Artifact names that are acronyms. Without these a Shellbags header read
+    # "Mft Record Number" and a SRUM one "Srum Id".
+    "mft", "usn", "srum", "bam", "dam", "amcache", "lsa", "com", "ssdp",
 })
 
 
