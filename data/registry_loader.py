@@ -16,8 +16,42 @@ class RegistryDataLoader(BaseDataLoader):
             'machine_run_once', 'user_run', 'user_run_once', 'Windows_lastupdate',
             'WindowsUpdateInfo', 'ShutdownInfo', 'BrowserHistory', 'USBDevices',
             'USBInstances', 'USBProperties', 'USBStorageDevices', 'USBStorageVolumes',
-            'RecentDocs', 'Search_Explorer_bar', 'OpenSaveMRU', 'lastSaveMRU',
-            'TypedPaths', 'BAM', 'DAM', 'InstalledSoftware'
+            # 'LastSaveMRU', not 'lastSaveMRU': table_exists() binds
+            # sqlite_master.name = ?, which is case-sensitive, so the
+            # mis-cased name never matched and the table was silently
+            # dropped from load_all_registry_data().
+            'RecentDocs', 'OpenSaveMRU', 'LastSaveMRU',
+            'TypedPaths', 'BAM', 'DAM', 'InstalledSoftware',
+            'ScheduledTasks', 'AutoStartPrograms',
+            'RunMRU', 'Shellbags', 'UserAssist', 'MUICache', 'WordWheelQuery',
+            'UserProfiles', 'winlogon', 'image_file_execution_options', 'appinit_dlls',
+            'appcert_dlls', 'active_setup', 'run_services', 'run_services_once',
+            'policies_explorer_run', 'user_shell_folders', 'lsa_packages', 'boot_execute',
+            'clsid_inprocserver32', 'UserAccounts', 'ComputerNameInfo', 'shutdown_information',
+            'Windows_lastupdate_subkeys',
+            # Provenance about the parse itself: one row per hive saying
+            # whether Windows had it open and whether its transaction logs were
+            # replayed. Empty on a live parse - there is no hive file to be
+            # stale - and the first thing to read on an offline case.
+            'registry_hive_state',
+            'SecurityPosture', 'DefenderExclusions', 'FirewallRules',
+            'NetworkShares', 'ConnectedDevices', 'MountPoints2',
+            'RDPClientMRU', 'OfficeDocuments', 'FeatureUsage',
+            'CompatibilityAssistant', 'RecentApps', 'ApplicationArtifacts',
+            'command_processor', 'drivers32', 'shell_service_object_delay_load',
+            'browser_helper_objects', 'shared_task_scheduler', 'shell_icon_overlay_identifiers',
+            'credential_providers', 'netsh_helper_dlls', 'amsi_providers',
+            'security_providers', 'print_monitors', 'print_processors',
+            'network_providers', 'wmi_autorecover_mofs', 'windows_load_run',
+            'shell_open_command', 'file_exts', 'cid_size_mru',
+            'programs_cache', 'regedit_lastkey', 'printer_connections',
+            'explorer_advanced', 'rdp_tcp', 'usbstor_start',
+            'windows_script_host', 'dnscache_parameters', 'files_not_to_snapshot',
+            'winevt_channels', 'wpdbusenum', 'device_classes',
+            'volume_info_cache', 'machine_guid', 'product_options',
+            'os_install_history', 'active_computer_name', 'hivelist',
+            'system_environment', 'network_adapters', 'group_policy_history',
+            'local_groups', 'lsa_policy', 'audit_policy', 'lsa_secrets', 'cached_domain_logons'
         ]
     
     def load_registry_table(self, table_name: str) -> List[Dict]:

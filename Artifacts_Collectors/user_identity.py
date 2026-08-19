@@ -504,6 +504,38 @@ def machine_wide_label():
     return MACHINE_WIDE_LABEL
 
 
+# The hives under HKEY_USERS that belong to no human. .DEFAULT is the profile
+# that applies before anyone logs on - a genuine persistence location, and one
+# neither parser read until now - and the three well-known service SIDs are the
+# accounts Windows itself runs as.
+#
+# They get their own names rather than a resolved account name, because these
+# rows sit in the same per-user tables as real user activity and "LocalSystem
+# opened this document" and "Ghassan opened this document" must never look
+# alike. Deliberately distinct from MACHINE_WIDE_LABEL: a value under
+# HKU\S-1-5-18 was set for an account, not for the machine.
+SYSTEM_ACCOUNT_LABELS = {
+    ".DEFAULT": "(.DEFAULT profile)",
+    "S-1-5-18": "(LocalSystem)",
+    "S-1-5-19": "(LocalService)",
+    "S-1-5-20": "(NetworkService)",
+}
+
+
+def system_account_label(sid_or_key):
+    """The label for a non-human HKU key, or "" if it is a real account.
+
+    Callers use the empty return as "resolve this one normally", so a SID this
+    does not recognise still goes through the usual account lookup.
+    """
+    return SYSTEM_ACCOUNT_LABELS.get(str(sid_or_key or "").strip(), "")
+
+
+def is_system_account_key(sid_or_key):
+    """Whether an HKEY_USERS subkey name is one of the non-human hives."""
+    return str(sid_or_key or "").strip() in SYSTEM_ACCOUNT_LABELS
+
+
 def unattributed_label(hive_path):
     """What a hive whose owner cannot be resolved is called.
 

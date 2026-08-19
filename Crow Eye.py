@@ -6194,6 +6194,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "active_setup", "run_services", "run_services_once", "policies_explorer_run",
                 "user_shell_folders", "lsa_packages", "boot_execute", "clsid_inprocserver32",
                 "UserAccounts", "ComputerNameInfo", "shutdown_information", "Windows_lastupdate_subkeys",
+                "registry_hive_state",
                 "SecurityPosture", "DefenderExclusions", "FirewallRules",
                 "NetworkShares", "ConnectedDevices", "MountPoints2",
                 "RDPClientMRU", "OfficeDocuments", "FeatureUsage",
@@ -6359,6 +6360,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "ApplicationArtifacts": self.ApplicationArtifacts_table,
             "shutdown_information": self.ShutdownRaw_table,
             "Windows_lastupdate_subkeys": self.LastUpdateSubkeys_table,
+            "registry_hive_state": self.RegistryHiveState_table,
             "AutoStartPrograms": self.AutoStartPrograms_table,
             "machine_run": self.MachineRun_table,
             "machine_run_once": self.MachineRunOnce_table,
@@ -7606,6 +7608,18 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.LastUpdateSubkeys_table.setObjectName("LastUpdateSubkeys_table")
         self.verticalLayout_LastUpdateSubkeys.addWidget(self.LastUpdateSubkeys_table)
         self.Registry_widget.addTab(self.LastUpdateSubkeys_tab, "")
+        # Provenance about the parse: one row per hive, saying whether Windows
+        # had it open and whether its transaction logs were replayed. Thirteen
+        # columns, matching registry_hive_state exactly.
+        self.RegistryHiveState_tab = QtWidgets.QWidget()
+        self.RegistryHiveState_tab.setObjectName("RegistryHiveState_tab")
+        self.verticalLayout_RegistryHiveState = QtWidgets.QVBoxLayout(self.RegistryHiveState_tab)
+        self.verticalLayout_RegistryHiveState.setObjectName("verticalLayout_RegistryHiveState")
+        self.RegistryHiveState_table = QtWidgets.QTableWidget(self.RegistryHiveState_tab)
+        self.setup_standard_table(self.RegistryHiveState_table, 13, False, 300, 190)
+        self.RegistryHiveState_table.setObjectName("RegistryHiveState_table")
+        self.verticalLayout_RegistryHiveState.addWidget(self.RegistryHiveState_table)
+        self.Registry_widget.addTab(self.RegistryHiveState_tab, "")
         self.TimeZoneInfo_tab = QtWidgets.QWidget()
         self.TimeZoneInfo_tab.setObjectName("TimeZoneInfo_tab")
         self.verticalLayout_TimeZoneInfo = QtWidgets.QVBoxLayout(self.TimeZoneInfo_tab)
@@ -9013,6 +9027,24 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.Registry_widget.indexOf(self.LastUpdateSubkeys_tab),
                 _translate("Crow_Eye", "Update Subkeys")
             )
+        # Named for the artifact, not for a verdict: the tab says what it holds
+        # - the state each hive was in - and leaves "is this parse stale?" to
+        # the analyst reading the rows.
+        if hasattr(self, 'RegistryHiveState_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RegistryHiveState_tab),
+                _translate("Crow_Eye", "Hive State")
+            )
+        if hasattr(self, 'RegistryHiveState_table'):
+            self.RegistryHiveState_table.setColumnCount(13)
+            headers = ["Hive Name", "Hive Path", "Sequence 1", "Sequence 2",
+                       "Was Dirty", "Logs Found", "Log Format", "Replayed",
+                       "Entries Applied", "Pages Applied", "Highest Sequence",
+                       "Reason", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.RegistryHiveState_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
         if hasattr(self, 'TimeZoneInfo_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
                 self.Registry_widget.indexOf(self.TimeZoneInfo_tab),

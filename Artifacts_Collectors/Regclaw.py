@@ -239,7 +239,7 @@ def main_live_reg(db_filename='registry_data.db'):
     """Main function for live registry parsing with comprehensive error handling"""
     try:
         # Function to read registry values and their types from a live system
-        def reg_Claw_live(hive_key, key_path):
+        def _read_values_at(hive_key, key_path):
             try:
                 values = {}
                 with winreg.OpenKey(hive_key, key_path) as key:
@@ -274,7 +274,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 return {}
         
         # Function to get subkeys and their values
-        def get_subkeys_live(hive_key, key_path):
+        def _read_subkeys_at(hive_key, key_path):
             try:
                 subkey_values = {}
                 with winreg.OpenKey(hive_key, key_path) as key:
@@ -334,6 +334,99 @@ def main_live_reg(db_filename='registry_data.db'):
                 logging.error(f"Error reading subkeys for {key_path}: {e}")
                 return {}
         
+        # ------------------------------------------------------- ControlSets
+        # CurrentControlSet is an alias Windows resolves to whichever set is
+        # active, so reading through it sees exactly one of them. A machine
+        # normally carries two - the active one and LastKnownGood - and they can
+        # differ: a service disabled since the last successful boot is still
+        # enabled in the other set, which is the kind of thing an analyst wants.
+        # The offline parser has always merged ControlSet001/002/003, so on any
+        # machine with more than one the two parsers silently disagreed. This
+        # machine has one, which is why the content audit never caught it.
+        _controlsets_cache = []
+
+        def _controlsets():
+            """Every ControlSet00N present, the active one first. Cached."""
+            if _controlsets_cache:
+                return _controlsets_cache
+            active = None
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\Select") as _sel:
+                    active = "ControlSet%03d" % int(winreg.QueryValueEx(_sel, "Current")[0])
+            except Exception as e:
+                logging.debug("SYSTEM\\Select unreadable: %s", e)
+            found = []
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, "SYSTEM") as _sys:
+                    for _i in range(winreg.QueryInfoKey(_sys)[0]):
+                        _n = winreg.EnumKey(_sys, _i)
+                        if _n.lower().startswith("controlset"):
+                            found.append(_n)
+                    found.sort()
+            except Exception as e:
+                logging.debug("SYSTEM subkeys unreadable: %s", e)
+            if active and active in found:
+                found.remove(active)
+                found.insert(0, active)
+            elif not found:
+                # Nothing enumerable: fall back to the alias so the parser still
+                # reads the active set rather than nothing at all.
+                found = ["CurrentControlSet"]
+            _controlsets_cache.extend(found)
+            return _controlsets_cache
+
+        def _cs_paths(subpath):
+            r"""`SYSTEM\<set>\<subpath>` for every ControlSet, active first."""
+            tail = (subpath or "").lstrip("\\")
+            return ["SYSTEM\\" + cs + ("\\" + tail if tail else "")
+                    for cs in _controlsets()]
+
+        _CCS_PREFIX = "system" + chr(92) + "currentcontrolset"
+
+        def _cs_expand(key_path):
+            """Concrete per-ControlSet paths for a CurrentControlSet path.
+
+            Returns [] for anything else, which is how the dispatchers below
+            tell "merge this" from "read it as given".
+            """
+            low = (key_path or "").lower()
+            if not low.startswith(_CCS_PREFIX):
+                return []
+            tail = key_path[len(_CCS_PREFIX):].lstrip(chr(92))
+            return _cs_paths(tail)
+
+        def reg_Claw_live(hive_key, key_path):
+            """Values of a key. A CurrentControlSet path reads every ControlSet.
+
+            Reading through the CurrentControlSet alias sees exactly one set.
+            Merging here rather than at fifty call sites means no reader can be
+            forgotten, and the active set is applied last so it wins.
+            """
+            paths = (_cs_expand(key_path)
+                     if hive_key == winreg.HKEY_LOCAL_MACHINE else [])
+            if not paths:
+                return _read_values_at(hive_key, key_path)
+            merged = {}
+            for path in reversed(paths):
+                merged.update(_read_values_at(hive_key, path) or {})
+            return merged
+
+        def get_subkeys_live(hive_key, key_path):
+            """Subkeys of a key, merged across ControlSets on a SYSTEM path.
+
+            A service present in LastKnownGood but not in the active set is a
+            real finding, and reading one set could not show it.
+            """
+            paths = (_cs_expand(key_path)
+                     if hive_key == winreg.HKEY_LOCAL_MACHINE else [])
+            if not paths:
+                return _read_subkeys_at(hive_key, key_path)
+            merged = {}
+            for path in reversed(paths):
+                for name, values in (_read_subkeys_at(hive_key, path) or {}).items():
+                    merged.setdefault(name, {}).update(values or {})
+            return merged
+
         def key_last_write_live(hive_key, key_path):
             """The key's own last-write time, formatted UTC, or '' if unreadable.
 
@@ -476,6 +569,34 @@ def main_live_reg(db_filename='registry_data.db'):
             shutdown_count INTEGER,
             shutdown_type TEXT,
             clean_shutdown INTEGER,
+            parsed_at TEXT
+            )''')
+            # Created here too, and deliberately left empty on a live parse.
+            #
+            # The offline parser fills this with one row per hive: whether
+            # Windows had it open mid-transaction and whether its .LOG1/.LOG2
+            # were replayed. A live parse reads the running registry through
+            # winreg - there is no hive file, so there is nothing that can be
+            # stale, and no row to write.
+            #
+            # The table still exists so a case has the same shape whichever way
+            # it was parsed. An analyst who queries registry_hive_state on a
+            # live case gets "no rows", which is the true answer; a missing
+            # table would look like an older build instead.
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS registry_hive_state (
+            hive_name TEXT,
+            hive_path TEXT,
+            sequence_1 INTEGER,
+            sequence_2 INTEGER,
+            was_dirty INTEGER,
+            logs_found TEXT,
+            log_format TEXT,
+            replayed INTEGER,
+            entries_applied INTEGER,
+            pages_applied INTEGER,
+            highest_sequence INTEGER,
+            reason TEXT,
             parsed_at TEXT
             )''')
             # Enhanced tables for USB devices
@@ -3767,12 +3888,21 @@ def main_live_reg(db_filename='registry_data.db'):
             _cu_name = get_username_from_sid(_cu_sid2) if _cu_sid2 else None
             user_roots = [(HKCU_R, "", _cu_name or "current user")]
             try:
-                SERVICE = {"S-1-5-18", "S-1-5-19", "S-1-5-20"}
+                # Every loaded hive, not only the S-1-5-21 accounts. .DEFAULT
+                # is the profile that applies before anyone logs on and the
+                # three service SIDs are what Windows itself runs as - all four
+                # are places persistence hides, and all four were skipped. They
+                # are labelled, not resolved, so a service account's row can
+                # never be mistaken for a person's.
                 with winreg.OpenKey(winreg.HKEY_USERS, "", 0, RD64) as _uk:
                     for _i in range(winreg.QueryInfoKey(_uk)[0]):
                         _s = winreg.EnumKey(_uk, _i)
-                        if (_s.startswith("S-1-5-21") and not _s.endswith("_Classes")
-                                and _s not in SERVICE and _s != _cu_sid2):
+                        if _s.endswith("_Classes") or _s == _cu_sid2:
+                            continue
+                        _sys_label = user_identity.system_account_label(_s)
+                        if _sys_label:
+                            user_roots.append((winreg.HKEY_USERS, _s + "\\", _sys_label))
+                        elif _s.startswith("S-1-5-21"):
                             user_roots.append((winreg.HKEY_USERS, _s + "\\", _s))
             except OSError as e:
                 logging.debug("HKEY_USERS walk for coverage: %s", e)
@@ -4437,9 +4567,6 @@ def main_live_reg(db_filename='registry_data.db'):
             current_username = get_username_from_sid(_cu_sid) if _cu_sid else None
             user_stamp = format_forensic_timestamp(get_current_utc())
 
-            # S-1-5-18/19/20 are LocalSystem / LocalService / NetworkService.
-            SERVICE_SIDS = {"S-1-5-18", "S-1-5-19", "S-1-5-20"}
-
             def _add_user_column(table):
                 """Additive migration - existing case DBs gain the column in place."""
                 cursor.execute(f"PRAGMA table_info({table})")
@@ -4503,11 +4630,15 @@ def main_live_reg(db_filename='registry_data.db'):
             except OSError as e:
                 logging.warning(f"HKEY_USERS unreadable: {e}")
 
+            # Same widening as the coverage walk above: the service hives and
+            # .DEFAULT come too, and carry their own labels. The set of service
+            # SIDs that used to be excluded here now lives in user_identity,
+            # where it names them instead of dropping them.
             other_sids = [s for s in loaded
-                          if s.startswith("S-1-5-21")
-                          and not s.endswith("_Classes")
-                          and s not in SERVICE_SIDS
-                          and s != _cu_sid]
+                          if not s.endswith("_Classes")
+                          and s != _cu_sid
+                          and (s.startswith("S-1-5-21")
+                               or user_identity.is_system_account_key(s))]
 
             other_rows = 0
             for sid in other_sids:
@@ -4516,7 +4647,11 @@ def main_live_reg(db_filename='registry_data.db'):
                 # ProfileList basename alone produced "HKU\Ghass Active Setup"
                 # beside "HKU\CROW-PC\Ghass User Shell Folders" - the same
                 # user under two labels, in one table, from one parser.
-                uname = (get_username_from_sid(sid)
+                # A service hive is named, never resolved: LookupAccountSid
+                # would return "NT AUTHORITY\SYSTEM", which reads like an
+                # account a person could log in as.
+                uname = (user_identity.system_account_label(sid)
+                         or get_username_from_sid(sid)
                          or sid_names.get(sid) or sid)
                 base = sid + "\\Software\\Microsoft\\Windows\\CurrentVersion"
 
@@ -4787,7 +4922,11 @@ def main_live_reg(db_filename='registry_data.db'):
                 # ProfileList basename alone produced "HKU\Ghass Active Setup"
                 # beside "HKU\CROW-PC\Ghass User Shell Folders" - the same
                 # user under two labels, in one table, from one parser.
-                uname = (get_username_from_sid(sid)
+                # A service hive is named, never resolved: LookupAccountSid
+                # would return "NT AUTHORITY\SYSTEM", which reads like an
+                # account a person could log in as.
+                uname = (user_identity.system_account_label(sid)
+                         or get_username_from_sid(sid)
                          or sid_names.get(sid) or sid)
             # Per-user autostart locations.
             #

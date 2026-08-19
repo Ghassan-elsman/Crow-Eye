@@ -143,6 +143,30 @@ def create_registry_artifact() -> Artifact:
             r"{PARTITION}\Windows\System32\config\SOFTWARE",
             r"{PARTITION}\Windows\System32\config\SAM",
             r"{PARTITION}\Windows\System32\config\SECURITY",
+            # HKU\.DEFAULT - the profile that applies before anyone logs on,
+            # which makes it a persistence location, and it was never collected.
+            r"{PARTITION}\Windows\System32\config\DEFAULT",
+            # The transaction logs. A hive Windows had open is mid-transaction
+            # and its outstanding changes live here; without them an offline
+            # parse reports a stale registry. Every one of this machine's
+            # hives was dirty when checked.
+            r"{PARTITION}\Windows\System32\config\SYSTEM.LOG1",
+            r"{PARTITION}\Windows\System32\config\SYSTEM.LOG2",
+            r"{PARTITION}\Windows\System32\config\SOFTWARE.LOG1",
+            r"{PARTITION}\Windows\System32\config\SOFTWARE.LOG2",
+            r"{PARTITION}\Windows\System32\config\SAM.LOG1",
+            r"{PARTITION}\Windows\System32\config\SAM.LOG2",
+            r"{PARTITION}\Windows\System32\config\SECURITY.LOG1",
+            r"{PARTITION}\Windows\System32\config\SECURITY.LOG2",
+            r"{PARTITION}\Windows\System32\config\DEFAULT.LOG1",
+            r"{PARTITION}\Windows\System32\config\DEFAULT.LOG2",
+            # RegBack holds an older copy of the same hives. Empty by default
+            # since Windows 10 1803, but present on earlier builds and free
+            # to ask for.
+            r"{PARTITION}\Windows\System32\config\RegBack\SYSTEM",
+            r"{PARTITION}\Windows\System32\config\RegBack\SOFTWARE",
+            r"{PARTITION}\Windows\System32\config\RegBack\SAM",
+            r"{PARTITION}\Windows\System32\config\RegBack\SECURITY",
         ],
         description="Windows Registry hives containing system configuration, software installations, user activity, and security settings",
         required_admin=True,
@@ -157,6 +181,15 @@ def create_ntuser_artifact() -> Artifact:
         artifact_type=ArtifactType.REGISTRY_HIVES,
         default_paths=[
             r"{PARTITION}\Users\*\NTUSER.DAT",
+            r"{PARTITION}\Users\*\NTUSER.DAT.LOG1",
+            r"{PARTITION}\Users\*\NTUSER.DAT.LOG2",
+            # The service accounts have profiles too, under ServiceProfiles
+            # rather than Users. The live parser reads them through
+            # HKEY_USERS - LocalService and NetworkService each carry a Run
+            # entry on a stock machine - so an offline case needs them
+            # collected or it cannot report the same persistence.
+            r"{PARTITION}\Windows\ServiceProfiles\LocalService\NTUSER.DAT",
+            r"{PARTITION}\Windows\ServiceProfiles\NetworkService\NTUSER.DAT",
         ],
         description="Per-user registry hive containing user-specific settings, recent files, run history, and user activity artifacts",
         required_admin=False,
@@ -171,6 +204,8 @@ def create_usrclass_artifact() -> Artifact:
         artifact_type=ArtifactType.REGISTRY_HIVES,
         default_paths=[
             r"{PARTITION}\Users\*\AppData\Local\Microsoft\Windows\UsrClass.dat",
+            r"{PARTITION}\Users\*\AppData\Local\Microsoft\Windows\UsrClass.dat.LOG1",
+            r"{PARTITION}\Users\*\AppData\Local\Microsoft\Windows\UsrClass.dat.LOG2",
         ],
         description="Per-user registry hive containing Windows Explorer ShellBags (folder access history), file associations, and COM registrations. Critical for complete ShellBags analysis.",
         required_admin=False,

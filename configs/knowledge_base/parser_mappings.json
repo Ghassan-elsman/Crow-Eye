@@ -41,8 +41,8 @@
       "parser_file": "Artifacts_Collectors/Regclaw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_RegClaw.py",
       "database": "registry_data.db",
-      "table": "registry_data",
-      "description": "Windows Registry hive parser. Covers persistence/ASEP keys (Winlogon, IFEO, AppInit_DLLs, Active Setup, per-user CLSID InprocServer32 shadowing, Command Processor AutoRun, Drivers32, SSODL, Browser Helper Objects, credential providers, netsh helper DLLs, AMSI providers, security providers, print monitors and processors, network providers, WMI autorecover MOFs and shell\\open\\command), security posture and anti-forensic settings (RDP-Tcp, usbstor Start, Windows Script Host, Explorer Advanced, FilesNotToSnapshot, event log channel config), device attribution (WPDBUSENUM, DeviceClasses, VolumeInfoCache), host identity (MachineGuid, ProductOptions, OS install history, system environment, network adapters, Group Policy history), per-user activity (FileExts, CIDSizeMRU, ProgramsCache, Regedit LastKey, printer connections), Scheduled Tasks from the SOFTWARE hive TaskCache, and UserAccounts - SAM merged with ProfileList, which maps a SID to a named user. Local group membership from SAM Builtin/Account Aliases, and the SECURITY hive (LSA policy, machine SID, primary domain, audit policy, LSA secret metadata, cached domain logon slots) - the live parser exports SAM and SECURITY with SeBackupPrivilege so both hives parse through the same code as an image case. LSA secrets are recorded by name and size only, never decrypted. Tables are named for the artifact, not the technique that abuses it.",
+      "table": "107 artifact tables in registry_data.db (AutoStartPrograms, UserAssist, Shellbags, SystemServices, registry_hive_state, ...) - there is no single 'registry_data' table",
+      "description": "Windows Registry hive parser. Covers persistence/ASEP keys (Winlogon, IFEO, AppInit_DLLs, Active Setup, per-user CLSID InprocServer32 shadowing, Command Processor AutoRun, Drivers32, SSODL, Browser Helper Objects, credential providers, netsh helper DLLs, AMSI providers, security providers, print monitors and processors, network providers, WMI autorecover MOFs and shell\\open\\command), security posture and anti-forensic settings (RDP-Tcp, usbstor Start, Windows Script Host, Explorer Advanced, FilesNotToSnapshot, event log channel config), device attribution (WPDBUSENUM, DeviceClasses, VolumeInfoCache), host identity (MachineGuid, ProductOptions, OS install history, system environment, network adapters, Group Policy history), per-user activity (FileExts, CIDSizeMRU, ProgramsCache, Regedit LastKey, printer connections), Scheduled Tasks from the SOFTWARE hive TaskCache, and UserAccounts - SAM merged with ProfileList, which maps a SID to a named user. Local group membership from SAM Builtin/Account Aliases, and the SECURITY hive (LSA policy, machine SID, primary domain, audit policy, LSA secret metadata, cached domain logon slots) - the live parser exports SAM and SECURITY with SeBackupPrivilege so both hives parse through the same code as an image case. LSA secrets are recorded by name and size only, never decrypted. Tables are named for the artifact, not the technique that abuses it. Transaction logs (.LOG1/.LOG2) are replayed into a temporary copy before an offline parse so a hive Windows had open is not read as final; the outcome per hive is recorded in registry_hive_state. Live and offline differences are documented in docs/live-vs-offline.md.",
       "anatomy_url": null,
       "anatomy_summary": "Visual anatomy page not yet published.",
       "notable_tables": [
@@ -142,7 +142,7 @@
     }
   },
   "anatomy_index": {
-    "_doc": "Quick lookup: artifact_key -> anatomy_url. Use this when the user / agent asks 'how is artifact X structured at the byte level' \u2014 fetch the URL for a guided visual walkthrough.",
+    "_doc": "Quick lookup: artifact_key -> anatomy_url. Use this when the user / agent asks 'how is artifact X structured at the byte level' — fetch the URL for a guided visual walkthrough.",
     "landing_page": "https://crow-eye.com/eye-describe/",
     "windows_boot_and_disk": "https://crow-eye.com/eye-describe/windows_boot_disk_explorer.html",
     "by_artifact": {
@@ -162,6 +162,6 @@
   "github_base_url": "https://github.com/crow-eye/crow-eye",
   "website_base_url": "https://crow-eye.com",
   "eye_describe_base_url": "https://crow-eye.com/eye-describe",
-  "version": "2.3",
-  "last_updated": "2026-08-16"
+  "version": "2.4",
+  "last_updated": "2026-08-19"
 }

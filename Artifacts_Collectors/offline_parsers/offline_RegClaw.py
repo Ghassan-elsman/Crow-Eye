@@ -31,6 +31,8 @@ import os
 import datetime
 import logging
 import struct
+import shutil
+import tempfile
 from Registry import Registry
 
 # Import registry_binary_parser with fallback
@@ -40,6 +42,14 @@ except ModuleNotFoundError:
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from Artifacts_Collectors import registry_binary_parser
+
+# Transaction-log replay, so a hive Windows had open is not read as final.
+try:
+    from Artifacts_Collectors import registry_transaction_log
+except ModuleNotFoundError:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from Artifacts_Collectors import registry_transaction_log
 
 # Shared with the live parser so both produce the same accounts and the same
 # user names - see Artifacts_Collectors/user_identity.py
@@ -258,7 +268,12 @@ def detect_hive_files(registry_dir):
                    'NTUSER.OLD', 'ntuser.old', 'NTUSER.SAV', 'ntuser.sav'],
         'usrclass': ['UsrClass.dat', 'USRCLASS.DAT', 'usrclass.dat', 'UsrClass', 
                      'USRCLASS', 'usrclass', 'UsrClass.OLD', 'usrclass.old', 
-                     'UsrClass.SAV', 'usrclass.sav', 'UsrClass.BAK', 'usrclass.bak']
+                     'UsrClass.SAV', 'usrclass.sav', 'UsrClass.BAK', 'usrclass.bak'],
+        # HKU\.DEFAULT lives in this hive. It is the profile that applies before
+        # anyone logs on, which makes it a persistence location worth reading,
+        # and nothing has ever collected or parsed it.
+        'default': ['DEFAULT', 'default', 'Default', 'DEFAULT.OLD', 'default.old',
+                    'DEFAULT.SAV', 'default.sav', 'DEFAULT.BAK', 'default.bak'],
     }
     
     detected_hives = {}
@@ -589,6 +604,12 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     print("=" * 80)
     print("Starting enhanced registry collection with 20+ artifact types...\n")
 
+    # Declared at function scope: the replay only runs on the offline path, but
+    # registry_hive_state is written at the end regardless, and a name bound
+    # inside an `if` is not a name that exists.
+    _hive_states = []
+    _replay_dir = None
+
     # Define paths
     if offline_mode and case_root:
         # Try multiple possible registry directory locations
@@ -645,6 +666,48 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         # until the LSA tables, so a collected SECURITY hive was silently unused.
         security_reg_hive = detected_hives.get('security', '')
         
+        default_reg_hive = detected_hives.get('default', '')
+
+        # ---------------------------------------------------------------- replay
+        # A hive Windows had open is rarely the whole story: its outstanding
+        # changes sit in the .LOG1/.LOG2 beside it. Recover into a temporary
+        # copy and parse THAT, leaving the evidence untouched. Whatever happens
+        # - recovered, no log collected, an old-format log - is recorded in
+        # registry_hive_state and printed, because "this may not be the final
+        # registry" is the analyst's call, not something to leave implicit.
+        _replay_dir = tempfile.mkdtemp(prefix="crow_eye_replay_")
+
+        def _replay(path):
+            """Recovered copy of `path`, or `path` unchanged. Never raises."""
+            if not path or not os.path.exists(path):
+                return path
+            try:
+                out = os.path.join(_replay_dir, "%d_%s" % (len(_hive_states),
+                                                           os.path.basename(path)))
+                res = registry_transaction_log.recover_hive(path, out)
+                _hive_states.append(res)
+                if res.recovered:
+                    print("  [REPLAY] %s: %s" % (res.hive_name, res.reason))
+                    return res.recovered_path
+                if res.was_dirty:
+                    # Loud on purpose. The rows about to be parsed may not be
+                    # the final state of this registry.
+                    print("  [STALE]  %s: dirty and NOT replayed - %s"
+                          % (res.hive_name, res.reason))
+                return path
+            except Exception as e:
+                logging.error("Transaction-log replay failed for %s: %s", path, e)
+                return path
+
+        print("\n[Transaction Logs] Checking hives for outstanding transactions...")
+        system_reg_hive = _replay(system_reg_hive)
+        Software_reg_hive = _replay(Software_reg_hive)
+        sam_reg_hive = _replay(sam_reg_hive)
+        security_reg_hive = _replay(security_reg_hive)
+        default_reg_hive = _replay(default_reg_hive)
+        ntuser_hives = [_replay(h) for h in ntuser_hives]
+        usrclass_hives = [_replay(h) for h in usrclass_hives]
+
         # Report detected hives
         if detected_hives:
             print(f"\n[Detected Hives] Found hive types:")
@@ -913,6 +976,19 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     CREATE TABLE IF NOT EXISTS WindowsUpdateInfo (
         last_check_time TEXT, last_install_time TEXT, au_options INTEGER,
         scheduled_install_day INTEGER, scheduled_install_time INTEGER, parsed_at TEXT
+    )''')
+
+    # One row per hive the parse touched, whether or not anything was replayed.
+    # A dirty hive that could not be recovered is evidence about the evidence:
+    # the rows in every other table may not be the final state of that registry,
+    # and that has to be recorded rather than inferred from a console message
+    # nobody kept.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registry_hive_state (
+        hive_name TEXT, hive_path TEXT, sequence_1 INTEGER, sequence_2 INTEGER,
+        was_dirty INTEGER, logs_found TEXT, log_format TEXT, replayed INTEGER,
+        entries_applied INTEGER, pages_applied INTEGER, highest_sequence INTEGER,
+        reason TEXT, parsed_at TEXT
     )''')
 
     cursor.execute('''
@@ -4569,6 +4645,41 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         logging.error(f"Error parsing SECURITY hive (offline): {e}")
         print(f"Warning: Could not parse SECURITY hive: {e}")
 
+    # ------------------------------------------------------- hive provenance
+    try:
+        _hs_stamp = get_current_forensic_timestamp()
+        for _st in _hive_states:
+            # Guarded like every other insert here: the table carries no UNIQUE
+            # constraint, so OR IGNORE would be a no-op and re-parsing the same
+            # case would append the same hive state again. Keyed on the hive and
+            # its sequence numbers - re-parsing unchanged evidence is a no-op,
+            # while a hive that has moved on since gets a new row.
+            if check_exists(cursor, 'registry_hive_state',
+                            ['hive_name', 'hive_path', 'sequence_1',
+                             'sequence_2', 'replayed'],
+                            (_st.hive_name, _st.hive_path, _st.sequence_1,
+                             _st.sequence_2, 1 if _st.recovered else 0)):
+                continue
+            cursor.execute(
+                'INSERT INTO registry_hive_state (hive_name, hive_path, '
+                'sequence_1, sequence_2, was_dirty, logs_found, log_format, '
+                'replayed, entries_applied, pages_applied, highest_sequence, '
+                'reason, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (_st.hive_name, _st.hive_path, _st.sequence_1, _st.sequence_2,
+                 1 if _st.was_dirty else 0,
+                 "; ".join(os.path.basename(x) for x in _st.logs_found),
+                 _st.log_format, 1 if _st.recovered else 0,
+                 _st.entries_applied, _st.pages_applied, _st.highest_sequence,
+                 _st.reason, _hs_stamp))
+        _stale = [x for x in _hive_states if x.was_dirty and not x.recovered]
+        if _stale:
+            print("[WARNING] %d hive(s) were dirty and could not be replayed; "
+                  "their rows may not be the final registry state:" % len(_stale))
+            for _st in _stale:
+                print("    %s - %s" % (_st.hive_name, _st.reason))
+    except Exception as e:
+        logging.error("Could not record registry_hive_state: %s", e)
+
     # ========================================================================
     # FINAL SUMMARY
     # ========================================================================
@@ -4625,6 +4736,16 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     print("    - Malware indicators with risk scoring")
     print(f"\n[OK] Errors logged to: offline_regclaw_errors.log")
     print("\n" + "=" * 80)
+
+    # The recovered copies existed only for this parse. Same lifecycle as
+    # user_identity.live_hive_export's temp directory: make it, work in it,
+    # remove it - a recovered SYSTEM left behind is a second copy of the
+    # registry sitting in the temp folder.
+    if _replay_dir:
+        try:
+            shutil.rmtree(_replay_dir, ignore_errors=True)
+        except Exception as e:
+            logging.debug("Could not remove replay directory %s: %s", _replay_dir, e)
 
     # Return dictionary format expected by parser invoker
     return {
