@@ -1278,6 +1278,69 @@ class _EyeInstantSplash(QtWidgets.QWidget):
             p.end()
 
 
+def _shellbags_file_size(value):
+    """Bytes as a human size, or the raw value when it is not a number."""
+    try:
+        return format_file_size(int(value))
+    except (ValueError, TypeError):
+        return str(value)
+
+
+# Which database column feeds which column of a tab, and what the analyst
+# reads at the top of it. One declaration per table, because several tabs used
+# to declare their headers twice - once when the tab is built and again when
+# data loads - and the two drifted: Shellbags declared 23 in one place and 21
+# in the other. Whichever ran last won, silently.
+#
+# The column name is the load-bearing half. `_fill_table_by_name` places each
+# value under the header that names its column, so the ORDER here is only a
+# presentation choice; a parser can add a column anywhere in its CREATE TABLE
+# without shifting anything on screen.
+#
+# `test_gui_column_counts_match_schema.py` checks every name here against the
+# parsers, in both directions - a name that matches no column, and a column no
+# tab displays.
+TABLE_COLUMNS = {
+    "Shellbags": [
+        ("file_name", "File Name"),
+        ("short_name", "Short Name"),
+        ("shell_item_type", "Type"),
+        ("mru_position", "MRU Position"),
+        ("created_date", "Created Date"),
+        ("modified_date", "Modified Date"),
+        ("accessed_date", "Accessed Date"),
+        ("attributes", "Attributes"),
+        ("file_size", "File Size"),
+        ("special_folder", "Special Folder"),
+        ("network_share", "Network Share"),
+        ("server_name", "Server Name"),
+        ("share_name", "Share Name"),
+        ("drive_letter", "Drive Letter"),
+        ("mft_record_number", "MFT Record"),
+        ("registry_path", "Registry Path"),
+        # parent_path is where the folder sat in the shell tree and user_name
+        # is whose hive it came from - the two columns that tell a multi-user
+        # case apart.
+        ("parent_path", "Parent Path"),
+        # node_slot names the Bags subkey holding this folder's view settings,
+        # and bag_views says which kind of shell view wrote them: Shell for an
+        # Explorer window, ComDlg for a File Open/Save dialog hosted inside
+        # some other program. Without the second column every row reads as
+        # though somebody browsed there.
+        ("node_slot", "Node Slot"),
+        ("bag_views", "View Kind"),
+        # last_written / time_basis are deliberately not shown. They are the
+        # back-fill's estimate of the key's write time. Unlike OpenSaveMRU,
+        # this table CAN be reached by that pass - registry_path really does
+        # hold a key path - but the shell item carries its own created,
+        # modified and accessed dates, and a fourth derived timestamp beside
+        # them invites being read as one of the record's own.
+        ("user_name", "User Name"),
+        ("parsed_at", "Parsed At"),
+    ],
+}
+
+
 class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just a plain object
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1463,16 +1526,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             cursor.execute("SELECT * FROM network_interfaces")
             rows = cursor.fetchall()
             if hasattr(self, 'NetworkInterface_table'):
-                self.NetworkInterface_table.setUpdatesEnabled(False)
-                self.NetworkInterface_table.setSortingEnabled(False)
-                self.NetworkInterface_table.setRowCount(len(rows))
-                for row_index, row in enumerate(rows):
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value))
-                        self.NetworkInterface_table.setItem(row_index, col_index, item)
-                self.NetworkInterface_table.setUpdatesEnabled(True)
-                self.NetworkInterface_table.setSortingEnabled(True)
-                self.apply_dynamic_column_sizing(self.NetworkInterface_table)
+                self._fill_table_by_name(self.NetworkInterface_table, cursor, rows)
             conn.close()
         except Exception as e:
             print(f"[NetworkInterfaces] Error loading data: {str(e)}")
@@ -1647,16 +1701,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             cursor.execute("SELECT * FROM RecentDocs")
             rows = cursor.fetchall()
             if hasattr(self, 'RecentDocs_table'):
-                self.RecentDocs_table.setUpdatesEnabled(False)
-                self.RecentDocs_table.setSortingEnabled(False)
-                self.RecentDocs_table.setRowCount(len(rows))
-                for row_index, row in enumerate(rows):
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value))
-                        self.RecentDocs_table.setItem(row_index, col_index, item)
-                self.RecentDocs_table.setUpdatesEnabled(True)
-                self.RecentDocs_table.setSortingEnabled(True)
-                self.apply_dynamic_column_sizing(self.RecentDocs_table)
+                self._fill_table_by_name(self.RecentDocs_table, cursor, rows)
             conn.close()
         except Exception as e:
             print(f"[RecentDocs] Error loading data: {str(e)}")
@@ -1671,16 +1716,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             cursor.execute("SELECT * FROM OpenSaveMRU")
             rows = cursor.fetchall()
             if hasattr(self, 'OpenSaveMRU_table'):
-                self.OpenSaveMRU_table.setUpdatesEnabled(False)
-                self.OpenSaveMRU_table.setSortingEnabled(False)
-                self.OpenSaveMRU_table.setRowCount(len(rows))
-                for row_index, row in enumerate(rows):
-                    for col_index, value in enumerate(row):
-                        item = QtWidgets.QTableWidgetItem(str(value))
-                        self.OpenSaveMRU_table.setItem(row_index, col_index, item)
-                self.OpenSaveMRU_table.setUpdatesEnabled(True)
-                self.OpenSaveMRU_table.setSortingEnabled(True)
-                self.apply_dynamic_column_sizing(self.OpenSaveMRU_table)
+                self._fill_table_by_name(self.OpenSaveMRU_table, cursor, rows)
             conn.close()
         except Exception as e:
             print(f"[OpenSaveMRU] Error loading data: {str(e)}")
@@ -1820,17 +1856,16 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
-            # Select all columns in the correct order
+            # SELECT *, not a column list. Naming the columns here meant a case
+            # parsed before any one of them existed failed the whole query -
+            # "no such column: parent_path" - and the tab showed nothing at all
+            # for 132 rows that were sitting in the database. The fill places
+            # values by name now, so whatever this returns lands correctly and
+            # a column the case predates simply renders empty.
             cursor.execute("""
-                SELECT 
-                    file_name, short_name, shell_item_type, 
-                    mru_position, created_date, modified_date, accessed_date, 
-                    attributes, file_size, special_folder, network_share, 
-                    server_name, share_name, drive_letter, mft_record_number, 
-                    registry_path, parent_path, user_name, parsed_at
-                FROM Shellbags 
-                ORDER BY 
-                    CASE 
+                SELECT * FROM Shellbags
+                ORDER BY
+                    CASE
                         WHEN mru_position = 'Unknown' THEN 999999
                         ELSE CAST(mru_position AS INTEGER)
                     END
@@ -1838,52 +1873,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             rows = cursor.fetchall()
             
             if hasattr(self, 'Shellbags_table'):
-                self.Shellbags_table.setRowCount(0)
-                
-                # Set column headers
-                headers = [
-                    "File Name", "Short Name", "Type", 
-                    "MRU Position", "Created Date", "Modified Date", "Accessed Date",
-                    "Attributes", "File Size", "Special Folder", "Network Share",
-                    "Server Name", "Share Name", "Drive Letter", "MFT Record", 
-                    # parent_path is where the folder sat in the shell tree and
-                    # user_name is whose hive it came from - the two columns that
-                    # tell a multi-user case apart. Both were parsed and stored
-                    # and neither reached the screen.
-                    "Registry Path", "Parent Path", "User Name", "Parsed At"
-                ]
-                self.Shellbags_table.setColumnCount(len(headers))
-                self.Shellbags_table.setHorizontalHeaderLabels(headers)
-                
-                self.Shellbags_table.setUpdatesEnabled(False)
-
-                
-                self.Shellbags_table.setSortingEnabled(False)
-
-                
-                self.Shellbags_table.setRowCount(len(rows))
-
-                
-                for row_index, row in enumerate(rows):
-                    
-                    for col_index, value in enumerate(row):
-                        # Format file size column (index 8 in new schema)
-                        if col_index == 8 and value is not None:
-                            try:
-                                display_value = format_file_size(int(value))
-                            except (ValueError, TypeError):
-                                display_value = str(value)
-                        else:
-                            display_value = str(value) if value is not None else ""
-                        
-                        item = QtWidgets.QTableWidgetItem(display_value)
-                        self.Shellbags_table.setItem(row_index, col_index, item)
-                
-                self.Shellbags_table.setUpdatesEnabled(True)
-                self.Shellbags_table.setSortingEnabled(True)
+                self._set_table_headers(self.Shellbags_table,
+                                        TABLE_COLUMNS["Shellbags"])
+                self._fill_table_by_name(
+                    self.Shellbags_table, cursor, rows,
+                    # Keyed on the column, not on index 8 - the position moves
+                    # the moment anyone edits the SELECT above.
+                    formatters={"file_size": _shellbags_file_size})
                 print(f"[Shellbags] Successfully loaded {len(rows)} records")
-            
-                self.apply_dynamic_column_sizing(self.Shellbags_table)
             conn.close()
         except Exception as e:
             # Clean one-liner like every other registry loader — a missing table
@@ -2845,6 +2842,11 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.Amcache_tab_widget.indexOf(tab), 
                 friendly_name
             )
+
+        # These tables are created from the hive's own schema, so they do not
+        # exist when setupUi runs its pass. Calling it again is safe - a table
+        # that already has its button is skipped.
+        self._add_anatomy_links()
     
     def create_mft_usn_table_tabs(self):
         """Create table tabs for MFT and USN Journal data"""
@@ -4495,13 +4497,25 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 # fall back for an older case rather than failing to load it.
                 cursor.execute("PRAGMA table_info(shimcache_entries)")
                 _sc_cols = [c[1] for c in cursor.fetchall()]
+                # cache_index is the entry's ordinal within the cache - 0 is the
+                # most recently inserted. Older databases predate it; -1 reads as
+                # "not recorded" rather than claiming position zero.
+                order_col = "cache_index" if "cache_index" in _sc_cols else "-1"
+                # The record's decoded trailing blob and its per-record id.
+                # Both arrived after packaged-app decoding, so a case parsed
+                # before them has neither column - show blanks rather than
+                # refusing to load the case.
+                flags_col = "shim_flags" if "shim_flags" in _sc_cols else "''"
+                rid_col = "record_id" if "record_id" in _sc_cols else "''"
                 if "entry_type" in _sc_cols:
-                    cursor.execute(f"""SELECT filename, path, entry_type,
+                    cursor.execute(f"""SELECT {order_col}, filename, path, entry_type,
                                       package_family_name, package_version, architecture,
+                                      {flags_col}, {rid_col},
                                       last_modified, last_modified_readable, {parse_col}
                                   FROM shimcache_entries ORDER BY last_modified DESC""")
                 else:
-                    cursor.execute(f"""SELECT filename, path, '', '', '', '',
+                    cursor.execute(f"""SELECT {order_col}, filename, path, '', '', '', '',
+                                      {flags_col}, {rid_col},
                                       last_modified, last_modified_readable, {parse_col}
                                   FROM shimcache_entries ORDER BY last_modified DESC""")
                 rows = cursor.fetchall()
@@ -4552,10 +4566,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.ShimCache_main_table.setUpdatesEnabled(False)
                 
                 # Set column headers if not already set
-                if self.ShimCache_main_table.columnCount() != 9:
-                    self.ShimCache_main_table.setColumnCount(9)
-                    headers = ["Filename", "Path", "Entry Type", "Package Family Name",
+                if self.ShimCache_main_table.columnCount() != 12:
+                    self.ShimCache_main_table.setColumnCount(12)
+                    headers = ["Cache Order", "Filename", "Path", "Entry Type",
+                               "Package Family Name",
                                "Package Version", "Architecture",
+                               "Shim Flags", "Record ID",
                                "Last Modified (Epoch)", "Last Modified", "Parsed At"]
                     self.ShimCache_main_table.setHorizontalHeaderLabels(headers)
                 
@@ -5511,6 +5527,245 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         except Exception as e:
             print(f"Custom tab style application error: {e}")
     
+    # ------------------------------------------------------------------ #
+    #  Anatomy links: from a row of evidence to what that row actually is
+    # ------------------------------------------------------------------ #
+
+    def _add_anatomy_links(self):
+        """Put an Anatomy button above every table an anatomy page documents.
+
+        Idempotent, and it has to be: the AmCache tabs are built from the
+        hive's own schema at runtime, so this runs once at the end of setupUi
+        and again after those tabs appear. A table that already has its button
+        is skipped rather than given a second one.
+
+        The button goes in the TAB's layout, not on the table, because the MFT
+        and USN tables are swapped for VirtualTableWidgets when data loads -
+        the old widget is removed from the layout and a new one appended. A
+        button parented to the table would go with it; one sitting at index 0
+        of the layout stays exactly where it was, above whatever table is
+        there now.
+        """
+        try:
+            from ui.anatomy_links import ANATOMY_LINKS, tooltip_for
+        except ImportError as exc:
+            print("[Anatomy] link map unavailable: %s" % exc)
+            return
+
+        placed, skipped = 0, []
+        for attr in ANATOMY_LINKS:
+            table = getattr(self, attr, None)
+            if table is None:
+                continue                      # not built yet, or not built at all
+            holder = table.parentWidget()
+            layout = holder.layout() if holder is not None else None
+            if layout is None:
+                # A table in a splitter or a bare widget: no layout to insert
+                # into. Reported rather than passed over in silence - the Qt
+                # test asserts every mapped table got its button.
+                skipped.append(attr)
+                continue
+            # Asked of the HOLDER, not the table. The MFT and USN tables are
+            # replaced by VirtualTableWidgets when data loads, and a fresh
+            # object carries no attribute of ours - so a guard kept on the
+            # table would miss, and the next pass (the AmCache tabs call one)
+            # would stack a second button row above the first.
+            if holder.findChild(QtWidgets.QWidget, attr + "_anatomy_row",
+                                QtCore.Qt.FindDirectChildrenOnly) is not None:
+                continue
+
+            row = QtWidgets.QWidget(holder)
+            row.setObjectName(attr + "_anatomy_row")
+            bar = QtWidgets.QHBoxLayout(row)
+            bar.setContentsMargins(0, 0, 0, 4)
+            bar.addStretch(1)
+
+            button = QtWidgets.QToolButton(row)
+            button.setObjectName(attr + "_anatomy_button")
+            button.setText(" Anatomy")
+            button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+            button.setCursor(QtCore.Qt.PointingHandCursor)
+            button.setToolTip(tooltip_for(attr) or "")
+            button.setAutoRaise(True)
+            try:
+                from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                button.setIcon(CrowEyeIcons.link())
+            except Exception:
+                pass                          # a null icon is a Qt no-op
+            button.clicked.connect(
+                lambda _checked=False, a=attr: self._open_anatomy(a))
+            bar.addWidget(button)
+
+            layout.insertWidget(0, row)
+            table._anatomy_row = row
+            placed += 1
+
+        # A skipped table is a button that never appears, so it is said
+        # out loud. The count is not - it would print on every start and
+        # say nothing anybody needs.
+        if skipped:
+            print("[Anatomy] no layout to place a button in: %s"
+                  % ", ".join(sorted(skipped)))
+
+    def _open_anatomy(self, attr):
+        """Open the artifact's anatomy page, or say why it cannot be opened.
+
+        Crow-Eye runs on examiner workstations that are routinely cut off from
+        the internet, and QDesktopServices.openUrl tells you only that a
+        browser launched - never that the page loaded. So reachability is
+        tested first, on a worker thread: a 1.5 second connect on the GUI
+        thread is a second and a half of frozen application every time
+        somebody clicks.
+        """
+        from ui.anatomy_links import url_for
+        url = url_for(attr)
+        if not url:
+            return
+        button = getattr(self, "sender", lambda: None)()
+
+        class _Probe(QtCore.QThread):
+            done = QtCore.pyqtSignal(bool)
+
+            def run(self):
+                import socket
+                try:
+                    socket.create_connection(("crow-eye.com", 443),
+                                             timeout=1.5).close()
+                    self.done.emit(True)
+                except OSError:
+                    self.done.emit(False)
+
+        probe = _Probe(self.centralwidget if hasattr(self, "centralwidget")
+                       else None)
+        if button is not None:
+            button.setEnabled(False)
+
+        def finished(reachable):
+            if button is not None:
+                button.setEnabled(True)
+            if reachable:
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
+            else:
+                self._anatomy_offline_dialog(url)
+            probe.deleteLater()
+
+        probe.done.connect(finished)
+        # Kept on the instance so Python does not collect the thread while it
+        # is still running, which ends the process rather than the thread.
+        self._anatomy_probe = probe
+        probe.start()
+
+    def _anatomy_offline_dialog(self, url):
+        """The address, in full, for a machine that cannot reach the site."""
+        dialog = QtWidgets.QDialog(self.centralwidget)
+        dialog.setWindowTitle("Anatomy page")
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        message = QtWidgets.QLabel(
+            "This machine cannot reach crow-eye.com, so the page cannot be "
+            "opened here.\nThe address below points at the exact section, and "
+            "can be read on a machine that is online.")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        field = QtWidgets.QLineEdit(url)
+        field.setReadOnly(True)
+        field.setCursorPosition(0)
+        layout.addWidget(field)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addStretch(1)
+        copy = QtWidgets.QPushButton("Copy address")
+        copy.clicked.connect(
+            lambda: QtWidgets.QApplication.clipboard().setText(url))
+        close = QtWidgets.QPushButton("Close")
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(copy)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+        try:
+            from correlation_engine.gui.ui_styling import (
+                apply_evidence_detail_styling)
+            apply_evidence_detail_styling(dialog)
+        except Exception:
+            pass
+        dialog.exec_()
+
+    # ------------------------------------------------------------------ #
+    #  Columns by name: what a header means, not where it happens to sit
+    # ------------------------------------------------------------------ #
+
+    def _set_table_headers(self, table, pairs, translate=None):
+        """Label each column AND record which database column feeds it.
+
+        `pairs` is [(column_name, label), ...]. The label is what the analyst
+        reads; the column name is stashed on the header item so the loader can
+        place values by name instead of by position. Keeping them together is
+        the point - two parallel lists drift, and the drift is invisible.
+        """
+        table.setColumnCount(len(pairs))
+        for index, (column, label) in enumerate(pairs):
+            item = QtWidgets.QTableWidgetItem()
+            item.setText(translate(label) if translate else label)
+            item.setData(QtCore.Qt.UserRole, column)
+            table.setHorizontalHeaderItem(index, item)
+
+    def _fill_table_by_name(self, table, cursor, rows, formatters=None):
+        """Put every value under the header that names its own column.
+
+        The tabs used to fill positionally - row[i] into column i - which made
+        the DDL's column order the display order. A column inserted anywhere
+        but the end of a CREATE TABLE then shifted every header after it, and
+        `setItem` past columnCount is a silent no-op, so the tab still rendered
+        with the right number of rows and nobody was told. OpenSaveMRU showed
+        its parse time under "Last Written"; Shellbags dropped parsed_at and
+        user_name off the end entirely.
+
+        Placing by name means a parser can add a column anywhere in its
+        CREATE TABLE: it lands under its own header, or nowhere at all - never
+        under someone else's.
+
+        A table whose headers carry no column names has not been converted yet
+        and is filled the old way, so this can be adopted a tab at a time.
+
+        `formatters` is {column_name: callable} for the few columns that are
+        displayed differently from how they are stored.
+        """
+        names = [d[0] for d in (cursor.description or [])]
+
+        target = {}
+        for index in range(table.columnCount()):
+            head = table.horizontalHeaderItem(index)
+            column = head.data(QtCore.Qt.UserRole) if head is not None else None
+            if column:
+                target[str(column).lower()] = index
+        positional = not target
+
+        table.setUpdatesEnabled(False)
+        table.setSortingEnabled(False)
+        table.clearContents()          # a header with no column this time round
+        table.setRowCount(len(rows))   # must not keep the last load's value
+        for row_index, row in enumerate(rows):
+            for source_index, value in enumerate(row):
+                name = names[source_index].lower() if source_index < len(names) else ""
+                column_index = source_index if positional else target.get(name)
+                if column_index is None or column_index >= table.columnCount():
+                    continue           # a column this tab does not show
+                formatter = (formatters or {}).get(name)
+                if formatter is not None and value is not None:
+                    try:
+                        text = formatter(value)
+                    except Exception:
+                        text = "" if value is None else str(value)
+                else:
+                    text = "" if value is None else str(value)
+                table.setItem(row_index, column_index,
+                              QtWidgets.QTableWidgetItem(text))
+        table.setUpdatesEnabled(True)
+        table.setSortingEnabled(True)
+        self.apply_dynamic_column_sizing(table)
+
     def setup_standard_table(self, table, column_count, auto_fill=True, default_section_size=300, min_section_size=None):
         """Helper function to setup tables with consistent configuration"""
         try:
@@ -6182,7 +6437,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # Define table names (without widget references)
             table_names = [
                 "computer_Name", "time_zone", "TimeZoneInfo", "network_interfaces",
-                "NetworkInterfacesInfo", "Network_list", "SystemServices", "machine_run",
+                "NetworkInterfacesInfo", "Network_list", "NetworkProfiles",
+                "SystemServices", "machine_run",
                 "machine_run_once", "user_run", "user_run_once", "RunMRU",
                 "ScheduledTasks", "AutoStartPrograms",
                 "Windows_lastupdate", "WindowsUpdateInfo", "ShutdownInfo", "BrowserHistory",
@@ -6195,6 +6451,19 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "user_shell_folders", "lsa_packages", "boot_execute", "clsid_inprocserver32",
                 "UserAccounts", "ComputerNameInfo", "shutdown_information", "Windows_lastupdate_subkeys",
                 "registry_hive_state",
+                "registry_class_names", "registry_security_descriptors",
+                "registry_carved_keys", "registry_carved_values",
+                "registry_value_changes",
+                "registry_key_times",
+                "startup_approved",
+                "app_paths",
+                "safe_boot_services",
+                "zone_map",
+                "app_permissions",
+                "shared_dlls",
+                "hid_devices",
+                "network_cards",
+                "system_configuration",
                 "SecurityPosture", "DefenderExclusions", "FirewallRules",
                 "NetworkShares", "ConnectedDevices", "MountPoints2",
                 "RDPClientMRU", "OfficeDocuments", "FeatureUsage",
@@ -6329,6 +6598,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "TimeZoneInfo": self.TimeZoneInfo_table,
             "network_interfaces": self.NetworkInterface_table,
             "NetworkInterfacesInfo": self.NetworkInterfacesInfo_table,
+            "NetworkProfiles": self.NetworkProfiles_table,
             "Network_list": self.NetworkLists_table,
             "SystemServices": self.SystemServices_table,
             "ScheduledTasks": self.ScheduledTasks_table,
@@ -6361,6 +6631,21 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "shutdown_information": self.ShutdownRaw_table,
             "Windows_lastupdate_subkeys": self.LastUpdateSubkeys_table,
             "registry_hive_state": self.RegistryHiveState_table,
+            "registry_class_names": self.RegistryClassNames_table,
+            "registry_security_descriptors": self.RegistrySecurity_table,
+            "registry_carved_keys": self.RegistryCarvedKeys_table,
+            "registry_carved_values": self.RegistryCarvedValues_table,
+            "registry_value_changes": self.RegistryValueChanges_table,
+            "registry_key_times": self.RegistryKeyTimes_table,
+            "startup_approved": self.StartupApproved_table,
+            "app_paths": self.AppPaths_table,
+            "safe_boot_services": self.SafeBootServices_table,
+            "zone_map": self.ZoneMap_table,
+            "app_permissions": self.AppPermissions_table,
+            "shared_dlls": self.SharedDlls_table,
+            "hid_devices": self.HidDevices_table,
+            "network_cards": self.NetworkCards_table,
+            "system_configuration": self.SystemConfiguration_table,
             "AutoStartPrograms": self.AutoStartPrograms_table,
             "machine_run": self.MachineRun_table,
             "machine_run_once": self.MachineRunOnce_table,
@@ -6474,12 +6759,50 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     header_item = QtWidgets.QTableWidgetItem(PARSE_TIME_LABEL)
                     gui_table.setHorizontalHeaderItem(c_idx, header_item)
 
+            # Both header writes above build fresh QTableWidgetItems, which do
+            # not carry the column name that `_fill_table_by_name` places by.
+            # A tab populated here and then reloaded through its own
+            # load_data_from_database_* method would find that name missing and
+            # leave the column blank - which is exactly what happened to
+            # OpenSaveMRU's "Parsed At" the first time these two paths were
+            # driven one after the other. Whoever writes a header last owns
+            # putting the name back.
+            for c_idx, col in enumerate(columns):
+                if c_idx >= gui_table.columnCount():
+                    break
+                head = gui_table.horizontalHeaderItem(c_idx)
+                if head is not None:
+                    head.setData(QtCore.Qt.UserRole, col)
+
             # Set row count
             gui_table.setRowCount(len(rows))
 
             # Populate cells
+            #
+            # A key's last-written time is an UPPER BOUND on the values it
+            # holds, never a point in time for any one of them: writing any
+            # value updates its key, so all this says is "not written after
+            # T". The Run key on a test machine has one timestamp and two
+            # values that changed in different transactions - one number on
+            # both rows is wrong for at least one of them.
+            #
+            # So a bounded time is displayed as "<= T", which cannot be read
+            # as "added at T". The prefix lives here rather than in the
+            # database on purpose: last_written stays a clean sortable
+            # timestamp for Eye, the correlation engine and the timeline,
+            # which all have to compare it.
+            basis_idx = columns.index("time_basis") if "time_basis" in columns else -1
             for r_idx, row in enumerate(rows):
+                bounded = (basis_idx >= 0
+                           and str(row[basis_idx] or "").startswith("key upper"))
                 for c_idx, value in enumerate(row):
+                    if (columns[c_idx] == "last_written" and bounded
+                            and value not in (None, "")):
+                        display_value = "<= %s" % value
+                        item = QtWidgets.QTableWidgetItem(display_value)
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                        gui_table.setItem(r_idx, c_idx, item)
+                        continue
                     # Special handling for Shellbags file_size column
                     if db_table == "Shellbags" and columns[c_idx] == "file_size" and value is not None:
                         try:
@@ -7609,17 +7932,179 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.verticalLayout_LastUpdateSubkeys.addWidget(self.LastUpdateSubkeys_table)
         self.Registry_widget.addTab(self.LastUpdateSubkeys_tab, "")
         # Provenance about the parse: one row per hive, saying whether Windows
-        # had it open and whether its transaction logs were replayed. Thirteen
-        # columns, matching registry_hive_state exactly.
+        # had it open, whether its transaction logs were replayed, and what the
+        # file hashed to as found. Fourteen columns, matching
+        # registry_hive_state exactly.
         self.RegistryHiveState_tab = QtWidgets.QWidget()
         self.RegistryHiveState_tab.setObjectName("RegistryHiveState_tab")
         self.verticalLayout_RegistryHiveState = QtWidgets.QVBoxLayout(self.RegistryHiveState_tab)
         self.verticalLayout_RegistryHiveState.setObjectName("verticalLayout_RegistryHiveState")
         self.RegistryHiveState_table = QtWidgets.QTableWidget(self.RegistryHiveState_tab)
-        self.setup_standard_table(self.RegistryHiveState_table, 13, False, 300, 190)
+        self.setup_standard_table(self.RegistryHiveState_table, 15, False, 300, 190)
         self.RegistryHiveState_table.setObjectName("RegistryHiveState_table")
         self.verticalLayout_RegistryHiveState.addWidget(self.RegistryHiveState_table)
         self.Registry_widget.addTab(self.RegistryHiveState_tab, "")
+        # What a tree walk cannot reach. Named for the artifact rather than
+        # for a verdict: "carved" says where the record was found, not that
+        # anybody deleted it deliberately.
+        self.RegistryClassNames_tab = QtWidgets.QWidget()
+        self.RegistryClassNames_tab.setObjectName("RegistryClassNames_tab")
+        self.verticalLayout_RegistryClassNames = QtWidgets.QVBoxLayout(self.RegistryClassNames_tab)
+        self.verticalLayout_RegistryClassNames.setObjectName("verticalLayout_RegistryClassNames")
+        self.RegistryClassNames_table = QtWidgets.QTableWidget(self.RegistryClassNames_tab)
+        self.setup_standard_table(self.RegistryClassNames_table, 7, False, 300, 190)
+        self.RegistryClassNames_table.setObjectName("RegistryClassNames_table")
+        self.verticalLayout_RegistryClassNames.addWidget(self.RegistryClassNames_table)
+        self.Registry_widget.addTab(self.RegistryClassNames_tab, "")
+
+        self.RegistrySecurity_tab = QtWidgets.QWidget()
+        self.RegistrySecurity_tab.setObjectName("RegistrySecurity_tab")
+        self.verticalLayout_RegistrySecurity = QtWidgets.QVBoxLayout(self.RegistrySecurity_tab)
+        self.verticalLayout_RegistrySecurity.setObjectName("verticalLayout_RegistrySecurity")
+        self.RegistrySecurity_table = QtWidgets.QTableWidget(self.RegistrySecurity_tab)
+        self.setup_standard_table(self.RegistrySecurity_table, 11, False, 300, 190)
+        self.RegistrySecurity_table.setObjectName("RegistrySecurity_table")
+        self.verticalLayout_RegistrySecurity.addWidget(self.RegistrySecurity_table)
+        self.Registry_widget.addTab(self.RegistrySecurity_tab, "")
+
+        self.RegistryCarvedKeys_tab = QtWidgets.QWidget()
+        self.RegistryCarvedKeys_tab.setObjectName("RegistryCarvedKeys_tab")
+        self.verticalLayout_RegistryCarvedKeys = QtWidgets.QVBoxLayout(self.RegistryCarvedKeys_tab)
+        self.verticalLayout_RegistryCarvedKeys.setObjectName("verticalLayout_RegistryCarvedKeys")
+        self.RegistryCarvedKeys_table = QtWidgets.QTableWidget(self.RegistryCarvedKeys_tab)
+        self.setup_standard_table(self.RegistryCarvedKeys_table, 10, False, 300, 190)
+        self.RegistryCarvedKeys_table.setObjectName("RegistryCarvedKeys_table")
+        self.verticalLayout_RegistryCarvedKeys.addWidget(self.RegistryCarvedKeys_table)
+        self.Registry_widget.addTab(self.RegistryCarvedKeys_tab, "")
+
+        self.RegistryCarvedValues_tab = QtWidgets.QWidget()
+        self.RegistryCarvedValues_tab.setObjectName("RegistryCarvedValues_tab")
+        self.verticalLayout_RegistryCarvedValues = QtWidgets.QVBoxLayout(self.RegistryCarvedValues_tab)
+        self.verticalLayout_RegistryCarvedValues.setObjectName("verticalLayout_RegistryCarvedValues")
+        self.RegistryCarvedValues_table = QtWidgets.QTableWidget(self.RegistryCarvedValues_tab)
+        self.setup_standard_table(self.RegistryCarvedValues_table, 11, False, 300, 190)
+        self.RegistryCarvedValues_table.setObjectName("RegistryCarvedValues_table")
+        self.verticalLayout_RegistryCarvedValues.addWidget(self.RegistryCarvedValues_table)
+        self.Registry_widget.addTab(self.RegistryCarvedValues_tab, "")
+
+        # Which value a transaction changed, and when. Its own tab because its
+        # grain is the CHANGE, not the artifact - a key time pushed onto a
+        # value row is the thing that made this awkward to show in the first
+        # place, and forcing it into the artifact tables would repeat that.
+        self.RegistryValueChanges_tab = QtWidgets.QWidget()
+        self.RegistryValueChanges_tab.setObjectName("RegistryValueChanges_tab")
+        self.verticalLayout_RegistryValueChanges = QtWidgets.QVBoxLayout(self.RegistryValueChanges_tab)
+        self.verticalLayout_RegistryValueChanges.setObjectName("verticalLayout_RegistryValueChanges")
+        self.RegistryValueChanges_table = QtWidgets.QTableWidget(self.RegistryValueChanges_tab)
+        self.setup_standard_table(self.RegistryValueChanges_table, 13, False, 300, 190)
+        self.RegistryValueChanges_table.setObjectName("RegistryValueChanges_table")
+        self.verticalLayout_RegistryValueChanges.addWidget(self.RegistryValueChanges_table)
+        self.Registry_widget.addTab(self.RegistryValueChanges_tab, "")
+
+        # One row per key, with its last-write time. The key-level surface,
+        # where that timestamp is unambiguous because the ROW IS THE KEY. On a
+        # value row the same number is only ever an upper bound, which is why
+        # it arrives there through time_basis rather than on its own.
+        self.RegistryKeyTimes_tab = QtWidgets.QWidget()
+        self.RegistryKeyTimes_tab.setObjectName("RegistryKeyTimes_tab")
+        self.verticalLayout_RegistryKeyTimes = QtWidgets.QVBoxLayout(self.RegistryKeyTimes_tab)
+        self.verticalLayout_RegistryKeyTimes.setObjectName("verticalLayout_RegistryKeyTimes")
+        self.RegistryKeyTimes_table = QtWidgets.QTableWidget(self.RegistryKeyTimes_tab)
+        self.setup_standard_table(self.RegistryKeyTimes_table, 5, False, 300, 190)
+        self.RegistryKeyTimes_table.setObjectName("RegistryKeyTimes_table")
+        self.verticalLayout_RegistryKeyTimes.addWidget(self.RegistryKeyTimes_table)
+        self.Registry_widget.addTab(self.RegistryKeyTimes_tab, "")
+
+        self.StartupApproved_tab = QtWidgets.QWidget()
+        self.StartupApproved_tab.setObjectName("StartupApproved_tab")
+        self.verticalLayout_StartupApproved = QtWidgets.QVBoxLayout(self.StartupApproved_tab)
+        self.verticalLayout_StartupApproved.setObjectName("verticalLayout_StartupApproved")
+        self.StartupApproved_table = QtWidgets.QTableWidget(self.StartupApproved_tab)
+        self.setup_standard_table(self.StartupApproved_table, 10, False, 300, 190)
+        self.StartupApproved_table.setObjectName("StartupApproved_table")
+        self.verticalLayout_StartupApproved.addWidget(self.StartupApproved_table)
+        self.Registry_widget.addTab(self.StartupApproved_tab, "")
+
+        self.AppPaths_tab = QtWidgets.QWidget()
+        self.AppPaths_tab.setObjectName("AppPaths_tab")
+        self.verticalLayout_AppPaths = QtWidgets.QVBoxLayout(self.AppPaths_tab)
+        self.verticalLayout_AppPaths.setObjectName("verticalLayout_AppPaths")
+        self.AppPaths_table = QtWidgets.QTableWidget(self.AppPaths_tab)
+        self.setup_standard_table(self.AppPaths_table, 7, False, 300, 190)
+        self.AppPaths_table.setObjectName("AppPaths_table")
+        self.verticalLayout_AppPaths.addWidget(self.AppPaths_table)
+        self.Registry_widget.addTab(self.AppPaths_tab, "")
+
+        self.SafeBootServices_tab = QtWidgets.QWidget()
+        self.SafeBootServices_tab.setObjectName("SafeBootServices_tab")
+        self.verticalLayout_SafeBootServices = QtWidgets.QVBoxLayout(self.SafeBootServices_tab)
+        self.verticalLayout_SafeBootServices.setObjectName("verticalLayout_SafeBootServices")
+        self.SafeBootServices_table = QtWidgets.QTableWidget(self.SafeBootServices_tab)
+        self.setup_standard_table(self.SafeBootServices_table, 7, False, 300, 190)
+        self.SafeBootServices_table.setObjectName("SafeBootServices_table")
+        self.verticalLayout_SafeBootServices.addWidget(self.SafeBootServices_table)
+        self.Registry_widget.addTab(self.SafeBootServices_tab, "")
+
+        self.ZoneMap_tab = QtWidgets.QWidget()
+        self.ZoneMap_tab.setObjectName("ZoneMap_tab")
+        self.verticalLayout_ZoneMap = QtWidgets.QVBoxLayout(self.ZoneMap_tab)
+        self.verticalLayout_ZoneMap.setObjectName("verticalLayout_ZoneMap")
+        self.ZoneMap_table = QtWidgets.QTableWidget(self.ZoneMap_tab)
+        self.setup_standard_table(self.ZoneMap_table, 9, False, 300, 190)
+        self.ZoneMap_table.setObjectName("ZoneMap_table")
+        self.verticalLayout_ZoneMap.addWidget(self.ZoneMap_table)
+        self.Registry_widget.addTab(self.ZoneMap_tab, "")
+
+        self.AppPermissions_tab = QtWidgets.QWidget()
+        self.AppPermissions_tab.setObjectName("AppPermissions_tab")
+        self.verticalLayout_AppPermissions = QtWidgets.QVBoxLayout(self.AppPermissions_tab)
+        self.verticalLayout_AppPermissions.setObjectName("verticalLayout_AppPermissions")
+        self.AppPermissions_table = QtWidgets.QTableWidget(self.AppPermissions_tab)
+        self.setup_standard_table(self.AppPermissions_table, 10, False, 300, 190)
+        self.AppPermissions_table.setObjectName("AppPermissions_table")
+        self.verticalLayout_AppPermissions.addWidget(self.AppPermissions_table)
+        self.Registry_widget.addTab(self.AppPermissions_tab, "")
+
+        self.SharedDlls_tab = QtWidgets.QWidget()
+        self.SharedDlls_tab.setObjectName("SharedDlls_tab")
+        self.verticalLayout_SharedDlls = QtWidgets.QVBoxLayout(self.SharedDlls_tab)
+        self.verticalLayout_SharedDlls.setObjectName("verticalLayout_SharedDlls")
+        self.SharedDlls_table = QtWidgets.QTableWidget(self.SharedDlls_tab)
+        self.setup_standard_table(self.SharedDlls_table, 6, False, 300, 190)
+        self.SharedDlls_table.setObjectName("SharedDlls_table")
+        self.verticalLayout_SharedDlls.addWidget(self.SharedDlls_table)
+        self.Registry_widget.addTab(self.SharedDlls_tab, "")
+
+        self.HidDevices_tab = QtWidgets.QWidget()
+        self.HidDevices_tab.setObjectName("HidDevices_tab")
+        self.verticalLayout_HidDevices = QtWidgets.QVBoxLayout(self.HidDevices_tab)
+        self.verticalLayout_HidDevices.setObjectName("verticalLayout_HidDevices")
+        self.HidDevices_table = QtWidgets.QTableWidget(self.HidDevices_tab)
+        self.setup_standard_table(self.HidDevices_table, 9, False, 300, 190)
+        self.HidDevices_table.setObjectName("HidDevices_table")
+        self.verticalLayout_HidDevices.addWidget(self.HidDevices_table)
+        self.Registry_widget.addTab(self.HidDevices_tab, "")
+
+        self.NetworkCards_tab = QtWidgets.QWidget()
+        self.NetworkCards_tab.setObjectName("NetworkCards_tab")
+        self.verticalLayout_NetworkCards = QtWidgets.QVBoxLayout(self.NetworkCards_tab)
+        self.verticalLayout_NetworkCards.setObjectName("verticalLayout_NetworkCards")
+        self.NetworkCards_table = QtWidgets.QTableWidget(self.NetworkCards_tab)
+        self.setup_standard_table(self.NetworkCards_table, 7, False, 300, 190)
+        self.NetworkCards_table.setObjectName("NetworkCards_table")
+        self.verticalLayout_NetworkCards.addWidget(self.NetworkCards_table)
+        self.Registry_widget.addTab(self.NetworkCards_tab, "")
+
+        self.SystemConfiguration_tab = QtWidgets.QWidget()
+        self.SystemConfiguration_tab.setObjectName("SystemConfiguration_tab")
+        self.verticalLayout_SystemConfiguration = QtWidgets.QVBoxLayout(self.SystemConfiguration_tab)
+        self.verticalLayout_SystemConfiguration.setObjectName("verticalLayout_SystemConfiguration")
+        self.SystemConfiguration_table = QtWidgets.QTableWidget(self.SystemConfiguration_tab)
+        self.setup_standard_table(self.SystemConfiguration_table, 9, False, 300, 190)
+        self.SystemConfiguration_table.setObjectName("SystemConfiguration_table")
+        self.verticalLayout_SystemConfiguration.addWidget(self.SystemConfiguration_table)
+        self.Registry_widget.addTab(self.SystemConfiguration_tab, "")
+
         self.TimeZoneInfo_tab = QtWidgets.QWidget()
         self.TimeZoneInfo_tab.setObjectName("TimeZoneInfo_tab")
         self.verticalLayout_TimeZoneInfo = QtWidgets.QVBoxLayout(self.TimeZoneInfo_tab)
@@ -7638,6 +8123,18 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.NetworkInterfacesInfo_table.setObjectName("NetworkInterfacesInfo_table")
         self.verticalLayout_NetworkInterfacesInfo.addWidget(self.NetworkInterfacesInfo_table)
         self.Registry_widget.addTab(self.NetworkInterfacesInfo_tab, "")
+        # One row per network, joining the gateway MAC and DNS suffix the
+        # Signatures key holds to the name, category and dates the Profiles
+        # key holds. Network_list keeps the raw values; this is the join.
+        self.NetworkProfiles_tab = QtWidgets.QWidget()
+        self.NetworkProfiles_tab.setObjectName("NetworkProfiles_tab")
+        self.verticalLayout_NetworkProfiles = QtWidgets.QVBoxLayout(self.NetworkProfiles_tab)
+        self.verticalLayout_NetworkProfiles.setObjectName("verticalLayout_NetworkProfiles")
+        self.NetworkProfiles_table = QtWidgets.QTableWidget(self.NetworkProfiles_tab)
+        self.setup_standard_table(self.NetworkProfiles_table, 20, False, 300, 190)
+        self.NetworkProfiles_table.setObjectName("NetworkProfiles_table")
+        self.verticalLayout_NetworkProfiles.addWidget(self.NetworkProfiles_table)
+        self.Registry_widget.addTab(self.NetworkProfiles_tab, "")
         self.SecurityPosture_tab = QtWidgets.QWidget()
         self.SecurityPosture_tab.setObjectName("SecurityPosture_tab")
         self.verticalLayout_SecurityPosture = QtWidgets.QVBoxLayout(self.SecurityPosture_tab)
@@ -7751,7 +8248,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.verticalLayout_AutoStart = QtWidgets.QVBoxLayout(self.AutoStartPrograms_tab)
         self.verticalLayout_AutoStart.setObjectName("verticalLayout_AutoStart")
         self.AutoStartPrograms_table = QtWidgets.QTableWidget(self.AutoStartPrograms_tab)
-        self.setup_standard_table(self.AutoStartPrograms_table, 4, False, 300, 190)
+        self.setup_standard_table(self.AutoStartPrograms_table, 5, False, 300, 190)
         self.AutoStartPrograms_table.setObjectName("AutoStartPrograms_table")
         self.verticalLayout_AutoStart.addWidget(self.AutoStartPrograms_table)
         self.Registry_widget.addTab(self.AutoStartPrograms_tab, "")
@@ -8161,7 +8658,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Create ShimCache table
         self.ShimCache_main_table = QtWidgets.QTableWidget(self.ShimCache_main_tab)
         self.ShimCache_main_table.setMinimumSize(QtCore.QSize(2, 2))
-        self.setup_standard_table(self.ShimCache_main_table, 9, False, 300, 190)
+        # Qt wraps at the backslashes, and with a fixed row height that leaves
+        # a long path rendering as "C:..." while the cell holds the whole
+        # thing - the evidence is there and unreadable. Prefetch, the other
+        # path-heavy tab, already turns this off for the same reason.
+        self.ShimCache_main_table.setWordWrap(False)
+        self.setup_standard_table(self.ShimCache_main_table, 12, False, 300, 190)
         self.ShimCache_main_table.setObjectName("ShimCache_main_table")
         self.verticalLayout_shimcache_main.addWidget(self.ShimCache_main_table)
         
@@ -8326,6 +8828,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.tabWidget.setCurrentIndex(2)
         # Remove conflicting hide/show connections; animation handles visibility/width
         QtCore.QMetaObject.connectSlotsByName(Crow_Eye)
+        self._add_anatomy_links()
         Crow_Eye.setTabOrder(self.lnkbutton, self.logbutton)
         Crow_Eye.setTabOrder(self.logbutton, self.main_tab)
         Crow_Eye.setTabOrder(self.main_tab, self.main_menu)
@@ -8398,12 +8901,16 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
         # Initialize NetworkInterface_table headers
         if hasattr(self, 'NetworkInterface_table'):
-            self.NetworkInterface_table.setColumnCount(4)
-            headers = ["Subkey", "Name", "Row data", "Type"]
-            for i, header in enumerate(headers):
-                item = QtWidgets.QTableWidgetItem()
-                self.NetworkInterface_table.setHorizontalHeaderItem(i, item)
-                item.setText(_translate("Crow_Eye", header))
+            # Was four headers for a five-column table, so "Type" showed the
+            # DECODED value and the real `type` fell off the end - setItem past
+            # columnCount says nothing.
+            self._set_table_headers(self.NetworkInterface_table, [
+                ("subkey", "Subkey"),
+                ("name", "Name"),
+                ("row_data", "Row data"),
+                ("decoded", "Decoded"),
+                ("type", "Type"),
+            ], lambda text: _translate("Crow_Eye", text))
                 
         # Set tab text for Network Interfaces tab
         if hasattr(self, 'NetworkInterfaces_tab') and hasattr(self, 'Registry_widget'):
@@ -8413,8 +8920,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         # Initialize NetworkLists_table headers
         if hasattr(self, 'NetworkLists_table'):
-            self.NetworkLists_table.setColumnCount(4)
-            headers = ["Sub Key Name", "Service", "Data", "Data Type"]
+            self.NetworkLists_table.setColumnCount(9)
+            headers = ["Sub Key Name", "Name", "Data", "Decoded", "Data Type",
+                       "Network Name", "Connection Date", "Gateway MAC",
+                       "Parsed at"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.NetworkLists_table.setHorizontalHeaderItem(i, item)
@@ -8455,7 +8964,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'winlogon_table'):
             self.winlogon_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'image_file_execution_options_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8464,7 +8973,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'image_file_execution_options_table'):
             self.image_file_execution_options_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'appinit_dlls_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8473,7 +8982,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'appinit_dlls_table'):
             self.appinit_dlls_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'appcert_dlls_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8482,7 +8991,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'appcert_dlls_table'):
             self.appcert_dlls_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'active_setup_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8491,7 +9000,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'active_setup_table'):
             self.active_setup_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'run_services_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8500,7 +9009,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'run_services_table'):
             self.run_services_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'run_services_once_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8509,7 +9018,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'run_services_once_table'):
             self.run_services_once_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'policies_explorer_run_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8518,7 +9027,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'policies_explorer_run_table'):
             self.policies_explorer_run_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'user_shell_folders_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8527,7 +9036,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'user_shell_folders_table'):
             self.user_shell_folders_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'lsa_packages_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8536,7 +9045,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'lsa_packages_table'):
             self.lsa_packages_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'boot_execute_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8545,7 +9054,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'boot_execute_table'):
             self.boot_execute_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'clsid_inprocserver32_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8554,7 +9063,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'clsid_inprocserver32_table'):
             self.clsid_inprocserver32_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'command_processor_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8563,7 +9072,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'command_processor_table'):
             self.command_processor_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'drivers32_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8572,7 +9081,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'drivers32_table'):
             self.drivers32_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'shell_service_object_delay_load_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8581,7 +9090,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'shell_service_object_delay_load_table'):
             self.shell_service_object_delay_load_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'browser_helper_objects_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8590,7 +9099,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'browser_helper_objects_table'):
             self.browser_helper_objects_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'shared_task_scheduler_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8599,7 +9108,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'shared_task_scheduler_table'):
             self.shared_task_scheduler_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'shell_icon_overlay_identifiers_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8608,7 +9117,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'shell_icon_overlay_identifiers_table'):
             self.shell_icon_overlay_identifiers_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'credential_providers_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8617,7 +9126,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'credential_providers_table'):
             self.credential_providers_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'netsh_helper_dlls_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8626,7 +9135,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'netsh_helper_dlls_table'):
             self.netsh_helper_dlls_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'amsi_providers_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8635,7 +9144,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'amsi_providers_table'):
             self.amsi_providers_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'security_providers_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8644,7 +9153,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'security_providers_table'):
             self.security_providers_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'print_monitors_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8653,7 +9162,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'print_monitors_table'):
             self.print_monitors_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'print_processors_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8662,7 +9171,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'print_processors_table'):
             self.print_processors_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'network_providers_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8671,7 +9180,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'network_providers_table'):
             self.network_providers_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'wmi_autorecover_mofs_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8680,7 +9189,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'wmi_autorecover_mofs_table'):
             self.wmi_autorecover_mofs_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'windows_load_run_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8689,7 +9198,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'windows_load_run_table'):
             self.windows_load_run_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'shell_open_command_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8698,7 +9207,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'shell_open_command_table'):
             self.shell_open_command_table.setHorizontalHeaderLabels([
-                "Hive", "Key Path", "Name", "Data", "Type", "User", "Parsed At"
+                "Hive", "Key Path", "Name", "Data", "Data Decoded", "Type", "User", "Parsed At"
             ])
         if hasattr(self, 'file_exts_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8707,7 +9216,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'file_exts_table'):
             self.file_exts_table.setHorizontalHeaderLabels([
-                "User", "Extension", "Choice Type", "ProgID", "Key Path", "Parsed At"
+                "User", "Extension", "Choice Type", "ProgID", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'cid_size_mru_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8716,7 +9225,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'cid_size_mru_table'):
             self.cid_size_mru_table.setHorizontalHeaderLabels([
-                "User", "Position", "Application", "Key Path", "Parsed At"
+                "User", "Position", "Application", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'programs_cache_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8725,7 +9234,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'programs_cache_table'):
             self.programs_cache_table.setHorizontalHeaderLabels([
-                "User", "Value Name", "Blob Size", "Key Path", "Parsed At"
+                "User", "Value Name", "Blob Size", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'regedit_lastkey_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8734,7 +9243,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'regedit_lastkey_table'):
             self.regedit_lastkey_table.setHorizontalHeaderLabels([
-                "User", "Name", "Value", "Key Path", "Parsed At"
+                "User", "Name", "Value", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'printer_connections_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8743,7 +9252,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'printer_connections_table'):
             self.printer_connections_table.setHorizontalHeaderLabels([
-                "User", "Connection", "Server", "Printer", "Key Path", "Parsed At"
+                "User", "Connection", "Server", "Printer", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'explorer_advanced_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8752,7 +9261,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'explorer_advanced_table'):
             self.explorer_advanced_table.setHorizontalHeaderLabels([
-                "User", "Setting", "Value", "Default", "Meaning", "Key Path", "Parsed At"
+                "User", "Setting", "Value", "Value Decoded", "Default", "Meaning", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'rdp_tcp_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8761,7 +9270,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'rdp_tcp_table'):
             self.rdp_tcp_table.setHorizontalHeaderLabels([
-                "Setting", "Value", "Default", "Meaning", "Key Path", "Parsed At"
+                "Setting", "Value", "Value Decoded", "Default", "Meaning", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'usbstor_start_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8770,7 +9279,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'usbstor_start_table'):
             self.usbstor_start_table.setHorizontalHeaderLabels([
-                "Setting", "Value", "Decoded", "Default", "Key Path", "Parsed At"
+                "Setting", "Value", "Decoded", "Default", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'windows_script_host_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8779,7 +9288,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'windows_script_host_table'):
             self.windows_script_host_table.setHorizontalHeaderLabels([
-                "Setting", "Value", "Default", "Meaning", "Key Path", "Parsed At"
+                "Setting", "Value", "Value Decoded", "Default", "Meaning", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'dnscache_parameters_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8788,7 +9297,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'dnscache_parameters_table'):
             self.dnscache_parameters_table.setHorizontalHeaderLabels([
-                "Name", "Value", "Key Path", "Parsed At"
+                "Name", "Value", "Value Decoded", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'files_not_to_snapshot_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8797,7 +9306,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'files_not_to_snapshot_table'):
             self.files_not_to_snapshot_table.setHorizontalHeaderLabels([
-                "Entry", "Value", "Key Path", "Parsed At"
+                "Entry", "Value", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'winevt_channels_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8806,7 +9315,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'winevt_channels_table'):
             self.winevt_channels_table.setHorizontalHeaderLabels([
-                "Channel", "Source", "Enabled", "Max Size", "Retention", "Log File", "Reason", "Key Path", "Parsed At"
+                "Channel", "Source", "Enabled", "Max Size", "Retention", "Log File", "Reason", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'wpdbusenum_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8815,7 +9324,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'wpdbusenum_table'):
             self.wpdbusenum_table.setHorizontalHeaderLabels([
-                "Device ID", "Friendly Name", "Volume GUID", "Key Path", "Parsed At"
+                "Device ID", "Friendly Name", "Volume GUID", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'device_classes_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8824,7 +9333,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'device_classes_table'):
             self.device_classes_table.setHorizontalHeaderLabels([
-                "Class GUID", "Class", "Device Instance", "Key Path", "Parsed At"
+                "Class GUID", "Class", "Device Instance", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'volume_info_cache_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8833,7 +9342,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'volume_info_cache_table'):
             self.volume_info_cache_table.setHorizontalHeaderLabels([
-                "Drive", "Volume Label", "File System", "Key Path", "Parsed At"
+                "Drive", "Volume Label", "File System", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'machine_guid_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8842,7 +9351,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'machine_guid_table'):
             self.machine_guid_table.setHorizontalHeaderLabels([
-                "Name", "Value", "Key Path", "Parsed At"
+                "Name", "Value", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'product_options_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8851,7 +9360,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'product_options_table'):
             self.product_options_table.setHorizontalHeaderLabels([
-                "Name", "Value", "Meaning", "Key Path", "Parsed At"
+                "Name", "Value", "Meaning", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'os_install_history_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8860,7 +9369,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'os_install_history_table'):
             self.os_install_history_table.setHorizontalHeaderLabels([
-                "Name", "Value", "Key Path", "Parsed At"
+                "Name", "Value", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'active_computer_name_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8869,7 +9378,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'active_computer_name_table'):
             self.active_computer_name_table.setHorizontalHeaderLabels([
-                "Name", "Value", "Key Path", "Parsed At"
+                "Name", "Value", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'hivelist_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8887,7 +9396,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'system_environment_table'):
             self.system_environment_table.setHorizontalHeaderLabels([
-                "Name", "Value", "Key Path", "Parsed At"
+                "Name", "Value", "Value Decoded", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'network_adapters_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8896,7 +9405,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'network_adapters_table'):
             self.network_adapters_table.setHorizontalHeaderLabels([
-                "Adapter GUID", "Name", "Value", "Key Path", "Parsed At"
+                "Adapter GUID", "Name", "Value", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'group_policy_history_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -8905,7 +9414,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
         if hasattr(self, 'group_policy_history_table'):
             self.group_policy_history_table.setHorizontalHeaderLabels([
-                "Scope", "GPO ID", "Name", "Value", "Key Path", "Parsed At"
+                "Scope", "GPO ID", "Name", "Value", "Key Path", "Last Written", "Time Basis", "Parsed At"
             ])
         if hasattr(self, 'local_groups_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -9036,14 +9545,214 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 _translate("Crow_Eye", "Hive State")
             )
         if hasattr(self, 'RegistryHiveState_table'):
-            self.RegistryHiveState_table.setColumnCount(13)
+            self.RegistryHiveState_table.setColumnCount(15)
             headers = ["Hive Name", "Hive Path", "Sequence 1", "Sequence 2",
                        "Was Dirty", "Logs Found", "Log Format", "Replayed",
                        "Entries Applied", "Pages Applied", "Highest Sequence",
-                       "Reason", "Parsed At"]
+                       "Source SHA-256", "Acquisition Route", "Reason",
+                       "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.RegistryHiveState_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        if hasattr(self, 'RegistryClassNames_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RegistryClassNames_tab),
+                _translate("Crow_Eye", "Class Names")
+            )
+        if hasattr(self, 'RegistryClassNames_table'):
+            self.RegistryClassNames_table.setColumnCount(7)
+            headers = ["Hive", "Key Path", "Key Name", "Class Name",
+                       "Class Length", "Key Last Write", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.RegistryClassNames_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        if hasattr(self, 'RegistrySecurity_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RegistrySecurity_tab),
+                _translate("Crow_Eye", "Key Security")
+            )
+        if hasattr(self, 'RegistrySecurity_table'):
+            self.RegistrySecurity_table.setColumnCount(11)
+            headers = ["Hive", "SK Offset", "Descriptor Hash", "Keys Sharing It",
+                       "Owner SID", "Group SID", "DACL ACEs", "SACL ACEs",
+                       "Descriptor Size", "Sample Key Path", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.RegistrySecurity_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        if hasattr(self, 'RegistryCarvedKeys_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RegistryCarvedKeys_tab),
+                _translate("Crow_Eye", "Carved Keys")
+            )
+        if hasattr(self, 'RegistryCarvedKeys_table'):
+            self.RegistryCarvedKeys_table.setColumnCount(10)
+            headers = ["Hive", "Cell Offset", "Key Name", "Key Path",
+                       "Path Resolved", "Key Last Write", "Subkeys", "Values",
+                       "Record State", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.RegistryCarvedKeys_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        if hasattr(self, 'RegistryCarvedValues_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RegistryCarvedValues_tab),
+                _translate("Crow_Eye", "Carved Values")
+            )
+        if hasattr(self, 'RegistryCarvedValues_table'):
+            self.RegistryCarvedValues_table.setColumnCount(11)
+            headers = ["Hive", "Cell Offset", "Parent Cell", "Key Path",
+                       "Value Name", "Value Type", "Data Size", "Inline",
+                       "Data", "Record State", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.RegistryCarvedValues_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        if hasattr(self, 'StartupApproved_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.StartupApproved_tab),
+                _translate("Crow_Eye", "Startup Approved")
+            )
+        if hasattr(self, 'StartupApproved_table'):
+            self.StartupApproved_table.setColumnCount(10)
+            headers = ["Hive", "Scope", "Entry Name", "State", "State Byte", "Disabled At", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.StartupApproved_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+
+        if hasattr(self, 'AppPaths_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.AppPaths_tab),
+                _translate("Crow_Eye", "App Paths")
+            )
+        if hasattr(self, 'AppPaths_table'):
+            self.AppPaths_table.setColumnCount(7)
+            headers = ["App Name", "Executable Path", "App Dir", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.AppPaths_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+
+        if hasattr(self, 'SafeBootServices_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.SafeBootServices_tab),
+                _translate("Crow_Eye", "Safe Boot Services")
+            )
+        if hasattr(self, 'SafeBootServices_table'):
+            self.SafeBootServices_table.setColumnCount(7)
+            headers = ["Boot Mode", "Entry Name", "Entry Type", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.SafeBootServices_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+
+        if hasattr(self, 'ZoneMap_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.ZoneMap_tab),
+                _translate("Crow_Eye", "Zone Map")
+            )
+        if hasattr(self, 'ZoneMap_table'):
+            self.ZoneMap_table.setColumnCount(9)
+            headers = ["Scope", "Host", "Protocol", "Zone", "Zone Name", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.ZoneMap_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+
+        if hasattr(self, 'AppPermissions_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.AppPermissions_tab),
+                _translate("Crow_Eye", "App Permissions")
+            )
+        if hasattr(self, 'AppPermissions_table'):
+            self.AppPermissions_table.setColumnCount(10)
+            headers = ["Capability", "App", "Packaged", "Permission", "Last Used Start", "Last Used Stop", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.AppPermissions_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+
+        if hasattr(self, 'SharedDlls_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.SharedDlls_tab),
+                _translate("Crow_Eye", "Shared DLLs")
+            )
+        if hasattr(self, 'SharedDlls_table'):
+            self.SharedDlls_table.setColumnCount(6)
+            headers = ["DLL Path", "Reference Count", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.SharedDlls_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+
+        if hasattr(self, 'HidDevices_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.HidDevices_tab),
+                _translate("Crow_Eye", "HID Devices")
+            )
+        if hasattr(self, 'HidDevices_table'):
+            self.HidDevices_table.setColumnCount(9)
+            headers = ["Device ID", "Instance ID", "Device Desc", "Manufacturer", "Service", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.HidDevices_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+
+        if hasattr(self, 'NetworkCards_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.NetworkCards_tab),
+                _translate("Crow_Eye", "Network Cards")
+            )
+        if hasattr(self, 'NetworkCards_table'):
+            self.NetworkCards_table.setColumnCount(7)
+            headers = ["Card Index", "Description", "Service Name", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.NetworkCards_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+
+        if hasattr(self, 'SystemConfiguration_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.SystemConfiguration_tab),
+                _translate("Crow_Eye", "System Configuration")
+            )
+        if hasattr(self, 'SystemConfiguration_table'):
+            self.SystemConfiguration_table.setColumnCount(9)
+            headers = ["Setting", "Value Raw", "Value Decoded", "Area", "Meaning", "Key Path", "Last Written", "Time Basis", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.SystemConfiguration_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        if hasattr(self, 'RegistryKeyTimes_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RegistryKeyTimes_tab),
+                _translate("Crow_Eye", "Key Times")
+            )
+        if hasattr(self, 'RegistryKeyTimes_table'):
+            self.RegistryKeyTimes_table.setColumnCount(5)
+            headers = ["Hive", "Key Path", "Key Last Write", "Cell Offset",
+                       "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.RegistryKeyTimes_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header))
+        if hasattr(self, 'RegistryValueChanges_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.RegistryValueChanges_tab),
+                _translate("Crow_Eye", "Value Changes")
+            )
+        if hasattr(self, 'RegistryValueChanges_table'):
+            self.RegistryValueChanges_table.setColumnCount(14)
+            headers = ["Hive", "Transaction", "Change", "Changed At", "Key Path",
+                       "Value Name", "Value Type", "Changed From", "Changed To",
+                       "Value Before", "Changed Bytes", "Cell Offset",
+                       "Key Last Write", "Parsed At"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.RegistryValueChanges_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
         if hasattr(self, 'TimeZoneInfo_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
@@ -9055,6 +9764,24 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.Registry_widget.indexOf(self.NetworkInterfacesInfo_tab),
                 _translate("Crow_Eye", "Interfaces Info")
             )
+        if hasattr(self, 'NetworkProfiles_tab') and hasattr(self, 'Registry_widget'):
+            self.Registry_widget.setTabText(
+                self.Registry_widget.indexOf(self.NetworkProfiles_tab),
+                _translate("Crow_Eye", "Network Profiles")
+            )
+        if hasattr(self, 'NetworkProfiles_table'):
+            self.NetworkProfiles_table.setColumnCount(20)
+            headers = ["Profile GUID", "Profile Name", "Description",
+                       "Signature", "First Network", "Gateway MAC",
+                       "DNS Suffix", "Category", "Category Label",
+                       "Name Type", "Name Type Label", "Managed",
+                       "Managed Label", "Source", "Date Created",
+                       "Date Last Connected", "Key Path", "Last Written",
+                       "Time Basis", "Parsed at"]
+            for i, header in enumerate(headers):
+                item = QtWidgets.QTableWidgetItem()
+                self.NetworkProfiles_table.setHorizontalHeaderItem(i, item)
+                item.setText(_translate("Crow_Eye", header.strip()))
         if hasattr(self, 'UserAccounts_tab') and hasattr(self, 'Registry_widget'):
             self.Registry_widget.setTabText(
                 self.Registry_widget.indexOf(self.UserAccounts_tab),
@@ -9081,8 +9808,15 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "Last Completed", "Last Result", "Parsed At"
             ])
         if hasattr(self, 'AutoStartPrograms_table'):
+            # Four labels for ten columns, and "Parsed At" sat where key_path
+            # is. The six that never had a header include startup_state, which
+            # is filled on every row and is the whole point of reading
+            # StartupApproved: without it every Run entry reads as live
+            # persistence, including the ones Explorer has switched off.
             self.AutoStartPrograms_table.setHorizontalHeaderLabels([
-                "Location", "Program Name", "Command", "Parsed At"
+                "Location", "Program Name", "Command", "Key Path",
+                "Startup State", "Disabled At", "Record State",
+                "Last Written", "Time Basis", "Parsed At"
             ])
 
         # Initialize SystemServices_table headers if it exists
@@ -9108,8 +9842,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize MachineRun_table headers if it exists
         if hasattr(self, 'MachineRun_table'):
-            self.MachineRun_table.setColumnCount(3)
-            headers = ["Name", "Row data", "Type"]
+            self.MachineRun_table.setColumnCount(4)
+            headers = ["Name", "Row data", "Row Decoded", "Type"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.MachineRun_table.setHorizontalHeaderItem(i, item)
@@ -9163,8 +9897,15 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize ShimCache_main_table headers for main tab
         if hasattr(self, 'ShimCache_main_table'):
-            self.ShimCache_main_table.setColumnCount(5)
-            headers = ["Filename", "Path", "Last Modified (Epoch)", "Last Modified", "Parsed At"]
+            # Must match _populate_shimcache_table, which sets the same ten.
+            # This block was left at the original five when packaged-app
+            # decoding added four columns, so an unloaded tab showed five
+            # headers and the loaded one showed ten.
+            self.ShimCache_main_table.setColumnCount(12)
+            headers = ["Cache Order", "Filename", "Path", "Entry Type",
+                       "Package Family Name", "Package Version", "Architecture",
+                       "Shim Flags", "Record ID",
+                       "Last Modified (Epoch)", "Last Modified", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShimCache_main_table.setHorizontalHeaderItem(i, item)
@@ -9338,12 +10079,18 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Initialize LastUpdateInfo_table headers if it exists
         if hasattr(self, 'LastUpdateInfo_table'):
             self.LastUpdateInfo_table.setSortingEnabled(True)
-            self.LastUpdateInfo_table.setColumnCount(4)
-            headers = ["Subkey", "Name", "Row data", "Type"]
-            for i, header in enumerate(headers):
-                item = QtWidgets.QTableWidgetItem()
-                self.LastUpdateInfo_table.setHorizontalHeaderItem(i, item)
-                item.setText(_translate("Crow_Eye", header))
+            # LastUpdateInfo_table is mapped to WindowsUpdateInfo, whose six
+            # columns are exactly these. (A second loader also points this
+            # widget at Windows_lastupdate_subkeys, which has four different
+            # columns - a pre-existing conflict, left alone here.)
+            self._set_table_headers(self.LastUpdateInfo_table, [
+                ("last_check_time", "Last Check Time"),
+                ("last_install_time", "Last Install Time"),
+                ("au_options", "AU Options"),
+                ("scheduled_install_day", "Scheduled Install Day"),
+                ("scheduled_install_time", "Scheduled Install Time"),
+                ("parsed_at", "Parsed At"),
+            ], lambda text: _translate("Crow_Eye", text))
         
         # Set tab text for Last Update Info tab
         if hasattr(self, 'Lstupdate_info') and hasattr(self, 'Registry_widget'):
@@ -9354,8 +10101,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize ShutDown_table headers if it exists
         if hasattr(self, 'ShutDown_table'):
-            self.ShutDown_table.setColumnCount(3)
-            for i, header in enumerate(["Name", "Row data", "Type"]):
+            self.ShutDown_table.setColumnCount(5)
+            for i, header in enumerate(["Shutdown Time", "Shutdown Count",
+                                        "Shutdown Type", "Clean Shutdown",
+                                        "Parsed At"]):
                 item = QtWidgets.QTableWidgetItem()
                 self.ShutDown_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
@@ -9369,8 +10118,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize Browser_history_table headers if it exists
         if hasattr(self, 'Browser_history_table'):
-            self.Browser_history_table.setColumnCount(6)
-            headers = ["Browser", "URL", "Title", "Visit count", "Last visit", "Parsed At"]
+            self.Browser_history_table.setColumnCount(7)
+            headers = ["Browser", "URL", "Title", "Visit count", "Last visit",
+                       "Parsed At", "User Name"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.Browser_history_table.setHorizontalHeaderItem(i, item)
@@ -9499,12 +10249,21 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # columns, so neither direction reports anything.
         # Initialize RecentDocs_table headers if it exists
         if hasattr(self, 'RecentDocs_table'):
-            self.RecentDocs_table.setColumnCount(8)
-            headers = ["Subkey", "Name", "Row Data", "Type", "User Name", "MRU Position", "Key Last Write", "Parsed At"]
-            for i, header in enumerate(headers):
-                item = QtWidgets.QTableWidgetItem()
-                self.RecentDocs_table.setHorizontalHeaderItem(i, item)
-                item.setText(_translate("Crow_Eye", header))
+            # last_written and time_basis are gone for the same reason as
+            # OpenSaveMRU: the back-fill claims any table with a column called
+            # subkey, and RecentDocs' subkey is an extension (".jpg", ".lua"),
+            # so the UPDATE matched nothing and both columns stayed empty on
+            # every row of every case.
+            self._set_table_headers(self.RecentDocs_table, [
+                ("subkey", "Subkey"),
+                ("name", "Name"),
+                ("row_data", "Row Data"),
+                ("type", "Type"),
+                ("user_name", "User Name"),
+                ("mru_position", "MRU Position"),
+                ("key_last_write", "Key Last Write"),
+                ("parsed_at", "Parsed At"),
+            ], lambda text: _translate("Crow_Eye", text))
         
         # Set tab text for Recent Docs tab
         if hasattr(self, 'Recent_docs_tab') and hasattr(self, 'filesActivityTab_tables'):
@@ -9516,17 +10275,28 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
 
         # Initialize OpenSaveMRU_table headers if it exists
         if hasattr(self, 'OpenSaveMRU_table'):
-            # Twelve columns, in the order SELECT * returns them. The count was
-            # 10 against 11 real columns, so user_name never rendered, and
-            # key_last_write - the only timestamp this artifact has - would have
-            # been the second column written past the end. setItem beyond
-            # columnCount is a silent no-op, so the tab looks complete either way.
-            self.OpenSaveMRU_table.setColumnCount(12)
-            headers = ["Subkey", "Name", "Type", "File Path", "File Name", "Extension", "Drive Letter", "Access Date", "Key Last Write", "Row data", "Parsed at", "User Name"]
-            for i, header in enumerate(headers):
-                item = QtWidgets.QTableWidgetItem()
-                self.OpenSaveMRU_table.setHorizontalHeaderItem(i, item)
-                item.setText(_translate("Crow_Eye", header.strip()))
+            # Each header names the column that feeds it, so this order is a
+            # presentation choice and nothing else. It used to be a contract
+            # with the DDL: last_written and time_basis sit at positions 11-12
+            # of the table, which pushed the last four headers along, so the
+            # parse time rendered under "Last Written" while "Parsed at" showed
+            # a column this artifact can never fill. It cannot, because the
+            # back-fill in Regclaw matches tables on a column NAMED subkey and
+            # OpenSaveMRU's subkey holds a file extension, not a key path.
+            self._set_table_headers(self.OpenSaveMRU_table, [
+                ("subkey", "Subkey"),
+                ("name", "Name"),
+                ("type", "Type"),
+                ("file_path", "File Path"),
+                ("file_name", "File Name"),
+                ("extension", "Extension"),
+                ("drive_letter", "Drive Letter"),
+                ("access_date", "Access Date"),
+                ("key_last_write", "Key Last Write"),
+                ("row_data", "Row data"),
+                ("parsed_at", "Parsed at"),
+                ("user_name", "User Name"),
+            ], lambda text: _translate("Crow_Eye", text))
         
         # Set tab text for Open Save MRU tab
         if hasattr(self, 'OpenSaveMru') and hasattr(self, 'filesActivityTab_tables'):
@@ -9554,8 +10324,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize TypedPath_table headers if it exists
         if hasattr(self, 'TypedPath_table'):
-            self.TypedPath_table.setColumnCount(3)
-            headers = ["Name", "Data", "Data Type"]
+            self.TypedPath_table.setColumnCount(7)
+            headers = ["Name", "Data", "Data Type", "User Name", "MRU Position",
+                       "Key Last Write", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.TypedPath_table.setHorizontalHeaderItem(i, item)
@@ -9570,8 +10341,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize Bam_table headers if it exists (BAM)
         if hasattr(self, 'Bam_table'):
-            self.Bam_table.setColumnCount(10)
-            headers = ["Sub Key Name", "Service", "Row data", "Type", "App Name", "Process Path", "SID", "Last Execution", "Execution Flags", "Parsed at"]
+            self.Bam_table.setColumnCount(15)
+            headers = ["Sub Key Name", "Service", "Row data", "Type",
+                       "App Name", "Process Path", "SID", "Last Execution",
+                       "Decoded", "Name Kind", "Name Kind (raw)",
+                       "Trailing Value", "Last Written", "Time Basis",
+                       "Parsed at"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.Bam_table.setHorizontalHeaderItem(i, item)
@@ -9586,8 +10361,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize Dam_table headers if it exists (DAM)
         if hasattr(self, 'Dam_table'):
-            self.Dam_table.setColumnCount(10)
-            headers = ["Sub Key Name", "Service", "Row data", "Type", "App Name", "Process Path", "SID", "Last Execution", "Execution Count", "Parsed at"]
+            self.Dam_table.setColumnCount(16)
+            headers = ["Sub Key Name", "Service", "Row data", "Type",
+                       "App Name", "Process Path", "SID", "Last Execution",
+                       "Execution Count", "Decoded", "Name Kind",
+                       "Name Kind (raw)", "Trailing Value", "Last Written",
+                       "Time Basis", "Parsed at"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.Dam_table.setHorizontalHeaderItem(i, item)
@@ -9622,17 +10401,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # This block named six columns that the table does not have -
             # "Folder Path", "Access Date" - so an empty tab described a
             # different artifact until the first case was loaded over it.
-            self.Shellbags_table.setColumnCount(19)
-            headers = ["File Name", "Short Name", "Type", "MRU Position",
-                       "Created Date", "Modified Date", "Accessed Date",
-                       "Attributes", "File Size", "Special Folder",
-                       "Network Share", "Server Name", "Share Name",
-                       "Drive Letter", "MFT Record", "Registry Path",
-                       "Parent Path", "User Name", "Parsed At"]
-            for i, header in enumerate(headers):
-                item = QtWidgets.QTableWidgetItem()
-                self.Shellbags_table.setHorizontalHeaderItem(i, item)
-                item.setText(_translate("Crow_Eye", header))
+            # It then drifted the other way: 23 headers here against the 21 the
+            # loader sets, so the empty tab and the loaded tab disagreed about
+            # what the artifact even has. Both now read the one declaration.
+            self._set_table_headers(self.Shellbags_table,
+                                    TABLE_COLUMNS["Shellbags"],
+                                    lambda text: _translate("Crow_Eye", text))
         
         # Set tab text for Shellbags tab
         if hasattr(self, 'Shellbags_tab') and hasattr(self, 'filesActivityTab_tables'):

@@ -143,10 +143,12 @@ class EYETabStub(QWidget):
         """)
         
         from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+        from PyQt5.QtCore import QSize
 
         # Add Context Settings button
         context_settings_button = QPushButton("Context Settings")
         context_settings_button.setIcon(CrowEyeIcons.settings())
+        context_settings_button.setIconSize(QSize(16, 16))
         context_settings_button.setToolTip("Configure context window and token budget settings")
         context_settings_button.clicked.connect(self._on_context_settings_clicked)
         toolbar.addWidget(context_settings_button)
@@ -163,12 +165,14 @@ class EYETabStub(QWidget):
         # Add placeholder buttons for future implementation
         clear_history_button = QPushButton("Clear History")
         clear_history_button.setIcon(CrowEyeIcons.delete())
+        clear_history_button.setIconSize(QSize(16, 16))
         clear_history_button.setToolTip("Clear conversation history (placeholder)")
         clear_history_button.setEnabled(False)
         toolbar.addWidget(clear_history_button)
 
         export_button = QPushButton("Export")
         export_button.setIcon(CrowEyeIcons.download())
+        export_button.setIconSize(QSize(16, 16))
         export_button.setToolTip("Export conversation or report (placeholder)")
         export_button.setEnabled(False)
         toolbar.addWidget(export_button)

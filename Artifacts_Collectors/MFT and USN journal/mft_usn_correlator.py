@@ -170,8 +170,73 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Column positions in the MFT row assembled by _get_mft_data_with_paths.
+#
+# That row is a bare tuple read by index in two places forty lines apart. The
+# first twenty-one positions were already load-bearing and are left alone; the
+# ones added for volume, extension, size and ADS are named, because appending
+# to a tuple that is unpacked positionally elsewhere is exactly how an off-by-
+# one gets into a forensic tool without anything failing.
+# ---------------------------------------------------------------------------
+VOL        = 21   # mr.volume_letter
+EXT        = 22   # mr.extension
+FILE_SIZE  = 23   # mr.file_size
+HAS_ADS    = 24   # mr.has_ads
+ADS_COUNT  = 25   # mr.ads_count
+
+
+# ---------------------------------------------------------------------------
+# The correlated row, in one place.
+#
+# This column list was written out twice — once for the batched insert and once
+# for the final flush — and adding a column meant remembering both. Declaring it
+# once and generating the statement means the two cannot disagree, and the
+# placeholder count cannot drift from the column count.
+# ---------------------------------------------------------------------------
+CORRELATED_COLUMNS = [
+    'volume_letter',
+    'mft_record_number', 'fn_filename', 'reconstructed_path',
+    'mft_sequence_number', 'mft_flags', 'is_directory', 'is_deleted',
+    'file_extension', 'file_size', 'in_use', 'has_ads', 'ads_count',
+    'si_creation_time', 'si_modification_time', 'si_mft_entry_change_time',
+    'si_access_time', 'si_file_attributes',
+    'fn_parent_record_number', 'fn_parent_sequence_number',
+    'fn_creation_time', 'fn_modification_time', 'fn_mft_entry_change_time',
+    'fn_access_time', 'fn_allocated_size', 'fn_real_size', 'fn_file_attributes',
+    'fn_namespace',
+    'usn_event_id', 'usn_timestamp', 'usn_reason', 'usn_source_info',
+    'usn_file_attributes', 'usn_filename', 'usn_frn', 'usn_parent_frn',
+    'usn_security_id',
+    'has_mft_record', 'has_usn_event', 'correlation_confidence',
+    'filename_change_timeline', 'namespace_evolution',
+]
+
+CORRELATED_INSERT = "INSERT OR IGNORE INTO mft_usn_correlated (%s) VALUES (%s)" % (
+    ', '.join(CORRELATED_COLUMNS), ', '.join(['?'] * len(CORRELATED_COLUMNS)))
+
+
 class MFTUSNCorrelator:
-    def __init__(self, case_directory=None):
+    def __init__(self, case_directory=None, status_callback=None):
+        """
+        Args:
+            case_directory: the case folder; databases live in its
+                Target_Artifacts subdirectory.
+            status_callback: optional, called as
+                ``status_callback(status=..., log=...)`` when something happens
+                that a person should be told about — currently only the rebuild
+                of a correlated table that predates the correlation fix.
+
+                This exists so the GUI can put that on the loading screen. The
+                correlator itself must stay free of any GUI: it runs headless,
+                inside spawned subprocesses via standalone_parsers, and from
+                the offline wrapper, and an accidental PyQt import here would
+                fail in a worker process where the traceback goes nowhere
+                useful. A callback keeps that boundary intact — the same shape
+                as progress_callback in the other parsers.
+        """
+        self.status_callback = status_callback
+
         # Database file paths - using Target_Artifacts subdirectory for consistency
         if case_directory:
             # Create Target_Artifacts subdirectory in case directory
@@ -370,6 +435,95 @@ class MFTUSNCorrelator:
         
         return namespace_map.get(namespace_value, f"Unknown ({namespace_value})")
     
+    # -----------------------------------------------------------------------
+    # A correlated database produced BEFORE the correlation was corrected.
+    #
+    # This one appends to an existing database rather than replacing it, and
+    # creates its table with CREATE TABLE IF NOT EXISTS — so a case correlated
+    # by the earlier version keeps its narrower table and the insert fails on
+    # the columns that were added.
+    #
+    # Those rows are not merely differently shaped, they are wrong: they were
+    # produced by the version that keyed on the MFT record number without the
+    # sequence number, so a deleted file's journal events were attributed to
+    # whichever file inherited its record.
+    #
+    # So the table is REBUILT, not migrated. Nothing is lost by that — the
+    # correlated database is derived entirely from mft_claw_analysis.db and
+    # USN_journal.db, and both are still in the case folder. Adding the columns
+    # and keeping the old rows would leave known-wrong correlations sitting in
+    # one table beside correct ones with nothing to tell them apart, which is
+    # the worse outcome for evidence.
+    # -----------------------------------------------------------------------
+    STALE_MARKER_COLUMN = 'volume_letter'
+
+    def _notify(self, status=None, log=None):
+        """Report something a person should see, wherever they are watching.
+
+        `status` is a short line for a progress display; `log` is the sentence
+        that has to still make sense after the run has finished.
+
+        The console output is unconditional so the headless, subprocess and
+        offline paths behave exactly as they always did. Plain text only —
+        this is read by a GUI that renders it as HTML, and terminal colour
+        codes would arrive as escape sequences in the middle of it.
+        """
+        if log:
+            logger.warning(log)
+            print(log)
+        if status:
+            logger.info(status)
+
+        if self.status_callback:
+            try:
+                self.status_callback(status=status, log=log)
+            except Exception as e:
+                # A display that cannot draw must never stop a correlation.
+                logger.warning(f"Status callback failed, continuing: {e}")
+
+    def _is_stale_schema(self, conn):
+        """True if the correlated table predates the correlation fix."""
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mft_usn_correlated'")
+            if not cur.fetchone():
+                return False                      # nothing there yet — not stale, just absent
+            cur.execute("PRAGMA table_info(mft_usn_correlated)")
+            columns = [row[1] for row in cur.fetchall()]
+            return self.STALE_MARKER_COLUMN not in columns
+        except sqlite3.Error as e:
+            logger.warning(f"Could not read the correlated table's schema: {e}")
+            return False
+
+    def _rebuild_stale_tables(self):
+        """Drop a pre-fix correlated table so it is rebuilt from the raw data."""
+        # Said plainly, wherever the person is looking. A tool that silently
+        # discards and regenerates a table in a case folder is worse than one
+        # that says what it did and why — and "why" has to outlast the run,
+        # which is why it goes to the log and not only to a status line.
+        self._notify(
+            status="REBUILDING CORRELATED TABLE",
+            log=("[MFT-USN] This case was correlated before the MFT/USN correlation fix, "
+                 "so its correlated rows are not reliable — journal events could be "
+                 "attributed to the wrong file. Rebuilding from mft_claw_analysis.db and "
+                 "USN_journal.db, which are unchanged, so nothing is lost."))
+        try:
+            conn = sqlite3.connect(self.correlated_db)
+            cur = conn.cursor()
+            # filename_changes gained no columns, but it is built from the same
+            # inputs — leaving it stale beside a rebuilt table would have the two
+            # disagreeing about the same case.
+            for table in ('mft_usn_correlated', 'filename_changes'):
+                cur.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.commit()
+            conn.close()
+            logger.info("Stale correlated tables dropped; they will be rebuilt below.")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Could not rebuild the stale correlated database: {e}")
+            print(f"{COLOR_ERROR}Could not rebuild the stale correlated database: {e}{COLOR_RESET}")
+            return False
+
     def create_correlated_database(self):
         """Create or update database with comprehensive correlated data"""
         logger.info("Processing correlated database...")
@@ -379,19 +533,23 @@ class MFTUSNCorrelator:
         
         if database_exists:
             logger.info(f"Existing correlated database found: {self.correlated_db}")
-            logger.info("Preserving existing forensic data - appending new correlation results")
-            
+
             # Check if database is accessible for appending data
             try:
                 test_conn = sqlite3.connect(self.correlated_db)
+                stale = self._is_stale_schema(test_conn)
                 test_conn.close()
                 logger.info("Database is accessible for appending data")
-                # Continue with existing database - we'll append data
             except sqlite3.Error as e:
                 # Database is locked/in use by another process
                 logger.warning(f"Correlated database is locked/in use: {e}")
                 logger.warning("Cannot access database for appending. Using existing data.")
                 return False
+
+            if stale:
+                self._rebuild_stale_tables()
+            else:
+                logger.info("Preserving existing forensic data - appending new correlation results")
         else:
             logger.info("Creating new correlated database")
         
@@ -451,6 +609,11 @@ class MFTUSNCorrelator:
         """Create the comprehensive correlated table"""
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS mft_usn_correlated (
+            -- Identity. volume_letter is part of it: an MFT record number is
+            -- unique per volume, not per machine, so record 5000 on C: and on
+            -- D: are different files.
+            volume_letter TEXT,
+
             -- MFT Core Information
             mft_record_number INTEGER,
             fn_filename TEXT,
@@ -458,6 +621,11 @@ class MFTUSNCorrelator:
             mft_flags TEXT,
             is_directory INTEGER,
             is_deleted INTEGER,
+            file_extension TEXT,
+            file_size INTEGER,
+            in_use INTEGER,
+            has_ads INTEGER,
+            ads_count INTEGER,
 
             -- MFT Standard Information
             si_creation_time TEXT,
@@ -487,20 +655,29 @@ class MFTUSNCorrelator:
             usn_reason TEXT,
             usn_source_info TEXT,
             usn_file_attributes TEXT,
+            -- The name the journal recorded AT THE TIME of the event, which is
+            -- not necessarily the name the MFT holds now. That difference is
+            -- the rename evidence.
+            usn_filename TEXT,
+            usn_frn TEXT,
+            usn_parent_frn TEXT,
+            usn_security_id INTEGER,
 
             -- Correlation & Analysis Fields
             has_mft_record INTEGER,
             has_usn_event INTEGER,
             correlation_confidence TEXT,
-            
+
             -- Forensic Analysis Fields
             filename_change_timeline TEXT,
             namespace_evolution TEXT,
-            
+
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            
-            -- Unique constraint to prevent duplicate entries
-            UNIQUE(mft_record_number, fn_filename, usn_event_id, usn_timestamp, usn_reason)
+
+            -- Identity is volume + record + sequence + the event. Without the
+            -- volume and the sequence this collapsed rows from different files
+            -- onto each other.
+            UNIQUE(volume_letter, mft_record_number, mft_sequence_number, usn_event_id, usn_timestamp, usn_reason)
         )
         """)
     
@@ -551,8 +728,11 @@ class MFTUSNCorrelator:
         # Fetch all necessary data in a single, optimized query
         print(f"{COLOR_INFO}Fetching and processing MFT data...{COLOR_RESET}")
         
+        # Every join carries volume_letter. Without it, record 5000 on C: joins
+        # to record 5000 on D: — two unrelated files merged into one row, and
+        # each one's timestamps attributed to the other.
         query = """
-        SELECT 
+        SELECT
             mr.record_number,
             mr.mft_sequence_number,
             mr.flags,
@@ -573,14 +753,23 @@ class MFTUSNCorrelator:
             mfn.allocated_size,
             mfn.real_size,
             mfn.flags,
-            mfn.namespace
+            mfn.namespace,
+            mr.volume_letter,
+            mr.extension,
+            mr.file_size,
+            mr.has_ads,
+            mr.ads_count
         FROM mft_records mr
-        LEFT JOIN mft_file_names mfn ON mr.record_number = mfn.record_number
-        LEFT JOIN mft_standard_info si ON mr.record_number = si.record_number
-        WHERE mfn.file_name IS NOT NULL 
-        AND mfn.file_name NOT LIKE ':$DATA' 
+        LEFT JOIN mft_file_names mfn
+               ON mr.record_number = mfn.record_number
+              AND mr.volume_letter = mfn.volume_letter
+        LEFT JOIN mft_standard_info si
+               ON mr.record_number = si.record_number
+              AND mr.volume_letter = si.volume_letter
+        WHERE mfn.file_name IS NOT NULL
+        AND mfn.file_name NOT LIKE ':$DATA'
         AND mfn.file_name NOT LIKE ':%'
-        ORDER BY mr.record_number, mfn.namespace DESC
+        ORDER BY mr.volume_letter, mr.record_number, mfn.namespace DESC
         """
         
         cursor.execute(query)
@@ -595,18 +784,22 @@ class MFTUSNCorrelator:
         file_names_counts = self._get_counts(cursor, "mft_file_names", "record_number")
 
         for row in all_rows:
-            record_number = row[0]
-            if record_number not in processed_records:
-                # Manually construct the row with the counts
-                standard_info_present = 1 if row[7] is not None else 0 # si_created timestamp
-                
-                data_attributes_count = data_attributes_counts.get(record_number, 0)
-                file_names_count = file_names_counts.get(record_number, 0)
+            # Keyed by volume AND record: the same record number on two volumes
+            # is two files, and de-duplicating on the number alone silently
+            # discarded whichever one the ORDER BY happened to put second.
+            key = (row[VOL], row[0])
+            if key not in processed_records:
+                # index 8 is si.created — index 7 is mfn.parent_sequence, which
+                # is present for every row and made this constantly 1
+                standard_info_present = 1 if row[8] is not None else 0
+
+                data_attributes_count = data_attributes_counts.get(row[0], 0)
+                file_names_count = file_names_counts.get(row[0], 0)
 
                 # Assemble the final row, including the namespace (last element)
                 final_row = row + (data_attributes_count, standard_info_present, file_names_count)
                 result.append(final_row)
-                processed_records.add(record_number)
+                processed_records.add(key)
 
         print(f"{COLOR_SUCCESS}\nSuccessfully processed {len(result):,} MFT records in {time.time() - start_time:.2f} seconds{COLOR_RESET}")
         return result
@@ -644,7 +837,8 @@ class MFTUSNCorrelator:
             "security_id",   # Security ID
             "file_attributes", # File attributes
             "filename",      # Filename
-            "record_length"  # Record length (can be used as file_size proxy)
+            "record_length", # Record length (can be used as file_size proxy)
+            "volume_letter"  # An MFT record number is unique per volume only
         ]
         
         query = f"SELECT {', '.join(select_columns)} FROM journal_events ORDER BY usn"
@@ -661,34 +855,57 @@ class MFTUSNCorrelator:
         print(f"\nSuccessfully fetched {len(usn_data):,} USN journal records")
         return usn_data, select_columns
     
-    def _extract_mft_record_from_frn(self, frn_string):
+    def _extract_mft_reference_from_frn(self, frn_string):
         """
-        Extract MFT record number from USN file reference number string.
-        
+        Extract the MFT record number AND sequence number from a USN file
+        reference number.
+
         Windows file reference number format:
-        - 64-bit value where lower 48 bits contain MFT record number
-        - frn_string is the string representation of this 64-bit value
-        
+        - lower 48 bits  MFT record number
+        - upper 16 bits  sequence number
+
+        THE SEQUENCE NUMBER IS NOT OPTIONAL. NTFS reuses an MFT record when the
+        file occupying it is deleted, incrementing the sequence number to mark
+        that the record now means something else. Keying correlation on the
+        record number alone attaches the deleted file's journal events to
+        whichever file inherited its record — producing a confident timeline
+        for the wrong file, with no error to indicate it.
+
         Args:
             frn_string (str): String representation of file reference number
-            
+
         Returns:
-            int or None: MFT record number if extraction successful, None otherwise
+            tuple or None: (record_number, sequence_number), or None if the
+            reference cannot be read.
         """
         try:
-            # Convert string to integer
             frn_int = int(frn_string)
-            # Extract lower 48 bits (MFT record number)
-            mft_record = frn_int & 0xFFFFFFFFFFFF  # 48-bit mask (0xFFFFFFFFFFFF = 281474976710655)
-            return mft_record
+            record = frn_int & 0xFFFFFFFFFFFF        # low 48 bits
+            sequence = (frn_int >> 48) & 0xFFFF      # high 16 bits
+            return (record, sequence)
         except (ValueError, TypeError):
             # If conversion fails (invalid format or None), return None
+            return None
+
+    @staticmethod
+    def _usn_field(usn_row, select_columns, name):
+        """One USN column by name, or None if this build did not select it."""
+        try:
+            return usn_row[select_columns.index(name)]
+        except (ValueError, IndexError, TypeError):
             return None
 
     def flags_to_text(self, flags_val):
         """Convert MFT flags to a human-readable string."""
         if flags_val is None:
             return ""
+        # Coerce like file_attributes_to_text does. A value that arrives as a
+        # string — from an older database, or a column whose declared affinity
+        # converted it — otherwise raises deep inside the correlation loop.
+        try:
+            flags_val = int(flags_val)
+        except (ValueError, TypeError):
+            return str(flags_val)
         flags = []
         if flags_val & 0x1: flags.append("IN_USE")
         if flags_val & 0x2: flags.append("IS_DIRECTORY")
@@ -714,16 +931,21 @@ class MFTUSNCorrelator:
         start_time = time.time()
         last_update_time = time.time()  # For progress bar updates
         
-        # Create mapping for quick lookup - optimize with dictionaries
+        # Create mapping for quick lookup - optimize with dictionaries.
+        # Keyed by (volume, record) — see the note on VOL above.
         mft_by_record = {}
         for row in mft_data:
-            record_num = row[0]
-            if record_num not in mft_by_record:
-                mft_by_record[record_num] = []
-            mft_by_record[record_num].append(row)
-        
-        # Create USN lookup by MFT record number for faster correlation
+            key = (row[VOL], row[0])
+            if key not in mft_by_record:
+                mft_by_record[key] = []
+            mft_by_record[key].append(row)
+
+        # USN lookup keyed by (volume, record, sequence). All three matter:
+        # the record number alone is ambiguous across volumes, and without the
+        # sequence number a deleted file's events attach to whatever now
+        # occupies its record.
         usn_by_mft_record = {}
+        matched_usn_keys = set()
         if usn_data:  # Only process if we have USN data
             # Find the correct index for file reference number in the select_columns
             ref_num_index = None
@@ -732,24 +954,31 @@ class MFTUSNCorrelator:
                 if col_name.lower() in ['frn', 'file_reference_number', 'file_reference']:
                     ref_num_index = i
                     break
-            
+
+            vol_index = (usn_select_columns.index('volume_letter')
+                         if 'volume_letter' in usn_select_columns else None)
+
             if ref_num_index is None:
                 print(f"{COLOR_WARNING}WARNING: No file_reference column found in USN data - correlation may fail{COLOR_RESET}")
             else:
                 for usn_row in usn_data:
                     try:
                         ref_num = usn_row[ref_num_index]  # file_reference field
-                        if ref_num:
-                            # Extract MFT record number from file reference
-                            mft_record = self._extract_mft_record_from_frn(ref_num)
-                            if mft_record and mft_record not in usn_by_mft_record:
-                                usn_by_mft_record[mft_record] = []
-                            if mft_record:
-                                usn_by_mft_record[mft_record].append(usn_row)
+                        if not ref_num:
+                            continue
+                        reference = self._extract_mft_reference_from_frn(ref_num)
+                        if not reference:
+                            continue
+                        record, sequence = reference
+                        volume = usn_row[vol_index] if vol_index is not None else None
+                        key = (volume, record, sequence)
+                        if key not in usn_by_mft_record:
+                            usn_by_mft_record[key] = []
+                        usn_by_mft_record[key].append(usn_row)
                     except (IndexError, TypeError):
                         # Skip rows with missing or invalid file_reference
                         continue
-        
+
         # Insert correlated data
         inserted_count = 0
         total_records = len(mft_data)
@@ -794,20 +1023,31 @@ class MFTUSNCorrelator:
             standard_info_present = mft_record_data[22]
             file_names_count = mft_record_data[23]
 
+            in_use_val = mft_record_data[4]
+            volume_letter = mft_record_data[VOL]
+            file_extension = mft_record_data[EXT]
+            file_size = mft_record_data[FILE_SIZE]
+            has_ads = mft_record_data[HAS_ADS]
+            ads_count = mft_record_data[ADS_COUNT]
+
             # Reconstruct path using parent-child relationships
-            reconstructed_path = self._reconstruct_path(record_num, mft_by_record, path_cache)
-            
+            reconstructed_path = self._reconstruct_path(
+                (volume_letter, record_num), mft_by_record, path_cache)
+
             # Convert file attributes to text for better readability
             flags_text = self.flags_to_text(flags)
             si_file_attributes_text = file_attributes_to_text(si_file_attributes)
             fn_file_flags_text = file_attributes_to_text(fn_file_flags)
-            
+
             # Check if this record has matching USN entries
             usn_events_to_process = []
-            
-            # Check if this MFT record has any corresponding USN events
-            if record_num in usn_by_mft_record and usn_by_mft_record[record_num]:
-                usn_events_to_process = usn_by_mft_record[record_num]
+
+            # Volume, record AND sequence — a record that has been reused must
+            # not collect the events of the file that used to occupy it.
+            usn_key = (volume_letter, record_num, sequence_number)
+            if usn_by_mft_record.get(usn_key):
+                usn_events_to_process = usn_by_mft_record[usn_key]
+                matched_usn_keys.add(usn_key)
                 matched_with_usn += 1
             else:
                 # If no USN events, still process once for MFT record
@@ -824,13 +1064,28 @@ class MFTUSNCorrelator:
                 usn_file_attributes_text = None
                 has_usn_event = 0
                 
+                usn_filename = None
+                usn_frn = None
+                usn_parent_frn = None
+                usn_security_id = None
+
                 if usn_event:
                     usn_event_id = usn_event[usn_select_columns.index('usn')]
                     usn_value = usn_event[usn_select_columns.index('usn')]
                     usn_reason = usn_reason_to_text(usn_event[usn_select_columns.index('reason')])
                     usn_timestamp = usn_event[usn_select_columns.index('timestamp')]
+                    # NOT a volume letter — source_info is the USN source flags.
+                    # The name is kept for the column it feeds, usn_source_info.
                     usn_volume_letter = usn_event[usn_select_columns.index('source_info')]
-                    
+
+                    # Fetched by the query all along and then discarded. The
+                    # filename is the name the journal recorded AT the event,
+                    # which is what makes a rename visible.
+                    usn_filename = self._usn_field(usn_event, usn_select_columns, 'filename')
+                    usn_frn = self._usn_field(usn_event, usn_select_columns, 'frn')
+                    usn_parent_frn = self._usn_field(usn_event, usn_select_columns, 'parent_frn')
+                    usn_security_id = self._usn_field(usn_event, usn_select_columns, 'security_id')
+
                     # Extract USN file attributes if available
                     try:
                         usn_file_attributes_val = usn_event[usn_select_columns.index('file_attributes')]
@@ -843,6 +1098,7 @@ class MFTUSNCorrelator:
                 
                 # Add to batch with all the glorious data
                 insert_batch.append((
+                    volume_letter,
                     record_num,
                     fn_filename,
                     reconstructed_path,
@@ -850,6 +1106,11 @@ class MFTUSNCorrelator:
                     flags_text,
                     is_directory,
                     is_deleted,
+                    file_extension,
+                    file_size,
+                    in_use_val,
+                    has_ads,
+                    ads_count,
                     si_created,
                     si_modified,
                     si_mft_modified,
@@ -870,6 +1131,10 @@ class MFTUSNCorrelator:
                     usn_reason,
                     usn_volume_letter,
                     usn_file_attributes_text,
+                    usn_filename,
+                    usn_frn,
+                    usn_parent_frn,
+                    usn_security_id,
                     1,  # has_mft_record
                     has_usn_event,
                     'HIGH' if has_usn_event else 'MEDIUM',
@@ -879,19 +1144,7 @@ class MFTUSNCorrelator:
 
                 # Execute batch insert when batch is full
                 if len(insert_batch) >= batch_size:
-                    corr_cursor.executemany("""
-                    INSERT OR IGNORE INTO mft_usn_correlated (
-                        mft_record_number, fn_filename, reconstructed_path,
-                        mft_sequence_number, mft_flags, is_directory, is_deleted,
-                        si_creation_time, si_modification_time, si_mft_entry_change_time, si_access_time, si_file_attributes,
-                        fn_parent_record_number, fn_parent_sequence_number,
-                        fn_creation_time, fn_modification_time, fn_mft_entry_change_time, fn_access_time,
-                        fn_allocated_size, fn_real_size, fn_file_attributes, fn_namespace,
-                        usn_event_id, usn_timestamp, usn_reason, usn_source_info, usn_file_attributes,
-                        has_mft_record, has_usn_event, correlation_confidence,
-                        filename_change_timeline, namespace_evolution
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, insert_batch)
+                    corr_cursor.executemany(CORRELATED_INSERT, insert_batch)
                     inserted_count += len(insert_batch)
                     insert_batch = []
 
@@ -921,21 +1174,66 @@ class MFTUSNCorrelator:
         
         # Insert any remaining records
         if insert_batch:
-            corr_cursor.executemany("""
-            INSERT OR IGNORE INTO mft_usn_correlated (
-                mft_record_number, fn_filename, reconstructed_path,
-                mft_sequence_number, mft_flags, is_directory, is_deleted,
-                si_creation_time, si_modification_time, si_mft_entry_change_time, si_access_time, si_file_attributes,
-                fn_parent_record_number, fn_parent_sequence_number,
-                fn_creation_time, fn_modification_time, fn_mft_entry_change_time, fn_access_time,
-                fn_allocated_size, fn_real_size, fn_file_attributes, fn_namespace,
-                usn_event_id, usn_timestamp, usn_reason, usn_source_info, usn_file_attributes,
-                has_mft_record, has_usn_event, correlation_confidence,
-                filename_change_timeline, namespace_evolution
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, insert_batch)
+            corr_cursor.executemany(CORRELATED_INSERT, insert_batch)
             inserted_count += len(insert_batch)
-        
+            insert_batch = []
+
+        # -------------------------------------------------------------------
+        # ORPHAN JOURNAL EVENTS
+        #
+        # Everything above walks MFT records, so a journal event whose file has
+        # no MFT record was silently dropped — and `has_mft_record` was written
+        # as a literal 1, so the column could never say otherwise.
+        #
+        # Those are the events worth having. A file created and deleted between
+        # two collections leaves no MFT record at all; the journal is the only
+        # place it ever existed. Discarding them means the correlated database
+        # can only ever show files that survived to be collected.
+        # -------------------------------------------------------------------
+        orphan_count = 0
+        for usn_key, events in usn_by_mft_record.items():
+            if usn_key in matched_usn_keys:
+                continue
+            volume, record, sequence = usn_key
+            for usn_event in events:
+                usn_attrs = self._usn_field(usn_event, usn_select_columns, 'file_attributes')
+                insert_batch.append((
+                    volume,
+                    record, None, None,          # no MFT record, so no name or path
+                    sequence, None, None, None,
+                    None, None, None, None, None,
+                    None, None, None, None, None,
+                    None, None,
+                    None, None, None, None, None, None, None, None,
+                    self._usn_field(usn_event, usn_select_columns, 'usn'),
+                    self._usn_field(usn_event, usn_select_columns, 'timestamp'),
+                    usn_reason_to_text(self._usn_field(usn_event, usn_select_columns, 'reason')),
+                    self._usn_field(usn_event, usn_select_columns, 'source_info'),
+                    file_attributes_to_text(usn_attrs) if usn_attrs is not None else None,
+                    self._usn_field(usn_event, usn_select_columns, 'filename'),
+                    self._usn_field(usn_event, usn_select_columns, 'frn'),
+                    self._usn_field(usn_event, usn_select_columns, 'parent_frn'),
+                    self._usn_field(usn_event, usn_select_columns, 'security_id'),
+                    0,   # has_mft_record — the point of this pass
+                    1,   # has_usn_event
+                    'JOURNAL_ONLY',
+                    None, None
+                ))
+                orphan_count += 1
+                if len(insert_batch) >= batch_size:
+                    corr_cursor.executemany(CORRELATED_INSERT, insert_batch)
+                    inserted_count += len(insert_batch)
+                    insert_batch = []
+
+        if insert_batch:
+            corr_cursor.executemany(CORRELATED_INSERT, insert_batch)
+            inserted_count += len(insert_batch)
+            insert_batch = []
+
+        if orphan_count:
+            print(f"{COLOR_INFO}{orphan_count:,} journal event(s) had no MFT record — "
+                  f"kept as JOURNAL_ONLY{COLOR_RESET}")
+
         # Final statistics
         elapsed = time.time() - start_time
         records_per_sec = inserted_count / elapsed if elapsed > 0 else 0
@@ -1068,27 +1366,34 @@ class MFTUSNCorrelator:
             except:
                 pass
 
-    def _reconstruct_path(self, record_num, mft_by_record, path_cache):
+    def _reconstruct_path(self, key, mft_by_record, path_cache):
         """
         Iteratively reconstruct file path using a cache to avoid re-computation.
-        """
-        if record_num in path_cache:
-            return path_cache[record_num]
 
+        `key` is (volume_letter, record_number). A path is walked by following
+        parent record numbers, and those are only meaningful within one volume —
+        walking across volumes would splice one disk's directory tree into
+        another's.
+        """
+        if key in path_cache:
+            return path_cache[key]
+
+        volume, record_num = key
         path_parts = []
         current_record = record_num
+        parent_record = None
         visited = set()
 
         while current_record is not None and current_record != 0 and current_record not in visited:
             visited.add(current_record)
-            if current_record in mft_by_record:
-                record_data = mft_by_record[current_record][0]
+            if (volume, current_record) in mft_by_record:
+                record_data = mft_by_record[(volume, current_record)][0]
                 filename = record_data[5]
                 parent_record = record_data[6]
 
                 if filename:
                     path_parts.append(filename)
-                
+
                 if parent_record == current_record or parent_record is None or parent_record == 0:
                     break
 
@@ -1096,14 +1401,14 @@ class MFTUSNCorrelator:
             else:
                 # Try to find the parent record in the MFT data to provide more context
                 parent_info = ""
-                if parent_record in mft_by_record:
-                    parent_data = mft_by_record[parent_record][0]
+                if (volume, parent_record) in mft_by_record:
+                    parent_data = mft_by_record[(volume, parent_record)][0]
                     parent_filename = parent_data[5]
                     parent_info = f" (Filename: {parent_filename})"
-                
+
                 path_parts.append(f"[Unknown Parent: {current_record}{parent_info}]")
                 break
-        
+
         # Handle root directory case
         if not path_parts:
             if record_num == 5:  # MFT record 5 is usually the root directory
@@ -1113,7 +1418,7 @@ class MFTUSNCorrelator:
         else:
             reconstructed_path = "/".join(reversed(path_parts))
 
-        path_cache[record_num] = reconstructed_path
+        path_cache[key] = reconstructed_path
         return reconstructed_path
     
     def _create_indexes(self, cursor):

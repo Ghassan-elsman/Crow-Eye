@@ -35,23 +35,10 @@ from eye.services.rag_service import _rag_tokenize
 from eye.services.report_engine import is_triage_block
 
 
-_TRANSIENT_ERROR_MARKERS = (
-    "500", "502", "503", "504",
-    "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED",
-    "timeout", "timed out", "temporarily unavailable",
-    "connection reset", "connection aborted",
-)
-
-
-def _is_transient_model_error(exc: Exception) -> bool:
-    """A model-call exception is treated as transient (and therefore retryable
-    exactly once) only when it looks like a server-side hiccup. Quota / auth /
-    bad-request failures are NOT transient and must surface immediately so the
-    user can act on them."""
-    s = str(exc)
-    if any(m in s for m in ("401", "403", "429", "INVALID_ARGUMENT", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "quota")):
-        return False
-    return any(m in s for m in _TRANSIENT_ERROR_MARKERS)
+# Transient-vs-permanent model-error classification lives in
+# eye.services.model_router.is_transient_model_error — the single choke point for
+# every model call, where the retry/backoff actually happens. A duplicate lived
+# here and had already drifted from the router's copy; it was never called.
 
 
 # A forensic evidence reference: ``database:table:rowid``. The database segment is
@@ -2254,25 +2241,31 @@ class QueryProcessor:
                     except Exception as _e:
                         self.logger.debug(f"Sub-question-aware context skipped: {_e}")
 
-            # Gemma models on the Gemini API can't use NATIVE function-calling (the
-            # backend drops the `tools` config, otherwise the API 500s), so they call
-            # tools through the TEXT protocol instead — the system prompt teaches them
-            # the ```tool_call format. Note it ONCE so the investigator understands the
-            # tool calls arrive as text, not native calls. This is NOT a failure.
+            # A model without NATIVE function-calling calls tools through the TEXT
+            # protocol instead — the system prompt teaches it the ```tool_call
+            # format. Note it ONCE so the investigator understands why tool calls
+            # arrive as text. This is NOT a failure.
+            #
+            # The capability now comes from ModelRouter's detection ladder rather
+            # than a hardcoded `gemma*` name match, so this notice fires for ANY
+            # degraded model — including local and fine-tuned ones nobody has
+            # catalogued — and names how the limitation was determined.
             try:
-                _mr_cfg = self.cm.model_router.config
-                _bk = (_mr_cfg.get("backend") or "").lower()
-                _mdl = (_mr_cfg.get("model_name") or "").replace("models/", "").lower()
-                if _bk == "gemini" and _mdl.startswith("gemma"):
-                    emit_step(
-                        "thinking",
-                        "Gemma model: native function-calling is unavailable on the Gemini API — "
-                        "running forensic tools via the text tool-call protocol.",
-                        "done",
-                    )
-                    self.logger.info(
-                        "Active model '%s' is a Gemma model on the Gemini API; using the text "
-                        "tool-call protocol (native function-calling unavailable).", _mdl)
+                from eye.services import tool_capability as tc
+                _cap = self.cm.model_router.get_tool_capability()
+                _support = _cap.get("support")
+                if _support in (tc.TEXT_PROTOCOL, tc.NONE):
+                    _mdl = self.cm.model_router.config.get("model_name") or "the active model"
+                    if _support == tc.NONE:
+                        _msg = (f"{_mdl} cannot call forensic tools ({tc.describe(_cap)}) — "
+                                f"answering conversationally only.")
+                    else:
+                        _msg = (f"{_mdl}: native function-calling unavailable "
+                                f"({tc.describe(_cap)}) — running forensic tools via the "
+                                f"text tool-call protocol.")
+                    emit_step("thinking", _msg, "done")
+                    self.logger.info("Tool capability for '%s': %s (%s)",
+                                     _mdl, _support, _cap.get("evidence"))
             except Exception:
                 pass
 

@@ -8,7 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist IS committed here (default vite scaffolding ignores it). The built
+# timeline ships with Crow-Eye so it opens without Node.js — see the root
+# .gitignore. The Eye's build stays ignored; it is ~9 MB.
 dist-ssr
 *.local
 

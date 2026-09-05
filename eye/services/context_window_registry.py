@@ -193,12 +193,14 @@ CURATED_MODELS: dict = {
         "o4-mini",
         "gpt-4-turbo",
     ],
+    # gemini-1.5-* were removed: they are retired and 404 on generate, so
+    # offering them in the menu handed the investigator a broken selection.
+    # Live list_models() is merged on top, so newer ids still appear.
     "gemini": [
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
+        "gemini-2.0-flash-lite",
     ],
     "deepseek": [
         "deepseek-chat",

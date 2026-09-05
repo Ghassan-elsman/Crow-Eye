@@ -13,7 +13,10 @@ Each profile defines:
 - display_name: Human-friendly name shown in the UI
 - default_executable: The command to run (e.g., "gemini", "llama-cli")
 - default_flags: Command-line flags to pass
-- model_flag: How to specify which model to use
+- model_flag: How to specify which model to use (e.g. "--model")
+- model_after_default_flags: Set instead of model_flag when the tool takes the
+  model as a POSITIONAL argument after its subcommand (e.g. `ollama run <model>`)
+- system_flag: How to pass the system prompt; omit and it is prepended to stdin
 - discovery_method: How to find available models ("probe" means we try running it)
 - model_pattern: Regex to extract model names from output
 - use_stdin: Whether to pipe input via stdin (almost always True)
@@ -46,9 +49,13 @@ CLI_PROFILES: Dict[str, Dict[str, Any]] = {
     "claude_code": {
         "display_name": "Claude Code",
         "default_executable": "claude",
-        "default_flags": ["--prompt"],
+        # `-p/--print` is the non-interactive flag (there is no `--prompt`), and the
+        # system prompt is appended with `--append-system-prompt` (there is no
+        # `--system-prompt`). The old values made every invocation fail on flag
+        # parsing. Verified against `claude --help`.
+        "default_flags": ["-p"],
         "model_flag": "--model",
-        "system_flag": "--system-prompt",
+        "system_flag": "--append-system-prompt",
         "discovery_method": "probe",
         "model_pattern": r"(claude-[a-z0-9.-]+)",
         "use_stdin": True,
@@ -74,7 +81,13 @@ CLI_PROFILES: Dict[str, Dict[str, Any]] = {
     "ollama_cli": {
         "display_name": "Ollama CLI",
         "default_executable": "ollama",
-        "default_flags": ["run", "llama3"],
+        # `ollama run <model>` takes the model as a POSITIONAL argument after the
+        # subcommand — there is no --model flag. The old profile hardcoded
+        # "llama3" in default_flags, so the configured model_name was ignored and
+        # every investigation ran against whatever llama3 happened to be pulled.
+        "default_flags": ["run"],
+        "model_after_default_flags": True,
+        "discovery_method": "probe",
         "use_stdin": True,
         "description": "Local models via Ollama CLI"
     },

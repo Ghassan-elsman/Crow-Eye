@@ -407,8 +407,8 @@ class CollectionManifest:
         if self.get_status() == "success":
             steps.append("All artifacts collected successfully.")
             steps.append("Run offline parsers to analyze collected artifacts:")
-            steps.append("  - offlineRegClaw.py for Registry analysis")
-            steps.append("  - offlineACJL.py for Jump Lists/LNK analysis")
+            steps.append("  - offline_parsers/offline_RegClaw.py for Registry analysis")
+            steps.append("  - offline_parsers/offline_ACJLClaw.py for Jump Lists/LNK analysis")
             steps.append("  - Other specialized parsers for specific artifact types")
         elif self.get_status() == "partial_success":
             steps.append("Some artifacts were collected successfully.")

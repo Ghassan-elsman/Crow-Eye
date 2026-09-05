@@ -7,9 +7,16 @@ Dark cyberpunk loading dialog with real-time log display for the Crow Eye applic
 import sys
 import os
 import io
+import re
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication
+
+# Terminal colour codes, which several parsers emit through colorama and which
+# this dialog would otherwise embed into HTML as literal escape sequences.
+# Stripped centrally so no parser has to remember — the MFT, USN, Registry and
+# live-collection paths all push coloured text down this same capture.
+ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
 
 # Add parent directory to path for standalone execution
 if __name__ == "__main__":
@@ -56,9 +63,13 @@ class LogCapture:
         sys.stderr = self.original_stderr
     
     def write(self, text):
-        # Write to original stdout/stderr
+        # Write to original stdout/stderr — unstripped, so a real terminal
+        # still gets its colours.
         self.original_stdout.write(text)
-        
+
+        # The display renders HTML, so escape codes have to come out here.
+        text = ANSI_ESCAPE.sub('', text)
+
         # Filter out progress bar updates (lines starting with carriage return or containing progress bars)
         if text.strip():
             # Skip progress bar lines (they contain █ or ░ characters and percentage)
@@ -81,7 +92,8 @@ class LogCapture:
 class LoadingDialog(QtWidgets.QDialog):
     """Dark cyberpunk loading dialog with real-time log display and glow effects"""
     
-    log_signal = pyqtSignal(str)  # Signal for thread-safe log updates
+    log_signal = pyqtSignal(str)     # Signal for thread-safe log updates
+    status_signal = pyqtSignal(str)  # Same, for the status line
     cancelled = pyqtSignal()      # Signal emitted when cancel button is clicked
     
     def __init__(self, title="CROW EYE SYSTEM", parent=None):
@@ -121,6 +133,7 @@ class LoadingDialog(QtWidgets.QDialog):
         
         # Connect log signal for thread-safe updates
         self.log_signal.connect(self.add_log_message_safe)
+        self.status_signal.connect(self.set_status_safe)
         
         # Log capture
         self.log_capture = LogCapture(self.add_log_message)
@@ -150,6 +163,19 @@ class LoadingDialog(QtWidgets.QDialog):
         self.title_label.setAlignment(QtCore.Qt.AlignCenter)
         self.title_label.setFixedHeight(80)
         content_layout.addWidget(self.title_label)
+
+        # Status line — what is happening right now, as opposed to the title,
+        # which says what the dialog is. Two places in Crow Eye.py already look
+        # for a QLabel named "statusLabel" to apply CrowEyeStyles.OVERLAY_STATUS
+        # to; the widget had never been added, so both were quietly doing
+        # nothing. Hidden until something has a status to report, so a run that
+        # never sets one looks exactly as it did before.
+        self.status_label = QtWidgets.QLabel("")
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.status_label.setWordWrap(True)
+        self.status_label.hide()
+        content_layout.addWidget(self.status_label)
         
         # Logo - centered with minimal container
         logo_container = QtWidgets.QHBoxLayout()
@@ -625,6 +651,23 @@ class LoadingDialog(QtWidgets.QDialog):
         self.progress_bar.setValue(percentage)
         self.progress_bar.setFormat(f"Progress: {completed_steps}/{total_steps} tasks ({percentage}%)")
         QApplication.processEvents()
+
+    def set_status(self, message):
+        """Set the status line (thread-safe via signal).
+
+        Safe to call from a worker thread — which is the point, since the
+        parsers run inside FunctionWorker. Note that update_step() is NOT:
+        it touches the progress bar and calls processEvents() directly.
+        """
+        self.status_signal.emit(message or "")
+
+    def set_status_safe(self, message):
+        """Apply the status line (called from the signal, on the GUI thread)."""
+        if not message:
+            self.status_label.hide()
+            return
+        self.status_label.setText(message)
+        self.status_label.show()
 
     def add_log_message(self, message):
         """Add a message to the log (thread-safe via signal)"""

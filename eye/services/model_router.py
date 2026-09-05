@@ -16,6 +16,7 @@ COMPONENTS:
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional
 import logging
+import re
 import time
 import requests
 import json
@@ -24,29 +25,80 @@ import json
 from eye.backends.base import LLMBackend
 
 
-# Transient (retryable) vs. permanent model-call failures. Mirrors the markers
-# in query_processor; kept here so retry/backoff lives at the single choke point
-# for EVERY model call (main loop, map-reduce, history summarization).
-_TRANSIENT_ERROR_MARKERS = (
-    "500", "502", "503", "504",
-    "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED", "overloaded",
-    "timeout", "timed out", "temporarily unavailable",
-    "connection reset", "connection aborted",
+# Transient (retryable) vs. permanent model-call failures. This lives here so
+# retry/backoff sits at the single choke point for EVERY model call (main loop,
+# map-reduce, history summarization).
+#
+# The status code is read FIRST and is decisive. Substring matching on the
+# message alone was wrong in both directions: a genuine 503 whose text mentioned
+# a previous 429 was treated as permanent and never retried, and a permanent 400
+# complaining about `max_tokens: 500` was retried three times with backoff.
+_TRANSIENT_STATUSES = frozenset({500, 502, 503, 504, 529})
+_PERMANENT_STATUSES = frozenset({400, 401, 403, 404, 409, 413, 422, 429})
+
+# Message fallback, used only when no status code is available.
+#
+# Numbers are anchored on BOTH sides, because that is where the false positives
+# came from — `req_1500x` and `max_tokens: 500` must not read as a 500. Named
+# markers are anchored on the left only, so provider variants like Anthropic's
+# `overloaded_error` and `INTERNAL_ERROR` still match.
+_TRANSIENT_MESSAGE_RE = re.compile(
+    r"\b(?:500|502|503|504|529)\b"
+    r"|\b(?:INTERNAL|UNAVAILABLE|DEADLINE_EXCEEDED|overloaded|timeout|timed out|"
+    r"temporarily unavailable|connection reset|connection aborted)",
+    re.IGNORECASE,
 )
-_PERMANENT_ERROR_MARKERS = (
-    "401", "403", "429", "INVALID_ARGUMENT", "PERMISSION_DENIED",
-    "RESOURCE_EXHAUSTED", "quota",
+_PERMANENT_MESSAGE_RE = re.compile(
+    r"\b(?:400|401|403|404|422|429)\b"
+    r"|\b(?:INVALID_ARGUMENT|PERMISSION_DENIED|RESOURCE_EXHAUSTED|quota)",
+    re.IGNORECASE,
 )
+
+
+def _error_status_code(exc: Exception) -> Optional[int]:
+    """The HTTP status behind an exception, whichever SDK raised it.
+
+    Providers disagree on where they put it: a bare ``status_code`` (Anthropic,
+    Gemini), ``response.status_code`` (requests / httpx), or ``code``.
+    """
+    for attr in ("status_code", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        return status
+    return None
 
 
 def is_transient_model_error(exc: Exception) -> bool:
     """True only for server-side hiccups worth retrying (e.g. Gemini 500/
     INTERNAL/overloaded). Auth/quota/bad-request are permanent and surface
     immediately so the investigator can act."""
+    status = _error_status_code(exc)
+    if status is not None:
+        return status in _TRANSIENT_STATUSES
+
     s = str(exc)
-    if any(m in s for m in _PERMANENT_ERROR_MARKERS):
+    if _PERMANENT_MESSAGE_RE.search(s):
         return False
-    return any(m in s for m in _TRANSIENT_ERROR_MARKERS)
+    return bool(_TRANSIENT_MESSAGE_RE.search(s))
+
+
+# The model menu's "Connect to <provider>…" rows carry these names rather than a
+# real model id. Persisting one literally leaves a name no provider accepts —
+# and the switch's connectivity check still passes, because listing models says
+# nothing about whether the configured one exists.
+_PLACEHOLDER_MODEL_NAMES = {"", "default", "auto", "cli-default-model"}
+
+
+def is_placeholder_model(model_name: Optional[str]) -> bool:
+    """True when ``model_name`` is a stand-in that must be resolved before use."""
+    if model_name is None:
+        return True
+    return str(model_name).strip().lower() in _PLACEHOLDER_MODEL_NAMES
 from eye.backends.cloud_api.openai_backend import OpenAIBackend
 from eye.backends.cloud_api.anthropic_backend import AnthropicBackend
 from eye.backends.cloud_api.gemini_backend import GeminiBackend
@@ -71,11 +123,21 @@ class ModelRouter:
     2. Providing a unified generation/discovery interface to the ContextManager.
     3. Ensuring secure model switching without accidentally changing the Agent (Backend).
     """
+
+    # How the active model can call forensic tools. The first two deliberately
+    # carry the same strings as eye.services.tool_capability's verdicts, so a
+    # verdict and a support level are never two vocabularies for one fact.
+    TOOL_SUPPORT_NATIVE = "native"          # real function calling
+    TOOL_SUPPORT_TEXT = "text_protocol"     # only the fenced ```tool_call format
+    TOOL_SUPPORT_UNKNOWN = "unknown"        # could not be determined — say so
+
     def __init__(self, config, credential_manager=None):
         self.config = config
         self.credential_manager = credential_manager
         self.logger = logging.getLogger(self.__class__.__name__)
         self.backend = self._initialize_backend()
+        # Built on first use and dropped on switch_model — see _capability_probe.
+        self._tool_capability_probe = None
 
     def _initialize_backend(self):
         """
@@ -218,7 +280,8 @@ class ModelRouter:
                 raise RuntimeError(f"EYE Assistant is missing a required dependency for the '{bt}' agent. Please check the 'Diagnostics' tool in the setup wizard. Error: {str(e)}")
             raise RuntimeError(f"EYE Assistant could not initialize the '{bt}' agent. Details: {str(e)}")
 
-    def generate(self, system_prompt, user_message, tools=None, history=None, on_retry=None, gen_params=None):
+    def generate(self, system_prompt, user_message, tools=None, history=None, on_retry=None,
+                 gen_params=None, _bypass_capability_gate=False):
         """Delegate to the active backend with transient-error retry + backoff.
 
         Gemini (and others) intermittently return 500/INTERNAL/UNAVAILABLE under
@@ -234,7 +297,32 @@ class ModelRouter:
         "max_output_tokens": 8192}``) is forwarded to the backend so callers can
         tune determinism per phase (planning vs answer). Backends that don't
         support a given knob ignore it; ``None`` keeps each backend's defaults.
+
+        ``_bypass_capability_gate`` is for the capability probe itself, which has
+        to send a tools payload to a model precisely to find out whether it can
+        accept one. Nothing else should set it.
         """
+        # CAPABILITY GATE. Sending a tools payload to a model that rejects it is
+        # what produced the recurring Gemma 500 INTERNAL — an opaque server error
+        # mid-investigation, with nothing pointing at the real cause.
+        #
+        # Only an ACTIONABLE verdict (confirmed by a live probe, or a known
+        # family) may strip the payload. A merely ASSUMED verdict must never
+        # change the request: guessing wrong here would silently disable native
+        # tools on a model that supports them, which is the worse failure — it
+        # degrades every answer instead of producing one loud error.
+        if tools and not _bypass_capability_gate:
+            try:
+                from eye.services import tool_capability as tc
+                verdict = self.get_tool_capability()
+                if tc.is_actionable(verdict) and verdict.get("support") != tc.NATIVE:
+                    self.logger.info(
+                        "Tool payload withheld: %s (%s). Tools go through the text protocol.",
+                        verdict.get("support"), tc.describe(verdict))
+                    tools = None
+            except Exception as e:
+                self.logger.debug(f"Capability gate skipped: {e}")
+
         try:
             attempts = int((self.config.get("reasoning") or {}).get("model_retry_max_attempts", 3))
         except (TypeError, ValueError, AttributeError):
@@ -302,6 +390,100 @@ class ModelRouter:
             return self.backend.get_context_window()
         except Exception as e:
             self.logger.debug(f"get_context_window failed: {e}")
+            return None
+
+    def _capability_probe(self):
+        """The ToolCapabilityProbe bound to this router, built on first use.
+
+        Held on the router rather than constructed per call so the on-disk
+        verdict cache is read once, and so ``switch_model`` has a single thing to
+        invalidate. Imported lazily: ``tool_capability`` reaches back into the
+        router, and importing it at module scope would close that loop.
+        """
+        probe = getattr(self, "_tool_capability_probe", None)
+        if probe is None:
+            from eye.services.tool_capability import ToolCapabilityProbe
+            probe = ToolCapabilityProbe(self)
+            self._tool_capability_probe = probe
+        return probe
+
+    def get_tool_capability(self, use_cache: bool = True) -> Dict[str, Any]:
+        """Can the active model call forensic tools, and how do we know?
+
+        Cheap rungs only — cache, provider metadata, family registry, then an
+        optimistic default. Issues no model call, so this is safe on the GUI
+        thread. Returns the verdict dict described in
+        ``eye.services.tool_capability`` (``support`` / ``confidence`` /
+        ``source`` / ``evidence``).
+
+        Never raises. An undetermined capability must not stop an investigation,
+        and the fallback is ASSUMED confidence, which the gate below ignores —
+        so a detection failure can never disable tools on a model that has them.
+        """
+        try:
+            return self._capability_probe().resolve(use_cache=use_cache)
+        except Exception as e:
+            self.logger.debug(f"Tool-capability resolve failed: {e}")
+            from eye.services import tool_capability as tc
+            return tc._verdict(
+                tc.NATIVE, tc.ASSUMED, tc.SRC_DEFAULT,
+                f"capability detection unavailable ({e}); assuming native function calling",
+                self.config.get("backend") or "", self.config.get("model_name") or "")
+
+    def probe_tool_capability(self, force: bool = False) -> Dict[str, Any]:
+        """The full ladder, including live probes against the model.
+
+        Costs up to two small model calls (~150 tokens each), so OFF-THREAD
+        CALLERS ONLY — the Settings panel's "Re-test" button runs it in a worker.
+        Unlike :meth:`get_tool_capability` this propagates, because a person
+        asked for the test and is waiting to be told whether it worked.
+        """
+        return self._capability_probe().probe(force=force)
+
+    def get_tool_support(self) -> str:
+        """How the active model can call tools, as a plain string for callers
+        that only branch on it (the system-prompt builder, the settings panel).
+
+        A backend may declare ``tool_support`` itself — it knows things the
+        ladder cannot, such as an endpoint that strips the tools payload. That
+        declaration wins. Otherwise the capability ladder answers.
+
+        Returns ``TOOL_SUPPORT_UNKNOWN`` if anything at all goes wrong, which is
+        an honest "we could not determine this" rather than a guess presented as
+        fact — the investigator sees the difference in Settings.
+        """
+        try:
+            declared = getattr(self.backend, "tool_support", None)
+            if declared:
+                return declared
+
+            from eye.services import tool_capability as tc
+            support = (self.get_tool_capability() or {}).get("support")
+            if support == tc.NATIVE:
+                return self.TOOL_SUPPORT_NATIVE
+            if support in (tc.TEXT_PROTOCOL, tc.NONE):
+                return self.TOOL_SUPPORT_TEXT
+            return self.TOOL_SUPPORT_UNKNOWN
+        except Exception as e:
+            self.logger.debug(f"Tool-support probe failed: {e}")
+            return self.TOOL_SUPPORT_UNKNOWN
+
+    def get_tool_support_warning(self) -> Optional[str]:
+        """One sentence for the investigator when the active model is degraded,
+        or ``None`` when it can function-call normally.
+
+        Shown BEFORE an investigation starts. Finding out mid-query that the
+        model cannot run forensic tools is finding out too late.
+        """
+        try:
+            if self.get_tool_support() == self.TOOL_SUPPORT_NATIVE:
+                return None
+            model = self.config.get("model_name") or "The active model"
+            return (f"{model} does not support native function calling — the Eye will run "
+                    f"forensic tools through the text tool-call protocol instead. Results are "
+                    f"the same, but tool calls are less reliable than with a native model.")
+        except Exception as e:
+            self.logger.debug(f"Tool-support warning failed: {e}")
             return None
 
     def get_models_with_quota(self):
@@ -434,22 +616,84 @@ class ModelRouter:
             
         return groups
 
+    def _resolve_placeholder_model(self, target_model: str) -> str:
+        """Turn a placeholder model name into an id the provider will accept.
+
+        Deliberately NOT ``list_models()[0]``. A provider's catalogue includes
+        ids that 404 on generate — Gemini lists ``gemini-2.5-flash-lite`` and
+        then rejects it as no longer available to new users — so the pick is the
+        intersection of what is live AND what we curate as recommended. Only if
+        that is empty do we fall back to any live model, then to the curated list
+        (for a provider whose listing is down or whose key is not set yet).
+
+        Raises ValueError when nothing resolves, so the bridge reverts the switch
+        and tells the investigator rather than leaving an unusable model behind.
+        """
+        bt = self.config.get("backend")
+
+        # A CLI agent runs its own default when no model is given; resolving one
+        # for it would override a deliberate choice.
+        if self.config.get("integration_type") == "local_cli" or bt in list_supported_backends():
+            return target_model
+
+        try:
+            live = list(self.backend.list_models() or [])
+        except Exception as e:
+            self.logger.debug(f"Could not list models while resolving '{target_model}': {e}")
+            live = []
+
+        from eye.services.context_window_registry import recommended_models
+        recommended = list(recommended_models(bt) or [])
+
+        for candidate in recommended:
+            if candidate in live:
+                self.logger.info(f"Resolved placeholder model to recommended+live '{candidate}'")
+                return candidate
+
+        for candidate in live:
+            if not is_placeholder_model(candidate):
+                self.logger.info(f"Resolved placeholder model to live '{candidate}'")
+                return candidate
+
+        if recommended:
+            self.logger.info(f"Resolved placeholder model to curated '{recommended[0]}' "
+                             f"(no live catalogue available)")
+            return recommended[0]
+
+        raise ValueError(
+            f"Could not determine a model to use for '{bt}'. The provider returned no models "
+            f"and Crow-Eye has no recommended list for it — choose a model explicitly.")
+
     def switch_model(self, model_name: str, backend: Optional[str] = None):
         """
         Updates the active model and optionally switches the backend provider.
         """
         old_bt = self.config.get("backend")
         target_model = model_name.strip()
-        
+
         if backend and backend != old_bt:
             self.logger.info(f"Switching backend from {old_bt} to {backend}")
             self.config["backend"] = backend
             # Reset integration_type to trigger re-inference in _initialize_backend
             self.config["integration_type"] = None
-        
+
+        # A "Connect to <provider>…" row carries a placeholder, not a model id.
+        # Resolve it to something the provider will actually accept, BEFORE it is
+        # persisted — otherwise the switch appears to succeed (connectivity only
+        # lists models) and every later request 404s.
+        if is_placeholder_model(target_model):
+            target_model = self._resolve_placeholder_model(target_model)
+
         # Update model_name for the next initialization
         self.config["model_name"] = target_model
-        
+
         # Re-initialize the specific backend strategy
         self.backend = self._initialize_backend()
+
+        # Drop the capability probe. It closes over the OLD backend (the Gemini
+        # rung asks it directly), and its verdict is per backend+model — keeping
+        # it would report the previous model's tool support for the new one. The
+        # on-disk cache survives, so re-resolving is free for a model already seen.
+        self._tool_capability_probe = None
+
         self.logger.info(f"Forensic Agent switched to {self.config.get('backend')}:{target_model}")

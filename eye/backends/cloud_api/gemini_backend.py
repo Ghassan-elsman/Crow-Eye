@@ -98,6 +98,20 @@ class GeminiBackend(LLMBackend):
         "definitions", "title", "examples", "const", "patternProperties",
     })
 
+    # Name fragments marking a model the Eye cannot hold a forensic conversation
+    # with. `models.list()` returns the account's WHOLE catalogue — image, music,
+    # audio, live-translate, robotics and research agents included — and every one
+    # of those used to appear in the model menu as a selectable chat model.
+    # Verified against a live account: lyria-3-* (music), nano-banana-* and
+    # *-image (image generation), *native-audio*, *-live-*, *robotics*,
+    # deep-research-*, computer-use and antigravity were all being offered.
+    _NON_CHAT_MODEL_TAGS = (
+        "embedding", "aqa", "imagen", "veo", "-tts", "image-generation",
+        "-image", "nano-banana", "lyria",
+        "native-audio", "-live-", "live-translate",
+        "robotics", "computer-use", "deep-research", "antigravity",
+    )
+
     def _is_gemma(self) -> bool:
         """Gemma models on the Gemini API support NEITHER system instructions NOR
         function calling. Detect them so we can build a request the server accepts
@@ -328,8 +342,7 @@ class GeminiBackend(LLMBackend):
                               "chat", "bidiGenerateContent"}
                 clean_name = m_name.replace("models/", "")
                 low = clean_name.lower()
-                non_chat = any(tag in low for tag in
-                               ("embedding", "aqa", "imagen", "veo", "-tts", "image-generation"))
+                non_chat = any(tag in low for tag in self._NON_CHAT_MODEL_TAGS)
                 is_chat = (bool(caps & generative) or not caps) and not non_chat
 
                 if is_chat and clean_name and clean_name not in models:

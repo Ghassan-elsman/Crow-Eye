@@ -75,6 +75,7 @@ from utils.time_utils import (format_forensic_timestamp, get_current_forensic_ti
                               get_current_utc, filetime_to_datetime, ensure_utc)
 # Shared with the live parser so both split an AppId and decode an Int64
 # timestamp identically.
+from Artifacts_Collectors import registry_transaction_log
 from Artifacts_Collectors.SRUM_Claw import (parse_srum_app_id, srum_filetime,
                                             decode_binary_sid)
 
@@ -501,8 +502,9 @@ class IDResolver:
                 
                 logger.info(f"Loading registry hive: {hive_path}")
                 
-                # Open registry hive
-                reg = Registry.Registry(hive_path)
+                # Open registry hive, recovered if its logs apply
+                reg = Registry.Registry(
+                    registry_transaction_log.hive_for_reading(hive_path))
                 
                 # Try to find ProfileList key (typically in SOFTWARE hive)
                 profile_list_path = "Microsoft\\Windows NT\\CurrentVersion\\ProfileList"

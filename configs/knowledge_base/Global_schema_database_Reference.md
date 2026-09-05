@@ -4,28 +4,175 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 
 **`parsed_at` is parser bookkeeping** — it records when Crow-Eye parsed the artifact, not when the artifact activity occurred. Never use it as an event time. Case databases written by older Crow-Eye builds may still carry the legacy names `timestamp` (registry tables), `parsed_timestamp` (ShimCache), `parse_timestamp` (SRUM metadata) or `inserted_at` (USN); check the actual schema before querying an older case.
 
+**`last_written` is an UPPER BOUND, not an event time.** It is the containing key's own last-write time, and writing any value under a key updates the whole key — so all it establishes is *"not written after T"*. `time_basis` says how it was derived, and the two values mean different things:
+
+| `time_basis` | what `last_written` is |
+|---|---|
+| `value (txn log)` | the exact time that value changed, recovered from the transaction log |
+| `key upper bound` | the key's write time — the value changed at or before this |
+
+A key with one timestamp and three values under it gives the same `last_written` to all three, and that is wrong for at least two of them. Never present a `key upper bound` time as when something happened; say "at or before". The GUI renders these as `<= T` for exactly this reason, while the database keeps the bare timestamp so it can be sorted and compared.
+
+**`*_decoded` columns hold the readable form, and are EMPTY when there was nothing to decode.** `value_decoded`, `data_decoded` and `row_decoded` are never a copy of the raw value — a blank means "this value is already plain, or Crow-Eye has no rule for it", not "decoding failed". So:
+
+- to find the rows that carry a decode, use `WHERE data_decoded <> ''` (or the relevant `*_decoded` column), not `IS NOT NULL`;
+- the raw column (`data`, `value`, `value_raw`, `row_data`) stays authoritative — quote it when the question is what the registry holds, and the decoded one when the question is what it means;
+- what gets decoded: locale ids (`0409` -> `English (United States)`), 0/1 switches (-> `enabled` / `disabled`), `%VARIABLE%` paths expanded from the evidence's own environment, W32Time `NtpServer` flag bytes, FILETIMEs embedded in blobs, and the Taskband pinned-item list. Performance counters, enumerations and version numbers are deliberately left raw.
+
 
 ## Database: `amcache.db`
+
+One table per `Root` subkey of `Amcache.hve`. `key_last_write` is the
+registry key's own LastWriteTime - when Windows wrote the entry - and is
+when the Compatibility Appraiser wrote the entry, not when anything ran, and
+it is batch-written so it orders some tables usefully and others not at all.
+`parsed_at` is when Crow-Eye
+ran and belongs on no timeline.
+
+Ten of these store one row per registry value (`entry`, `name`, `value`)
+rather than fixed columns: `DeviceCensus`, which carries 237 distinct
+value names and grows every Windows release, and nine subkeys that were
+empty on every system available, whose columns therefore could not be
+verified against real data.
+
+
+
+
+### Table: `AmcacheCarvedKeys`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `cell_offset` | TEXT |
+| `key_name` | TEXT |
+| `key_path` | TEXT |
+| `parent_resolved` | TEXT |
+| `key_last_write` | TEXT |
+| `subkey_count` | TEXT |
+| `value_count` | TEXT |
+| `record_state` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `AmcacheCarvedValues`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `cell_offset` | TEXT |
+| `parent_cell_offset` | TEXT |
+| `key_path` | TEXT |
+| `value_name` | TEXT |
+| `value_type` | TEXT |
+| `data_size` | TEXT |
+| `is_inline` | TEXT |
+| `data` | TEXT |
+| `record_state` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `DeviceCensus`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `DriverPackageExtended`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryAcpiPhatHealthRecord`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryAcpiPhatVersionElement`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
 
 ### Table: `InventoryApplication`
 
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `name` | TEXT |
 | `program_id` | TEXT |
-| `program_instance_id` | TEXT |
+| `name` | TEXT |
 | `version` | TEXT |
 | `publisher` | TEXT |
 | `language` | TEXT |
 | `source` | TEXT |
 | `root_dir_path` | TEXT |
+| `default_value` | TEXT |
+| `program_instance_id` | TEXT |
 | `store_app_type` | TEXT |
 | `inbox_modern_app` | TEXT |
 | `manifest_path` | TEXT |
 | `package_full_name` | TEXT |
 | `install_date` | TEXT |
+| `hidden_arp` | TEXT |
+| `uninstall_string` | TEXT |
+| `registry_key_path` | TEXT |
+| `msi_package_code` | TEXT |
+| `msi_product_code` | TEXT |
+| `msi_install_date` | TEXT |
 | `bundle_manifest_path` | TEXT |
+| `user_sid` | TEXT |
+| `install_date_utc` | TEXT |
+| `msi_install_date_utc` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryApplicationAppV`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryApplicationDriver`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -34,21 +181,42 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `name` | TEXT |
+| `program_id` | TEXT |
 | `file_id` | TEXT |
 | `lower_case_long_path` | TEXT |
-| `original_file_name` | TEXT |
-| `publisher` | TEXT |
-| `version` | TEXT |
-| `bin_file_version` | TEXT |
+| `name` | TEXT |
 | `binary_type` | TEXT |
-| `product_name` | TEXT |
-| `product_version` | TEXT |
 | `link_date` | TEXT |
-| `bin_product_version` | TEXT |
 | `size` | TEXT |
 | `language` | TEXT |
 | `usn` | TEXT |
+| `bin_file_version` | TEXT |
+| `bin_product_version` | TEXT |
+| `product_version` | TEXT |
+| `version` | TEXT |
+| `product_name` | TEXT |
+| `publisher` | TEXT |
+| `original_file_name` | TEXT |
+| `appx_package_full_name` | TEXT |
+| `is_os_component` | TEXT |
+| `appx_package_relative_id` | TEXT |
+| `link_date_utc` | TEXT |
+| `file_id_is_partial` | TEXT |
+| `file_id_verified` | TEXT |
+| `program_association` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryApplicationFramework`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -57,48 +225,12 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `ShortcutPath` | TEXT |
-| `ShortcutTargetPath` | TEXT |
-| `ShortcutAumid` | TEXT |
-| `ShortcutProgramId` | TEXT |
-| `parsed_at` | TEXT |
-
-
-### Table: `InventoryDriverBinary`
-
-| Column | Type |
-|---|---|
-| `id` | TEXT |
-| `driver_name` | TEXT |
-| `inf` | TEXT |
-| `driver_version` | TEXT |
-| `product` | TEXT |
-| `product_version` | TEXT |
-| `wdf_version` | TEXT |
-| `driver_company` | TEXT |
-| `service` | TEXT |
-| `driver_in_box` | TEXT |
-| `driver_signed` | TEXT |
-| `driver_is_kernel_mode` | TEXT |
-| `driver_id` | TEXT |
-| `driver_last_write_time` | TEXT |
-| `driver_type` | TEXT |
-| `driver_time_stamp` | TEXT |
-| `driver_check_sum` | TEXT |
-| `image_size` | TEXT |
-| `parsed_at` | TEXT |
-
-
-### Table: `InventoryDriverPackage`
-
-| Column | Type |
-|---|---|
-| `id` | TEXT |
-| `driver_package_strong_name` | TEXT |
-| `provider` | TEXT |
-| `driver_in_box` | TEXT |
-| `inf_name` | TEXT |
-| `hwids` | TEXT |
+| `shortcut_path` | TEXT |
+| `shortcut_target_path` | TEXT |
+| `shortcut_aumid` | TEXT |
+| `shortcut_program_id` | TEXT |
+| `default_value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -122,36 +254,8 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `is_paired` | TEXT |
 | `is_networked` | TEXT |
 | `state` | TEXT |
-| `parsed_at` | TEXT |
-
-
-### Table: `InventoryDevicePnp`
-
-| Column | Type |
-|---|---|
-| `id` | TEXT |
-| `service` | TEXT |
-| `class` | TEXT |
-| `class_guid` | TEXT |
-| `model` | TEXT |
-| `upper_filters` | TEXT |
-| `lower_filters` | TEXT |
-| `enumerator` | TEXT |
-| `upper_class_filters` | TEXT |
-| `lower_class_filters` | TEXT |
-| `install_state` | TEXT |
-| `device_state` | TEXT |
-| `location_paths` | TEXT |
-| `parsed_at` | TEXT |
-
-
-### Table: `InventoryDeviceMediaClass`
-
-| Column | Type |
-|---|---|
-| `id` | TEXT |
-| `Audio_Render_Driver` | TEXT |
-| `Audio_Capture_Driver` | TEXT |
+| `default_value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -160,6 +264,109 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | TEXT |
+| `accelerometer3_d` | TEXT |
+| `activity_detection` | TEXT |
+| `ambient_light` | TEXT |
+| `barometer` | TEXT |
+| `custom` | TEXT |
+| `floor_elevation` | TEXT |
+| `geomagnetic_orientation` | TEXT |
+| `gravity_vector` | TEXT |
+| `gyrometer3_d` | TEXT |
+| `humidity` | TEXT |
+| `linear_accelerometer` | TEXT |
+| `magnetometer3_d` | TEXT |
+| `orientation` | TEXT |
+| `pedometer` | TEXT |
+| `proximity` | TEXT |
+| `relative_orientation` | TEXT |
+| `simple_device_orientation` | TEXT |
+| `temperature` | TEXT |
+| `energy_meter` | TEXT |
+| `hinge_angle` | TEXT |
+| `presence_capabilities` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryDeviceMediaClass`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `audio_render_driver` | TEXT |
+| `audio_capture_driver` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryDevicePci`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryDevicePnp`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `model` | TEXT |
+| `manufacturer` | TEXT |
+| `driver_name` | TEXT |
+| `parent_id` | TEXT |
+| `matching_id` | TEXT |
+| `class` | TEXT |
+| `class_guid` | TEXT |
+| `description` | TEXT |
+| `enumerator` | TEXT |
+| `service` | TEXT |
+| `install_state` | TEXT |
+| `device_state` | TEXT |
+| `inf` | TEXT |
+| `driver_ver_date` | TEXT |
+| `install_date` | TEXT |
+| `first_install_date` | TEXT |
+| `driver_package_strong_name` | TEXT |
+| `driver_ver_version` | TEXT |
+| `container_id` | TEXT |
+| `problem_code` | TEXT |
+| `provider` | TEXT |
+| `driver_id` | TEXT |
+| `bus_reported_description` | TEXT |
+| `hwid` | TEXT |
+| `extended_infs` | TEXT |
+| `compid` | TEXT |
+| `stackid` | TEXT |
+| `upper_class_filters` | TEXT |
+| `lower_class_filters` | TEXT |
+| `upper_filters` | TEXT |
+| `lower_filters` | TEXT |
+| `device_interface_classes` | TEXT |
+| `location_paths` | TEXT |
+| `default_value` | TEXT |
+| `install_date_utc` | TEXT |
+| `first_install_date_utc` | TEXT |
+| `driver_ver_date_utc` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryDeviceSensor`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -168,8 +375,63 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `device_capabilities` | TEXT |
-| `device_speed` | TEXT |
+| `total_user_connectable_ports` | TEXT |
+| `total_user_connectable_type_cports` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryDriverBinary`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `driver_name` | TEXT |
+| `inf` | TEXT |
+| `driver_version` | TEXT |
+| `product` | TEXT |
+| `product_version` | TEXT |
+| `wdf_version` | TEXT |
+| `driver_company` | TEXT |
+| `driver_package_strong_name` | TEXT |
+| `service` | TEXT |
+| `driver_in_box` | TEXT |
+| `driver_signed` | TEXT |
+| `driver_is_kernel_mode` | TEXT |
+| `driver_id` | TEXT |
+| `driver_last_write_time` | TEXT |
+| `driver_type` | TEXT |
+| `driver_time_stamp` | TEXT |
+| `driver_check_sum` | TEXT |
+| `image_size` | TEXT |
+| `default_value` | TEXT |
+| `driver_last_write_time_utc` | TEXT |
+| `driver_time_stamp_utc` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryDriverPackage`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `class_guid` | TEXT |
+| `class` | TEXT |
+| `directory` | TEXT |
+| `date` | TEXT |
+| `version` | TEXT |
+| `provider` | TEXT |
+| `submission_id` | TEXT |
+| `driver_in_box` | TEXT |
+| `inf` | TEXT |
+| `flight_ids` | TEXT |
+| `recovery_ids` | TEXT |
+| `is_active` | TEXT |
+| `hwids` | TEXT |
+| `sysfile` | TEXT |
+| `date_utc` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -178,10 +440,9 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `misc_name` | TEXT |
-| `misc_type` | TEXT |
-| `misc_value` | TEXT |
-| `misc_source` | TEXT |
+| `exists` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -190,25 +451,18 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `memory_slot_array_id` | TEXT |
-| `memory_slot_array_location` | TEXT |
-| `memory_slot_array_use` | TEXT |
-| `memory_slot_array_number_of_slots` | TEXT |
-| `parsed_at` | TEXT |
-
-
-### Table: `InventoryMiscellaneousUupInfo`
-
-| Column | Type |
-|---|---|
-| `id` | TEXT |
-| `uup_name` | TEXT |
-| `uup_id` | TEXT |
-| `uup_version` | TEXT |
-| `uup_description` | TEXT |
-| `uup_state` | TEXT |
-| `uup_install_source` | TEXT |
-| `uup_publisher` | TEXT |
+| `slot` | TEXT |
+| `type` | TEXT |
+| `type_details` | TEXT |
+| `speed` | TEXT |
+| `capacity` | TEXT |
+| `model` | TEXT |
+| `manufacturer` | TEXT |
+| `total_width` | TEXT |
+| `data_width` | TEXT |
+| `memory_error_correction` | TEXT |
+| `default_value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -217,9 +471,39 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `user_name` | TEXT |
-| `user_sid` | TEXT |
-| `user_type` | TEXT |
+| `original_name` | TEXT |
+| `exists` | TEXT |
+| `value` | TEXT |
+| `user_id` | TEXT |
+| `standard_user_hash` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryMiscellaneousUupInfo`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `identifier` | TEXT |
+| `version` | TEXT |
+| `source` | TEXT |
+| `previous_version` | TEXT |
+| `last_activated_version` | TEXT |
+| `default_value` | TEXT |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `InventoryMiscellaneousWAMAccounts`
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `entry` | TEXT |
+| `name` | TEXT |
+| `value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -228,22 +512,27 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `mare_name` | TEXT |
-| `mare_id` | TEXT |
-| `mare_type` | TEXT |
-| `mare_state` | TEXT |
-| `mare_path` | TEXT |
-| `mare_flags` | TEXT |
-| `mare_data` | TEXT |
+| `flags` | TEXT |
+| `default_value` | TEXT |
+| `restore` | TEXT |
+| `root_dir_path` | TEXT |
+| `sdbentryguid` | TEXT |
+| `path` | TEXT |
+| `program_id` | TEXT |
+| `far` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
-### Table: `DeviceCensus`
+### Table: `MareBackupApps`
 
 | Column | Type |
 |---|---|
 | `id` | TEXT |
-| `data` | TEXT |
+| `hash` | TEXT |
+| `sid_state` | TEXT |
+| `default_value` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -254,8 +543,8 @@ This document contains the comprehensive schema for all parsed artifacts and cor
 | `id` | TEXT |
 | `subkey_name` | TEXT |
 | `data` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
-
 
 ## Database: `LnkDB.db`
 
@@ -660,6 +949,7 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 |---|---|
 | `name` | TEXT |
 | `row_data` | TEXT |
+| `row_decoded` | TEXT |
 | `type` | TEXT |
 
 
@@ -706,6 +996,7 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `subkey` | TEXT |
 | `name` | TEXT |
 | `row_data` | TEXT |
+| `row_decoded` | TEXT |
 | `type` | TEXT |
 
 
@@ -724,6 +1015,7 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 |---|---|
 | `name` | TEXT |
 | `row_data` | TEXT |
+| `decoded` | TEXT |
 | `type` | TEXT |
 
 
@@ -734,6 +1026,7 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `subkey` | TEXT |
 | `name` | TEXT |
 | `row_data` | TEXT |
+| `decoded` | TEXT |
 | `type` | TEXT |
 
 
@@ -743,6 +1036,7 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 |---|---|
 | `name` | TEXT |
 | `row_data` | TEXT |
+| `row_decoded` | TEXT |
 | `type` | TEXT |
 
 
@@ -767,6 +1061,15 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `daylight_name` | TEXT |
 | `bias` | INTEGER |
 | `active_time_bias` | INTEGER |
+| `daylight_bias` | INTEGER |
+| `utc_offset` | TEXT |
+| `display_name` | TEXT |
+| `standard_name_raw` | TEXT |
+| `daylight_name_raw` | TEXT |
+| `standard_start_rule` | TEXT |
+| `daylight_start_rule` | TEXT |
+| `dynamic_dst_disabled` | TEXT |
+| `agrees_with_tzi` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -782,6 +1085,11 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `dhcp_server` | TEXT |
 | `dns_servers` | TEXT |
 | `mac_address` | TEXT |
+| `gateway_ip` | TEXT |
+| `gateway_hardware_mac` | TEXT |
+| `dns_suffix` | TEXT |
+| `lease_obtained` | TEXT |
+| `lease_expires` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -878,6 +1186,272 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `parsed_at` | TEXT |
 
 
+### Table: `registry_hive_state`
+
+One row per hive: whether Windows had it open mid-transaction, whether its `.LOG1`/`.LOG2` were replayed, and what the file hashed to as found. A hive with `was_dirty = 1` and `replayed = 0` may not be the final registry, and `reason` says why it was not replayed. Empty on a live parse: there is no hive file to be stale.
+
+| Column | Type |
+|---|---|
+| `hive_name` | TEXT |
+| `hive_path` | TEXT |
+| `sequence_1` | INTEGER |
+| `sequence_2` | INTEGER |
+| `was_dirty` | INTEGER |
+| `logs_found` | TEXT |
+| `log_format` | TEXT |
+| `replayed` | INTEGER |
+| `entries_applied` | INTEGER |
+| `pages_applied` | INTEGER |
+| `highest_sequence` | INTEGER |
+| `source_sha256` | TEXT |
+| `acquisition_route` | TEXT |
+| `reason` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `registry_class_names`
+
+A key can carry a class name, a second string separate from its name and stored in its own cell. Most keys have none. It is a place data can hide from tools that read only names and values - the four keys under `Control\Lsa` keep the machine's boot key there.
+
+| Column | Type |
+|---|---|
+| `hive_name` | TEXT |
+| `key_path` | TEXT |
+| `key_name` | TEXT |
+| `class_name` | TEXT |
+| `class_length` | INTEGER |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `registry_security_descriptors`
+
+One row per DISTINCT security descriptor. Keys do not get one each - identical descriptors are stored once and shared, and `reference_count` is how many keys use this one. A descriptor with a low reference count, where sibling keys share one used by thousands, is a key whose permissions differ from its neighbours. The SIDs are stored, not names: resolving them against the examiner's own machine is how an offline account gets mislabelled.
+
+| Column | Type |
+|---|---|
+| `hive_name` | TEXT |
+| `sk_offset` | INTEGER |
+| `descriptor_hash` | TEXT |
+| `reference_count` | INTEGER |
+| `owner_sid` | TEXT |
+| `group_sid` | TEXT |
+| `dacl_ace_count` | INTEGER |
+| `sacl_ace_count` | INTEGER |
+| `descriptor_size` | INTEGER |
+| `sample_key_path` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `registry_carved_keys`
+
+Keys recovered from FREE cells - unreachable from the registry tree and still present in the file, because deleting a key flips its cell's size field rather than erasing it. `key_last_write` is the key's own timestamp and dates the activity, not the deletion. **A key here was removed; that is not the same as somebody having removed it deliberately.** Windows frees cells constantly by itself. Empty on a live parse: free cells exist in a hive file, and a live read has none.
+
+| Column | Type |
+|---|---|
+| `hive_name` | TEXT |
+| `cell_offset` | INTEGER |
+| `key_name` | TEXT |
+| `key_path` | TEXT |
+| `parent_resolved` | INTEGER |
+| `key_last_write` | TEXT |
+| `subkey_count` | INTEGER |
+| `value_count` | INTEGER |
+| `record_state` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `registry_carved_values`
+
+Values recovered from free cells, on the same terms as `registry_carved_keys`. `is_inline` marks a value small enough that its data sits in the offset field itself rather than in a cell of its own.
+
+| Column | Type |
+|---|---|
+| `hive_name` | TEXT |
+| `cell_offset` | INTEGER |
+| `parent_cell_offset` | INTEGER |
+| `key_path` | TEXT |
+| `value_name` | TEXT |
+| `value_type` | TEXT |
+| `data_size` | INTEGER |
+| `is_inline` | INTEGER |
+| `data` | TEXT |
+| `record_state` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `registry_value_changes`
+
+Which value each pending transaction changed, recovered by diffing the transaction logs against the hive. A key records when it was last written and its values record nothing at all, so this is the only place that names the value. `change_kind` is created, deleted or modified. `changed_at` is exact and present only where the transaction moved the owning key's timestamp. **Scope: transactions still in `.LOG1`/`.LOG2`, which is recent activity and not full history - an absence here means nothing.**
+
+| Column | Type |
+|---|---|
+| `hive_name` | TEXT |
+| `transaction_sequence` | INTEGER |
+| `change_kind` | TEXT |
+| `changed_at` | TEXT |
+| `key_path` | TEXT |
+| `value_name` | TEXT |
+| `value_type` | TEXT |
+| `changed_before` | TEXT |
+| `changed_after` | TEXT |
+| `value_before` | TEXT |
+| `changed_bytes` | INTEGER |
+| `cell_offset` | INTEGER |
+| `key_last_write` | TEXT |
+| `parsed_at` | TEXT |
+
+
+### Table: `startup_approved`
+
+Whether each autostart entry is allowed to launch, and when it was switched off. A Run value is a request; this is the answer.
+
+| Column | Type |
+|---|---|
+| `hive` | TEXT |
+| `scope` | TEXT |
+| `entry_name` | TEXT |
+| `state` | TEXT |
+| `state_byte` | TEXT |
+| `disabled_at` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `app_paths`
+
+How a bare command name resolves to an executable. Change an entry and typing the name runs something else.
+
+| Column | Type |
+|---|---|
+| `app_name` | TEXT |
+| `executable_path` | TEXT |
+| `app_dir` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `safe_boot_services`
+
+Services and drivers that still start in Safe Mode - the boot people use to clean a machine.
+
+| Column | Type |
+|---|---|
+| `boot_mode` | TEXT |
+| `entry_name` | TEXT |
+| `entry_type` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `zone_map`
+
+Hosts and protocols assigned to an Internet Explorer security zone. A host moved to Trusted Sites runs what the others block.
+
+| Column | Type |
+|---|---|
+| `scope` | TEXT |
+| `host` | TEXT |
+| `protocol` | TEXT |
+| `zone` | TEXT |
+| `zone_name` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `app_permissions`
+
+Which applications hold consent for microphone, camera or location, and when each last used it.
+
+| Column | Type |
+|---|---|
+| `capability` | TEXT |
+| `app` | TEXT |
+| `packaged` | INTEGER |
+| `permission` | TEXT |
+| `last_used_start` | TEXT |
+| `last_used_stop` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `shared_dlls`
+
+Reference counts for shared libraries. Mostly inventory, occasionally the only record a DLL was installed.
+
+| Column | Type |
+|---|---|
+| `dll_path` | TEXT |
+| `reference_count` | INTEGER |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `hid_devices`
+
+Human interface devices the machine enumerated, including anything presenting itself as one.
+
+| Column | Type |
+|---|---|
+| `device_id` | TEXT |
+| `instance_id` | TEXT |
+| `device_desc` | TEXT |
+| `manufacturer` | TEXT |
+| `service` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `network_cards`
+
+The adapter inventory by installation index, naming cards that no longer have an interface.
+
+| Column | Type |
+|---|---|
+| `card_index` | TEXT |
+| `description` | TEXT |
+| `service_name` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `system_configuration`
+
+Settings rather than artifacts: power and fast startup, locale, time source, TCP/IP identity, search scope, shell folders, taskbar and zone policy.
+
+| Column | Type |
+|---|---|
+| `setting` | TEXT |
+| `value_raw` | TEXT |
+| `value_decoded` | TEXT |
+| `area` | TEXT |
+| `meaning` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `registry_key_times`
+
+One row per key with its last-write time. The key-level surface, where the timestamp is unambiguous because the row IS the key. Only keys some other table refers to are stored - a hive set holds around half a million and keeping all of them turned a 30,000-row case into a 520,000-row one.
+
+| Column | Type |
+|---|---|
+| `hive_name` | TEXT |
+| `key_path` | TEXT |
+| `key_last_write` | TEXT |
+| `cell_offset` | INTEGER |
+| `parsed_at` | TEXT |
+
+
 ### Table: `BrowserHistory`
 
 URLs typed into the Internet Explorer address bar, from `NTUSER\Software\Microsoft\Internet
@@ -950,6 +1524,7 @@ before the rename still carry the old table name.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1075,6 +1650,12 @@ Persistence and execution evidence: what runs, as whom, when it last ran and whe
 | `location` | TEXT |
 | `program_name` | TEXT |
 | `command` | TEXT |
+| `key_path` | TEXT |
+| `startup_state` | TEXT |
+| `disabled_at` | TEXT |
+| `record_state` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -1091,6 +1672,12 @@ Persistence and execution evidence: what runs, as whom, when it last ran and whe
 | `sid` | TEXT |
 | `last_execution` | TEXT |
 | `execution_count` | INTEGER |
+| `decoded` | TEXT |
+| `name_kind` | TEXT |
+| `name_kind_raw` | INTEGER |
+| `trailing_value` | INTEGER |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -1106,7 +1693,12 @@ Persistence and execution evidence: what runs, as whom, when it last ran and whe
 | `process_path` | TEXT |
 | `sid` | TEXT |
 | `last_execution` | TEXT |
-| `execution_flags` | INTEGER |
+| `decoded` | TEXT |
+| `name_kind` | TEXT |
+| `name_kind_raw` | INTEGER |
+| `trailing_value` | INTEGER |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -1118,6 +1710,7 @@ Persistence and execution evidence: what runs, as whom, when it last ran and whe
 | `search_type` | TEXT |
 | `mru_position` | INTEGER |
 | `access_date` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 | `user_name` | TEXT |
 
@@ -1156,8 +1749,25 @@ Persistence and execution evidence: what runs, as whom, when it last ran and whe
 | `mft_record_number` | INTEGER |
 | `registry_path` | TEXT |
 | `parent_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `node_slot` | INTEGER |
+| `bag_views` | TEXT |
 | `parsed_at` | TEXT |
 | `user_name` | TEXT |
+
+`node_slot` is the `NodeSlot` DWORD on the folder's own BagMRU key, naming the
+subkey of `Bags` that holds its view settings. `bag_views` is which subkeys are
+there: `Shell` for an Explorer window, `ComDlg` for a common File Open/Save
+dialog hosted inside some other program, `Shell,ComDlg` for both. It is the
+only field in the table that speaks to **what created the view**, and it is
+empty on rows whose key carries no `NodeSlot` - about 7% on a typical machine.
+
+**A row is not evidence that a person opened a folder.** A shellbag records
+that a container was rendered as a shell view under that account; Explorer is
+the commonest host of a shell view, not the only one. `bag_views` of `ComDlg`
+says a file dialog did it. To name the program, join against `LastSaveMRU`,
+whose `application` column comes from `ComDlg32\LastVisitedPidlMRU`.
 
 
 ### Table: `RunMRU`
@@ -1167,6 +1777,7 @@ Persistence and execution evidence: what runs, as whom, when it last ran and whe
 | `command` | TEXT |
 | `mru_position` | INTEGER |
 | `access_date` | TEXT |
+| `key_last_write` | TEXT |
 | `parsed_at` | TEXT |
 | `user_name` | TEXT |
 
@@ -1192,6 +1803,41 @@ ShimCache and BAM, which all record the same path.
 | `user_name` | TEXT |
 
 
+### Table: `NetworkProfiles`
+
+One row per network the machine has joined, built by joining
+`NetworkList\Signatures\Unmanaged` (gateway MAC, DNS suffix) to
+`NetworkList\Profiles` (name, category, dates) on `ProfileGuid`.
+`Network_list` keeps the raw values one row per registry value; this
+is the joined view, and it is where a network's MAC and its
+connection dates appear together.
+
+### Table: `NetworkProfiles`
+
+| Column | Type |
+|---|---|
+| `profile_guid` | TEXT |
+| `profile_name` | TEXT |
+| `description` | TEXT |
+| `signature` | TEXT |
+| `first_network` | TEXT |
+| `gateway_mac` | TEXT |
+| `dns_suffix` | TEXT |
+| `category` | INTEGER |
+| `category_label` | TEXT |
+| `name_type` | INTEGER |
+| `name_type_label` | TEXT |
+| `managed` | INTEGER |
+| `managed_label` | TEXT |
+| `source` | INTEGER |
+| `date_created` | TEXT |
+| `date_last_connected` | TEXT |
+| `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
+| `parsed_at` | TEXT |
+
+
 ### Table: `Network_list`
 
 | Column | Type |
@@ -1199,11 +1845,12 @@ ShimCache and BAM, which all record the same path.
 | `subkey` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `decoded` | TEXT |
 | `type` | TEXT |
 | `network_name` | TEXT |
 | `connection_date` | TEXT |
 | `gateway_mac` | TEXT |
-| `is_hidden` | INTEGER |
+| `parsed_at` | TEXT |
 
 
 ### Table: `OpenSaveMRU`
@@ -1315,6 +1962,8 @@ be tied to it.
 | `name` | TEXT |
 | `value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `CompatibilityAssistant`
@@ -1325,6 +1974,8 @@ be tied to it.
 | `program_path` | TEXT |
 | `blob_size` | INTEGER |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `ConnectedDevices`
@@ -1336,6 +1987,8 @@ be tied to it.
 | `friendly_name` | TEXT |
 | `details` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `DefenderExclusions`
@@ -1346,6 +1999,8 @@ be tied to it.
 | `value` | TEXT |
 | `source` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `FeatureUsage`
@@ -1357,6 +2012,8 @@ be tied to it.
 | `program` | TEXT |
 | `count` | INTEGER |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `FirewallRules`
@@ -1376,6 +2033,8 @@ be tied to it.
 | `service` | TEXT |
 | `profile` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `MountPoints2`
@@ -1386,6 +2045,8 @@ be tied to it.
 | `mount_id` | TEXT |
 | `mount_type` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `NetworkShares`
@@ -1397,6 +2058,8 @@ be tied to it.
 | `remark` | TEXT |
 | `raw` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `OfficeDocuments`
@@ -1410,6 +2073,8 @@ be tied to it.
 | `document` | TEXT |
 | `raw` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `RDPClientMRU`
@@ -1421,6 +2086,8 @@ be tied to it.
 | `server` | TEXT |
 | `username_hint` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `RecentApps`
@@ -1433,6 +2100,8 @@ be tied to it.
 | `launch_count` | INTEGER |
 | `last_accessed` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `SecurityPosture`
@@ -1446,6 +2115,8 @@ be tied to it.
 | `assessment` | TEXT |
 | `meaning` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `active_computer_name`
@@ -1455,6 +2126,8 @@ be tied to it.
 | `name` | TEXT |
 | `value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `active_setup`
@@ -1465,6 +2138,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1477,6 +2151,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1489,6 +2164,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1501,6 +2177,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1526,6 +2203,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1538,6 +2216,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1561,6 +2240,8 @@ be tied to it.
 | `position` | INTEGER |
 | `application` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `clsid_inprocserver32`
@@ -1571,6 +2252,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1583,6 +2265,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1595,6 +2278,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1607,6 +2291,8 @@ be tied to it.
 | `class_name` | TEXT |
 | `device_instance` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `dnscache_parameters`
@@ -1615,7 +2301,10 @@ be tied to it.
 |---|---|
 | `name` | TEXT |
 | `value` | TEXT |
+| `value_decoded` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `drivers32`
@@ -1626,6 +2315,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1637,9 +2327,12 @@ be tied to it.
 | `user_name` | TEXT |
 | `setting` | TEXT |
 | `value` | TEXT |
+| `value_decoded` | TEXT |
 | `default_value` | TEXT |
 | `meaning` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `file_exts`
@@ -1651,6 +2344,8 @@ be tied to it.
 | `choice_type` | TEXT |
 | `progid` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `files_not_to_snapshot`
@@ -1660,6 +2355,8 @@ be tied to it.
 | `entry` | TEXT |
 | `value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `group_policy_history`
@@ -1671,6 +2368,8 @@ be tied to it.
 | `name` | TEXT |
 | `value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `hivelist`
@@ -1690,6 +2389,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1716,6 +2416,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1750,6 +2451,8 @@ be tied to it.
 | `name` | TEXT |
 | `value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `netsh_helper_dlls`
@@ -1760,6 +2463,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1772,6 +2476,8 @@ be tied to it.
 | `name` | TEXT |
 | `value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `network_providers`
@@ -1782,6 +2488,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1793,6 +2500,8 @@ be tied to it.
 | `name` | TEXT |
 | `value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `policies_explorer_run`
@@ -1803,6 +2512,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1815,6 +2525,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1827,6 +2538,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1840,6 +2552,8 @@ be tied to it.
 | `server` | TEXT |
 | `printer` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `product_options`
@@ -1850,6 +2564,8 @@ be tied to it.
 | `value` | TEXT |
 | `meaning` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `programs_cache`
@@ -1860,6 +2576,8 @@ be tied to it.
 | `value_name` | TEXT |
 | `blob_size` | INTEGER |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `rdp_tcp`
@@ -1868,9 +2586,12 @@ be tied to it.
 |---|---|
 | `setting` | TEXT |
 | `value` | TEXT |
+| `value_decoded` | TEXT |
 | `default_value` | TEXT |
 | `meaning` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `regedit_lastkey`
@@ -1881,6 +2602,8 @@ be tied to it.
 | `name` | TEXT |
 | `value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `run_services`
@@ -1891,6 +2614,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1903,6 +2627,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1915,6 +2640,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1927,6 +2653,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1939,6 +2666,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1951,6 +2679,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1963,6 +2692,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -1973,7 +2703,10 @@ be tied to it.
 |---|---|
 | `name` | TEXT |
 | `value` | TEXT |
+| `value_decoded` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `usbstor_start`
@@ -1985,6 +2718,8 @@ be tied to it.
 | `decoded` | TEXT |
 | `default_value` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `user_shell_folders`
@@ -1995,6 +2730,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -2007,6 +2743,8 @@ be tied to it.
 | `volume_label` | TEXT |
 | `file_system` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `windows_load_run`
@@ -2017,6 +2755,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -2027,9 +2766,12 @@ be tied to it.
 |---|---|
 | `setting` | TEXT |
 | `value` | TEXT |
+| `value_decoded` | TEXT |
 | `default_value` | TEXT |
 | `meaning` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `winevt_channels`
@@ -2044,6 +2786,8 @@ be tied to it.
 | `log_file` | TEXT |
 | `reason` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 ### Table: `winlogon`
@@ -2054,6 +2798,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -2066,6 +2811,7 @@ be tied to it.
 | `key_path` | TEXT |
 | `name` | TEXT |
 | `data` | TEXT |
+| `data_decoded` | TEXT |
 | `type` | TEXT |
 | `user_name` | TEXT |
 | `parsed_at` | TEXT |
@@ -2078,6 +2824,8 @@ be tied to it.
 | `friendly_name` | TEXT |
 | `volume_guid` | TEXT |
 | `key_path` | TEXT |
+| `last_written` | TEXT |
+| `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
 
@@ -2117,6 +2865,9 @@ installed package exactly.
 | `data_size` | INTEGER |
 | `entry_size` | INTEGER |
 | `cache_entry_position` | INTEGER |
+| `cache_index` | INTEGER |
+| `record_id` | TEXT |
+| `shim_flags` | TEXT |
 | `entry_hash` | TEXT |
 | `parsed_at` | TIMESTAMP |
 
@@ -2425,4 +3176,23 @@ window, not a failed decode.
 | `total_records` | INTEGER |
 | `identities_extracted` | INTEGER |
 | `identities_found` | INTEGER |
+
+
+## `last_written` and `time_basis`
+
+Every table that records which key its rows came from carries this pair.
+
+`time_basis` says what kind of time `last_written` is:
+
+| Value | Meaning |
+|---|---|
+| `value (txn log)` | Exact. The transaction log named this specific value. |
+| `key upper bound` | The KEY's last-write time. The value was written **at or before** it, never after - writing any value updates its key. At most one value in a key matches it, and nothing says which. |
+| empty | No key was recorded for the row, so there is no bound to give it. |
+
+The GUI renders a bound as `<= T`. The stored value stays a clean sortable timestamp, because Eye, the correlation engine and the timeline all have to compare it.
+
+`AutoStartPrograms.startup_state` is `enabled`, `disabled` or **`unknown`** - most autostart locations have no `StartupApproved` equivalent, so a row without one is never called enabled. `disabled_at` is set only for a disabled entry, because a timestamp exists only once something has been switched off.
+
+`NetworkInterfacesInfo.mac_address` follows the same principle: the registry holds a MAC only when one has been **overridden** (`NetworkAddress` under the adapter's class key). An empty cell means no override was set, not that the MAC is unknown.
 

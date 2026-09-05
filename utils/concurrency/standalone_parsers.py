@@ -193,7 +193,19 @@ def standalone_collect_live_artifacts(case_paths, windows_partition, message_que
             if mft_usn_path not in sys.path:
                 sys.path.insert(0, mft_usn_path)
             from mft_usn_correlator import MFTUSNCorrelator
-            correlator = MFTUSNCorrelator(case_directory=case_root)
+            # This runs in a spawned process, so print() reaches nobody: the
+            # loading dialog captures stdout in the PARENT. The queue callbacks
+            # above are the only route to the GUI, which is why the log line is
+            # forwarded here rather than left to stdout capture as it is on the
+            # in-process path.
+            def _correlation_status(status=None, log=None):
+                if log:
+                    log_callback(log)
+                if status:
+                    step_callback(13, status)
+
+            correlator = MFTUSNCorrelator(case_directory=case_root,
+                                          status_callback=_correlation_status)
             # Use run_complete_analysis but skip parsers since we just ran them
             correlator.create_correlated_database()
             correlator.generate_forensic_report()

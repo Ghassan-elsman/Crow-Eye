@@ -71,6 +71,7 @@ def _mk_btn(text, icon_name=None):
     b = QtWidgets.QPushButton(text)
     if icon_name:
         b.setIcon(_ce_icon(icon_name))
+        b.setIconSize(QtCore.QSize(16, 16))
     return b
 
 
@@ -290,6 +291,7 @@ class SettingsDialog(QtWidgets.QDialog):
         button = QtWidgets.QPushButton(text)
         if icon_name:
             button.setIcon(_ce_icon(icon_name))
+            button.setIconSize(QtCore.QSize(16, 16))
         button.setFixedHeight(50)
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(lambda: self.switch_panel(index))
@@ -1442,6 +1444,25 @@ class SettingsDialog(QtWidgets.QDialog):
         backend_row.addWidget(self.eye_backend_label, 1)
         backend_row.addWidget(self.eye_configure_btn)
         layout.addLayout(backend_row)
+
+        # Tool-calling capability. The Eye is agentic, so whether the active model
+        # can call tools natively is the most consequential fact about it — and it
+        # is shown WITH its provenance, because "verified by a live probe" and
+        # "assumed because we recognise the name" are very different claims.
+        capability_row = QtWidgets.QHBoxLayout()
+        self.eye_capability_label = QtWidgets.QLabel("Tool calling: —")
+        self.eye_capability_label.setWordWrap(True)
+        self.eye_capability_label.setStyleSheet(
+            "QLabel { color: #E2E8F0; font-size: 13px; font-weight: 600; font-family: 'Segoe UI', sans-serif; }")
+        self.eye_capability_retest_btn = QtWidgets.QPushButton("Re-test")
+        self.eye_capability_retest_btn.setStyleSheet(btn_style)
+        self.eye_capability_retest_btn.setToolTip(
+            "Ask the model to make a real tool call and record what it actually does. "
+            "Costs a few hundred tokens; the result is cached until you re-test.")
+        self.eye_capability_retest_btn.clicked.connect(self._retest_tool_capability)
+        capability_row.addWidget(self.eye_capability_label, 1)
+        capability_row.addWidget(self.eye_capability_retest_btn)
+        layout.addLayout(capability_row)
 
         checkbox_style = """
             QCheckBox { color: #E2E8F0; font-size: 13px; font-weight: 600;
@@ -2817,8 +2838,92 @@ class SettingsDialog(QtWidgets.QDialog):
                 backend = eye_ai.get("backend") or "—"
                 model = eye_ai.get("model_name") or "—"
                 self.eye_backend_label.setText(f"Backend: {backend} / {model}")
+                self._refresh_tool_capability_label(backend, model)
             except Exception as e:
                 print(f"[Settings] Could not load Eye AI settings: {e}")
+
+    def _refresh_tool_capability_label(self, backend=None, model=None):
+        """Show the cached tool-calling verdict for the configured model.
+
+        Read-only and offline: uses the cheap ladder (cache → provider metadata →
+        family registry → default) so opening Settings never issues a model call.
+        Press Re-test for the live probe.
+        """
+        try:
+            from datetime import datetime
+            from eye.services import tool_capability as tc
+            from eye.services.tool_capability import ToolCapabilityProbe
+
+            if backend is None or model is None:
+                from eye.services.config_manager import ConfigManager
+                cfg = ConfigManager().load_config()
+                backend = cfg.get("backend") or ""
+                model = cfg.get("model_name") or ""
+
+            verdict = ToolCapabilityProbe.read_cached(backend, model)
+            if not verdict:
+                verdict = tc.registry_lookup(backend, model)
+            if not verdict:
+                self.eye_capability_label.setText(
+                    "Tool calling: not yet determined — press Re-test to verify")
+                self.eye_capability_label.setStyleSheet(
+                    "QLabel { color: #94A3B8; font-size: 13px; font-weight: 600; }")
+                return
+
+            support = verdict.get("support")
+            label = {tc.NATIVE: "native function calling",
+                     tc.TEXT_PROTOCOL: "text protocol only (degraded)",
+                     tc.NONE: "NOT supported"}.get(support, support)
+            when = ""
+            try:
+                if verdict.get("probed_at"):
+                    when = f", {datetime.fromtimestamp(float(verdict['probed_at'])):%Y-%m-%d}"
+            except Exception:
+                pass
+            self.eye_capability_label.setText(
+                f"Tool calling: {label} — {tc.describe(verdict)}{when}")
+            color = {"native": "#10B981"}.get(support, "#F59E0B")
+            self.eye_capability_label.setStyleSheet(
+                f"QLabel {{ color: {color}; font-size: 13px; font-weight: 600; }}")
+        except Exception as e:
+            print(f"[Settings] Could not read tool capability: {e}")
+
+    def _retest_tool_capability(self):
+        """Force a live capability probe of the configured model.
+
+        Runs on a worker thread — the probe issues real model calls and must never
+        freeze the dialog.
+        """
+        from PyQt5.QtCore import QThread, pyqtSignal
+
+        class _Probe(QThread):
+            done = pyqtSignal(bool, str)
+
+            def run(self):
+                try:
+                    from eye.services.config_manager import ConfigManager
+                    from eye.services.credential_manager import CredentialManager
+                    from eye.services.model_router import ModelRouter
+                    router = ModelRouter(ConfigManager().load_config(), CredentialManager())
+                    verdict = router.probe_tool_capability(force=True)
+                    self.done.emit(True, str(verdict.get("support")))
+                except Exception as exc:
+                    self.done.emit(False, str(exc))
+
+        self.eye_capability_retest_btn.setEnabled(False)
+        self.eye_capability_label.setText("Tool calling: testing the model now…")
+        worker = _Probe(self)
+        self._capability_worker = worker  # keep a ref so it isn't GC'd
+
+        def _finished(ok, detail):
+            self.eye_capability_retest_btn.setEnabled(True)
+            if ok:
+                self._refresh_tool_capability_label()
+            else:
+                self.eye_capability_label.setText(f"Tool calling: test failed — {detail[:120]}")
+
+        worker.done.connect(_finished)
+        worker.start()
     
     def save_settings(self):
         """Save settings and close dialog."""

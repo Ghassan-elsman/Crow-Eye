@@ -184,19 +184,23 @@ class LLMBackend(ABC):
         
         Returns:
             List[Dict[str, str]]: List of dicts, each containing:
-                - 'model': Model name/ID
-                - 'quota_info': Human-readable quota status
-                  (e.g., "1000 requests remaining" or "Unlimited (local)")
-        
+                - 'id': Model name/ID
+                - 'quota': Human-readable quota status
+                  (e.g., "1000 requests remaining" or "Unlimited (Local)")
+
+            These exact key names are the contract consumed by
+            EYEBridge.get_available_models_with_quota and the React model menu —
+            do not rename them in an implementation.
+
         Note:
             Not all backends support quota tracking. Local backends typically return
-            "Unlimited (local)" since there's no external rate limiting.
-        
+            "Unlimited (Local)" since there's no external rate limiting.
+
         Example:
             models_with_quota = backend.get_models_with_quota()
             for model_info in models_with_quota:
-                print(f"{model_info['model']}: {model_info['quota_info']}")
-            
+                print(f"{model_info['id']}: {model_info['quota']}")
+
             # Output:
             # gpt-4: 500 requests remaining (resets in 1 hour)
             # gpt-3.5-turbo: 5000 requests remaining (resets in 1 hour)

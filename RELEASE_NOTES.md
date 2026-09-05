@@ -2,6 +2,72 @@
 
 ---
 
+## Version 0.12.7 — Correlation Correctness & Provenance Release
+
+**Release date:** 2026-08-08
+
+This release fixes a **correctness bug in MFT ↔ USN correlation that could attribute a deleted file's journal history to a different file**, and removes a long-standing source of timeline confusion by giving the parser's own bookkeeping timestamp a single, unmistakable name. Both change what Crow-Eye reports on a case, so read the two sections below before working an existing investigation. Alongside them, the Eye now determines — and tells you — whether the model you selected can actually call forensic tools, instead of assuming it can and failing opaquely mid-query.
+
+### 🔗 Fixed: MFT ↔ USN correlation was joining on the wrong key
+
+Correlation matched a journal event to an MFT record using **only the record number**. That is not an identity.
+
+- **The sequence number was discarded.** NTFS reuses an MFT record when the file occupying it is deleted, incrementing the record's sequence number to mark that it now means something else. Matching on the record number alone attached the **deleted file's journal events to whichever file later inherited its record** — a complete, confident-looking timeline for the wrong file, with nothing to indicate anything was wrong. Correlation is now keyed on the full file reference (record **and** sequence number).
+- **The volume was ignored.** An MFT record number is unique per volume, not per machine, so record 5000 on `C:` was merged with record 5000 on `D:` — two unrelated files collapsed into one row, each one's timestamps attributed to the other. Every join, lookup and correlated row now carries the volume letter.
+- **Reconstructed paths could cross disks.** Path rebuilding followed parent record numbers without regard to volume, splicing one disk's directory tree into another's.
+- **Journal-only activity was silently dropped.** Correlation walked MFT records, so an event whose file has no MFT record was discarded — and the "has MFT record" column was hard-coded to say it did. A file created and deleted between two collections leaves **no MFT record at all**; the journal is the only place it ever existed. Those events are now kept and marked `JOURNAL_ONLY`.
+- **The name the journal recorded at the time of the event is now stored** (`usn_filename`, plus the file reference and security ID). The difference between that name and the name the MFT holds now *is* the rename evidence — it was being fetched and thrown away.
+- Correlated rows now also carry file extension, size, in-use state and alternate-data-stream counts, and the "standard information present" flag reports the real answer instead of always saying yes.
+
+**What this means for existing cases.** A case correlated by an earlier version holds rows produced by the broken match. On first open, Crow-Eye **detects that and rebuilds the correlated table**, telling you on the loading screen that it is doing so and why. Nothing is lost: the correlated database is derived entirely from the MFT and USN databases in the case folder, which are never modified. Leaving the old rows in place would have meant known-wrong correlations sitting alongside correct ones with no way to tell them apart.
+
+### 🕒 Changed: one name for the parser's own timestamp — `parsed_at`
+
+Every parser records **when Crow-Eye parsed the artifact** next to each row. That column shipped under four different names, and in the Registry tables it was called `timestamp` — which reads, to any analyst, as the time the activity happened. It was worse than cosmetic: `timestamp` was ranked as a *real activity* time, so the Correlation Engine and the Timeline could anchor findings on the moment Crow-Eye ran.
+
+- All parsers — live and offline — now write **`parsed_at`**, and every tab displays it as **"Parsed At"**.
+- **Existing cases are not modified and stay fully readable.** Crow-Eye resolves whichever name a database actually uses and relabels it on screen, so an older case opens exactly as before, with the column now clearly identified.
+- The Correlation Engine and Timeline treat `parsed_at` and all its legacy spellings as bookkeeping only — they can no longer be mistaken for evidence.
+- **Removed the Network Interfaces lane from the Timeline.** Its only timestamp was the bookkeeping column, so the lane was plotting *when Crow-Eye ran* as though it were network activity. Interface configuration is still available in the Registry tab. A second lane, Network List Profiles, queried a table no parser has ever created and always returned nothing.
+
+### 🤖 New: the Eye tells you whether your model can call tools
+
+The Eye is agentic — everything it does for you runs through forensic tool calls — yet it decided whether a model could call tools by matching its **name** against `gemma`, and optimistically assumed every other model could. A local GGUF, a fine-tune or a fresh provider model that could not function-call was sent the full tool payload anyway, and the failure surfaced as an opaque server error in the middle of a query.
+
+- Capability is now **determined**, through a ladder of increasingly expensive checks — cached result, the provider's own metadata, known model families, then a live probe against the model itself — and Crow-Eye records **how it knew**.
+- **Settings → Eye shows the verdict with its provenance**, plus a **Re-test** button that probes the live model. "Verified by a live probe" and "assumed because we recognise the name" are very different claims, and you can see which one you have.
+- A model confirmed unable to function-call is **no longer sent a tool payload at all** — it is taught the text tool-call protocol instead, and told so once, clearly. A merely *assumed* verdict never changes what is sent, so a wrong guess can never quietly disable tools on a model that supports them.
+
+### 🖥️ Fixed: User Behavior Analytics could not open from a source checkout
+
+Running Crow-Eye from a clone of the repository and opening **User Behavior Analytics** produced *"UBA interface build not found — run npm install && npm run build"*, and nothing in the application ever built it.
+
+- **UBA is now built at startup like the Timeline and the Eye.** Crow-Eye's start-up build step handled those two but had no step for UBA at all — it was added after that step was written and never wired in, so the interface was never built by anything.
+- **The UBA and Timeline interfaces now ship prebuilt.** A packaging rule intended for Python build output was also matching the compiled interfaces, so they never reached the repository. Both are now included (about 300 KB each), which means **neither needs Node.js to open** — this matters on an isolated or air-gapped workstation, where Crow-Eye cannot download Node.
+- **A clone no longer rebuilds an interface it already has.** Start-up treated a missing `node_modules` folder as reason to rebuild, so a fresh checkout tried to download Node and rebuild files that were already present and current. It now rebuilds only when the interface is genuinely missing, or when you have edited its source with a development environment installed.
+
+The Eye's own interface is still built on first launch — it is a 9 MB bundle, and shipping it prebuilt would add that to the repository on every rebuild.
+
+### 🔧 Fixes
+
+- **The Pipeline Builder could not be opened from Settings.** Both **Edit** and **Create** in Settings → Pipeline Management failed immediately with *"Failed to open Pipeline Builder"* — the builder was being handed the wrong configuration manager, one that carries none of the signals it listens to. It now shares the same configuration manager as the Correlation Engine, so a feather or wing added in one appears in the other while both are open. Opening the builder from the Correlation Engine window was never affected.
+- **Renaming a pipeline while editing it no longer leaves a duplicate behind.** The file is named after the pipeline, so renaming used to write a second pipeline and keep the original — the rename now moves it.
+- **Local CLI agents were invoked with flags that do not exist.** The Claude CLI profile passed `--prompt` and `--system-prompt` (the real flags are `-p` and `--append-system-prompt`), so every invocation failed on flag parsing. The Ollama CLI profile hard-coded `llama3` as an argument, so **the model you configured was ignored** and every investigation ran against whatever `llama3` happened to be installed.
+- **Choosing certain providers silently failed to save.** The configuration schema's list of valid backends had not kept up with the provider catalogue, so connectivity validated, the write then failed, and the choice was never persisted. There is now a single list of supported backends that the schema is tested against.
+- **Ollama can now be configured as a local server during setup** — the router always supported it, but the wizard only offered it as a CLI agent, so a LAN Ollama could not be set up at all. A placeholder model name is also resolved to a model that is actually installed, rather than being sent literally.
+- **"Connect to <provider>…" no longer leaves an unusable model name behind.** The placeholder is resolved to a model the provider actually serves before it is saved, preferring one that is both live and recommended — a provider's catalogue can list models that reject every request.
+- **Retry classification now reads the HTTP status code** instead of searching the error text. A real 503 whose message mentioned a previous 429 was never retried, and a permanent 400 complaining about `max_tokens: 500` was retried three times with backoff.
+- Retired Gemini 1.5 models were removed from the model menu — they no longer serve requests, so offering them handed you a broken selection.
+- The Eye's configuration is now located relative to the application rather than the working directory, so it is found however Crow-Eye is launched.
+- **Terminal colour codes no longer appear as escape sequences in the loading screen log**, which now also has a status line for long-running steps.
+- Icons in the Settings, Eye, image-parsing and offline-importer dialogs are drawn at a consistent size.
+
+### 📋 Wording: how we describe defensibility
+
+Crow-Eye's documentation and the Ghassan Elsman Protocol now describe outputs as **traceable to source records and backed by an auditable, tamper-evident chain**, rather than "court-defensible" or "legal-grade". Nothing about the evidence handling changed — the hash chain, the Evidence Seal and the Compliance trail are the same. The new wording states precisely what the tool guarantees and leaves admissibility, which depends on jurisdiction and process, to the people who decide it.
+
+---
+
 ## Version 0.12.6 — Bring-Your-Own-Model & Evidence Custody Release
 
 **Release date:** 2026-07-26
@@ -37,12 +103,6 @@ Connect the AI backend you already use. Every new provider is a **single-key, Op
 
 - **The model dropdown opens instantly.** It used to freeze the UI on every open (a live network call plus up to ten OS-keychain reads on the GUI thread). It now opens immediately from a cached list and refreshes in the background.
 - **Suggested-action chips run on a single click** with an instant running indicator; a small pencil icon inserts the action into the message box to edit first. Typing in long conversations no longer lags.
-
-### 🔧 Fixes
-
-- **AI setup — "Validate & Save" now always works.** Configuring a model backend could silently do nothing if you pressed Back and then Next in the setup wizard. The final step now reliably validates the connection and saves your configuration regardless of how you navigated the wizard.
-- **Local Ollama server on a LAN or custom address is now honored.** When Ollama was configured as a Local Server, the Eye ignored the address you entered and always tried `localhost:11434`. It now connects to the endpoint you configured — a dedicated AI server on your LAN or a non-default port.
-- **Setup wizard shows a "Validating…" indicator.** Clicking Validate & Save now shows a live progress indicator while the connection is checked, and the check runs off the UI thread so the window no longer freezes on a slow or unreachable backend.
 
 ---
 

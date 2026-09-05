@@ -10,22 +10,36 @@
   "properties": {
     "integration_type": {
       "type": "string",
-      "enum": ["local_cli", "local_api", "cloud_api"],
-      "description": "Type of LLM backend integration"
+      "enum": ["local_cli", "local_api", "local_server", "cloud_api"],
+      "description": "Type of LLM backend integration. 'local_server' is what the router and bridge write; 'local_api' is the historical spelling kept for configs written by older builds."
     },
     "backend": {
       "type": "string",
       "enum": [
-        "ollama",
-        "llama",
         "gemini_cli",
+        "llama",
+        "claude_code",
+        "jules_cli",
+        "gpt_cli",
+        "ollama_cli",
+        "custom_cli",
+        "ollama",
         "lm_studio",
         "vllm",
         "openai",
         "anthropic",
-        "gemini"
+        "gemini",
+        "openrouter",
+        "nvidia",
+        "deepseek",
+        "kimi",
+        "moonshot",
+        "groq",
+        "mistral",
+        "xai",
+        "grok"
       ],
-      "description": "Specific LLM backend to use"
+      "description": "Specific LLM backend to use. MUST stay in sync with eye.backends.backend_registry.SUPPORTED_BACKENDS (asserted by eye/tests/test_backend_registry.py)."
     },
     "model_name": {
       "type": "string",
@@ -331,19 +345,25 @@
           "integration_type": {
             "const": "local_cli"
           }
-        }
+        },
+        "required": ["integration_type"]
       },
       "then": {
         "required": ["executable_path"]
       }
     },
     {
+      "comment": "Only LM Studio / vLLM genuinely need an endpoint — ModelRouter raises without one. Ollama defaults to http://localhost:11434, so requiring it there would reject a valid config.",
       "if": {
         "properties": {
           "integration_type": {
-            "const": "local_api"
+            "enum": ["local_api", "local_server"]
+          },
+          "backend": {
+            "enum": ["lm_studio", "vllm"]
           }
-        }
+        },
+        "required": ["integration_type", "backend"]
       },
       "then": {
         "required": ["api_endpoint"]

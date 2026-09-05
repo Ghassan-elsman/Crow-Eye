@@ -216,7 +216,15 @@ class OllamaBackend(LLMBackend):
                 raise RuntimeError(
                     f"Ollama returned error: {e.response.status_code} - {error_detail or str(e)}"
                 )
-    
+
+        # Unreachable for max_retries >= 1 (every branch above returns or raises),
+        # but a caller passing 0 would otherwise fall through and return None,
+        # producing an opaque AttributeError on `.json()` at the call site.
+        raise RuntimeError(
+            f"Ollama request to {url} was never attempted (max_retries={max_retries})."
+        )
+
+
     def generate(
         self,
         system_prompt: str,
@@ -247,27 +255,44 @@ class OllamaBackend(LLMBackend):
             TimeoutError: If the request times out
             RuntimeError: If Ollama returns an error
         """
+        # Ollama rejects a placeholder model name literally ("model 'default' not
+        # found"). Resolve it to a pulled model, matching LM Studio's behaviour so
+        # a "Connect to Ollama…" selection can never leave an unusable name behind.
+        target_model = self.model_name
+        if not target_model or target_model in ["", "default", "auto"]:
+            available = self.list_models()
+            if not available:
+                raise RuntimeError(
+                    "Ollama Error: no models are available. "
+                    f"Pull one first (e.g. `ollama pull llama3`) and confirm the service at "
+                    f"{self.api_endpoint} is running."
+                )
+            target_model = available[0]
+            # Persist so get_context_window() looks up what we actually use.
+            self.model_name = target_model
+            self.logger.info(f"Ollama: no model configured. Auto-selecting: {target_model}")
+
         try:
             # Build the raw messages array (system + history + user)
             raw_messages = [{"role": "system", "content": system_prompt}]
-            
+
             if history:
                 for msg in history:
                     raw_messages.append({
-                        "role": msg.get("role", "user"), 
+                        "role": msg.get("role", "user"),
                         "content": msg.get("content", "")
                     })
-            
+
             raw_messages.append({"role": "user", "content": user_message})
-            
+
             # Sanitize messages to ensure alternating user/assistant roles
             # This is critical for local models (like Llama 3) which often fail
             # if roles don't alternate or if system messages appear in the middle.
             messages = self._sanitize_messages(raw_messages)
-            
+
             # Build the request payload
             payload = {
-                "model": self.model_name,
+                "model": target_model,
                 "messages": messages,
                 "stream": False  # We want the complete response, not streaming
             }

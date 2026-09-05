@@ -138,23 +138,24 @@ class AnthropicBackend(LLMBackend):
 
     def validate_connectivity(self):
         """
-        Checks if the Anthropic API is reachable and key is valid.
-        
-        Attempts a minimal request. If no model name is configured, it tries
-        to list models instead to verify the API key's validity.
+        Checks if the Anthropic API is reachable and the key is valid.
+
+        Uses ``models.retrieve``, which verifies the key AND that the configured
+        model id actually exists — strictly more informative than listing models,
+        and free. This deliberately does NOT send a real ``messages.create``:
+        connectivity is re-checked on every pre-flight TTL miss, on every
+        ``get_backend_status()`` and on every model switch, so a billable
+        generation here charged the investigator just to answer "are you up?".
         """
         try:
             if self.model_name and self.model_name not in ["", "default"]:
-                # If we have a model name, try a 1-token generation (cheapest check)
-                self.client.messages.create(
-                    model=self.model_name, 
-                    max_tokens=1, 
-                    messages=[{"role": "user", "content": "t"}]
-                )
-            else:
-                # If no model name yet, just try to list models
-                self.list_models()
-            return True
+                models_api = getattr(self.client, "models", None)
+                if models_api is not None and hasattr(models_api, "retrieve"):
+                    models_api.retrieve(self.model_name)
+                    return True
+            # No model name yet, or an SDK too old for models.retrieve: fall back
+            # to discovery, which validates the key just as well.
+            return bool(self.list_models())
         except Exception as e:
             self.logger.error(f"Anthropic connectivity check failed: {e}")
             return False

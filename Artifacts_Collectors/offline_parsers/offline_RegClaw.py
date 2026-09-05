@@ -26,8 +26,10 @@ Note: Both NTUSER.DAT and UsrClass.dat are required for complete ShellBags
 
 """
 
+import hashlib
 import sqlite3
 import os
+import re
 import datetime
 import logging
 import struct
@@ -43,13 +45,19 @@ except ModuleNotFoundError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from Artifacts_Collectors import registry_binary_parser
 
-# Transaction-log replay, so a hive Windows had open is not read as final.
+# Transaction-log replay, so a hive Windows had open is not read as final, and
+# the allocator walk, which reaches what a tree walk cannot: class names, the
+# shared security descriptors, and records still sitting in freed cells.
 try:
     from Artifacts_Collectors import registry_transaction_log
+    from Artifacts_Collectors import registry_hive_walk
+    from Artifacts_Collectors import registry_extra_keys
 except ModuleNotFoundError:
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from Artifacts_Collectors import registry_transaction_log
+    from Artifacts_Collectors import registry_hive_walk
+    from Artifacts_Collectors import registry_extra_keys
 
 # Shared with the live parser so both produce the same accounts and the same
 # user names - see Artifacts_Collectors/user_identity.py
@@ -124,6 +132,25 @@ def format_focus_time(milliseconds):
         return f"{hours:.2f}h"
 
 
+def _off_decoded(table, name, data, vtype=None, env=None):
+    """The decoded form of a plain value, or "".
+
+    Module level because the two tables that use it are written deep
+    inside the parse, well before the ASEP environment is built.
+
+    `env` is empty by default, so %VARIABLE% values in these two
+    tables are left standing offline rather than expanded against the
+    examiner's own machine. Switches, locales and flag fields do not
+    depend on an environment and decode either way.
+    """
+    try:
+        got = registry_binary_parser.render_registry_value(
+            table, name, data, vtype, env) or ""
+    except Exception:
+        return ""
+    return "" if got == str(data) else got
+
+
 def check_exists(cursor, table_name, conditions, values):
     """Check if record exists in table.
 
@@ -151,6 +178,106 @@ def _extract_sid_from_path(subkey_path):
         return parts[-1] if parts else ''
     except Exception:
         return ''
+
+
+
+# The documented value types, for naming a carved value's type. A carved cell
+# can hold anything, including a type outside this set, which is exactly why
+# the lookup has a default rather than raising.
+_REG_TYPE_NAMES = {
+    0: "REG_NONE", 1: "REG_SZ", 2: "REG_EXPAND_SZ", 3: "REG_BINARY",
+    4: "REG_DWORD", 5: "REG_DWORD_BIG_ENDIAN", 6: "REG_LINK",
+    7: "REG_MULTI_SZ", 8: "REG_RESOURCE_LIST",
+    9: "REG_FULL_RESOURCE_DESCRIPTOR", 10: "REG_RESOURCE_REQUIREMENTS_LIST",
+    11: "REG_QWORD",
+}
+
+
+
+# What record_state says. A record recovered from a freed cell is marked
+# wherever it appears, so an analyst reading any table knows this row was not
+# in the live registry - rather than having to know which table means what.
+#
+# "(deleted)" describes where the record was found, not who removed it. Windows
+# frees cells constantly by itself; a key in free space was removed, which is
+# not the same as somebody having removed it.
+DELETED_STATE = "(deleted)"
+LIVE_STATE = "live"
+
+
+def _carved_data_text(data, value_type):
+    """A carved value's data, rendered so a person can read it.
+
+    Text types are decoded; everything else becomes hex. Capped, because this
+    is here to say what the value HELD, not to reconstitute a file out of free
+    space - and because a parser writes to a console that is cp1252 by default,
+    so the output has to stay ASCII.
+    """
+    if not data:
+        return ""
+    try:
+        # REG_SZ, REG_EXPAND_SZ and REG_MULTI_SZ are UTF-16LE on disk.
+        if value_type in (1, 2, 7):
+            text = data.decode("utf-16-le", "replace").rstrip("\x00")
+            text = text.replace("\x00", " | ").strip()
+            printable = "".join(c if 32 <= ord(c) < 127 else "." for c in text)
+            if printable.strip("."):
+                return printable[:512]
+        return data[:256].hex()
+    except Exception:
+        try:
+            return data[:256].hex()
+        except Exception:
+            return ""
+
+
+def _value_bytes(value):
+    """Read a value's data, even when its type is not one Windows documents.
+
+    python-registry raises UnknownTypeException from .value() for any type
+    outside the documented twelve. Device and driver keys are full of them:
+    Enum, DeviceClasses and DriverDatabase store Plug and Play device property
+    types in the same field, and those types are not in the REG_* set.
+
+    Left uncaught this is expensive out of all proportion, because the read
+    loops sit inside a try that covers the whole key: one odd value discarded
+    every value in that key and the log blamed a missing path. Measured on a
+    real SYSTEM hive that was 1,319 keys, 254 of them under Enum\\USB, which
+    is USB device history.
+
+    Returns (data, ok). ok is False when the type had to be bypassed, so the
+    caller can label the type UNKNOWN rather than claim to know it.
+    """
+    try:
+        return value.value(), True
+    except Exception:
+        # The bytes are still there; only the interpretation is unavailable.
+        try:
+            return value.raw_data(), False
+        except Exception:
+            return None, False
+
+
+def _device_property_time(values):
+    """Turn a device property key's value into a forensic timestamp.
+
+    The properties under {83da6326-97a6-4088-9453-a1923f573b29} are
+    DEVPROP_TYPE_FILETIME, which is not a REG_* type. python-registry knows
+    that one and hands back a datetime; other readers hand back the raw eight
+    bytes. Both arrive here, and a reader that accepted only bytes produced an
+    empty column on every device.
+    """
+    for _name, _entry in (values or {}).items():
+        d = _entry[0] if isinstance(_entry, tuple) else _entry
+        if isinstance(d, datetime.datetime):
+            return format_forensic_timestamp(d)
+        if isinstance(d, bytes) and len(d) >= 8:
+            try:
+                return format_forensic_timestamp(
+                    filetime_to_datetime(int.from_bytes(d[:8], byteorder="little")))
+            except Exception:
+                continue
+    return ""
 
 
 def _default_name(name):
@@ -555,7 +682,7 @@ def read_registry_multi_path(hive, base_path, controlset_dependent=True, active_
             path_values = {}
             for value in key.values():
                 name = value.name()
-                data = value.value()
+                data, typed = _value_bytes(value)
                 value_type = value.value_type()
                 value_type_str = {
                     Registry.RegBin: "REG_BINARY",
@@ -566,6 +693,8 @@ def read_registry_multi_path(hive, base_path, controlset_dependent=True, active_
                     Registry.RegMultiSZ: "REG_MULTI_SZ",
                     Registry.RegNone: "REG_NONE"
                 }.get(value_type, "UNKNOWN")
+                if not typed:
+                    value_type_str = "UNKNOWN"
                 path_values[name] = (data, value_type_str)
             
             if path_values:
@@ -578,7 +707,9 @@ def read_registry_multi_path(hive, base_path, controlset_dependent=True, active_
                         merged_values[name] = value_tuple
         
         except Exception as e:
-            logging.debug(f"Path not found: {path}")
+            # Not necessarily missing: say what actually happened, because
+            # "Path not found" sent an earlier investigation the wrong way.
+            logging.debug(f"Could not read {path}: {type(e).__name__}: {e}")
             continue
     
     # Log summary
@@ -608,7 +739,6 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     # registry_hive_state is written at the end regardless, and a name bound
     # inside an `if` is not a name that exists.
     _hive_states = []
-    _replay_dir = None
 
     # Define paths
     if offline_mode and case_root:
@@ -675,31 +805,47 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         # - recovered, no log collected, an old-format log - is recorded in
         # registry_hive_state and printed, because "this may not be the final
         # registry" is the analyst's call, not something to leave implicit.
-        _replay_dir = tempfile.mkdtemp(prefix="crow_eye_replay_")
-
         def _replay(path):
-            """Recovered copy of `path`, or `path` unchanged. Never raises."""
+            """Recovered copy of `path`, or `path` unchanged. Never raises.
+
+            The replay itself lives in registry_transaction_log, because five
+            other parsers read these same hives and each of them needs the
+            recovered state too. Going through the shared helper means SYSTEM
+            is replayed once per run rather than once per parser.
+            """
             if not path or not os.path.exists(path):
                 return path
-            try:
-                out = os.path.join(_replay_dir, "%d_%s" % (len(_hive_states),
-                                                           os.path.basename(path)))
-                res = registry_transaction_log.recover_hive(path, out)
+            resolved = registry_transaction_log.hive_for_reading(path)
+            res = registry_transaction_log.recovery_result_for(path)
+            if res is not None and res not in _hive_states:
                 _hive_states.append(res)
                 if res.recovered:
                     print("  [REPLAY] %s: %s" % (res.hive_name, res.reason))
-                    return res.recovered_path
-                if res.was_dirty:
+                elif res.was_dirty:
                     # Loud on purpose. The rows about to be parsed may not be
                     # the final state of this registry.
                     print("  [STALE]  %s: dirty and NOT replayed - %s"
                           % (res.hive_name, res.reason))
-                return path
-            except Exception as e:
-                logging.error("Transaction-log replay failed for %s: %s", path, e)
-                return path
+            return resolved
 
         print("\n[Transaction Logs] Checking hives for outstanding transactions...")
+        # Keep the pre-replay paths. Every other table describes the recovered
+        # state, which is right - but the change pass needs the state BEFORE
+        # the pending transactions, because that is the half of the diff the
+        # log does not carry. Diff the recovered hive instead and the two sides
+        # are identical by construction, so it finds nothing at all. That is
+        # what the first run of this did: 259 changes where there were 4,000,
+        # and no error anywhere.
+        _pre_replay = {
+            "SYSTEM": system_reg_hive, "SOFTWARE": Software_reg_hive,
+            "SAM": sam_reg_hive, "SECURITY": security_reg_hive,
+            "DEFAULT": default_reg_hive,
+        }
+        for _i, _h in enumerate(ntuser_hives or []):
+            _pre_replay["NTUSER.DAT" if _i == 0 else "NTUSER.DAT[%d]" % _i] = _h
+        for _i, _h in enumerate(usrclass_hives or []):
+            _pre_replay["UsrClass.dat" if _i == 0 else "UsrClass.dat[%d]" % _i] = _h
+
         system_reg_hive = _replay(system_reg_hive)
         Software_reg_hive = _replay(Software_reg_hive)
         sam_reg_hive = _replay(sam_reg_hive)
@@ -845,7 +991,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             values = {}
             for value in key.values():
                 name = value.name()
-                data = value.value()
+                data, typed = _value_bytes(value)
                 value_type = value.value_type()
                 value_type_str = {
                     Registry.RegBin: "REG_BINARY",
@@ -856,6 +1002,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     Registry.RegMultiSZ: "REG_MULTI_SZ",
                     Registry.RegNone: "REG_NONE"
                 }.get(value_type, "UNKNOWN")
+                if not typed:
+                    value_type_str = "UNKNOWN"
                 values[name] = (data, value_type_str)
             return values
         except Exception as e:
@@ -888,7 +1036,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 subkey_values[subkey.name()] = {}
                 for value in subkey.values():
                     name = value.name()
-                    data = value.value()
+                    data, typed = _value_bytes(value)
                     value_type = value.value_type()
                     value_type_str = {
                         Registry.RegBin: "REG_BINARY",
@@ -899,6 +1047,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         Registry.RegMultiSZ: "REG_MULTI_SZ",
                         Registry.RegNone: "REG_NONE"
                     }.get(value_type, "UNKNOWN")
+                    if not typed:
+                        value_type_str = "UNKNOWN"
                     subkey_values[subkey.name()][name] = (data, value_type_str)
             return subkey_values
         except Exception as e:
@@ -916,7 +1066,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
 
     # Create comprehensive table set (40+ tables) - Phase 1-9
     tables_basic = [
-        ("machine_run", "name TEXT, row_data TEXT, type TEXT"),
+        ("machine_run", "name TEXT, row_data TEXT, row_decoded TEXT, type TEXT"),
         ("machine_run_once", "name TEXT, row_data TEXT, type TEXT"),
         ("user_run", "name TEXT, row_data TEXT, type TEXT"),
         ("user_run_once", "name TEXT, row_data TEXT, type TEXT"),
@@ -929,21 +1079,24 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         # The four enrichment columns match the live schema. They were absent
         # here, so the same network profile carried different columns depending
         # on whether the case was acquired live or from an image.
-        ("Network_list", "subkey TEXT, name TEXT, data TEXT, type TEXT, "
-                         "network_name TEXT, connection_date TEXT, "
-                         "gateway_mac TEXT, is_hidden INTEGER"),
+        # is_hidden is gone from both parsers. It was derived from
+        # NameType == 6, which is a WIRED network, and it was a verdict where
+        # the registry only offers a fact.
+        ("Network_list", "subkey TEXT, name TEXT, data TEXT, decoded TEXT, "
+                         "type TEXT, network_name TEXT, connection_date TEXT, "
+                         "gateway_mac TEXT, parsed_at TEXT"),
         # 'type' matches the live schema. Without it the inserts below - which
         # named a non-existent column - failed inside a try/except and left both
         # tables empty in every offline case.
         ("computer_Name", "name TEXT, row_data TEXT, type TEXT"),
-        ("time_zone", "name TEXT, row_data TEXT, type TEXT"),
+        ("time_zone", "name TEXT, row_data TEXT, decoded TEXT, type TEXT"),
         # Raw layer for keys whose structured tables already exist here. The
         # live parser creates all four; offline created none, so the same
         # machine yielded a different schema depending on how it was acquired.
-        ("network_interfaces", "subkey TEXT, name TEXT, row_data TEXT, type TEXT"),
-        ("shutdown_information", "name TEXT, row_data TEXT, type TEXT"),
+        ("network_interfaces", "subkey TEXT, name TEXT, row_data TEXT, decoded TEXT, type TEXT"),
+        ("shutdown_information", "name TEXT, row_data TEXT, row_decoded TEXT, type TEXT"),
         ("Windows_lastupdate", "name TEXT, row_data TEXT, type TEXT"),
-        ("Windows_lastupdate_subkeys", "subkey TEXT, name TEXT, row_data TEXT, type TEXT"),
+        ("Windows_lastupdate_subkeys", "subkey TEXT, name TEXT, row_data TEXT, row_decoded TEXT, type TEXT"),
         # 'Search_Explorer_bar' was created here and never populated. The same
         # artifact is WordWheelQuery in the live parser, which is the name the
         # industry uses and the one the GUI already knows.
@@ -962,15 +1115,77 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS TimeZoneInfo (
         time_zone_name TEXT, standard_name TEXT, daylight_name TEXT,
-        bias INTEGER, active_time_bias INTEGER, parsed_at TEXT
+        bias INTEGER, active_time_bias INTEGER, daylight_bias INTEGER,
+        utc_offset TEXT, display_name TEXT, standard_name_raw TEXT,
+        daylight_name_raw TEXT, standard_start_rule TEXT,
+        daylight_start_rule TEXT, dynamic_dst_disabled TEXT,
+        agrees_with_tzi TEXT, parsed_at TEXT
+    )''')
+
+    # One row per network, joining Signatures\Unmanaged to Profiles on
+    # ProfileGuid. Built from the values already read out of the hive, which is
+    # why it works here at all - the live parser used to do this join by
+    # reading the Profiles key back through the registry API, so offline it
+    # could never have worked.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS NetworkProfiles (
+        profile_guid TEXT, profile_name TEXT, description TEXT,
+        signature TEXT, first_network TEXT, gateway_mac TEXT,
+        dns_suffix TEXT, category INTEGER, category_label TEXT,
+        name_type INTEGER, name_type_label TEXT, managed INTEGER,
+        managed_label TEXT, source INTEGER, date_created TEXT,
+        date_last_connected TEXT, key_path TEXT, last_written TEXT,
+        time_basis TEXT, parsed_at TEXT
     )''')
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS NetworkInterfacesInfo (
         interface_id TEXT, ip_address TEXT, subnet_mask TEXT,
         default_gateway TEXT, dhcp_enabled INTEGER, dhcp_server TEXT,
-        dns_servers TEXT, mac_address TEXT, parsed_at TEXT
+        dns_servers TEXT, mac_address TEXT, gateway_ip TEXT,
+        gateway_hardware_mac TEXT, dns_suffix TEXT, lease_obtained TEXT,
+        lease_expires TEXT, parsed_at TEXT
     )''')
+
+    # An existing case database is evidence: it gets ALTER TABLE ADD COLUMN
+    # and never a rebuild, so a re-parse gains the decoded columns and loses
+    # nothing already in it.
+    for _t, _cols in (
+            ("time_zone", {"decoded": "TEXT"}),
+            ("network_interfaces", {"decoded": "TEXT"}),
+            ("Network_list", {"decoded": "TEXT", "parsed_at": "TEXT"}),
+            ("BAM", {"decoded": "TEXT", "name_kind": "TEXT",
+                     "name_kind_raw": "INTEGER", "trailing_value": "INTEGER"}),
+            ("DAM", {"decoded": "TEXT", "name_kind": "TEXT",
+                     "name_kind_raw": "INTEGER", "trailing_value": "INTEGER"}),
+            ("TimeZoneInfo", {"daylight_bias": "INTEGER", "utc_offset": "TEXT",
+                              "display_name": "TEXT",
+                              "standard_name_raw": "TEXT",
+                              "daylight_name_raw": "TEXT",
+                              "standard_start_rule": "TEXT",
+                              "daylight_start_rule": "TEXT",
+                              "dynamic_dst_disabled": "TEXT",
+                              "agrees_with_tzi": "TEXT"}),
+            ("NetworkInterfacesInfo", {"gateway_ip": "TEXT",
+                                       "gateway_hardware_mac": "TEXT",
+                                       "dns_suffix": "TEXT",
+                                       "lease_obtained": "TEXT",
+                                       "lease_expires": "TEXT"}),
+            # Which shell view wrote the bag - see _bag_view() below.
+            ("Shellbags", {"node_slot": "INTEGER", "bag_views": "TEXT"}),
+    ):
+        try:
+            _have = {r[1].lower() for r
+                     in cursor.execute('PRAGMA table_info("%s")' % _t)}
+        except Exception:
+            continue
+        for _c, _ty in _cols.items():
+            if _have and _c.lower() not in _have:
+                try:
+                    cursor.execute('ALTER TABLE "%s" ADD COLUMN "%s" %s'
+                                   % (_t, _c, _ty))
+                except Exception as _exc:
+                    logging.debug("could not add %s.%s: %s", _t, _c, _exc)
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS WindowsUpdateInfo (
@@ -988,7 +1203,190 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         hive_name TEXT, hive_path TEXT, sequence_1 INTEGER, sequence_2 INTEGER,
         was_dirty INTEGER, logs_found TEXT, log_format TEXT, replayed INTEGER,
         entries_applied INTEGER, pages_applied INTEGER, highest_sequence INTEGER,
-        reason TEXT, parsed_at TEXT
+        source_sha256 TEXT, acquisition_route TEXT, reason TEXT, parsed_at TEXT
+    )''')
+
+    # Additive migration, same as key_last_write below: a case database from an
+    # earlier build has this table without source_sha256, CREATE TABLE IF NOT
+    # EXISTS will not add it, and the insert would then fail inside a try that
+    # logs and continues - so the table would quietly stop gaining rows.
+    try:
+        cursor.execute("PRAGMA table_info(registry_hive_state)")
+        _hs_cols = [c[1] for c in cursor.fetchall()]
+        if _hs_cols and "source_sha256" not in _hs_cols:
+            cursor.execute(
+                "ALTER TABLE registry_hive_state ADD COLUMN source_sha256 TEXT")
+        if _hs_cols and "acquisition_route" not in _hs_cols:
+            cursor.execute(
+                "ALTER TABLE registry_hive_state ADD COLUMN acquisition_route TEXT")
+    except sqlite3.Error as _e:
+        logging.debug("source_sha256 migration: %s", _e)
+
+
+    # ---- what a tree walk cannot see -------------------------------------
+    # Sections 13 and 14 of the registry guide. A tree walk reports what the
+    # root can reach; these three come from walking the allocator instead.
+
+    # An nk record can carry a class name, a second string separate from the
+    # key's name. Most keys have none, and it is where the four keys under
+    # Control\Lsa keep the machine's boot key - data in a field most registry
+    # viewers do not render at all.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registry_class_names (
+        hive_name TEXT, key_path TEXT, key_name TEXT, class_name TEXT,
+        class_length INTEGER, key_last_write TEXT, parsed_at TEXT,
+        UNIQUE(hive_name, key_path, class_name)
+    )''')
+
+    # Keys do not get a security descriptor each; identical ones are stored
+    # once and shared, carrying a count of how many keys use them. One row per
+    # distinct descriptor. A descriptor with a reference count of 1, where its
+    # siblings share one, is a key whose permissions were changed - and that is
+    # visible here without reading a single ACE.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registry_security_descriptors (
+        hive_name TEXT, sk_offset INTEGER, descriptor_hash TEXT,
+        reference_count INTEGER,
+        owner_sid TEXT, group_sid TEXT, dacl_ace_count INTEGER,
+        sacl_ace_count INTEGER, descriptor_size INTEGER, sample_key_path TEXT,
+        parsed_at TEXT,
+        -- Keyed on the descriptor itself rather than on where it sat: a live
+        -- read has no offset, and two keys sharing a hash share permissions.
+        UNIQUE(hive_name, descriptor_hash)
+    )''')
+
+    # Deleting a key does not erase it: Windows flips the cell's size from
+    # negative to positive and moves on, leaving the signature, name, timestamp
+    # and pointers in place until something allocates over them. "Carved", not
+    # "deleted" - a key in free space was removed, which is not the same as
+    # somebody having removed it deliberately.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registry_carved_keys (
+        hive_name TEXT, cell_offset INTEGER, key_name TEXT, key_path TEXT,
+        parent_resolved INTEGER, key_last_write TEXT,
+        subkey_count INTEGER, value_count INTEGER, record_state TEXT,
+        parsed_at TEXT,
+        UNIQUE(hive_name, cell_offset)
+    )''')
+
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registry_carved_values (
+        hive_name TEXT, cell_offset INTEGER, parent_cell_offset INTEGER,
+        key_path TEXT, value_name TEXT, value_type TEXT,
+        data_size INTEGER, is_inline INTEGER, data TEXT, record_state TEXT,
+        parsed_at TEXT,
+        UNIQUE(hive_name, cell_offset)
+    )''')
+
+    # A key records when it was last written; its values record nothing at
+    # all. This table is the only place that says WHICH value changed, and it
+    # comes from the transaction logs rather than from the hive: the hive holds
+    # the state before the pending transactions, the log holds it after, and
+    # the bytes that differ name the value.
+    #
+    # Scope is a property of the row, not a caveat in a manual - the logs hold
+    # recent transactions, not full history, so an absence here means nothing.
+    # One row per key, with its last-write time. The key-level surface: here
+    # the timestamp is unambiguous because the ROW IS THE KEY. On a value row
+    # the same number is only ever an upper bound, which is why it is written
+    # there through time_basis rather than on its own.
+    # Whether each autostart entry is allowed to launch, and when it was switched off.
+    # Without this a persistence table lists everything the Run key holds as though it all ran.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS startup_approved (
+            hive TEXT, scope TEXT, entry_name TEXT, state TEXT, state_byte TEXT,
+            disabled_at TEXT, key_path TEXT, last_written TEXT, time_basis TEXT,
+            parsed_at TEXT,
+            UNIQUE(hive, scope, entry_name)
+    )''')
+
+    # How a bare command name resolves to an executable.
+    # A hijack point: change the entry and typing the name runs something else.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS app_paths (
+            app_name TEXT, executable_path TEXT, app_dir TEXT, key_path TEXT,
+            last_written TEXT, time_basis TEXT, parsed_at TEXT,
+            UNIQUE(app_name)
+    )''')
+
+    # Services and drivers that still start in Safe Mode.
+    # Persistence placed here survives the boot most people use to clean a machine.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS safe_boot_services (
+            boot_mode TEXT, entry_name TEXT, entry_type TEXT, key_path TEXT,
+            last_written TEXT, time_basis TEXT, parsed_at TEXT,
+            UNIQUE(boot_mode, entry_name)
+    )''')
+
+    # Sites and domains assigned to an Internet Explorer security zone.
+    # A host moved into Trusted Sites runs content the others would block.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS zone_map (
+            scope TEXT, host TEXT, protocol TEXT, zone TEXT, zone_name TEXT,
+            key_path TEXT, last_written TEXT, time_basis TEXT, parsed_at TEXT,
+            UNIQUE(scope, host, protocol)
+    )''')
+
+    # Which applications hold consent for a capability - microphone, camera, location - and when each last used it..
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS app_permissions (
+            capability TEXT, app TEXT, packaged INTEGER, permission TEXT,
+            last_used_start TEXT, last_used_stop TEXT, key_path TEXT,
+            last_written TEXT, time_basis TEXT, parsed_at TEXT,
+            UNIQUE(capability, app)
+    )''')
+
+    # Reference counts Windows keeps for shared libraries.
+    # Mostly inventory, and occasionally the only record that a DLL was ever installed.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS shared_dlls (
+            dll_path TEXT, reference_count INTEGER, key_path TEXT,
+            last_written TEXT, time_basis TEXT, parsed_at TEXT,
+            UNIQUE(dll_path)
+    )''')
+
+    # Human interface devices the machine has enumerated - keyboards, mice and anything that presents itself as one..
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS hid_devices (
+            device_id TEXT, instance_id TEXT, device_desc TEXT, manufacturer TEXT,
+            service TEXT, key_path TEXT, last_written TEXT, time_basis TEXT,
+            parsed_at TEXT,
+            UNIQUE(device_id, instance_id)
+    )''')
+
+    # The adapter inventory, by installation index.
+    # Names cards that no longer have an interface.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS network_cards (
+            card_index TEXT, description TEXT, service_name TEXT, key_path TEXT,
+            last_written TEXT, time_basis TEXT, parsed_at TEXT,
+            UNIQUE(card_index)
+    )''')
+
+    # Settings rather than artifacts: power and fast startup, locale, time source, TCP/IP identity, search scope, shell folders and the taskbar.
+    # Same shape as SecurityPosture, which holds the security-relevant subset.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS system_configuration (
+            setting TEXT, value_raw TEXT, value_decoded TEXT, area TEXT,
+            meaning TEXT, key_path TEXT, last_written TEXT, time_basis TEXT,
+            parsed_at TEXT,
+            UNIQUE(area, setting, key_path)
+    )''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registry_key_times (
+        hive_name TEXT, key_path TEXT, key_last_write TEXT, cell_offset INTEGER,
+        parsed_at TEXT,
+        UNIQUE(hive_name, key_path)
+    )''')
+
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registry_value_changes (
+        hive_name TEXT, transaction_sequence INTEGER, change_kind TEXT,
+        changed_at TEXT, key_path TEXT, value_name TEXT, value_type TEXT,
+        changed_before TEXT,
+        changed_after TEXT, value_before TEXT, changed_bytes INTEGER,
+        cell_offset INTEGER, key_last_write TEXT, parsed_at TEXT,
+        UNIQUE(hive_name, transaction_sequence, key_path, value_name)
     )''')
 
     cursor.execute('''
@@ -1000,16 +1398,20 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     # DAM and BAM
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS DAM (
-        subkey TEXT, name TEXT, row_data TEXT, type TEXT, app_name TEXT,
-        process_path TEXT, sid TEXT, last_execution TEXT,
-        execution_count INTEGER, parsed_at TEXT
+        subkey TEXT, name TEXT, row_data TEXT, type TEXT,
+        app_name TEXT, process_path TEXT, sid TEXT, last_execution TEXT,
+        execution_count INTEGER, decoded TEXT, name_kind TEXT,
+        name_kind_raw INTEGER, trailing_value INTEGER,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT
     )''')
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS BAM (
-        subkey TEXT, name TEXT, row_data TEXT, type TEXT, app_name TEXT,
-        process_path TEXT, sid TEXT, last_execution TEXT,
-        execution_flags INTEGER, parsed_at TEXT
+        subkey TEXT, name TEXT, row_data TEXT, type TEXT,
+        app_name TEXT, process_path TEXT, sid TEXT, last_execution TEXT,
+        decoded TEXT, name_kind TEXT, name_kind_raw INTEGER,
+        trailing_value INTEGER,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT
     )''')
 
     # User/execution tracking
@@ -1026,7 +1428,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         accessed_date TEXT, attributes TEXT, file_size INTEGER DEFAULT 0,
         special_folder TEXT, network_share TEXT, server_name TEXT,
         share_name TEXT, drive_letter TEXT, mft_record_number INTEGER,
-        registry_path TEXT, parent_path TEXT, parsed_at TEXT, user_name TEXT
+        registry_path TEXT, parent_path TEXT,
+        last_written TEXT, time_basis TEXT,
+        node_slot INTEGER, bag_views TEXT, parsed_at TEXT, user_name TEXT
     )''')
 
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_file_name ON Shellbags(file_name)')
@@ -1085,6 +1489,31 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         except sqlite3.Error as _e:
             logging.debug("key_last_write migration for %s: %s", _mru_t, _e)
 
+    # The subtractive counterpart, mirroring Regclaw. last_written / time_basis
+    # are filled by the time-basis pass for any table that has them and a column
+    # it takes for a key path - it takes the NAME "subkey" for one, and in these
+    # two tables subkey is a file extension (".jpg", "exe"). The match never
+    # happened, so both columns were empty on every row, and because they sat
+    # mid-table a positionally-filled tab showed the parse time under
+    # "Last Written". One statement per column: a (name, DDL) pair list is the
+    # shape Sentinel's extract-schema.js reads as a table definition.
+    for _dead_t in ("OpenSaveMRU", "RecentDocs"):
+        try:
+            cursor.execute("PRAGMA table_info(%s)" % _dead_t)
+            _dc = [c[1] for c in cursor.fetchall()]
+            if not _dc:
+                continue
+            if "last_written" in _dc:
+                cursor.execute(
+                    "ALTER TABLE %s DROP COLUMN last_written" % _dead_t)
+            if "time_basis" in _dc:
+                cursor.execute(
+                    "ALTER TABLE %s DROP COLUMN time_basis" % _dead_t)
+        except sqlite3.Error as _e:
+            # Needs SQLite 3.35+. Older builds keep the columns; the tabs place
+            # values by name now, so they render empty instead of shifting.
+            logging.debug("dead-column drop for %s: %s", _dead_t, _e)
+
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS MUICache (
         app_path TEXT, app_name TEXT, company TEXT, file_extension TEXT,
@@ -1113,9 +1542,23 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS AutoStartPrograms (
-        location TEXT, program_name TEXT, command TEXT, parsed_at TEXT,
+        location TEXT, program_name TEXT, command TEXT, key_path TEXT,
+        startup_state TEXT, disabled_at TEXT, record_state TEXT,
+        last_written TEXT, time_basis TEXT,
+        parsed_at TEXT,
         PRIMARY KEY (location, program_name)
     )''')
+
+    # A case database from an earlier build has this table without
+    # record_state, and CREATE TABLE IF NOT EXISTS will not add it.
+    try:
+        cursor.execute("PRAGMA table_info(AutoStartPrograms)")
+        _asp_cols = [c[1] for c in cursor.fetchall()]
+        if _asp_cols and "record_state" not in _asp_cols:
+            cursor.execute(
+                "ALTER TABLE AutoStartPrograms ADD COLUMN record_state TEXT")
+    except sqlite3.Error as _e:
+        logging.debug("record_state migration: %s", _e)
 
     # NEW: USB Device Tables (5 tables)
     cursor.execute('''
@@ -1225,9 +1668,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     full_location = f"{location} {auto_type}"
                     if not check_exists(cursor, 'AutoStartPrograms', ['location', 'program_name'], (full_location, name)):
                         cursor.execute('''INSERT INTO AutoStartPrograms
-                            (location, program_name, command, parsed_at)
-                            VALUES (?, ?, ?, ?)''',
-                            (full_location, name, command_str, get_current_forensic_timestamp()))
+                            (location, program_name, command, key_path,
+                             record_state, parsed_at)
+                            VALUES (?, ?, ?, ?, ?, ?)''',
+                            (full_location, name, command_str, key, LIVE_STATE,
+                             get_current_forensic_timestamp()))
 
                     # An AutoStartSuspicious verdict was written here. Every entry it
                     # flagged is already recorded in AutoStartPrograms with its full
@@ -1260,9 +1705,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         full_location = f"{location} {auto_type}"
                         if not check_exists(cursor, 'AutoStartPrograms', ['location', 'program_name'], (full_location, name)):
                             cursor.execute('''INSERT INTO AutoStartPrograms
-                                (location, program_name, command, parsed_at)
-                                VALUES (?, ?, ?, ?)''',
-                                (full_location, name, command_str, get_current_forensic_timestamp()))
+                                (location, program_name, command, key_path,
+                                 record_state, parsed_at)
+                                VALUES (?, ?, ?, ?, ?, ?)''',
+                                (full_location, name, command_str, key,
+                                 LIVE_STATE, get_current_forensic_timestamp()))
 
                         # An AutoStartSuspicious verdict was written here. Every entry it
                         # flagged is already recorded in AutoStartPrograms with its full
@@ -1363,11 +1810,22 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     
                     # Insert into database with all columns
                     if not check_exists(cursor, 'DAM', ['subkey', 'name'], (subkey, name)):
+                        _dam_blob = (registry_binary_parser.parse_bam_blob(data)
+                                     if isinstance(data, bytes) else {})
                         cursor.execute('''INSERT INTO DAM
-                            (subkey, name, row_data, type, app_name, process_path, sid, last_execution, execution_count, parsed_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                            (subkey, name, str(data)[:200], value_type, app_name, process_path, sid,
-                             last_execution, execution_count, get_current_forensic_timestamp()))
+                            (subkey, name, row_data, decoded, type, app_name, process_path, sid,
+                             last_execution, execution_count, name_kind, name_kind_raw,
+                             trailing_value, parsed_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                            (subkey, name, str(data)[:200],
+                             registry_binary_parser.render_registry_value(
+                                 'bam', name, data, value_type),
+                             value_type, app_name, process_path, sid,
+                             last_execution, execution_count,
+                             _dam_blob.get('name_kind'),
+                             _dam_blob.get('name_kind_raw'),
+                             _dam_blob.get('trailing_value'),
+                             get_current_forensic_timestamp()))
                 except Exception as e:
                     logging.error(f"Error processing DAM entry {name}: {e}")
 
@@ -1393,47 +1851,63 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         for subkey, values in bam_subkeys.items():
             for name, (data, value_type) in values.items():
                 try:
-                    # Initialize default values
-                    process_path = name
-                    app_name = os.path.basename(name) if name else ''
+                    process_path = ''
+                    app_name = ''
                     last_execution = ''
-                    execution_flags = 0
-                    
-                    # Parse binary data for timestamp
-                    if value_type == "REG_BINARY":
+                    name_kind = ''
+                    name_kind_raw = None
+                    trailing_value = None
+
+                    if registry_binary_parser.is_bam_metadata(name):
+                        # Version and SequenceNumber are the key's own
+                        # bookkeeping, not programs. Writing them as programs
+                        # gave two rows per SID an app_name and a process_path
+                        # of "Version" and "SequenceNumber" - paths that exist
+                        # nowhere.
+                        pass
+                    elif value_type == "REG_BINARY":
                         binary_data = data if isinstance(data, bytes) else data.encode('latin-1')
                         try:
                             parsed_data = registry_binary_parser.parse_bam_entry(name, binary_data)
                             process_path = parsed_data.get('process_path', name)
-                            last_execution = parsed_data.get('last_execution', '')
+                            # The whole 24-byte blob. The uint32 at offset 16
+                            # says whether the value NAME is a device path or a
+                            # package family name; only the first eight bytes
+                            # were ever read.
+                            blob = registry_binary_parser.parse_bam_blob(binary_data)
+                            last_execution = (blob['last_execution']
+                                              or parsed_data.get('last_execution', ''))
+                            name_kind = blob['name_kind']
+                            name_kind_raw = blob['name_kind_raw']
+                            trailing_value = blob['trailing_value']
                             app_name = os.path.basename(process_path)
                         except Exception as e:
                             logging.error(f"Error parsing BAM binary data for {name}: {e}")
-                    
-                    # Extract execution_flags from 'Flags' value if present
-                    if 'Flags' in values:
-                        try:
-                            flags_data, flags_type = values['Flags']
-                            if isinstance(flags_data, int):
-                                execution_flags = flags_data
-                            elif isinstance(flags_data, bytes) and len(flags_data) >= 4:
-                                execution_flags = struct.unpack('<I', flags_data[:4])[0]
-                            else:
-                                execution_flags = int(flags_data)
-                        except Exception as e:
-                            logging.debug(f"Could not parse execution_flags for {name}: {e}")
-                            execution_flags = 0
+                            process_path = name
+                            app_name = os.path.basename(name) if name else ''
+                    else:
+                        process_path = name
+                        app_name = os.path.basename(name) if name else ''
+
+                    decoded = registry_binary_parser.render_registry_value(
+                        'bam', name, data, value_type)
 
                     # Extract SID from subkey path
                     sid = _extract_sid_from_path(subkey)
                     
                     # Insert into database
                     if not check_exists(cursor, 'BAM', ['subkey', 'name'], (subkey, name)):
+                        # execution_flags is gone from both parsers. It read a
+                        # value named 'Flags' that these keys do not have, so it
+                        # was 0 on every row - a constant presented as a finding.
                         cursor.execute('''INSERT INTO BAM
-                            (subkey, name, row_data, type, app_name, process_path, sid, last_execution, execution_flags, parsed_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                            (subkey, name, str(data)[:200], value_type, app_name, process_path, sid,
-                             last_execution, execution_flags, get_current_forensic_timestamp()))
+                            (subkey, name, row_data, decoded, type, app_name, process_path, sid,
+                             last_execution, name_kind, name_kind_raw, trailing_value, parsed_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                            (subkey, name, str(data)[:200], decoded, value_type,
+                             app_name or None, process_path or None, sid,
+                             last_execution, name_kind, name_kind_raw,
+                             trailing_value, get_current_forensic_timestamp()))
                 except Exception as e:
                     logging.error(f"Error processing BAM entry {name}: {e}")
 
@@ -1567,9 +2041,78 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         except Exception as e:
             logging.debug(f"Error accessing RecentDocs path {path}: {e}")
 
+    # The evidence machine's UTC offset, read BEFORE any shell item is
+    # decoded. Shell items carry DOS date/time, which is that machine's local
+    # wall clock with no zone in it, so the decoder needs the offset to return
+    # a real UTC moment rather than relabelling a local one.
+    #
+    # Read here rather than where TimeZoneInfo is written, which happens more
+    # than a thousand lines later - setting it there applied it to nothing
+    # while looking perfectly correct.
+    try:
+        # Through the parser's own ControlSet-resolving reader. An offline
+        # SYSTEM hive has no CurrentControlSet - that key is assembled at boot
+        # and never stored - so the live path finds nothing here and reports no
+        # error, which is exactly what the first version of this did.
+        _tz_values, _ = read_registry_multi_path(
+            system_reg_hive, "Control" + chr(92) + "TimeZoneInformation",
+            controlset_dependent=True, active_controlset=active_controlset)
+        _raw_bias = 0
+        for _n, _v in (_tz_values or {}).items():
+            if str(_n).lower() == "bias":
+                _raw_bias = _v[0] if isinstance(_v, (tuple, list)) else _v
+                break
+        _bias_minutes = registry_binary_parser.set_evidence_bias(_raw_bias)
+        if _bias_minutes:
+            print("[OK] Evidence timezone offset UTC%s - shell item times "
+                  "converted from the evidence machine's local clock"
+                  % registry_binary_parser.utc_offset_label(_bias_minutes))
+        else:
+            print("[--] No timezone bias in this evidence - shell item times "
+                  "stay on the evidence machine's local clock")
+    except Exception as _exc:
+        logging.debug("evidence bias: %s", _exc)
+
     # PHASE: Shellbags
     print("[SHELLBAGS] Collecting folder access history...")
     
+    # Explorer files a window's view settings under Shell; a common File
+    # Open/Save dialog files its own under ComDlg. Listed in that order rather
+    # than alphabetically, and fixed rather than arbitrary so a re-parse is
+    # stable.
+    _VIEW_ORDER = {"Shell": 0, "ComDlg": 1}
+
+    def _bag_view(reg, bags_path, folder_key):
+        """Which kind of shell view wrote this folder's bag, if any.
+
+        A BagMRU key carries a NodeSlot DWORD naming a subkey of the Bags tree
+        beside it, and that subkey holds the view settings. It is the only
+        place in the hive that distinguishes a bag written by an Explorer
+        window from one written by a file dialog inside another program.
+
+        The slot is read from the folder's OWN key. An item is value N of key
+        P and the folder it names is P then N, so reading the slot off P would
+        give every row its parent's view - wrong, and entirely plausible.
+
+        Returns (node_slot, views); either may be None. The reference system
+        has 58 of 839 keys with no NodeSlot at all, and an empty column is the
+        honest answer for those.
+        """
+        try:
+            key = reg.open(folder_key)
+            slot = key.value("NodeSlot").value()
+        except Exception:
+            return None, None
+        if not isinstance(slot, int):
+            return None, None
+        try:
+            bag = reg.open(bags_path + chr(92) + str(slot))
+            views = [sub.name() for sub in bag.subkeys()]
+        except Exception:
+            return slot, None
+        views.sort(key=lambda v: (_VIEW_ORDER.get(v, 2), v))
+        return slot, (",".join(views) or None)
+
     def process_shellbag_subkey_recursive(reg_hive, base_path, subkey_path, cursor,
                                           parent_readable=""):
     
@@ -1587,12 +2130,20 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             full_path = f"{base_path}\\{subkey_path}" if subkey_path else base_path
             reg = Registry.Registry(reg_hive)
             current_key = reg.open(full_path)
+            # The Bags tree is the sibling of BagMRU, per hive - NTUSER's Shell
+            # and ShellNoRoam trees and the UsrClass tree each have their own.
+            # Derived from the base path so all of them resolve without a
+            # constant, and without depending on which hive this is.
+            bags_path = base_path.rsplit(chr(92), 1)[0] + chr(92) + "Bags"
             
             # Collect all values from this subkey
             subkey_values = {}
             for value in current_key.values():
                 name = value.name()
-                data = value.value()
+                # value_type() reads the type field and never raises; only
+                # value() does. The consumer below compares this against
+                # Registry.RegBin, so it stays the real numeric type.
+                data, _typed = _value_bytes(value)
                 value_type = value.value_type()
                 subkey_values[name] = (data, value_type)
             
@@ -1656,6 +2207,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             registry_path = (_sb_pfx + chr(92)
                                              + registry_path.lstrip(chr(92)))
 
+                        node_slot, bag_views = _bag_view(
+                            reg, bags_path, full_path + chr(92) + name)
+
                         if not check_exists(cursor, 'Shellbags', ['file_name', 'registry_path', 'user_name'],
                                            (file_name, registry_path, _sb_user)):
                             cursor.execute('''INSERT INTO Shellbags
@@ -1663,14 +2217,27 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                  created_date, modified_date, accessed_date, attributes,
                                  file_size, special_folder, network_share, server_name,
                                  share_name, drive_letter, mft_record_number,
-                                 registry_path, parent_path, parsed_at, user_name)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                 registry_path, parent_path, node_slot, bag_views,
+                                 parsed_at, user_name)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                 (file_name, short_name, shell_item_type, mru_position,
                                  created_date, modified_date, accessed_date, attributes,
                                  file_size, special_folder, network_share, server_name,
                                  share_name, drive_letter, mft_record_number,
-                                 registry_path, parent_readable,
+                                 registry_path, parent_readable, node_slot, bag_views,
                                  get_current_forensic_timestamp(), _sb_user))
+                        else:
+                            # The row is already evidence and is left alone, but
+                            # a column added after the case was made is empty on
+                            # it. Filled in only where it is still NULL, so this
+                            # adds information and overwrites nothing.
+                            cursor.execute(
+                                "UPDATE Shellbags SET node_slot = ?, "
+                                "bag_views = ? WHERE file_name IS ? AND "
+                                "registry_path IS ? AND user_name IS ? "
+                                "AND node_slot IS NULL",
+                                (node_slot, bag_views, file_name,
+                                 registry_path, _sb_user))
                 except Exception as e:
                     logging.error(f"Error parsing Shellbag entry at {full_path}\\{name}: {e}")
 
@@ -2092,28 +2659,28 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     # Extract VID and PID from device ID
                     vid, pid = extract_vid_pid(device_id)
 
-                    # Last install time: Properties\{83da6326-...}\0067 - the same
-                    # FILETIME the live parser reads.
-                    last_connected = ""
-                    if instance_id:
+                    # Under {83da6326-97a6-4088-9453-a1923f573b29}: 0066 is
+                    # DEVPKEY_Device_LastArrivalDate, 0067 is LastRemovalDate.
+                    # This read 0067 and called it last_connected, which
+                    # reports the disconnect. On this hive 20 of 22 devices
+                    # carry 0066 and no 0067 - plugged in, never unplugged - so
+                    # 0067 cannot be the connection time.
+                    def _dev_prop(_pid):
+                        if not instance_id:
+                            return ""
                         for _cs in _usb_cs:
                             _pp = (f"{_cs}\\{usb_path}\\{device_id}\\{instance_id}"
-                                   r"\Properties\{83da6326-97a6-4088-9453-a1923f573b29}\0067")
+                                   f"\\Properties\\{{83da6326-97a6-4088-9453-a1923f573b29}}\\{_pid}")
                             try:
                                 _pv = read_registry_values(system_reg_hive, _pp)
                             except Exception:
-                                _pv = {}
-                            for _n, _t in (_pv or {}).items():
-                                _d = _t[0] if isinstance(_t, tuple) else _t
-                                if isinstance(_d, bytes) and len(_d) >= 8:
-                                    try:
-                                        last_connected = registry_binary_parser.parse_filetime(_d[:8])
-                                    except Exception:
-                                        last_connected = ""
-                                if last_connected:
-                                    break
-                            if last_connected:
-                                break
+                                continue
+                            _when = _device_property_time(_pv)
+                            if _when:
+                                return _when
+                        return ""
+
+                    last_connected = _dev_prop("0066")
 
                     full_id = f"{device_id}\\{instance_id}" if instance_id else device_id
                     if not check_exists(cursor, 'USBDevices', ['device_id'], (full_id,)):
@@ -2123,20 +2690,25 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             (full_id, str(description), str(manufacturer),
                              str(friendly_name), str(last_connected)))
                 
-                # 2. USB Properties (USBProperties table)
-                # Collect all properties for this device
-                for prop_name, (prop_value, prop_type) in values.items():
-                    if prop_name not in ['', None]:
-                        prop_type_str = str(prop_type)
-                        prop_value_str = str(prop_value)
-                        
-                        if not check_exists(cursor, 'USBProperties', 
-                                          ['device_id', 'property_name'], 
-                                          (device_id, prop_name)):
-                            cursor.execute('''INSERT INTO USBProperties
-                                (device_id, property_name, property_value, property_type)
-                                VALUES (?, ?, ?, ?)''',
-                                (device_id, prop_name, prop_value_str, prop_type_str))
+                    # 2. USB Properties (USBProperties table)
+                    # The properties are on the instance key, not the model key
+                    # above it. Under Enum\USB a model key (VID_xxxx&PID_yyyy)
+                    # holds only subkeys, so reading `values` here inserted
+                    # nothing and the table was empty on every parse.
+                    for prop_name, (prop_value, prop_type) in ivals.items():
+                        if prop_name not in ['', None]:
+                            prop_type_str = str(prop_type)
+                            prop_value_str = str(prop_value)
+
+                            # Keyed by full_id, like the USBDevices row above,
+                            # so a property joins to the device it describes.
+                            if not check_exists(cursor, 'USBProperties',
+                                              ['device_id', 'property_name'],
+                                              (full_id, prop_name)):
+                                cursor.execute('''INSERT INTO USBProperties
+                                    (device_id, property_name, property_value, property_type)
+                                    VALUES (?, ?, ?, ?)''',
+                                    (full_id, prop_name, prop_value_str, prop_type_str))
                 
                 # 3. USB Instances (USBInstances table)
                 # Check for instance subkeys
@@ -2250,13 +2822,41 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 elif value.name() == 'VolumeName':
                                     volume_name = str(value.value())
 
+                            # The connection times, from the same property
+                            # set the Enum\USB path reads: 0065 first install,
+                            # 0066 last arrival, 0067 last removal. Offline used
+                            # to write none of them, so a case parsed from an
+                            # image had no USB storage timeline at all while the
+                            # same machine parsed live did.
+                            def _usbstor_time(_pid):
+                                for _cs in _usb_cs:
+                                    _pp = (f"{_cs}\\{usbstor_path}\\{device_class}"
+                                           f"\\{serial_number}\\Properties"
+                                           f"\\{{83da6326-97a6-4088-9453-a1923f573b29}}"
+                                           f"\\{_pid}")
+                                    try:
+                                        _pv = read_registry_values(system_reg_hive, _pp)
+                                    except Exception:
+                                        continue
+                                    _when = _device_property_time(_pv)
+                                    if _when:
+                                        return _when
+                                return ""
+
+                            first_connected = _usbstor_time("0065")
+                            last_connected = _usbstor_time("0066")
+                            last_removed = _usbstor_time("0067")
+
                             # 4a. USB Storage Devices table
                             if not check_exists(cursor, 'USBStorageDevices', ['device_id'], (device_id,)):
                                 cursor.execute('''INSERT INTO USBStorageDevices
-                                    (device_id, friendly_name, serial_number, vendor_id, product_id, revision, parsed_at)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?)''',
                                     (device_id, friendly_name, serial_number, vendor_id,
-                                     product_id, revision, get_current_forensic_timestamp()))
+                                     product_id, revision, first_connected, last_connected,
+                                     last_removed, parsed_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                    (device_id, friendly_name, serial_number, vendor_id,
+                                     product_id, revision, first_connected, last_connected,
+                                     last_removed, get_current_forensic_timestamp()))
                             
                             # 5. USB Storage Volumes table (USBStorageVolumes)
                             if drive_letter or volume_guid or volume_name:
@@ -2353,7 +2953,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             cursor.execute('''INSERT INTO InstalledSoftware
                                 (display_name, display_version, publisher, install_date, install_location, uninstall_string, parsed_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                                (display_name_str, str(display_version), str(publisher), str(install_date),
+                                (display_name_str, str(display_version), str(publisher),
+                                 registry_binary_parser.normalise_install_date(install_date),
                                  str(install_location), str(uninstall_string), ts))
 
                             # Two SuspiciousIndicators verdicts were written here
@@ -2462,7 +3063,16 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             "Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Signatures\\Managed"
         ]
         
+        # Both key trees, kept so they can be joined on ProfileGuid after
+        # the loop. Signatures\\Unmanaged holds the gateway MAC and the DNS
+        # suffix; Profiles holds the name, the category and the dates; and a
+        # table with one row per value keeps them on separate rows forever.
+        _nl_profiles = {}
+        _nl_signatures = []
+
         for network_list_path in network_list_paths:
+            _nl_kind = ("profile" if network_list_path.rstrip(chr(92)).lower()
+                        .endswith("profiles") else "signature")
             try:
                 logging.debug(f"Checking Network Lists path: {network_list_path}")
                 network_profiles = get_subkeys(Software_reg_hive, network_list_path)
@@ -2472,6 +3082,12 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             
                 for profile_guid, values in network_profiles.items():
                     try:
+                        if _nl_kind == "profile":
+                            _nl_profiles[str(profile_guid).strip().lower()] = (
+                                profile_guid, values, network_list_path)
+                        else:
+                            _nl_signatures.append(
+                                (profile_guid, values, network_list_path))
                         # A Signatures key has no ProfileName - it names the
                         # network in FirstNetwork instead. Reading only
                         # ProfileName left network_name empty on all 24 signature
@@ -2548,18 +3164,123 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                             (str(profile_guid), str(_vn), str(_vd), str(_vt))):
                                 continue
                             cursor.execute(
-                                'INSERT INTO Network_list (subkey, name, data, type, '
-                                'network_name, connection_date, gateway_mac, is_hidden) '
-                                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                                (str(profile_guid), str(_vn), str(_vd), str(_vt),
+                                'INSERT INTO Network_list (subkey, name, data, '
+                                'decoded, type, network_name, connection_date, '
+                                'gateway_mac, parsed_at) '
+                                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                (str(profile_guid), str(_vn), str(_vd),
+                                 registry_binary_parser.render_registry_value(
+                                     'networklist', _vn,
+                                     _vp[0] if isinstance(_vp, tuple) else _vp,
+                                     _vt),
+                                 str(_vt),
                                  str(profile_name), date_last_connected_str,
-                                 formatted_mac, 0))
+                                 formatted_mac,
+                                 get_current_forensic_timestamp()))
 
                     except Exception as e:
                         logging.error(f"Error with network profile {profile_guid}: {e}")
             except Exception as e:
                 logging.debug(f"NetworkList path unavailable: {network_list_path}")
-        
+
+
+        # --- one row per network, joined on ProfileGuid --------------------
+        def _nlv(values, want):
+            for _n, _p in (values or {}).items():
+                if str(_n).lower() == want:
+                    return _p[0] if isinstance(_p, tuple) else _p
+            return None
+
+        def _nli(values, want):
+            try:
+                return int(_nlv(values, want))
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            _seen = set()
+            _rows = []
+            for _sig, _sv, _sp in _nl_signatures:
+                _guid = _nlv(_sv, 'profileguid')
+                _key = str(_guid).strip().lower() if _guid else ""
+                _pr = _nl_profiles.get(_key)
+                if _key:
+                    _seen.add(_key)
+                # Both keys, each as its own full path. Concatenating a
+                # name that can be empty is how the live parser first came to
+                # read the PARENT key's write time for every row - a trailing
+                # separator opens the parent and raises nothing.
+                _rows.append((_guid, _sig, _sv, _pr[1] if _pr else {},
+                              (_pr[2] + chr(92) + str(_pr[0])) if _pr else "",
+                              _sp + chr(92) + str(_sig)))
+            # A profile with no signature is still a network this machine
+            # joined; dropping it would make the summary hold fewer networks
+            # than the registry does.
+            for _key, (_guid, _pv, _pp) in _nl_profiles.items():
+                if _key not in _seen:
+                    _rows.append((_guid, "", {}, _pv,
+                                  _pp + chr(92) + str(_guid), ""))
+
+            for _guid, _sig, _sv, _pv, _profile_key, _signature_key in _rows:
+                _mac = _nlv(_sv, 'defaultgatewaymac')
+                _cat = _nli(_pv, 'category')
+                _nt = _nli(_pv, 'nametype')
+                _mg = _nli(_pv, 'managed')
+                _cr = _nlv(_pv, 'datecreated')
+                _lc = _nlv(_pv, 'datelastconnected')
+                _pn = _nlv(_pv, 'profilename')
+                _ds = _nlv(_sv, 'dnssuffix')
+                _desc = _nlv(_pv, 'description') or _nlv(_sv, 'description')
+                # The profile key carries the dates, so its write time is
+                # what bounds this row.
+                _kp = _profile_key or _signature_key
+                _written = (key_last_write(Software_reg_hive, _profile_key)
+                            if _profile_key else "")
+                if not _written and _signature_key:
+                    _written = key_last_write(Software_reg_hive, _signature_key)
+                if check_exists(cursor, 'NetworkProfiles',
+                                ['profile_guid', 'signature'],
+                                (str(_guid or ""), str(_sig or ""))):
+                    continue
+                cursor.execute(
+                    'INSERT INTO NetworkProfiles (profile_guid, profile_name, '
+                    'description, signature, first_network, gateway_mac, '
+                    'dns_suffix, category, category_label, name_type, '
+                    'name_type_label, managed, managed_label, source, '
+                    'date_created, date_last_connected, key_path, '
+                    'last_written, time_basis, parsed_at) VALUES '
+                    '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (str(_guid or ""),
+                     str(_pn) if _pn is not None else None,
+                     str(_desc) if _desc is not None else None,
+                     str(_sig or ""),
+                     str(_nlv(_sv, 'firstnetwork') or "") or None,
+                     (registry_binary_parser.format_mac_address(_mac)
+                      if isinstance(_mac, bytes) and len(_mac) >= 6 else None),
+                     # "<none>" is what Windows writes when a network has no
+                     # DNS suffix. Carried through as found: it is the
+                     # registry's answer, not a missing value.
+                     str(_ds) if _ds is not None else None,
+                     _cat,
+                     registry_binary_parser.network_category_label(_cat)
+                     if _cat is not None else None,
+                     _nt,
+                     registry_binary_parser.network_name_type_label(_nt)
+                     if _nt is not None else None,
+                     _mg,
+                     registry_binary_parser.network_managed_label(_mg)
+                     if _mg is not None else None,
+                     _nli(_sv, 'source'),
+                     registry_binary_parser.parse_systemtime(_cr)
+                     if isinstance(_cr, bytes) else None,
+                     registry_binary_parser.parse_systemtime(_lc)
+                     if isinstance(_lc, bytes) else None,
+                     _kp, _written,
+                     'key upper bound' if _written else None,
+                     get_current_forensic_timestamp()))
+        except Exception as _exc:
+            logging.error("NetworkProfiles could not be built: %s", _exc)
+
         # Network Interfaces
         # Get active ControlSet for this system
         active_controlset = get_active_controlset(system_reg_hive)
@@ -2611,10 +3332,45 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                         (str(interface_id), str(_vn))):
                         cursor.execute(
                             'INSERT INTO network_interfaces '
-                            '(subkey, name, row_data, type) VALUES (?, ?, ?, ?)',
-                            (str(interface_id), str(_vn), _ni_text(_d), str(_t)))
+                            '(subkey, name, row_data, decoded, type) '
+                            'VALUES (?, ?, ?, ?, ?)',
+                            (str(interface_id), str(_vn), _ni_text(_d),
+                             registry_binary_parser.render_registry_value(
+                                 'network_interfaces', _vn, _d, _t),
+                             str(_t)))
                 except Exception as e:
                     logging.debug(f"raw network_interfaces {interface_id}/{_vn}: {e}")
+
+        # Adapter MAC overrides, keyed by the interface GUID that ties an
+        # adapter to its Tcpip interface key. Built once: the class key holds
+        # every adapter the machine has ever had, and re-walking it per
+        # interface would be ten walks for one answer.
+        _mac_overrides = {}
+        try:
+            _cs = active_controlset or "ControlSet001"
+            _cls_base = (_cs + chr(92) + "Control" + chr(92) + "Class" + chr(92)
+                         + registry_binary_parser.ADAPTER_CLASS_GUID)
+            for _adapter in (get_subkeys(system_reg_hive, _cls_base) or []):
+                if not str(_adapter).isdigit():
+                    continue
+                _av = read_registry_values(
+                    system_reg_hive, _cls_base + chr(92) + str(_adapter)) or {}
+
+                def _val(name):
+                    item = _av.get(name)
+                    if item is None:
+                        return ""
+                    return item[0] if isinstance(item, (tuple, list)) else item
+
+                _guid = _val("NetCfgInstanceId")
+                _mac = registry_binary_parser.normalise_mac(_val("NetworkAddress"))
+                if _guid and _mac:
+                    _mac_overrides[str(_guid).lower()] = _mac
+        except Exception as _exc:
+            logging.debug("adapter MAC overrides: %s", _exc)
+        if _mac_overrides:
+            print("[OK] %d network adapter(s) carry a MAC override - a MAC in "
+                  "the registry is one somebody set" % len(_mac_overrides))
 
         for interface_id, values in network_interfaces.items():
             try:
@@ -2657,6 +3413,22 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 dhcp_enabled = values.get('EnableDHCP', (0, 'REG_DWORD'))[0] if 'EnableDHCP' in values else 0
                 dhcp_server = values.get('DhcpServer', ('', 'REG_SZ'))[0] if 'DhcpServer' in values else ''
                 dns_servers = _first('NameServer', 'DhcpNameServer', 'DhcpNameServers')
+                # The DNS suffix the interface was given. The user asked for
+                # it and it existed only as a raw row.
+                dns_suffix = _first('Domain', 'DhcpDomain')
+                # The gateway's own hardware address, and a second independent
+                # record of what NetworkList keeps as DefaultGatewayMac. It is
+                # the GATEWAY's MAC - deliberately not mac_address, which means
+                # this adapter's own overridden address.
+                _gwhw = values.get('DhcpGatewayHardware')
+                if isinstance(_gwhw, tuple):
+                    _gwhw = _gwhw[0]
+                _gw = registry_binary_parser.parse_dhcp_gateway_hardware(_gwhw)
+                lease_obtained = registry_binary_parser.unix_seconds_label(
+                    _first('LeaseObtainedTime'))
+                lease_expires = registry_binary_parser.unix_seconds_label(
+                    _first('LeaseTerminatesTime'))
+                mac_address = _mac_overrides.get(str(interface_id).lower(), '')
 
                 # An interface with no IP is still an interface, and its DNS
                 # servers and gateway can still matter. Gating on ip_address
@@ -2664,10 +3436,17 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 # parser reported four where the live one reported ten.
                 if not check_exists(cursor, 'NetworkInterfacesInfo', ['interface_id'], (interface_id,)):
                     cursor.execute('''INSERT INTO NetworkInterfacesInfo
-                        (interface_id, ip_address, subnet_mask, default_gateway, dhcp_enabled, dhcp_server, dns_servers, parsed_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (interface_id, ip_address, subnet_mask, default_gateway,
+                         dhcp_enabled, dhcp_server, dns_servers, mac_address,
+                         gateway_ip, gateway_hardware_mac, dns_suffix,
+                         lease_obtained, lease_expires, parsed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                         (interface_id, str(ip_address), str(subnet_mask), str(default_gateway),
-                         int(dhcp_enabled), str(dhcp_server), str(dns_servers), get_current_forensic_timestamp()))
+                         int(dhcp_enabled), str(dhcp_server), str(dns_servers),
+                         mac_address, _gw['gateway_ip'] or None,
+                         _gw['gateway_mac'] or None, str(dns_suffix) or None,
+                         lease_obtained or None, lease_expires or None,
+                         get_current_forensic_timestamp()))
             except Exception as e:
                 logging.error(f"Error with network interface {interface_id}: {e}")
 
@@ -2768,12 +3547,91 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             if successful_paths:
                 logging.debug(f"Extracted Time Zone from {len(successful_paths)} path(s): {successful_paths}")
             
+            daylight_bias = timezone_values.get('DaylightBias', (0, 'REG_DWORD'))[0] if 'DaylightBias' in timezone_values else 0
+            standard_start = timezone_values.get('StandardStart', (b'', 'REG_BINARY'))[0] if 'StandardStart' in timezone_values else b''
+            daylight_start = timezone_values.get('DaylightStart', (b'', 'REG_BINARY'))[0] if 'DaylightStart' in timezone_values else b''
+            dynamic_disabled = timezone_values.get('DynamicDaylightTimeDisabled', (None, 'REG_DWORD'))[0] if 'DynamicDaylightTimeDisabled' in timezone_values else None
+
+            # StandardName and DaylightName are MUI references - the readable
+            # text is in this evidence's own SOFTWARE hive, under
+            # Time Zones\\<TimeZoneKeyName>. Read from the image rather than
+            # resolved through a Windows API, which would answer about the
+            # analyst's machine and its language.
+            def _tz_read_offline(path):
+                try:
+                    _vals = read_registry_values(
+                        Software_reg_hive,
+                        path.split("SOFTWARE" + chr(92), 1)[-1])
+                    return {_k: (_v[0] if isinstance(_v, tuple) else _v)
+                            for _k, _v in (_vals or {}).items()}
+                except Exception:
+                    return {}
+
+            resolved_tz = registry_binary_parser.resolve_time_zone_names(
+                _tz_read_offline, str(time_zone_name))
+            std_rule = registry_binary_parser.parse_tz_transition_rule(standard_start)
+            dlt_rule = registry_binary_parser.parse_tz_transition_rule(daylight_start)
+
+            # Cross-checked against TZI, which stores the same two transitions
+            # in the documented SYSTEMTIME order. The Start values put
+            # wDayOfWeek somewhere else, and read the documented way they give
+            # an hour of 59 - wrong, and silent about it.
+            agrees_tzi = ""
+            try:
+                _tzi = _tz_read_offline("%s%s%s" % (
+                    registry_binary_parser.TIME_ZONES_KEY, chr(92),
+                    time_zone_name)).get("TZI")
+                if _tzi:
+                    _checks = [
+                        registry_binary_parser.tz_rules_agree(
+                            std_rule,
+                            registry_binary_parser.tz_rule_from_tzi(_tzi, False)),
+                        registry_binary_parser.tz_rules_agree(
+                            dlt_rule,
+                            registry_binary_parser.tz_rule_from_tzi(_tzi, True)),
+                    ]
+                    if all(_c is True for _c in _checks):
+                        agrees_tzi = "yes"
+                    elif any(_c is False for _c in _checks):
+                        agrees_tzi = "NO - the Start values and TZI disagree"
+            except Exception as _exc:
+                logging.debug("TZI cross-check unavailable: %s", _exc)
+
+            _signed = registry_binary_parser.signed_bias(bias)
             if not check_exists(cursor, 'TimeZoneInfo', ['time_zone_name'], (str(time_zone_name),)):
                 cursor.execute('''INSERT OR IGNORE INTO TimeZoneInfo
-                    (time_zone_name, standard_name, daylight_name, bias, active_time_bias, parsed_at)
-                    VALUES (?, ?, ?, ?, ?, ?)''',
-                    (str(time_zone_name), str(standard_name), str(daylight_name),
-                     int(bias), int(active_time_bias), get_current_forensic_timestamp()))
+                    (time_zone_name, standard_name, daylight_name, bias,
+                     active_time_bias, daylight_bias, utc_offset, display_name,
+                     standard_name_raw, daylight_name_raw, standard_start_rule,
+                     daylight_start_rule, dynamic_dst_disabled, agrees_with_tzi,
+                     parsed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (str(time_zone_name),
+                     resolved_tz["standard_name"] or str(standard_name),
+                     resolved_tz["daylight_name"] or str(daylight_name),
+                     _signed,
+                     registry_binary_parser.signed_bias(active_time_bias),
+                     registry_binary_parser.signed_bias(daylight_bias),
+                     registry_binary_parser.utc_offset_label(_signed),
+                     resolved_tz["display_name"],
+                     str(standard_name), str(daylight_name),
+                     std_rule["rule"], dlt_rule["rule"],
+                     registry_binary_parser.render_registry_value(
+                         'timezone', 'DynamicDaylightTimeDisabled',
+                         dynamic_disabled, 4)
+                     if dynamic_disabled is not None else "",
+                     agrees_tzi,
+                     get_current_forensic_timestamp()))
+            # Shell items carry DOS date/time, which is this machine's local
+            # wall clock with no zone in it. Hand the decoder the offset so
+            # those readings become real UTC instead of being relabelled.
+            _applied = registry_binary_parser.set_evidence_bias(bias)
+            print("[OK] Evidence timezone: %s (UTC%s) - shell item times "
+                  "converted" % (time_zone_name,
+                                 registry_binary_parser.utc_offset_label(bias))
+                  if _applied else
+                  "[--] No usable timezone bias - shell item times stay on the "
+                  "evidence machine's local clock")
             
             # Also populate the raw time_zone table (column is row_data).
             #
@@ -2788,8 +3646,23 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 if check_exists(cursor, 'time_zone', ['name'], (str(_tz_name),)):
                     continue
                 cursor.execute(
-                    'INSERT INTO time_zone (name, row_data, type) VALUES (?, ?, ?)',
-                    (str(_tz_name), str(_tz_data), str(_tz_type)))
+                    'INSERT INTO time_zone (name, row_data, decoded, type) '
+                    'VALUES (?, ?, ?, ?)',
+                    (str(_tz_name), str(_tz_data),
+                     registry_binary_parser.render_registry_value(
+                         'timezone', _tz_name, _tz_data, _tz_type),
+                     str(_tz_type)))
+
+            # The MUI names only become readable once the SOFTWARE hive has
+            # been consulted, which happens above - but the rows they belong to
+            # are written here. Filling them before the insert updated nothing.
+            for _col, _val in (("StandardName", resolved_tz["standard_name"]),
+                               ("DaylightName", resolved_tz["daylight_name"]),
+                               ("TimeZoneKeyName", resolved_tz["display_name"])):
+                if _val:
+                    cursor.execute(
+                        'UPDATE time_zone SET decoded = ? WHERE name = ? '
+                        'AND (decoded IS NULL OR decoded = ?)', (_val, _col, ""))
         except Exception as e:
             logging.debug(f"TimeZone path unavailable: {e}")
         
@@ -2910,8 +3783,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                             (str(_sk), str(_vn))):
                             cursor.execute(
                                 'INSERT INTO Windows_lastupdate_subkeys '
-                                '(subkey, name, row_data, type) VALUES (?, ?, ?, ?)',
-                                (str(_sk), str(_vn), str(_d), str(_t)))
+                                '(subkey, name, row_data, row_decoded, type) '
+                                'VALUES (?, ?, ?, ?, ?)',
+                                (str(_sk), str(_vn), str(_d),
+                                 _off_decoded('Windows_lastupdate_subkeys',
+                                              _vn, _d, _t), str(_t)))
                 except Exception as e:
                     logging.debug(f"raw Windows_lastupdate_subkeys {_sk}: {e}")
 
@@ -2977,8 +3853,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                         ['name'], (str(_vn),)):
                         cursor.execute(
                             'INSERT INTO shutdown_information '
-                            '(name, row_data, type) VALUES (?, ?, ?)',
-                            (str(_vn), str(_d), str(_t)))
+                            '(name, row_data, row_decoded, type) '
+                            'VALUES (?, ?, ?, ?)',
+                            (str(_vn), str(_d),
+                             _off_decoded('shutdown_information', _vn, _d, _t),
+                             str(_t)))
                 except Exception as e:
                     logging.debug(f"raw shutdown_information {_vn}: {e}")
 
@@ -3105,10 +3984,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         try:
                             cursor.execute(
                                 """INSERT OR IGNORE INTO AutoStartPrograms
-                                   (location, program_name, command, parsed_at)
-                                   VALUES (?, ?, ?, ?)""",
+                                   (location, program_name, command, record_state, parsed_at)
+                                   VALUES (?, ?, ?, ?, ?)""",
                                 ("TaskCache" + task_path,
-                                 task_path.rsplit("\\", 1)[-1], full, stamp))
+                                 task_path.rsplit("\\", 1)[-1], full, LIVE_STATE,
+                                 stamp))
                         except Exception:
                             pass  # AutoStartPrograms may not exist in every schema
                     _task_count += 1
@@ -3150,8 +4030,19 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                    "shell_open_command"):
             cursor.execute(
                 f'CREATE TABLE IF NOT EXISTS {_t} ('
-                'hive TEXT, key_path TEXT, name TEXT, data TEXT, type TEXT, '
+                'hive TEXT, key_path TEXT, name TEXT, data TEXT, '
+                'data_decoded TEXT, type TEXT, '
                 'user_name TEXT, parsed_at TEXT)')
+            # Additive migration, matching the live parser: a case
+            # from an earlier build has no data_decoded, and
+            # CREATE TABLE IF NOT EXISTS is a no-op on it.
+            cursor.execute(f'PRAGMA table_info({_t})')
+            if 'data_decoded' not in [c[1] for c in cursor.fetchall()]:
+                try:
+                    cursor.execute(
+                        f'ALTER TABLE {_t} ADD COLUMN data_decoded TEXT')
+                except sqlite3.Error as _mig:
+                    logging.debug('data_decoded migration %s: %s', _t, _mig)
 
         _asep_cs = get_active_controlset(system_reg_hive) if system_reg_hive else "ControlSet001"
         _asep_stamp = format_forensic_timestamp(get_current_utc())
@@ -3184,10 +4075,18 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 # reads as attribution having failed. Label it instead, matching
                 # the live parser so the two agree row for row.
                 _owner = user_name or user_identity.MACHINE_WIDE_LABEL
+                # The same decoder the live parser uses, so the two
+                # agree on this column as they do on every other.
+                _dec = registry_binary_parser.render_registry_value(
+                    table, name, data, rtype, _asep_env)
+                if _dec == value:
+                    _dec = ''              # a copy is not a decode
                 cursor.execute(
-                    f'INSERT INTO {table} (hive, key_path, name, data, type, '
-                    'user_name, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                    (hive_label, key_path, name, value, rtype, _owner, _asep_stamp))
+                    f'INSERT INTO {table} (hive, key_path, name, data, '
+                    'data_decoded, type, user_name, parsed_at) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    (hive_label, key_path, name, value, _dec, rtype,
+                     _owner, _asep_stamp))
                 _asep_count += 1
             if roll_up and value:
                 loc = roll_up if not user_name else f"HKU\\{user_name} {roll_up}"
@@ -3195,8 +4094,10 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                     ['location', 'program_name'], (loc, name)):
                     cursor.execute(
                         'INSERT INTO AutoStartPrograms '
-                        '(location, program_name, command, parsed_at) '
-                        'VALUES (?, ?, ?, ?)', (loc, name, value, _asep_stamp))
+                        '(location, program_name, command, key_path, '
+                        'record_state, parsed_at) '
+                        'VALUES (?, ?, ?, ?, ?, ?)',
+                        (loc, name, value, key_path, LIVE_STATE, _asep_stamp))
 
         def _asep_vals(hive_file, key, names=None):
             """(name, data, type) tuples; [] when the key or hive is absent.
@@ -3222,6 +4123,24 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     continue
                 out.append((nm, d, t))
             return out
+
+        # The expansion environment, read from the IMAGE's own SOFTWARE
+        # hive - never os.environ. A machine installed to D:\Windows must
+        # not be reported with the examiner's C:\Windows, and an image is
+        # always somebody else's computer. No hive means no expansion,
+        # which is the right answer rather than a plausible wrong one.
+        _asep_env = {}
+        try:
+            for _n, _d, _t2 in (_asep_vals(
+                    Software_reg_hive,
+                    r'Microsoft\Windows NT\CurrentVersion',
+                    ['SystemRoot', 'ProgramFilesDir', 'CommonFilesDir']) or []):
+                if _d:
+                    _asep_env[str(_n)] = str(_d)
+            if 'SystemRoot' in _asep_env:
+                _asep_env.setdefault('windir', _asep_env['SystemRoot'])
+        except Exception as _env_exc:
+            logging.debug('offline evidence environment: %s', _env_exc)
 
         SW = Software_reg_hive
         SY = system_reg_hive
@@ -3596,108 +4515,168 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         for _sql in (
             '''CREATE TABLE IF NOT EXISTS SecurityPosture (
                 setting TEXT, value_raw TEXT, value_decoded TEXT, default_value TEXT,
-                assessment TEXT, meaning TEXT, key_path TEXT, parsed_at TEXT)''',
+                assessment TEXT, meaning TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS DefenderExclusions (
-                exclusion_type TEXT, value TEXT, source TEXT, key_path TEXT, parsed_at TEXT)''',
+                exclusion_type TEXT, value TEXT, source TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS FirewallRules (
                 rule_type TEXT, rule_name TEXT, display_name TEXT, action TEXT,
                 direction TEXT, enabled TEXT, protocol TEXT, local_port TEXT,
                 remote_port TEXT, application TEXT, service TEXT, profile TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS NetworkShares (
                 share_name TEXT, share_path TEXT, remark TEXT, raw TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS ConnectedDevices (
                 device_type TEXT, device_id TEXT, friendly_name TEXT, details TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS MountPoints2 (
-                user_name TEXT, mount_id TEXT, mount_type TEXT, key_path TEXT, parsed_at TEXT)''',
+                user_name TEXT, mount_id TEXT, mount_type TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS RDPClientMRU (
                 user_name TEXT, entry_type TEXT, server TEXT, username_hint TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS OfficeDocuments (
                 user_name TEXT, application TEXT, version TEXT, kind TEXT,
-                document TEXT, raw TEXT, key_path TEXT, parsed_at TEXT)''',
+                document TEXT, raw TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS FeatureUsage (
                 user_name TEXT, usage_type TEXT, program TEXT, count INTEGER,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS CompatibilityAssistant (
                 user_name TEXT, program_path TEXT, blob_size INTEGER,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS RecentApps (
                 user_name TEXT, app_id TEXT, app_path TEXT, launch_count INTEGER,
-                last_accessed TEXT, key_path TEXT, parsed_at TEXT)''',
+                last_accessed TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS ApplicationArtifacts (
                 user_name TEXT, application TEXT, artifact TEXT, name TEXT,
-                value TEXT, key_path TEXT, parsed_at TEXT)''',
+                value TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             # Per-user activity - same shape as the live parser.
             '''CREATE TABLE IF NOT EXISTS file_exts (
                 user_name TEXT, extension TEXT, choice_type TEXT, progid TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS cid_size_mru (
                 user_name TEXT, position INTEGER, application TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS programs_cache (
                 user_name TEXT, value_name TEXT, blob_size INTEGER,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS regedit_lastkey (
                 user_name TEXT, name TEXT, value TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT,
                 parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS printer_connections (
                 user_name TEXT, connection TEXT, server TEXT, printer TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS explorer_advanced (
-                user_name TEXT, setting TEXT, value TEXT, default_value TEXT,
-                meaning TEXT, key_path TEXT, parsed_at TEXT)''',
+                user_name TEXT, setting TEXT, value TEXT, value_decoded TEXT, default_value TEXT,
+                meaning TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             # Posture - one table per artifact, each carrying its stock default.
             '''CREATE TABLE IF NOT EXISTS rdp_tcp (
-                setting TEXT, value TEXT, default_value TEXT, meaning TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                setting TEXT, value TEXT, value_decoded TEXT, default_value TEXT, meaning TEXT,
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS usbstor_start (
                 setting TEXT, value TEXT, decoded TEXT, default_value TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS windows_script_host (
-                setting TEXT, value TEXT, default_value TEXT, meaning TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                setting TEXT, value TEXT, value_decoded TEXT, default_value TEXT, meaning TEXT,
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS dnscache_parameters (
-                name TEXT, value TEXT, key_path TEXT, parsed_at TEXT)''',
+                name TEXT, value TEXT, value_decoded TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS files_not_to_snapshot (
-                entry TEXT, value TEXT, key_path TEXT, parsed_at TEXT)''',
+                entry TEXT, value TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS winevt_channels (
                 channel TEXT, source TEXT, enabled TEXT, max_size TEXT,
                 retention TEXT, log_file TEXT, reason TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT,
                 parsed_at TEXT)''',
             # Device attribution.
             '''CREATE TABLE IF NOT EXISTS wpdbusenum (
                 device_id TEXT, friendly_name TEXT, volume_guid TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS device_classes (
                 class_guid TEXT, class_name TEXT, device_instance TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS volume_info_cache (
                 drive_letter TEXT, volume_label TEXT, file_system TEXT,
-                key_path TEXT, parsed_at TEXT)''',
+                key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             # Host identity.
             '''CREATE TABLE IF NOT EXISTS machine_guid (
-                name TEXT, value TEXT, key_path TEXT, parsed_at TEXT)''',
+                name TEXT, value TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS product_options (
                 name TEXT, value TEXT, meaning TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT,
                 parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS os_install_history (
-                name TEXT, value TEXT, key_path TEXT, parsed_at TEXT)''',
+                name TEXT, value TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS active_computer_name (
-                name TEXT, value TEXT, key_path TEXT, parsed_at TEXT)''',
+                name TEXT, value TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS hivelist (
                 hive TEXT, file_path TEXT, key_path TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS system_environment (
-                name TEXT, value TEXT, key_path TEXT, parsed_at TEXT)''',
+                name TEXT, value TEXT, value_decoded TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT, parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS network_adapters (
                 adapter_guid TEXT, name TEXT, value TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT,
                 parsed_at TEXT)''',
             '''CREATE TABLE IF NOT EXISTS group_policy_history (
                 scope TEXT, gpo_id TEXT, name TEXT, value TEXT, key_path TEXT,
+        last_written TEXT, time_basis TEXT,
                 parsed_at TEXT)'''):
             cursor.execute(_sql)
+
+        def _cov_dec(table, name, data, vtype=None):
+
+            """The decoded form of a coverage value, or "".
+
+
+            The same decoder the live parser uses, so the two agree on
+
+            this column as they do on every other. A result equal to the
+
+            raw value is discarded - a copy is not a decode.
+
+            """
+
+            try:
+
+                got = registry_binary_parser.render_registry_value(
+
+                    table, name, data, vtype, _asep_env) or ''
+
+            except Exception:
+
+                return ''
+
+            return '' if got == str(data) else got
+
 
         def _cov_ins(table, cols, values, key_cols):
             key_vals = tuple(values[cols.index(c)] for c in key_cols)
@@ -4238,9 +5217,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 if not _p:
                     continue
                 _cov_ins("explorer_advanced",
-                         ["user_name", "setting", "value", "default_value",
+                         ["user_name", "setting", "value", "value_decoded", "default_value",
                           "meaning", "key_path", "parsed_at"],
-                         (_u, _n, str(_v), _dflt, _why, _EXA, _cov_stamp),
+                         (_u, _n, str(_v), _cov_dec("explorer_advanced", _n, _v), _dflt, _why, _EXA, _cov_stamp),
                          ["user_name", "setting"])
 
         # ------------------------------------------------------- posture keys
@@ -4255,9 +5234,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             if not _p:
                 continue
             _cov_ins("rdp_tcp",
-                     ["setting", "value", "default_value", "meaning", "key_path",
+                     ["setting", "value", "value_decoded", "default_value", "meaning", "key_path",
                       "parsed_at"],
-                     (_n, str(_v), _dflt, _why, "SYSTEM\\" + _RDPT, _cov_stamp),
+                     (_n, str(_v), _cov_dec("rdp_tcp", _n, _v), _dflt, _why, "SYSTEM\\" + _RDPT, _cov_stamp),
                      ["setting", "key_path"])
 
         # usbstor Start: 3 is the normal on-demand start, 4 is disabled - a
@@ -4292,17 +5271,17 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             if not _p:
                 continue
             _cov_ins("windows_script_host",
-                     ["setting", "value", "default_value", "meaning", "key_path",
+                     ["setting", "value", "value_decoded", "default_value", "meaning", "key_path",
                       "parsed_at"],
-                     (_n, str(_v), "(absent = enabled)", _why,
+                     (_n, str(_v), _cov_dec("windows_script_host", _n, _v), "(absent = enabled)", _why,
                       "SOFTWARE\\" + _WSH, _cov_stamp),
                      ["setting", "key_path"])
 
         _DNSP = _cov_cs + r"\Services\Dnscache\Parameters"
         for vn, vd, vt in _cov_vals(SY, _DNSP):
             _cov_ins("dnscache_parameters",
-                     ["name", "value", "key_path", "parsed_at"],
-                     (vn, _cov_fmt(vd)[:400], "SYSTEM\\" + _DNSP, _cov_stamp),
+                     ["name", "value", "value_decoded", "key_path", "parsed_at"],
+                     (vn, _cov_fmt(vd)[:400], _cov_dec("dnscache_parameters", vn, vd), "SYSTEM\\" + _DNSP, _cov_stamp),
                      ["name", "key_path"])
 
         # FilesNotToSnapshot - files VSS drops from shadow copies. An added
@@ -4478,8 +5457,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         _SENV = _cov_cs + r"\Control\Session Manager\Environment"
         for vn, vd, vt in _cov_vals(SY, _SENV):
             _cov_ins("system_environment",
-                     ["name", "value", "key_path", "parsed_at"],
-                     (vn, _cov_fmt(vd)[:1000], "SYSTEM\\" + _SENV, _cov_stamp),
+                     ["name", "value", "value_decoded", "key_path", "parsed_at"],
+                     (vn, _cov_fmt(vd)[:1000], _cov_dec("system_environment", vn, vd), "SYSTEM\\" + _SENV, _cov_stamp),
                      ["name"])
 
         _NETC = (_cov_cs + r"\Control\Network"
@@ -4645,6 +5624,571 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         logging.error(f"Error parsing SECURITY hive (offline): {e}")
         print(f"Warning: Could not parse SECURITY hive: {e}")
 
+    # --------------------------------------------- walking the allocator
+    # One pass per hive collects everything a tree walk cannot reach: class
+    # names, the shared security descriptors, and the keys and values still
+    # present in freed cells.
+    #
+    # This walks the same hive the rest of the parse read - the recovered copy
+    # where one was made - so every table in the case describes one state.
+    # Measured either way, the difference is small and goes in both directions:
+    # replaying SOFTWARE loses 2 carved keys and gains 6 carved values out of
+    # 1,451 and 6,347.
+    print("\n[Structure] Walking hive allocators for class names, "
+          "security descriptors and freed cells...")
+    try:
+        _walk_stamp = get_current_forensic_timestamp()
+        _walk_targets = []
+        for _label, _path in (("SYSTEM", system_reg_hive),
+                              ("SOFTWARE", Software_reg_hive),
+                              ("SAM", sam_reg_hive),
+                              ("SECURITY", security_reg_hive),
+                              ("DEFAULT", default_reg_hive)):
+            if _path:
+                _walk_targets.append((_label, _path))
+        for _i, _p in enumerate(ntuser_hives or []):
+            _walk_targets.append(("NTUSER.DAT" if _i == 0 else "NTUSER.DAT[%d]" % _i, _p))
+        for _i, _p in enumerate(usrclass_hives or []):
+            _walk_targets.append(("UsrClass.dat" if _i == 0 else "UsrClass.dat[%d]" % _i, _p))
+
+        _tot = {"c": 0, "s": 0, "k": 0, "v": 0}
+        # Kept so the attribution pass below can reuse them rather than
+        # walking every hive a second time.
+        _walk_results = {}
+        for _label, _path in _walk_targets:
+            _w = registry_hive_walk.walk_hive(_path)
+            _walk_results[_label] = _w
+            if _w.error:
+                logging.debug("hive walk %s: %s", _label, _w.error)
+
+            for _cn in _w.class_names:
+                cursor.execute(
+                    'INSERT OR IGNORE INTO registry_class_names (hive_name, key_path, '
+                    'key_name, class_name, class_length, key_last_write, '
+                    'parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (_label, _cn["key_path"], _cn["key_name"], _cn["class_name"],
+                     _cn["class_length"],
+                     format_forensic_timestamp(_cn["timestamp"]) if _cn["timestamp"] else "",
+                     _walk_stamp))
+                _tot["c"] += cursor.rowcount if cursor.rowcount > 0 else 0
+
+            for _sd in _w.security:
+                _d = registry_binary_parser.parse_security_descriptor(_sd["descriptor"])
+                cursor.execute(
+                    'INSERT OR IGNORE INTO registry_security_descriptors (hive_name, '
+                    'sk_offset, descriptor_hash, reference_count, owner_sid, '
+                    'group_sid, dacl_ace_count, sacl_ace_count, '
+                    'descriptor_size, sample_key_path, parsed_at) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (_label, _sd["sk_offset"],
+                     hashlib.sha256(_sd["descriptor"]).hexdigest(),
+                     _sd["reference_count"],
+                     _d.get("owner_sid", ""), _d.get("group_sid", ""),
+                     _d.get("dacl_ace_count"), _d.get("sacl_ace_count"),
+                     _d.get("size", 0), _sd["sample_key_path"], _walk_stamp))
+                _tot["s"] += cursor.rowcount if cursor.rowcount > 0 else 0
+
+            for _ck in _w.carved_keys:
+                # A carved key keeps its own last-written time, which dates the
+                # activity rather than the deletion - often the more useful half.
+                _when = ""
+                if _ck["timestamp_raw"]:
+                    try:
+                        _when = format_forensic_timestamp(
+                            filetime_to_datetime(_ck["timestamp_raw"]))
+                    except Exception:
+                        _when = ""
+                cursor.execute(
+                    'INSERT OR IGNORE INTO registry_carved_keys (hive_name, '
+                    'cell_offset, key_name, key_path, parent_resolved, '
+                    'key_last_write, subkey_count, value_count, record_state, '
+                    'parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (_label, _ck["cell_offset"], _ck["key_name"],
+                     _ck.get("key_path", ""),
+                     1 if _ck.get("parent_resolved") else 0, _when,
+                     _ck["subkey_count"], _ck["value_count"], DELETED_STATE,
+                     _walk_stamp))
+                # The values this key held, recovered through its own value
+                # list. A deleted key with no values is a name and a date.
+                for _kv in _ck.get("values", []):
+                    cursor.execute(
+                        'INSERT OR IGNORE INTO registry_carved_values (hive_name, '
+                        'cell_offset, parent_cell_offset, key_path, value_name, '
+                        'value_type, data_size, is_inline, data, record_state, '
+                        'parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (_label, _kv["cell_offset"], _ck["cell_offset"],
+                         _ck.get("key_path", ""), _kv["value_name"],
+                         _REG_TYPE_NAMES.get(_kv["value_type"], "UNKNOWN"),
+                         _kv["data_size"], 1 if _kv["inline"] else 0,
+                         _carved_data_text(_kv.get("data"), _kv["value_type"]),
+                         DELETED_STATE, _walk_stamp))
+                    _tot["v"] += cursor.rowcount if cursor.rowcount > 0 else 0
+                _tot["k"] += cursor.rowcount if cursor.rowcount > 0 else 0
+
+            for _cv in _w.carved_values:
+                # A freed value reached without the key that owned it: no
+                # path, because the key that would give it one is gone.
+                cursor.execute(
+                    'INSERT OR IGNORE INTO registry_carved_values (hive_name, '
+                    'cell_offset, parent_cell_offset, key_path, value_name, '
+                    'value_type, data_size, is_inline, data, record_state, '
+                    'parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (_label, _cv["cell_offset"], None, "", _cv["value_name"],
+                     _REG_TYPE_NAMES.get(_cv["value_type"], "UNKNOWN"),
+                     _cv["data_size"], 1 if _cv["inline"] else 0,
+                     _carved_data_text(_cv.get("data"), _cv["value_type"]),
+                     DELETED_STATE, _walk_stamp))
+                _tot["v"] += cursor.rowcount if cursor.rowcount > 0 else 0
+
+        conn.commit()
+        print("[OK] Allocator walk: %d class names, %d security descriptors, "
+              "%d carved keys, %d carved values"
+              % (_tot["c"], _tot["s"], _tot["k"], _tot["v"]))
+
+        # ---- which value changed, and in which transaction ---------------
+        # The one thing the hive alone cannot say. Each pending transaction's
+        # dirty pages are diffed against the hive, and a value sitting on a
+        # byte that differs is a value that genuinely changed. The diff is what
+        # makes it worth having: a dirty page is 4 KB and holds dozens of
+        # records, so taking the page as the unit implicates roughly seventy
+        # times more data than actually moved.
+        _changes = 0
+        _change_hives = 0
+        try:
+            for _label, _path in sorted(_pre_replay.items()):
+                if not _path or not os.path.exists(_path):
+                    continue
+                try:
+                    _rows = registry_hive_walk.value_changes(_path)
+                except Exception as _exc:
+                    logging.debug("value changes %s: %s", _label, _exc)
+                    continue
+                if _rows:
+                    _change_hives += 1
+                for _r in _rows:
+                    # Exact, and only where the transaction's own pages show
+                    # the owning key's time actually moved. A key whose nk
+                    # merely sits on a dirty page reads back what the hive
+                    # already said, and reporting that as an exact time would
+                    # relabel the bound as a measurement.
+                    _ca = ""
+                    if _r.get("changed_at_raw"):
+                        try:
+                            _ca = format_forensic_timestamp(
+                                filetime_to_datetime(_r["changed_at_raw"]))
+                        except Exception:
+                            _ca = ""
+                    _kw = ""
+                    if _r.get("key_last_write_raw"):
+                        try:
+                            _kw = format_forensic_timestamp(
+                                filetime_to_datetime(_r["key_last_write_raw"]))
+                        except Exception:
+                            _kw = ""
+                    cursor.execute(
+                        'INSERT OR IGNORE INTO registry_value_changes ('
+                        'hive_name, transaction_sequence, change_kind, changed_at, key_path, '
+                        'value_name, value_type, changed_before, changed_after, '
+                        'value_before, changed_bytes, cell_offset, key_last_write, '
+                        'parsed_at) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (_label, _r["sequence"], _r["change_kind"], _ca,
+                         _r["key_path"], _r["value_name"],
+                         _REG_TYPE_NAMES.get(_r.get("value_type"), "UNKNOWN"),
+                         _r["changed_before"], _r["changed_after"],
+                         _r["value_before"], _r["changed_bytes"], _r["offset"],
+                         _kw, _walk_stamp))
+                    _changes += cursor.rowcount if cursor.rowcount > 0 else 0
+            conn.commit()
+        except Exception as _exc:
+            logging.debug("value change pass: %s", _exc)
+        print("[OK] Value changes from transaction logs: %d across %d hive(s)"
+              % (_changes, _change_hives))
+
+
+        # ---- the keys nothing used to read ---------------------------------
+        # Nineteen keys that hold real data and were opened by nothing. One of
+        # them corrects a finding rather than adding one: StartupApproved says
+        # whether each autostart entry is allowed to launch, and without it every
+        # Run value is reported as live persistence.
+        try:
+            _cs = active_controlset or "ControlSet001"
+
+            def _vals(path):
+                try:
+                    return read_registry_values(_hive_for(path), _strip(path)) or {}
+                except Exception:
+                    return {}
+
+            def _subs(path):
+                try:
+                    return get_subkeys(_hive_for(path), _strip(path)) or []
+                except Exception:
+                    return []
+
+            # Each collector is handed a path already carrying its hive tag, so one
+            # pair of readers can serve keys that live in different hives.
+            def _hive_for(path):
+                tag = path.split("|", 1)[0]
+                return {"SYSTEM": system_reg_hive, "SOFTWARE": Software_reg_hive,
+                        "NTUSER": (ntuser_hives or [None])[0]}.get(tag)
+
+            def _strip(path):
+                body = path.split("|", 1)[1] if "|" in path else path
+                return body
+
+            def _sys(rel):
+                return "SYSTEM|" + _cs + chr(92) + rel
+
+            def _sw(rel):
+                return "SOFTWARE|" + rel
+
+            def _nt(rel):
+                return "NTUSER|" + rel
+
+            K = registry_extra_keys.KEYS
+            _resolved = {
+                "power": _sys(K["power"]), "nls_language": _sys(K["nls_language"]),
+                "w32time": _sys(K["w32time"]), "tcpip": _sys(K["tcpip"]),
+                "search_gather": _sw(K["search_gather"]),
+                "winnt_current_version": _sw(K["winnt_current_version"]),
+                "shell_folders": _nt(K["shell_folders"]),
+                "taskband": _nt(K["taskband"]),
+                "zone_policy": _nt(K["zone_map"]),
+                "attachments": _nt(K["attachments"]),
+                "device_guard": _sys(K["device_guard"]),
+                "lanman_workstation": _sys(K["lanman_workstation"]),
+            }
+
+            _extra = {"n": 0}
+
+            def _put(table, columns, rows):
+                if not rows:
+                    return
+                # One choke point for the hive tag, so no collector has to
+                # remember: the tag is how a path is routed to a reader, never
+                # what gets stored.
+                registry_extra_keys.with_display_paths(rows)
+                marks = ", ".join("?" * (len(columns) + 1))
+                sql = ("INSERT OR IGNORE INTO %s (%s, parsed_at) VALUES (%s)"
+                       % (table, ", ".join(columns), marks))
+                for row in rows:
+                    cursor.execute(sql, tuple(row.get(c) for c in columns)
+                                   + (_walk_stamp,))
+                    _extra["n"] += cursor.rowcount if cursor.rowcount > 0 else 0
+
+            _put("startup_approved",
+                 ["hive", "scope", "entry_name", "state", "state_byte",
+                  "disabled_at", "key_path"],
+                 registry_extra_keys.startup_approved(
+                     _vals, _subs, _sw(K["startup_approved_hklm"]), "HKLM")
+                 + registry_extra_keys.startup_approved(
+                     _vals, _subs, _nt(K["startup_approved_hkcu"]), "HKCU"))
+
+            _put("app_paths", ["app_name", "executable_path", "app_dir", "key_path"],
+                 registry_extra_keys.app_paths(_vals, _subs, _sw(K["app_paths"])))
+
+            _put("safe_boot_services",
+                 ["boot_mode", "entry_name", "entry_type", "key_path"],
+                 registry_extra_keys.safe_boot_services(
+                     _vals, _subs, _sys(K["safe_boot"])))
+
+            _put("zone_map",
+                 ["scope", "host", "protocol", "zone", "zone_name", "key_path"],
+                 registry_extra_keys.zone_map(_vals, _subs, _nt(K["zone_map"])))
+
+            _put("app_permissions",
+                 ["capability", "app", "packaged", "permission", "last_used_start",
+                  "last_used_stop", "key_path"],
+                 registry_extra_keys.app_permissions(
+                     _vals, _subs, _sw(K["consent_store"])))
+
+            _put("shared_dlls", ["dll_path", "reference_count", "key_path"],
+                 registry_extra_keys.shared_dlls(_vals, _sw(K["shared_dlls"])))
+
+            _put("hid_devices",
+                 ["device_id", "instance_id", "device_desc", "manufacturer",
+                  "service", "key_path"],
+                 registry_extra_keys.hid_devices(_vals, _subs, _sys(K["hid"])))
+
+            _put("network_cards",
+                 ["card_index", "description", "service_name", "key_path"],
+                 registry_extra_keys.network_cards(
+                     _vals, _subs, _sw(K["network_cards"])))
+
+            _put("system_configuration",
+                 ["setting", "value_raw", "value_decoded", "area", "meaning",
+                  "key_path"],
+                 registry_extra_keys.system_configuration(_vals, _resolved))
+
+            # SecurityPosture is guarded, not constrained - it predates _put
+            # and declares no UNIQUE, so OR IGNORE has nothing to act on and
+            # would append these five settings on every re-parse. Adding a
+            # UNIQUE would not fix it either: CREATE TABLE IF NOT EXISTS leaves
+            # every case already on disk without one. So the guard goes here,
+            # the way the other ten writers do it.
+            _sp_cols = ["setting", "value_raw", "value_decoded",
+                        "default_value", "assessment", "meaning", "key_path"]
+            for _row in registry_extra_keys.with_display_paths(
+                    registry_extra_keys.security_posture(_vals, _resolved)):
+                if check_exists(cursor, "SecurityPosture",
+                                ["setting", "key_path"],
+                                (_row.get("setting"), _row.get("key_path"))):
+                    continue
+                cursor.execute(
+                    "INSERT INTO SecurityPosture (%s, parsed_at) VALUES (%s)"
+                    % (", ".join(_sp_cols), ", ".join("?" * (len(_sp_cols) + 1))),
+                    tuple(_row.get(c) for c in _sp_cols) + (_walk_stamp,))
+                _extra["n"] += 1
+
+            # ---- feed the correction back into the persistence table --
+            # A Run value is a request; StartupApproved is the answer. Without
+            # this, six entries on the reference system read as live
+            # persistence while Explorer has refused to launch them since
+            # February.
+            #
+            # A row with no matching approval entry is "unknown", never
+            # "enabled": most autostart locations have no StartupApproved
+            # equivalent, and calling them enabled asserts something unrecorded.
+            try:
+                cursor.execute("UPDATE AutoStartPrograms SET startup_state = "
+                               "'unknown' WHERE startup_state IS NULL")
+                _marked = 0
+                for _st, _at, _nm, _sc in cursor.execute(
+                        "SELECT state, disabled_at, entry_name, scope "
+                        "FROM startup_approved").fetchall():
+                    # Matched within the matching location, so a Run entry
+                    # cannot be marked from a StartupFolder one of the same name.
+                    _like = "%" + str(_sc).replace("StartupFolder", "Startup") + "%"
+                    cursor.execute(
+                        "UPDATE AutoStartPrograms SET startup_state = ?, "
+                        "disabled_at = ? WHERE program_name = ? "
+                        "AND location LIKE ?",
+                        (_st, _at or "", _nm, _like))
+                    _marked += cursor.rowcount if cursor.rowcount > 0 else 0
+                conn.commit()
+                if _marked:
+                    print("     %d AutoStartPrograms row(s) carry their real "
+                          "enabled/disabled state" % _marked)
+            except Exception as _exc:
+                logging.debug("autostart state pass: %s", _exc)
+
+            conn.commit()
+            _dis = cursor.execute(
+                "SELECT COUNT(*) FROM startup_approved WHERE state = 'disabled'"
+            ).fetchone()[0]
+            print("[OK] Previously unread keys: %d rows" % _extra["n"])
+            if _dis:
+                print("     %d autostart entr%s disabled - AutoStartPrograms marks "
+                      "them" % (_dis, "y is" if _dis == 1 else "ies are"))
+        except Exception as _exc:
+            logging.debug("extra key pass: %s", _exc)
+
+        # ---- when was this written, and how well do we know -------------
+        # A key's last-write time is an UPPER BOUND on every value it holds:
+        # writing any value updates its key, so no value can be newer than its
+        # key, and at most one value actually matches it - and not even that
+        # one for certain, because adding a subkey moves the key's time too.
+        #
+        # So a value row never carries a key time as though it were its own.
+        # last_written holds the time, time_basis says what kind of time it is,
+        # and the display prefixes "<=" for a bound. The Run key on the machine
+        # this was written against has one timestamp and two values that
+        # changed in different transactions - one number on both rows is wrong
+        # for at least one of them, and nothing in the hive says which.
+        _KEY_ROOTS = re.compile(
+            r"^(root|cmi-createhive\{[^}]*\}|\$\$\$proto\.hiv|system|software|"
+            r"sam|security|default|ntuser\.dat|usrclass\.dat|hklm|hkcu|hku|"
+            r"hkey_local_machine|hkey_current_user|hkey_users)$")
+
+        def _norm_key(path):
+            parts = [x for x in (path or "").replace("/", chr(92)).split(chr(92)) if x]
+            while parts and _KEY_ROOTS.match(parts[0].lower()):
+                parts.pop(0)
+            return chr(92).join(parts).lower()
+
+        def _key_columns(cur):
+            """(table, key column) for every table that names its rows' key.
+
+            The two passes below both need this list, and deriving it from the
+            live schema rather than a hardcoded list means a table added later
+            is covered without anyone remembering to come back here.
+            """
+            out = []
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            for (_name,) in cur.fetchall():
+                cur.execute("PRAGMA table_info([%s])" % _name)
+                cols = [r[1] for r in cur.fetchall()]
+                if "last_written" not in cols or "time_basis" not in cols:
+                    continue
+                kc = next((c for c in ("key_path", "registry_path", "subkey",
+                                       "reg_path") if c in cols), None)
+                if kc:
+                    out.append((_name, kc))
+            return out
+
+        _key_rows = 0
+        _timed = {"exact": 0, "bound": 0, "none": 0}
+        try:
+            _key_time = {}
+            for _label, _path in sorted(_pre_replay.items()):
+                if not _path or not os.path.exists(_path):
+                    continue
+                for _kt in registry_hive_walk.key_times(_path):
+                    if not _kt["key_path"]:
+                        continue
+                    _when = ""
+                    if _kt["timestamp_raw"]:
+                        try:
+                            _when = format_forensic_timestamp(
+                                filetime_to_datetime(_kt["timestamp_raw"]))
+                        except Exception:
+                            _when = ""
+                    if _when:
+                        # The same path exists in several hives - one per user
+                        # profile, plus DEFAULT - and an artifact row does not
+                        # always say which one it came from. Where they
+                        # disagree, take the LATEST: an upper bound that is too
+                        # late is still a true bound, one that is too early is
+                        # a false claim about when a value could have been
+                        # written. 131 rows differed from their key's recorded
+                        # time before this, all of them collisions of this kind.
+                        _nk = _norm_key(_kt["key_path"])
+                        _prev = _key_time.get(_nk)
+                        if _prev is None or _when > _prev[2]:
+                            _key_time[_nk] = (_label, _kt["key_path"], _when,
+                                              _kt["cell_offset"])
+            # Held in memory, written out below - but only for the keys
+            # something in this case actually refers to. A hive set has around
+            # half a million keys, and storing all of them turned a 30,000-row
+            # case into a 520,000-row one whose key tab nobody could read.
+            _wanted = set()
+            for _t, _kc in _key_columns(cursor):
+                try:
+                    for (_kp,) in cursor.execute(
+                            "SELECT DISTINCT [%s] FROM [%s]" % (_kc, _t)):
+                        if _kp:
+                            _wanted.add(_norm_key(_kp))
+                except Exception:
+                    continue
+            for _norm in _wanted:
+                _hit = _key_time.get(_norm)
+                if not _hit:
+                    continue
+                cursor.execute(
+                    'INSERT OR IGNORE INTO registry_key_times (hive_name, '
+                    'key_path, key_last_write, cell_offset, parsed_at) '
+                    'VALUES (?, ?, ?, ?, ?)',
+                    (_hit[0], _hit[1], _hit[2], _hit[3], _walk_stamp))
+                _key_rows += cursor.rowcount if cursor.rowcount > 0 else 0
+            conn.commit()
+
+            # Attributed changes beat the bound wherever the log named a value.
+            _exact = {}
+            try:
+                for _kp, _vn, _at in cursor.execute(
+                        'SELECT key_path, value_name, changed_at FROM '
+                        'registry_value_changes WHERE changed_at IS NOT NULL '
+                        'AND changed_at <> ""').fetchall():
+                    _exact.setdefault((_norm_key(_kp), (_vn or "").lower()), _at)
+            except Exception:
+                pass
+
+            # Every table that records which key its rows came from.
+            for _tbl, _kc in _key_columns(cursor):
+                cursor.execute("PRAGMA table_info([%s])" % _tbl)
+                _cols = [r[1] for r in cursor.fetchall()]
+                _vc = next((c for c in ("value_name", "name", "program_name")
+                            if c in _cols), None)
+                _sel = "SELECT rowid, [%s]%s FROM [%s]" % (
+                    _kc, (", [%s]" % _vc) if _vc else "", _tbl)
+                _updates = []
+                for _row in cursor.execute(_sel).fetchall():
+                    _rid, _kp = _row[0], _row[1]
+                    _vn = (_row[2] if _vc and len(_row) > 2 else "") or ""
+                    _norm = _norm_key(_kp)
+                    if not _norm:
+                        # No key recorded for this row, so there is no bound to
+                        # give it. A hive root normalises to the empty string
+                        # too, and without this every row with a blank key_path
+                        # silently inherited the root's timestamp - 131 rows in
+                        # AutoStartPrograms alone, each of them a confident
+                        # claim about a key nobody wrote down.
+                        _timed["none"] += 1
+                        continue
+                    _hit = _exact.get((_norm, _vn.lower()))
+                    if _hit:
+                        _updates.append((_hit, "value (txn log)", _rid))
+                        _timed["exact"] += 1
+                        continue
+                    _bound = _key_time.get(_norm)
+                    if _bound:
+                        _updates.append((_bound[2], "key upper bound", _rid))
+                        _timed["bound"] += 1
+                    else:
+                        _timed["none"] += 1
+                if _updates:
+                    cursor.executemany(
+                        "UPDATE [%s] SET last_written = ?, time_basis = ? "
+                        "WHERE rowid = ?" % _tbl, _updates)
+            conn.commit()
+        except Exception as _exc:
+            logging.debug("time basis pass: %s", _exc)
+        print("[OK] Key times: %d keys; value rows dated: %d exact, %d bounded, "
+              "%d without a key" % (_key_rows, _timed["exact"], _timed["bound"],
+                                    _timed["none"]))
+
+        # ---- deleted autostart entries, put where they will be seen ------
+        # A carved key is attributed ONLY when its reconstructed path matches a
+        # path this parser collects AutoStartPrograms from. No path, no
+        # attribution: a carved key whose parent chain broke could have been
+        # anywhere, and guessing is how a recovered artefact becomes a wrong
+        # conclusion.
+        _autostart_paths = {
+            "microsoft\\windows\\currentversion\\run": "Run",
+            "microsoft\\windows\\currentversion\\runonce": "RunOnce",
+        }
+        _deleted_asep = 0
+        try:
+            for _label, _walked in _walk_results.items():
+                _scope = "HKCU" if _label.startswith(("NTUSER", "UsrClass")) else "HKLM"
+                for _ck in _walked.carved_keys:
+                    _path = (_ck.get("key_path") or "").lower().lstrip("\\")
+                    # The hive's own root is not part of the path an autostart
+                    # location is named by, so match on the tail.
+                    _hit = None
+                    for _needle, _kind in _autostart_paths.items():
+                        if _path.endswith(_needle):
+                            _hit = _kind
+                            break
+                    if not _hit:
+                        continue
+                    for _kv in _ck.get("values", []):
+                        _cmd = _carved_data_text(_kv.get("data"), _kv["value_type"])
+                        _loc = "%s %s" % (_scope, _hit)
+                        if check_exists(cursor, 'AutoStartPrograms',
+                                        ['location', 'program_name'],
+                                        (_loc, _kv["value_name"])):
+                            continue
+                        cursor.execute(
+                            'INSERT INTO AutoStartPrograms (location, '
+                            'program_name, command, record_state, parsed_at) '
+                            'VALUES (?, ?, ?, ?, ?)',
+                            (_loc, _kv["value_name"], _cmd, DELETED_STATE,
+                             _walk_stamp))
+                        _deleted_asep += 1
+            if _deleted_asep:
+                print("[OK] %d deleted autostart entr%s recovered into "
+                      "AutoStartPrograms" % (_deleted_asep,
+                                             "y" if _deleted_asep == 1 else "ies"))
+            conn.commit()
+        except Exception as e:
+            logging.error("Could not attribute carved autostart entries: %s", e)
+
+    except Exception as e:
+        logging.error("Hive allocator walk failed: %s", e)
+        print("Warning: allocator walk did not complete: %s" % e)
+
     # ------------------------------------------------------- hive provenance
     try:
         _hs_stamp = get_current_forensic_timestamp()
@@ -4664,13 +6208,18 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 'INSERT INTO registry_hive_state (hive_name, hive_path, '
                 'sequence_1, sequence_2, was_dirty, logs_found, log_format, '
                 'replayed, entries_applied, pages_applied, highest_sequence, '
-                'reason, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'source_sha256, acquisition_route, reason, parsed_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (_st.hive_name, _st.hive_path, _st.sequence_1, _st.sequence_2,
                  1 if _st.was_dirty else 0,
                  "; ".join(os.path.basename(x) for x in _st.logs_found),
                  _st.log_format, 1 if _st.recovered else 0,
                  _st.entries_applied, _st.pages_applied, _st.highest_sequence,
-                 _st.reason, _hs_stamp))
+                 # The hash of the file as found. Recovery works on a copy, so
+                 # this is what the evidence still hashes to afterwards.
+                 # An offline parse reads a hive the collector already
+                 # acquired, so the route is settled before the parser sees it.
+                 _st.source_sha256, "file:collected", _st.reason, _hs_stamp))
         _stale = [x for x in _hive_states if x.was_dirty and not x.recovered]
         if _stale:
             print("[WARNING] %d hive(s) were dirty and could not be replayed; "
@@ -4737,15 +6286,18 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     print(f"\n[OK] Errors logged to: offline_regclaw_errors.log")
     print("\n" + "=" * 80)
 
-    # The recovered copies existed only for this parse. Same lifecycle as
-    # user_identity.live_hive_export's temp directory: make it, work in it,
-    # remove it - a recovered SYSTEM left behind is a second copy of the
-    # registry sitting in the temp folder.
-    if _replay_dir:
-        try:
-            shutil.rmtree(_replay_dir, ignore_errors=True)
-        except Exception as e:
-            logging.debug("Could not remove replay directory %s: %s", _replay_dir, e)
+    # The recovered copies are NOT removed here any more, and that is
+    # deliberate. They used to belong to this parse, and a recovered SYSTEM
+    # left behind is a second copy of the registry sitting in the temp folder.
+    # But ShimCache, AmCache, SRUM, the SECURITY hive and user identity now
+    # read the same recovered hives, and several of them run after this parser
+    # - deleting the workspace here would make each of them replay the same
+    # files again.
+    #
+    # registry_transaction_log owns the workspace and registers it with atexit,
+    # so nothing outlives the process. It is memoised, so within a run it holds
+    # one copy per hive rather than one per parser. A caller that wants the
+    # space back sooner can call registry_transaction_log.reset_replay_cache().
 
     # Return dictionary format expected by parser invoker
     return {

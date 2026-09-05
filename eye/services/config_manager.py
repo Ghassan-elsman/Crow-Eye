@@ -6,11 +6,37 @@ saving, and validating configuration against JSON schema.
 """
 
 import json
+import logging
 import os
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 import jsonschema
 from jsonschema import validate, ValidationError
+
+logger = logging.getLogger(__name__)
+
+
+def _default_config_dir() -> Path:
+    """Locate ``configs/`` without depending on the process working directory.
+
+    Anchored to the app root (three levels up from this file: eye/services/ ->
+    eye/ -> repo root), or to the PyInstaller bundle dir in the frozen EXE. Falls
+    back to a relative "configs" only if neither exists, preserving the old
+    behaviour for unusual layouts.
+    """
+    candidates = []
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", None) or os.path.dirname(sys.executable)
+        candidates.append(Path(base) / "configs")
+        candidates.append(Path(os.path.dirname(sys.executable)) / "configs")
+    candidates.append(Path(__file__).resolve().parents[2] / "configs")
+    candidates.append(Path.cwd() / "configs")
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return Path("configs")
 
 
 class ConfigManager:
@@ -22,14 +48,17 @@ class ConfigManager:
     backend type, and context window configuration.
     """
     
-    def __init__(self, config_dir: str = "configs"):
+    def __init__(self, config_dir: Optional[str] = None):
         """
         Initialize ConfigManager.
-        
+
         Args:
-            config_dir: Directory containing configuration files (default: "configs")
+            config_dir: Directory containing configuration files. Defaults to the
+                        app-root ``configs/`` (see _default_config_dir) rather than
+                        a CWD-relative path, so launching Crow-Eye from another
+                        directory still finds the real configuration.
         """
-        self.config_dir = Path(config_dir)
+        self.config_dir = Path(config_dir) if config_dir else _default_config_dir()
         self.config_path = self.config_dir / "eye_config.json"
         self.schema_path = self.config_dir / "eye_config_schema.json"
         self._schema: Optional[Dict[str, Any]] = None
@@ -40,27 +69,40 @@ class ConfigManager:
         
         Returns:
             Configuration dictionary, or empty dict if file doesn't exist or is incomplete
-            
+
         Raises:
             json.JSONDecodeError: If the file contains invalid JSON
+
+        Note:
+            A schema *mismatch* is logged and the config returned as-is rather than
+            raised. Loading happens during EYEWindow startup, and a config the
+            schema hasn't caught up with (a newer backend id, a key added by a later
+            build) must never make the assistant window fail to open — the router
+            does its own validation of the fields it actually needs.
         """
         if not self.config_path.exists():
             # Return empty config instead of raising exception
             # This allows first-time setup to proceed without errors
             return {}
-        
+
         with open(self.config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
-        
+
         # Check if config has required fields before validating
         # If missing required fields, treat as incomplete and return empty dict
         required_fields = ["integration_type", "backend", "model_name"]
         if not all(field in config for field in required_fields):
             return {}
-        
+
         # Validate against schema only if config has required fields
-        self.validate_config(config)
-        
+        try:
+            self.validate_config(config)
+        except (ValidationError, FileNotFoundError) as e:
+            logger.warning(
+                f"eye_config.json could not be schema-validated ({getattr(e, 'message', e)}). "
+                "Loading it anyway — the backend will validate what it needs."
+            )
+
         return config
     
     def save_config(self, config_dict: Dict[str, Any]) -> None:
