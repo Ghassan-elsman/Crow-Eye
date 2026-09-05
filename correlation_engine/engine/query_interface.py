@@ -808,31 +808,11 @@ class QueryInterface:
         """Context manager exit."""
         self.disconnect()
     
-    def query_identities_by_anchor_time(self, filters: Optional[QueryFilters] = None) -> TimeBasedQueryResult:
-        """
-        Query identities grouped by their anchor times.
-        
-        Transforms identity-first data into time-first organization for temporal analysis.
-        
-        Args:
-            filters: Optional query filters
-            
-        Returns:
-            TimeBasedQueryResult with identities grouped by anchor time
-            
-        Requirements: 1.1, 1.2, 1.3
-        """
-        # First get identities using existing method
-        identities = self.query_identities(filters)
-        
-        # Transform into time-based groups
-        anchor_time_groups = group_identities_by_anchor_time(identities)
-        
-        # Create result object
-        result = TimeBasedQueryResult(anchor_time_groups=anchor_time_groups)
-        
-        logger.info(f"Grouped {result.total_identities} identities into {result.total_anchor_times} anchor time groups")
-        return result
+    # NOTE: a first `query_identities_by_anchor_time` used to be defined
+    # here. Python keeps the last definition, so it never ran - and the
+    # two differed: this dead one ignored the time window entirely, while
+    # the live one below honours filters.time_window_minutes. Removed so
+    # nobody edits the copy that does nothing.
     
     # NEW: Time-based query methods for hierarchical results view
     

@@ -202,24 +202,32 @@ All extracted data is stored in `registry_data.db` (SQLite database) in the `Tar
 
 ### ShellBags Table Schema
 
-The `Shellbags` table contains 17 fields:
-- `file_name` - Folder/file name
-- `short_name` - 8.3 short name
-- `shell_item_type` - Type of shell item
-- `mru_position` - Most Recently Used position
-- `created_date` - Creation timestamp
-- `modified_date` - Modification timestamp
-- `accessed_date` - Access timestamp
-- `attributes` - File attributes
-- `file_size` - File size
-- `special_folder` - Special folder GUID
-- `network_share` - Network share path
-- `server_name` - Server name
-- `share_name` - Share name
-- `drive_letter` - Drive letter
-- `mft_record_number` - MFT record number
-- `registry_path` - Source registry path
-- `analyzing_date` - Analysis timestamp
+The `Shellbags` table contains 23 fields:
+- `file_name` - the long name, or the short name when there is no extension block
+- `short_name` - the 8.3 name from the fixed part of the item
+- `shell_item_type` - filesystem, drive, network, special_folder, or unknown
+- `mru_position` - position in the key's MRUListEx - visit order, not slot order
+- `created_date` - the target's creation time, from the extension block
+- `modified_date` - the target's DOS modification time, two-second resolution
+- `accessed_date` - the target's last access time, from the extension block
+- `attributes` - the FILE_ATTRIBUTE word - hidden and system are the useful bits
+- `file_size` - the target's size as the shell last saw it; zero for a folder
+- `special_folder` - known-folder name for a 0x1F root, or its GUID
+- `network_share` - UNC path for a network item
+- `server_name` - server component of a network item
+- `share_name` - share component of a network item
+- `drive_letter` - the volume, from a 0x2F item
+- `mft_record_number` - MFT record from the extension block, version 7 and up
+- `registry_path` - the BagMRU key the value was read from
+- `parent_path` - the decoded folder chain above this item
+- `last_written` - the key's last-write time
+- `time_basis` - what last_written was derived from
+- `node_slot` - the NodeSlot DWORD on the folder's own key, naming its Bags subkey
+- `bag_views` - which view kinds that bag holds: Shell (an Explorer window), ComDlg (a File Open/Save dialog inside another program), or both. Empty where the key carries no NodeSlot
+- `parsed_at` - when Crow-Eye read the hive - bookkeeping, never evidence
+- `user_name` - which user's hive the row came from
+
+A row records that a container was rendered as a **shell view** under that account. It is not evidence that a person browsed there - `bag_views` is the field that distinguishes an Explorer window from a program's file dialog.
 
 ## Validation
 

@@ -36,7 +36,6 @@ QTabBar::tab {
     min-height: 18px;
     font-weight: 600;
     font-size: 11px;
-    letter-spacing: 0.5px;
 }
 
 QTabBar::tab:selected {
@@ -233,7 +232,6 @@ QHeaderView::section {
     border-right: 1px solid #334155;
     font-weight: 600;
     font-size: 11px;
-    letter-spacing: 0.5px;
 }
 
 QHeaderView::section:hover {

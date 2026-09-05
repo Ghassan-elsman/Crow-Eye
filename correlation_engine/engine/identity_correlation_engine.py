@@ -405,14 +405,19 @@ class IdentityCorrelationEngine:
                 'hash': []
             },
             # NEW: TypedPaths/TypedURLs
+            #
+            # row_data holds the typed path; `name` is only the MRU slot
+            # (url1, url2), so it must never be the first candidate. `data` is
+            # the column name older case databases used - kept so those still
+            # resolve. Neither was listed here, so the path was never matched.
             'TypedPaths': {
-                'name': ['value', 'Value', 'name', 'Name', 'path', 'Path'],
-                'path': ['value', 'Value', 'path', 'Path'],
+                'name': ['row_data', 'data', 'value', 'Value', 'path', 'Path', 'name', 'Name'],
+                'path': ['row_data', 'data', 'value', 'Value', 'path', 'Path'],
                 'hash': []
             },
             'typedpaths': {
-                'name': ['value', 'Value', 'name', 'Name', 'path', 'Path'],
-                'path': ['value', 'Value', 'path', 'Path'],
+                'name': ['row_data', 'data', 'value', 'Value', 'path', 'Path', 'name', 'Name'],
+                'path': ['row_data', 'data', 'value', 'Value', 'path', 'Path'],
                 'hash': []
             },
             # NEW: Run keys
@@ -3468,7 +3473,9 @@ class IdentityBasedEngineAdapter:
             # Get minimum_matches from wing configuration (default 1)
             min_feathers_required = 1
             if hasattr(wing, 'correlation_rules') and hasattr(wing.correlation_rules, 'minimum_matches'):
-                min_feathers_required = wing.correlation_rules.minimum_matches
+                # The corroboration floor, shared with the time-window engine
+                # so one wing config means one thing in both.
+                min_feathers_required = wing.correlation_rules.required_feather_count()
             logger.info(f"[Identity Engine] Minimum feathers required per match: {min_feathers_required}")
             
             # Count total anchors that meet criteria (for statistics)

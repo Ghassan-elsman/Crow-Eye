@@ -36,7 +36,13 @@ class PipelineConfig:
     auto_run_correlation: bool = True # Automatically run correlation after feathers
     
     # NEW: Engine selection and filtering
-    engine_type: str = "time_window_scanning" # "time_window_scanning" or "identity_based"
+    #
+    # Identity-Based is the default engine. Every pipeline anything builds -
+    # the per-case default from DefaultPipelineCreator, and anything the
+    # Pipeline Builder saves - inherits this, and neither passes an engine of
+    # its own. A pipeline that names an engine keeps it; this only decides
+    # what a pipeline says when nobody chose.
+    engine_type: str = "identity_based" # "identity_based" or "time_window_scanning"
 
     # Runtime-only: groups the per-wing executions of one run (live GUI runs
     # create a separate execution per wing). Set by the execution worker /
@@ -150,6 +156,13 @@ class PipelineConfig:
         data.pop('run_group_id', None)
 
         # NEW: Provide defaults for backward compatibility
+        #
+        # This is a MIGRATION value, not the product default (which is
+        # identity_based, above). It fires only for a pipeline saved before the
+        # field existed, and those pipelines have been running on the
+        # time-window engine ever since. Changing it to agree with the new
+        # default would silently change how an existing case runs, so leave it
+        # alone - the disagreement is deliberate.
         if 'engine_type' not in data:
             data['engine_type'] = 'time_window_scanning'
         if 'time_period_start' not in data:

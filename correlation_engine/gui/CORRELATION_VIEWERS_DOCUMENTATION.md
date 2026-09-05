@@ -436,6 +436,5 @@ Crow-Eye/correlation_engine/gui/
 ├── identity_results_view.py         # Identity-based viewer
 ├── results_viewer.py                # Legacy/shared components
 ├── scoring_breakdown_widget.py      # Weighted scoring display
-├── match_detail_dialog.py           # Match detail popup
 └── CORRELATION_VIEWERS_DOCUMENTATION.md  # This file
 ```

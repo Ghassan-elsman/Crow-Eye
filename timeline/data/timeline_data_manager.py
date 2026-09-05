@@ -31,9 +31,10 @@ from timeline.data.timestamp_indexer import TimestampIndexer
 from timeline.data.srum_app_resolver import SrumAppResolver
 from timeline.utils.value_parser import parsable_num_adapter
 from timeline.utils.error_handler import (
-    ErrorHandler, DatabaseError, DataLoadError, 
+    ErrorHandler, DatabaseError, DataLoadError,
     ErrorSeverity, create_recovery_options
 )
+from timeline.data import artifact_map as _artifact_map
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -120,108 +121,14 @@ class TimelineDataManager:
     
     # Artifact type to database mapping
     # Maps artifact types to their actual database filenames in the case directory
-    ARTIFACT_DB_MAPPING = {
-        'Prefetch': 'prefetch_data.db',
-        'LNK': 'LnkDB.db',  # Actual filename in case directory
-        'Registry': 'registry_data.db',
-        'BAM': 'registry_data.db',  # BAM data is in registry database
-        'ShellBag': 'registry_data.db',  # ShellBag data is in registry database
-        'SRUM': 'srum_data.db',
-        'USN': 'USN_journal.db',  # Actual filename in case directory
-        'MFT': 'mft_claw_analysis.db',  # Actual filename in case directory
-    }
-    
-    # Alternative database names to check if primary name not found
-    ARTIFACT_DB_ALTERNATIVES = {
-        'MFT': ['MFT_data.db'],  # Support old naming convention
-    }
-    
-    # Timestamp column mappings for each artifact type
-    # Format: artifact_type -> [(table_name, timestamp_column, timestamp_type, description)]
-    # Updated to match actual database schemas in case directory
-    TIMESTAMP_MAPPINGS = {
-        'Prefetch': [
-            ('prefetch_data', 'last_executed', 'executed', 'Last execution time'),
-            ('prefetch_data', 'created_on', 'created', 'File creation time'),
-            ('prefetch_data', 'modified_on', 'modified', 'File modification time'),
-            ('prefetch_data', 'accessed_on', 'accessed', 'File access time'),
-        ],
-        'LNK': [
-            ('LNK_Files', 'Time_Creation', 'created'),
-            ('LNK_Files', 'Time_Modification', 'modified'),
-            ('LNK_Files', 'Time_Access', 'accessed'),
-            ('Automatic_JumpLists', 'Time_Creation', 'created'),
-            ('Automatic_JumpLists', 'Time_Modification', 'modified'),
-            ('Automatic_JumpLists', 'Time_Access', 'accessed'),
-            ('Custom_JumpLists', 'Time_Creation', 'created'),
-            ('Custom_JumpLists', 'Time_Modification', 'modified'),
-            ('Custom_JumpLists', 'Time_Access', 'accessed'),
-        ],
-        'Registry': [
-            ('UserAssist', 'last_execution', 'executed'),
-            ('MUICache', 'timestamp', 'various'),
-            ('InstalledSoftware', 'install_date', 'installed'),
-            ('ComputerNameInfo', 'installation_date', 'installed'),
-            ('Auto', 'last_install_time', 'installed'),
-            ('Auto', 'scheduled_install_time', 'created'),
-            ('WindowsUpdateInfo', 'last_check_time', 'accessed'),
-            ('WindowsUpdateInfo', 'last_install_time', 'installed'),
-            ('WindowsUpdateInfo', 'scheduled_install_time', 'created'),
-            ('ShutdownInfo', 'shutdown_time', 'executed'),
-            ('WordWheelQuery', 'access_date', 'accessed'),
-            ('RunMRU', 'access_date', 'accessed'),
-            ('Network_list', 'connection_date', 'accessed'),
-            ('NetworkListProfiles', 'timestamp', 'various'),
-            ('OpenSaveMRU', 'access_date', 'accessed'),
-            ('LastSaveMRU', 'access_date', 'accessed'),
-            ('NetworkInterfacesInfo', 'timestamp', 'various'),
-        ],
-        'DAM': [
-            ('DAM', 'last_execution', 'executed'),
-        ],
-        'USBStorageDevices': [
-            ('USBStorageDevices', 'first_connected', 'installed'),
-            ('USBStorageDevices', 'last_connected', 'accessed'),
-            ('USBStorageDevices', 'last_removed', 'deleted'),
-        ],
-        'BAM': [
-            ('BAM', 'last_execution', 'executed'),
-        ],
-        'Amcache': [
-            ('InventoryApplication', 'install_date', 'installed', 'Application install date'),
-            ('InventoryApplicationFile', 'link_date', 'linked', 'Application file link date'),
-            ('InventoryDriverBinary', 'driver_last_write_time', 'modified', 'Driver last write time'),
-            ('InventoryDriverBinary', 'driver_time_stamp', 'created', 'Driver timestamp'),
-        ],
-        'Shimcache': [
-            ('shimcache_entries', 'last_modified', 'modified', 'Shimcache last modified time'),
-        ],
-        'RecycleBin': [
-            ('recycle_bin_entries', 'deletion_time', 'deleted', 'File deletion time'),
-        ],
-        'Shellbags': [
-            ('Shellbags', 'created_date', 'created'),
-            ('Shellbags', 'modified_date', 'modified'),
-            ('Shellbags', 'accessed_date', 'accessed'),
-        ],
-        'SRUM': [
-            ('srum_application_usage', 'timestamp', 'various'),
-            ('srum_network_connectivity', 'timestamp', 'various'),
-            ('srum_network_data_usage', 'timestamp', 'various'),
-            ('srum_energy_usage', 'timestamp', 'various'),
-            ('srum_app_timeline', 'timestamp', 'various'),
-        ],
-        'USN': [
-            ('journal_events', 'timestamp', 'various'),
-        ],
-        'MFT': [
-            ('mft_records', 'created_time', 'created'),
-            ('mft_records', 'modified_time', 'modified'),
-            ('mft_records', 'accessed_time', 'accessed'),
-            ('mft_records', 'mft_modified_time', 'mft_modified'),
-        ],
-    }
-    
+    # The canonical maps live in artifact_map so they cannot drift.
+    # They used to be written out here AND in timestamp_indexer.py, and
+    # the two disagreed about ShellBag/Shellbags, about DAM and USB
+    # storage, and about whether UserAssist.focus_time is a time.
+    ARTIFACT_DB_MAPPING = dict(_artifact_map.ARTIFACT_DB_MAPPING)
+    ARTIFACT_DB_ALTERNATIVES = dict(_artifact_map.ARTIFACT_DB_ALTERNATIVES)
+    TIMESTAMP_MAPPINGS = dict(_artifact_map.TIMESTAMP_MAPPINGS)
+
     def __init__(self, case_paths: Dict[str, str], error_handler: Optional[ErrorHandler] = None):
         """
         Initialize TimelineDataManager with case paths.
@@ -940,7 +847,7 @@ class TimelineDataManager:
             'LNK': self._query_lnk_time_range,
             'Registry': self._query_registry_time_range,
             'BAM': self._query_bam_time_range,
-            'ShellBag': self._query_shellbag_time_range,
+            'Shellbags': self._query_shellbag_time_range,
             'SRUM': self._query_srum_time_range,
             'USN': self._query_usn_time_range,
             'MFT': self._query_mft_time_range,
@@ -1327,7 +1234,7 @@ class TimelineDataManager:
     ) -> List[Dict]:
         """Query ShellBag artifacts within time range."""
         # ShellBag data is in the registry database
-        conn = self._get_connection('ShellBag')
+        conn = self._get_connection('Shellbags')
         if not conn:
             return []
         
@@ -1392,7 +1299,7 @@ class TimelineDataManager:
                             'id': f"shellbag_{rid}_{sub_type}_{raw_ts}",
                             'timestamp': ts,
                             'subType': sub_type,
-                            'artifact_type': 'ShellBag',
+                            'artifact_type': 'Shellbags',
                             'source_db': 'registry_data.db',
                             'source_table': 'Shellbags',
                             'source_row_id': str(rid),

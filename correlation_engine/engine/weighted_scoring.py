@@ -53,15 +53,31 @@ class WeightedScoringEngine:
            multiplier (the wing's `weight` is the single source of truth
            for scoring magnitude).
         """
-        # Fast path: scoring disabled → count fallback.
-        scoring_config = getattr(wing_config, 'scoring', {})
+        # Fast path: scoring disabled → coverage fallback.
+        #
+        # `score` used to be `len(match_records)` - a raw COUNT in a field every
+        # consumer reads as the normalised [0, 1] value, and then interprets
+        # against the 0.7 / 0.4 / 0.2 thresholds. A match spanning five feathers
+        # scored 5.0 and rendered as far above "Confirmed"; the reference case
+        # carried a 2.55 labelled "Confirmed Execution". The count is still
+        # reported, under a name that says what it is.
+        #
+        # `scoring` may be None as well as missing, and `.get` on None raises -
+        # so normalise it before use rather than assuming a dict.
+        scoring_config = getattr(wing_config, 'scoring', None) or {}
         if not scoring_config.get('enabled', False):
+            matched = len(match_records)
+            total = len(getattr(wing_config, 'feathers', [])) or 0
             return {
-                'score': len(match_records),
+                # Coverage: the share of the wing's feathers this match spans.
+                # In [0, 1] like the weighted path, so a consumer applying the
+                # thresholds gets a meaningful answer instead of a count.
+                'score': round(matched / total, 4) if total else 0.0,
+                'match_count': matched,
                 'interpretation': 'Match Count',
                 'breakdown': {},
-                'matched_feathers': len(match_records),
-                'total_feathers': len(getattr(wing_config, 'feathers', []))
+                'matched_feathers': matched,
+                'total_feathers': total
             }
 
         feathers = getattr(wing_config, 'feathers', [])
@@ -163,7 +179,24 @@ class WeightedScoringEngine:
         """
         if not interpretation_config:
             return "Unknown"
-        
+
+        # The thresholds (0.7 / 0.4 / 0.2) are calibrated for a normalised
+        # score. Anything outside [0, 1] is not a score on that scale, and
+        # interpreting it silently promotes it: a count of 5 clears every band
+        # and renders as the top label. Refuse rather than mislabel - a wrong
+        # confidence label on a forensic finding is worse than no label.
+        try:
+            numeric = float(score)
+        except (TypeError, ValueError):
+            logger.warning("[WeightedScoring] Non-numeric score %r - not interpreted", score)
+            return "Unknown"
+        if not (0.0 <= numeric <= 1.0):
+            logger.warning(
+                "[WeightedScoring] Score %s is outside [0, 1] and was not "
+                "interpreted; the interpretation thresholds only mean something "
+                "on a normalised score", numeric)
+            return "Unknown"
+
         # Normalize interpretation config to handle both dict and flat float values
         normalized = {}
         for level, config in interpretation_config.items():

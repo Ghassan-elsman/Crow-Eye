@@ -40,6 +40,19 @@ CAVEAT_SHELLBAGS = (
     "ShellBags are created both when a person browses folders in File Explorer "
     "AND when an application opens a file/save dialog — this confirms the folder "
     "was accessed in this user's session, not necessarily deliberate browsing.")
+# Windows files an Explorer window's view settings under Bags\\<n>\\Shell and a
+# common file dialog's under ComDlg, and the parser records which in
+# `bag_views`. Where it is present the blanket caveat above can be replaced by
+# what actually happened; where it is absent - an older case, or a key with no
+# NodeSlot - the blanket caveat is still the honest answer.
+CAVEAT_SHELLBAGS_DIALOG = (
+    "This folder's view was written by a file dialog hosted inside another "
+    "application, not by an Explorer window — it shows the folder was reached "
+    "in this user's session, and not that anyone browsed to it.")
+CAVEAT_SHELLBAGS_EXPLORER = (
+    "This folder's view was written by an Explorer window. That is consistent "
+    "with a person browsing and is not proof of one: any application running "
+    "as this user can open an Explorer view.")
 CAVEAT_FILE_OPEN = (
     "Shortcuts, jump lists and recent-file lists are also written by "
     "applications opening files on the user's behalf — this shows the file was "
@@ -86,6 +99,102 @@ def _rows(ctx, logical_db, sql, params=()):
     except Exception as e:
         logger.warning("UBA: query failed on %s: %s", logical_db, e)
         return []
+
+
+def _value_column(ctx, table, default="row_data"):
+    """Whichever spelling this case uses for a registry value's data.
+
+    Current parsers write `row_data`; cases from older builds carry `data`.
+    Asking for the wrong one is not an error an analyst ever sees - the query
+    throws inside `_rows`, which logs a single line and returns [], so the
+    whole behaviour disappears from the report with the run still green.
+    """
+    for name in (default, "data", "value"):
+        if ctx.pool.has_column("registry", table, name):
+            return name
+    return default
+
+
+# A registry key's write time is an upper bound on every value under it: writing
+# any value updates the whole key, so all it establishes is "not after T". The
+# parser records which kind of time it found in `time_basis`.
+BASIS_EXACT = "value (txn log)"
+CAVEAT_KEY_TIME = (
+    "This time is the registry KEY's last-write time, which is an upper bound "
+    "on every value under it - another value in the same key may be what "
+    "changed then. Read it as 'at or before', not as when this happened."
+)
+
+
+def _time_phrase(ts, basis):
+    """How to say a registry-sourced time, given what it is.
+
+    Returns ("", "") when there is no time at all, so a caller can fall back to
+    a timeless event rather than writing a sentence about nothing.
+    """
+    if not ts:
+        return "", ""
+    if str(basis or "").strip() == BASIS_EXACT:
+        return "at {}".format(ts), ""
+    return "at or before {}".format(ts), CAVEAT_KEY_TIME
+
+
+CAVEAT_MRU_KEY_TIME = (
+    "An MRU list stores no time per entry. This is the containing key's own "
+    "last-write time, so it dates the most recent entry in that list and not "
+    "necessarily this one."
+)
+
+
+def _evidence_env(ctx):
+    """%VARIABLE% -> value, read from the case's own system_environment table.
+
+    Grounded in the evidence, never in the machine the analyst is sitting at:
+    the parser already decoded `windir` to `C:\\Windows` for THIS case, and on
+    an image that is somebody else's computer. A case without the table gets an
+    empty map and nothing is expanded, which is the right answer rather than a
+    plausible wrong one.
+    """
+    cached = getattr(ctx, "_uba_env_cache", None)
+    if cached is not None:
+        return cached
+    env = {}
+    if ctx.pool.has_column("registry", "system_environment", "value_decoded"):
+        for name, value, decoded in _rows(
+                ctx, "registry",
+                "SELECT name, value, value_decoded FROM system_environment"):
+            resolved = decoded or (value if value and "%" not in str(value) else "")
+            if name and resolved:
+                env[str(name).lower()] = str(resolved)
+    if "windir" in env:
+        env.setdefault("systemroot", env["windir"])
+    try:
+        ctx._uba_env_cache = env
+    except Exception:
+        pass
+    return env
+
+
+def _expanded(ctx, text):
+    """A command with its %VARIABLES% resolved from the evidence, or as stored.
+
+    ScheduledTasks stores `%windir%\\system32\\disksnapshot.exe` and has no
+    decoded column of its own, so the expansion happens here - from the same
+    environment the parser decoded, not from os.environ.
+    """
+    out = str(text or "")
+    if "%" not in out:
+        return out
+    env = _evidence_env(ctx)
+    for name, value in env.items():
+        token = "%" + name + "%"
+        lowered = out.lower()
+        at = lowered.find(token)
+        while at != -1:
+            out = out[:at] + value + out[at + len(token):]
+            lowered = out.lower()
+            at = lowered.find(token)
+    return out
 
 
 # --------------------------------------------------------------------- #
@@ -335,23 +444,47 @@ def network_share_access(ctx, rules) -> List[BehaviorEvent]:
 
 
 def shellbags_browsing(ctx, rules) -> List[BehaviorEvent]:
+    """Folders that were rendered as a shell view in this user's session.
+
+    Not "folders the user opened". A shell view is hosted by Explorer and by
+    every File Open/Save dialog, and until the parser started reading Bags
+    there was no way to tell the two apart, so every event carried the same
+    hedge. Now a row can say which - and where it cannot, it still carries the
+    hedge rather than picking one.
+    """
     rule = rules[0]
     events = []
-    for rowid, name, parent, accessed, modified in _rows(
-            ctx, "registry",
-            "SELECT rowid, file_name, parent_path, accessed_date, modified_date "
-            "FROM Shellbags"):
+    # Older cases have no such column, and selecting it would empty the whole
+    # behaviour out of the report with only a log line to show for it.
+    has_views = ctx.pool.has_column("registry", "Shellbags", "bag_views")
+    sql = ("SELECT rowid, file_name, parent_path, accessed_date, modified_date"
+           + (", bag_views" if has_views else ", NULL") + " FROM Shellbags")
+    for rowid, name, parent, accessed, modified, views in _rows(
+            ctx, "registry", sql):
         folder = "{}\\{}".format(parent, name) if parent else (name or "")
         ts = normalize_ts(accessed) or normalize_ts(modified)
         actor = ctx.resolver.from_user_hive("the folder-view (ShellBags) record")
         who = actor[1] or "this user profile"
-        text = "The folder '{}' was accessed in {}'s Windows session".format(
-            folder or "(unknown)", who)
+        kinds = set((views or "").split(","))
+        if kinds == {"ComDlg"}:
+            text = ("The folder '{}' was shown in a file dialog inside another "
+                    "program, in {}'s Windows session").format(
+                        folder or "(unknown)", who)
+            caveat = CAVEAT_SHELLBAGS_DIALOG
+        elif kinds == {"Shell"}:
+            text = "The folder '{}' was opened in Explorer in {}'s Windows session".format(
+                folder or "(unknown)", who)
+            caveat = CAVEAT_SHELLBAGS_EXPLORER
+        else:
+            text = "The folder '{}' was accessed in {}'s Windows session".format(
+                folder or "(unknown)", who)
+            caveat = CAVEAT_SHELLBAGS
         events.append(_mk(
             rule, ctx, ts, actor, text,
             [EvidenceRef(db="registry", table="Shellbags", rowids=[rowid], count=1)],
-            caveat=CAVEAT_SHELLBAGS,
-            details={"folder": folder, "area": description.folder_label(folder)}))
+            caveat=caveat,
+            details={"folder": folder, "area": description.folder_label(folder),
+                     "view_kind": views or ""}))
     return events
 
 
@@ -440,12 +573,19 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
                 caveat=CAVEAT_FILE_OPEN, details={"name": name}))
 
     if ctx.pool.has_table("registry", "RecentDocs"):
-        # The parser decodes the document name into `data`; `name` is just the
-        # MRU index ("0"/"1"/"MRUListEx"). Read `data`, skip the MRUListEx
-        # ordering row and any raw-binary values (Python-repr byte strings).
+        # The parser decodes the document name into the value column; `name` is
+        # just the MRU index ("0"/"1"/"MRUListEx"). Skip the MRUListEx ordering
+        # row and any raw-binary values (Python-repr byte strings).
+        #
+        # The column is `row_data`. This asked for `data`, which RecentDocs has
+        # never had - the query threw, _rows logged one line and returned [],
+        # and every RecentDocs document silently vanished from the report.
+        # Older cases really do use `data`, so ask which one is there.
+        column = _value_column(ctx, "RecentDocs")
         items = []
         for rowid, mru_name, data in _rows(
-                ctx, "registry", "SELECT rowid, name, data FROM RecentDocs"):
+                ctx, "registry",
+                "SELECT rowid, name, %s FROM RecentDocs" % column):
             if not data or mru_name == "MRUListEx":
                 continue
             doc = str(data).strip()
@@ -556,8 +696,11 @@ def local_search(ctx, rules) -> List[BehaviorEvent]:
                 [EvidenceRef(db="registry", table=table, rowids=[rowid], count=1)],
                 details={"value": value}))
     if ctx.pool.has_table("registry", "TypedPaths"):
+        # `row_data`, not `data` - see _value_column. Seventeen typed paths on
+        # the reference system were being dropped by this one wrong name.
         items = [(rowid, data) for rowid, data in _rows(
-            ctx, "registry", "SELECT rowid, data FROM TypedPaths") if data]
+            ctx, "registry", "SELECT rowid, %s FROM TypedPaths"
+            % _value_column(ctx, "TypedPaths")) if data]
         if items:
             actor = ctx.resolver.from_user_hive("the typed-paths record")
             events.append(_mk(
@@ -724,24 +867,58 @@ def _is_user_writable_path(path) -> bool:
 
 def autostart_programs(ctx, rules) -> List[BehaviorEvent]:
     """Persistence: programs set to auto-run at startup (Run/RunOnce/Startup).
-    Auto-start from a user-writable location is escalated for review."""
+
+    Explorer records in StartupApproved whether each entry is actually allowed
+    to launch, and the parser stores that as `startup_state`. This used not to
+    read it, so an entry the user had switched OFF was reported as
+    "is set to run automatically at startup" - and escalated to suspicious if
+    its path was user-writable. Six of 331 entries on the reference system are
+    disabled, and a disabled entry is a different fact: persistence that was
+    configured and is not currently live.
+
+    Three states, and `unknown` is not "probably enabled": it means this
+    autostart location is not one StartupApproved governs at all. That is 319
+    of the 331, so treating unknown as disabled would be just as wrong.
+    """
     rule = rules[0]
     events = []
-    for rowid, location, program_name, command in _rows(
-            ctx, "registry",
-            "SELECT rowid, location, program_name, command FROM AutoStartPrograms"):
+    has_state = ctx.pool.has_column("registry", "AutoStartPrograms",
+                                    "startup_state")
+    sql = ("SELECT rowid, location, program_name, command"
+           + (", startup_state, disabled_at" if has_state else ", NULL, NULL")
+           + " FROM AutoStartPrograms")
+    for rowid, location, program_name, command, state, disabled_at in _rows(
+            ctx, "registry", sql):
         name = program_name or description.app_display_name(command)
-        suspicious = _is_user_writable_path(command)
-        text = ("The program '{}' is set to run automatically at startup "
-                "(via {})".format(name, location or "an autostart key"))
-        if suspicious:
-            text += " — it runs from a user-writable location, which is a common persistence trick"
+        state = str(state or "").strip().lower()
+        where = location or "an autostart key"
+        user_writable = _is_user_writable_path(command)
+
+        if state == "disabled":
+            text = ("The program '{}' is registered to run at startup (via {}) "
+                    "but Windows has it switched OFF, so it does not "
+                    "run".format(name, where))
+            if disabled_at:
+                text += " - disabled at {}".format(disabled_at)
+            # Not escalated: a user-writable path that cannot launch is not the
+            # live persistence the suspicious flag is meant to raise.
+            severity = None
+        else:
+            text = ("The program '{}' is set to run automatically at startup "
+                    "(via {})".format(name, where))
+            if user_writable:
+                text += (" - it runs from a user-writable location, which is a "
+                         "common persistence trick")
+            severity = SEV_SUSPICIOUS if user_writable else None
+
         events.append(_mk(
             rule, ctx, None, ("", "", ""), text,
             [EvidenceRef(db="registry", table="AutoStartPrograms",
                          rowids=[rowid], count=1)],
-            severity=SEV_SUSPICIOUS if suspicious else None,
-            details={"program": name, "location": location, "command": command},
+            severity=severity,
+            details={"program": name, "location": location, "command": command,
+                     "startup_state": state or "unknown",
+                     "disabled_at": disabled_at or ""},
             app_name=description.app_display_name(name)))
     return events
 
@@ -942,4 +1119,417 @@ def device_present(ctx, rules) -> List[BehaviorEvent]:
                          count=len(rowids))],
             severity=severity, count=len(items),
             details={"class": cls, "sample_models": names}))
+    return events
+
+# --------------------------------------------------------------------- #
+#  Behaviours the parsers collect that no rule used to read
+#
+#  Each of these reads a table that held rows in a real case while the
+#  timeline showed nothing from it. Three of them also retire an entry from
+#  `requires_collection` - the list the coverage panel shows as "Crow-Eye has
+#  no parser for this" - which had gone stale and was telling examiners the
+#  tool could not see things it now collects.
+# --------------------------------------------------------------------- #
+
+
+def scheduled_tasks(ctx, rules) -> List[BehaviorEvent]:
+    """Task registration and last-run, from TaskCache.
+
+    Serves two rules: `scheduled_task_registered` (when the task was created -
+    filled on all 286 rows of the reference system) and `scheduled_task_run`
+    (its last run, on 190 of them). Both are per-task times stored by the
+    scheduler itself, not a key's write time, so neither carries the
+    upper-bound hedge.
+
+    Scheduled tasks are the classic persistence mechanism the timeline had no
+    rule for at all, and "Scheduled task creation" was still sitting in
+    requires_collection as something Crow-Eye could not see.
+    """
+    by_id = {r["id"]: r for r in rules}
+    reg_rule = by_id.get("scheduled_task_registered")
+    run_rule = by_id.get("scheduled_task_run")
+    events = []
+    for rowid, path, command, args, ctxt, registered, last_run, result in _rows(
+            ctx, "registry",
+            "SELECT rowid, task_path, command, arguments, run_context, "
+            "task_registered, last_run, last_result FROM ScheduledTasks"):
+        name = (path or "").rstrip("\\").split("\\")[-1] or path or "a task"
+        runs_as = ctxt or "an unnamed account"
+        shown = _expanded(ctx, command)
+        user_writable = _is_user_writable_path(shown or command)
+
+        if reg_rule and normalize_ts(registered):
+            text = ("The scheduled task '{}' was registered on this computer, "
+                    "to run {} as {}".format(
+                        name, shown or "a command", runs_as))
+            if user_writable:
+                text += (" - it runs a program from a user-writable location, "
+                         "which is a common persistence trick")
+            events.append(_mk(
+                reg_rule, ctx, normalize_ts(registered), ("", "", ""), text,
+                [EvidenceRef(db="registry", table="ScheduledTasks",
+                             rowids=[rowid], count=1)],
+                severity=SEV_SUSPICIOUS if user_writable else None,
+                details={"task": name, "task_path": path, "command": shown,
+                         "arguments": args or "", "run_context": ctxt or ""},
+                app_name=description.app_display_name(shown or name)))
+
+        if run_rule and normalize_ts(last_run):
+            text = ("The scheduled task '{}' ran, as {}".format(name, runs_as))
+            if str(result or "").strip() not in ("", "0", "0x0"):
+                text += " - it finished with result {}".format(result)
+            events.append(_mk(
+                run_rule, ctx, normalize_ts(last_run), ("", "", ""), text,
+                [EvidenceRef(db="registry", table="ScheduledTasks",
+                             rowids=[rowid], count=1)],
+                details={"task": name, "task_path": path,
+                         "command": shown, "last_result": result or ""},
+                app_name=description.app_display_name(shown or name)))
+    return events
+
+
+def defender_exclusion(ctx, rules) -> List[BehaviorEvent]:
+    """Paths, processes and extensions Windows Defender was told to ignore.
+
+    Stated as what the registry holds, deliberately. An exclusion is equally
+    the work of an administrator setting up a forensics workstation and of an
+    attacker clearing a path for a payload - on the reference system it is FTK
+    Imager, excluded by the examiner. The rule describes; the analyst judges.
+    """
+    rule = rules[0]
+    events = []
+    for rowid, kind, value, source, key_path, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, exclusion_type, value, source, key_path, "
+            "last_written, time_basis FROM DefenderExclusions"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        text = ("Windows Defender was configured to ignore the {} '{}'{}"
+                .format(str(kind or "item").lower(), value or "(unnamed)",
+                        " " + when if when else ""))
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="DefenderExclusions",
+                         rowids=[rowid], count=1)],
+            caveat=caveat,
+            details={"exclusion_type": kind, "value": value,
+                     "source": source or "", "key_path": key_path or "",
+                     "time_basis": basis or ""}))
+    return events
+
+
+def security_posture_changed(ctx, rules) -> List[BehaviorEvent]:
+    """Security settings that differ from the Windows default.
+
+    Only rows the parser assessed as `changed` - a machine at its defaults
+    produces no events here, which is the healthy answer and is exactly what
+    the reference system gives. The fixture carries a changed row so this rule
+    is seen to fire.
+    """
+    rule = rules[0]
+    events = []
+    for rowid, setting, raw, decoded, default, meaning, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, setting, value_raw, value_decoded, default_value, "
+            "meaning, last_written, time_basis FROM SecurityPosture "
+            "WHERE assessment = 'changed'"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        shown = decoded or raw
+        text = ("The security setting '{}' is set to '{}', not the Windows "
+                "default of '{}'{}{}".format(
+                    setting, shown, default,
+                    " - " + meaning if meaning else "",
+                    " (" + when + ")" if when else ""))
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="SecurityPosture",
+                         rowids=[rowid], count=1)],
+            caveat=caveat,
+            details={"setting": setting, "value": shown,
+                     "default": default, "time_basis": basis or ""}))
+    return events
+
+
+def file_association_choice(ctx, rules) -> List[BehaviorEvent]:
+    """Which program a user chose to open a file type with.
+
+    Named for the artifact, not the technique. A UserChoice entry is how
+    Windows records an ordinary "always open with" decision - all 181 on the
+    reference system are exactly that - and calling the rule a hijack would put
+    a verdict on the analyst's screen before they had looked.
+
+    ONLY `UserChoice` rows. `file_exts` also holds `OpenWithList`, which is
+    just the "Open with" menu and says nothing about the handler in force - on
+    the reference system that is most of the 408 rows, so treating the two
+    alike would report hundreds of hijacks where there are none.
+
+    Retires "File-type hijacking (UserChoice)" from requires_collection.
+    """
+    rule = rules[0]
+    events = []
+    for rowid, user, ext, progid, key_path, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, user_name, extension, progid, key_path, "
+            "last_written, time_basis FROM file_exts "
+            "WHERE choice_type = 'UserChoice'"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        who = user or "a user"
+        text = ("{} chose '{}' as the program that opens '{}' files{}"
+                .format(who, progid or "(unnamed)", ext or "(unknown)",
+                        " " + when if when else ""))
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="file_exts",
+                         rowids=[rowid], count=1)],
+            caveat=caveat,
+            details={"extension": ext, "handler": progid, "user": who,
+                     "time_basis": basis or ""}))
+    return events
+
+
+def com_inprocserver(ctx, rules) -> List[BehaviorEvent]:
+    """CLSIDs whose in-process server points at a DLL.
+
+    Named for the artifact, not the technique that abuses it - the same rule
+    the table names follow (`clsid_inprocserver32`, not "com_hijack"). The
+    sentence describes what the registry holds and lets the analyst judge.
+
+    In particular it does NOT escalate on a user-writable path alone. Every
+    per-user COM registration lives under AppData, so that test marks ordinary
+    software as suspicious: on the reference system it flagged a WPS Office
+    shell extension and the Python launcher, which is two false positives out
+    of two rows. The location is reported as a fact instead.
+
+    The same key stores `ThreadingModel`, so a row whose data reads "Apartment"
+    is not a path at all - the parser learned to ask for the default value by
+    name, and this keeps that distinction rather than reporting a threading
+    model as a loaded library.
+    """
+    rule = rules[0]
+    events = []
+    has_decoded = ctx.pool.has_column("registry", "clsid_inprocserver32",
+                                      "data_decoded")
+    sql = ("SELECT rowid, hive, key_path, name, data"
+           + (", data_decoded" if has_decoded else ", NULL")
+           + " FROM clsid_inprocserver32")
+    for rowid, hive, key_path, name, data, decoded in _rows(ctx, "registry", sql):
+        path = decoded or data or ""
+        if not path or "\\" not in path:
+            continue              # ThreadingModel and friends, not a DLL path
+        per_user = _is_user_writable_path(path)
+        text = ("The COM object {} loads the library '{}' in-process ({})"
+                .format(name or "(unnamed CLSID)", path, hive or "registry"))
+        if per_user:
+            text += (" - the library sits in a per-user, writable location, "
+                     "which is normal for software installed by a user and is "
+                     "also where COM hijacking puts a DLL")
+        events.append(_mk(
+            rule, ctx, None, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="clsid_inprocserver32",
+                         rowids=[rowid], count=1)],
+            details={"clsid": name, "library": path, "key_path": key_path or "",
+                     "user_writable_path": bool(per_user)},
+            app_name=description.app_display_name(path)))
+    return events
+
+
+def feature_usage(ctx, rules) -> List[BehaviorEvent]:
+    """Explorer's own per-application usage counters."""
+    rule = rules[0]
+    events = []
+    for rowid, user, usage_type, program, count, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, user_name, usage_type, program, count, "
+            "last_written, time_basis FROM FeatureUsage"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        who = user or "a user"
+        text = ("Explorer counted {} {} for '{}' by {}{}".format(
+            count if count is not None else "some",
+            str(usage_type or "interactions").replace("_", " "),
+            program or "(unnamed)", who, " " + when if when else ""))
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="FeatureUsage",
+                         rowids=[rowid], count=1)],
+            caveat=caveat,
+            details={"program": program, "usage_type": usage_type,
+                     "count": count, "user": who, "time_basis": basis or ""},
+            app_name=description.app_display_name(program)))
+    return events
+
+
+def compat_assistant_execution(ctx, rules) -> List[BehaviorEvent]:
+    """Programs the Program Compatibility Assistant recorded.
+
+    Presence evidence: the Assistant records a program it has inspected. It
+    does not carry a run time, so this is a timeless observation rather than a
+    point on the timeline.
+    """
+    rule = rules[0]
+    events = []
+    for rowid, user, program_path, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, user_name, program_path, last_written, time_basis "
+            "FROM CompatibilityAssistant"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        who = user or "a user"
+        text = ("The Program Compatibility Assistant recorded '{}' on {}'s "
+                "profile{}".format(program_path or "(unnamed)", who,
+                                   " " + when if when else ""))
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="CompatibilityAssistant",
+                         rowids=[rowid], count=1)],
+            confidence=CONF_PRESENCE, caveat=caveat,
+            details={"program": program_path, "user": who,
+                     "time_basis": basis or ""},
+            app_name=description.app_display_name(program_path)))
+    return events
+
+
+def file_dialog_history(ctx, rules) -> List[BehaviorEvent]:
+    """Files opened or saved through a common File Open/Save dialog.
+
+    This is the other half of the ShellBags story: `folder_browsing` says a
+    folder was rendered in a dialog, and this says which FILE was chosen in
+    one. An MRU carries no per-entry time, so the key's own write time is all
+    there is - and it is an upper bound, marked as such.
+    """
+    rule = rules[0]
+    events = []
+    for rowid, file_name, file_path, ext, user, key_last_write in _rows(
+            ctx, "registry",
+            "SELECT rowid, file_name, file_path, extension, user_name, "
+            "key_last_write FROM OpenSaveMRU"):
+        if not file_name:
+            continue
+        ts = normalize_ts(key_last_write)
+        who = user or "a user"
+        text = ("The file '{}' was chosen in a File Open/Save dialog by {}"
+                .format(file_name, who))
+        if file_path:
+            text += " (in {})".format(file_path)
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="OpenSaveMRU",
+                         rowids=[rowid], count=1)],
+            caveat=CAVEAT_MRU_KEY_TIME,
+            details={"file": file_name, "path": file_path or "",
+                     "extension": ext or "", "user": who}))
+    return events
+
+
+def connected_device(ctx, rules) -> List[BehaviorEvent]:
+    """Devices Windows recorded as having been connected."""
+    rule = rules[0]
+    events = []
+    for rowid, kind, device_id, friendly, details, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, device_type, device_id, friendly_name, details, "
+            "last_written, time_basis FROM ConnectedDevices"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        label = friendly or device_id or "an unnamed device"
+        text = ("The {} '{}' was connected to this computer{}".format(
+            str(kind or "device").lower(), label, " " + when if when else ""))
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="ConnectedDevices",
+                         rowids=[rowid], count=1)],
+            caveat=caveat,
+            details={"device": label, "device_type": kind or "",
+                     "device_id": device_id or "", "info": details or "",
+                     "time_basis": basis or ""}))
+    return events
+
+
+def mounted_volume(ctx, rules) -> List[BehaviorEvent]:
+    """Volumes THIS user actually opened, from MountPoints2.
+
+    Machine-wide keys record every volume the computer saw; MountPoints2 is
+    per-user and records the ones that account browsed. Retires "Per-user USB
+    drive mapping" from requires_collection.
+    """
+    rule = rules[0]
+    events = []
+    for rowid, user, mount_id, mount_type, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, user_name, mount_id, mount_type, last_written, "
+            "time_basis FROM MountPoints2"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        who = user or "a user"
+        text = ("{} opened the volume '{}' ({}){}".format(
+            who, mount_id or "(unnamed)", mount_type or "volume",
+            " " + when if when else ""))
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="MountPoints2",
+                         rowids=[rowid], count=1)],
+            caveat=caveat,
+            details={"volume": mount_id, "mount_type": mount_type or "",
+                     "user": who, "time_basis": basis or ""}))
+    return events
+
+
+def office_document(ctx, rules) -> List[BehaviorEvent]:
+    """Documents an Office application recorded in its own MRU."""
+    rule = rules[0]
+    events = []
+    for rowid, user, app, version, kind, document, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, user_name, application, version, kind, document, "
+            "last_written, time_basis FROM OfficeDocuments"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        who = user or "a user"
+        text = ("{} opened '{}' in {}{}{}".format(
+            who, document or "(unnamed)", app or "an Office application",
+            " " + str(version) if version else "",
+            " " + when if when else ""))
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="OfficeDocuments",
+                         rowids=[rowid], count=1)],
+            caveat=caveat,
+            details={"document": document, "application": app or "",
+                     "kind": kind or "", "user": who,
+                     "time_basis": basis or ""},
+            app_name=description.app_display_name(app)))
+    return events
+
+
+def taskbar_pinned(ctx, rules) -> List[BehaviorEvent]:
+    """What the user pinned to their taskbar.
+
+    Read from the decoded form of Taskband's Favorites blob - the raw value is
+    11 KB of shell item list, and the parser's decoder turns it into the names.
+    Nothing to show if this case predates that decoder.
+    """
+    rule = rules[0]
+    if not ctx.pool.has_column("registry", "system_configuration",
+                               "value_decoded"):
+        return []
+    events = []
+    for rowid, setting, decoded, last_written, basis in _rows(
+            ctx, "registry",
+            "SELECT rowid, setting, value_decoded, last_written, time_basis "
+            "FROM system_configuration WHERE setting = 'Favorites' "
+            "AND trim(ifnull(value_decoded, '')) <> ''"):
+        ts = normalize_ts(last_written)
+        when, caveat = _time_phrase(ts, basis)
+        # The decoded value already reads "5 pinned: a, b, c" - prefixing
+        # "pinned with" produced "The taskbar was pinned with: 5 pinned: ...".
+        text = "The taskbar held {}{}".format(decoded,
+                                              " " + when if when else "")
+        events.append(_mk(
+            rule, ctx, ts, ("", "", ""), text,
+            [EvidenceRef(db="registry", table="system_configuration",
+                         rowids=[rowid], count=1)],
+            caveat=caveat,
+            details={"pinned": decoded, "time_basis": basis or ""}))
     return events

@@ -26,8 +26,10 @@ class DataViewer(QWidget):
         layout.setSpacing(15)
         
         # Header with feather info
-        info_group = QGroupBox("Feather Information")
+        info_group = QGroupBox()
         info_layout = QVBoxLayout()
+        from ...gui.crow_eye_icons import group_title_label
+        info_layout.addWidget(group_title_label("feather", "Feather Information"))
         
         self.feather_info_label = QLabel("No feather database loaded")
         self.feather_info_label.setStyleSheet("font-weight: bold; font-size: 14px;")

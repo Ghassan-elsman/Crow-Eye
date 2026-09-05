@@ -113,6 +113,7 @@ flowchart TB
     I3["OFFLINE IMPORTER<br/>SCAN → COLLECT → PARSE"]
     I4["IMPORT EVIDENCE<br/>CSV · JSON · SQLite"]
 
+    REPLAY["DIRTY-HIVE REPLAY<br/>transaction logs applied to a working copy"]
     PARSERS["ARTIFACT PARSERS<br/>18 artifact types · live and offline"]
 
 %% ═══════════ 3. CASE ═══════════
@@ -142,6 +143,9 @@ flowchart TB
     I1 --> PARSERS
     I2 --> PARSERS
     I3 --> PARSERS
+
+    PARSERS -- "every registry hive,<br/>evidence never written to" --> REPLAY
+    REPLAY -- "the state Windows<br/>had not finished writing" --> PARSERS
 
     PARSERS -- "parsed artifacts" --> CASE
     I4 -- "verbatim copy or<br/>converted to feather" --> CASE
@@ -257,9 +261,12 @@ Crow-Eye parses a broad set of Windows execution, file-system, and user-activity
 | Artifact | Live | Offline | Data Extracted |
 |---|:---:|:---:|---|
 | Prefetch | ✅ | ✅ | Execution history, run count, per-run timestamps |
-| Registry (AutoRun, UserAssist, BAM, ShimCache, networks, time zone) | ✅ | ✅ | Persistence, program usage, background activity, network config |
-| Amcache | ✅ | ✅ | App execution, install time, SHA-1, file paths |
-| ShimCache | ✅ | ✅ | Executed apps, last modified, size |
+| Registry (AutoRun, UserAssist, BAM/DAM, ShimCache, networks, time zone, and 80+ keys in all) | ✅ | ✅ | Persistence, program usage, background activity, network config, startup approval state |
+| Registry — deleted keys & values | ✅ | ✅ | Records recovered from the hive's free space, marked as such (`record_state`) |
+| Registry — class names & key security | ✅ | ✅ | `nk` class names (where `Control\Lsa` keeps the boot key), owner/group/DACL from shared security descriptors |
+| Registry — transaction logs | ✅ | ✅ | `.LOG1`/`.LOG2` replayed onto a working copy, so a dirty hive is read in the state the machine was in |
+| Amcache (29 tables) | ✅ | ✅ | App execution, install time, SHA-1, file paths, drivers, PnP devices, device census |
+| ShimCache | ✅ | ✅ | Executed apps, last modified, size, and the decoded trailing blob (PE machine type, OS-binary flag) |
 | MUICache | ✅ | ✅ | Program presence and display names |
 | Jump Lists & LNK | ✅ | ✅ | File access, paths, timestamps, metadata |
 | ShellBags | ✅ | ✅ | Folder access history and navigation |
@@ -289,6 +296,7 @@ Crow-Eye parses a broad set of Windows execution, file-system, and user-activity
   - Windows locks these during operation — for a live system, boot from external media (WinPE/Live CD), use forensic acquisition tools, or analyze a disk image.
 - **Prefetch** — parses `C:\Windows\Prefetch`, extracting execution history and forensic metadata (including per-run timestamps).
 - **Event Logs** — automatic parsing of System/Security/Application logs into a database for comprehensive analysis.
+- **Registry depth (0.13.0)** — the parser reads the hive **file** as well as the live registry, so it reaches what `winreg` denies even to an administrator (every device `Properties` subkey, and with it USB connect times), walks the hive's allocator to recover deleted keys and values, and reads class names and key security descriptors. Nineteen keys that held real data and were read by nothing are now parsed — including Explorer's **StartupApproved**, which says whether each autostart entry is actually allowed to launch.
 - **ShellBags** — reveals folder access history and user navigation patterns.
 - **Recycle Bin** — parses `$RECYCLE.BIN` to recover deleted file names, original paths, deletion times, and sizes (live systems and disk images).
 - **MFT** — parses the Master File Table for file metadata, attributes, timestamps, and deleted-file information (NTFS, Windows 7/10/11).
@@ -700,7 +708,9 @@ Eye is **tool-driven**: the model never touches evidence directly. It emits tool
 | `search_artifacts` | Cross-database text / regex search. |
 | `semantic_search_artifacts` | Semantic search across parsed artifacts. |
 | `get_schema` | Inspect table schemas. |
+| `query_timeline` | One chronological sweep across every database in the case — what happened, and when. |
 | `query_correlation_results` | Query the Correlation Engine's output by time / identity. |
+| `read_imported_evidence` | Read third-party evidence imported into the case verbatim (reports, email, browser-tool output). |
 | `correlate_imported_evidence` | Correlate third-party evidence imported into the case against native artifacts. |
 | `analyze_large_dataset` | Map-reduce analysis of big result sets — **no silent truncation**. |
 | `list_case_files` | List files in the case directory. |

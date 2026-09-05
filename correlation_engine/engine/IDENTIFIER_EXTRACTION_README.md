@@ -60,7 +60,6 @@ This implementation provides comprehensive identifier extraction and correlation
 
 ### GUI Components
 
-1. **Configuration Panel** (`identifier_extraction_config_panel.py`)
    - Extract from Names/Paths checkboxes
    - Anchor time window configuration
    - Advanced options (column overrides, custom timestamp formats)
@@ -297,7 +296,6 @@ Evidence rows are grouped into anchors based on timestamps:
 - `correlation_engine/config/identifier_extraction_config.py`
 
 ### GUI
-- `correlation_engine/gui/identifier_extraction_config_panel.py`
 - `correlation_engine/gui/correlation_results_view.py`
 
 ## Next Steps

@@ -13,11 +13,24 @@ from platform import system, version
 import sys
 from Registry import Registry
 import sqlite3
+import hashlib
+import shutil
+import tempfile
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
-from utils.time_utils import get_current_forensic_timestamp
+from utils.time_utils import (get_current_forensic_timestamp,
+                              format_forensic_timestamp,
+                              filetime_to_datetime)
+try:
+    from Artifacts_Collectors import registry_transaction_log
+except ImportError:                                   # pragma: no cover
+    import registry_transaction_log
+try:
+    from Artifacts_Collectors import registry_hive_walk
+except ImportError:                                   # pragma: no cover
+    import registry_hive_walk
 try:
     from tqdm import tqdm
     TQDM_AVAILABLE = True
@@ -46,56 +59,345 @@ def get_live_amcache_path(windows_partition: str = "C:") -> str:
     return f"{windows_partition}\\Windows\\AppCompat\\Programs\\Amcache.hve"
 
 # Schema for normalized database tables (name after id if present, parsed_at last)
+# Every column below is a registry value name that was OBSERVED in a real
+# Amcache.hve, not a guess. The comment above each table is how many entries
+# that subkey held on the reference system.
+#
+# key_last_write is the KEY's own LastWriteTime: when the Compatibility
+# Appraiser WROTE the entry. It was captured nowhere before - `parsed_at` is
+# when Crow-Eye ran, which belongs on no timeline - but it is not an event
+# time either, and how much ordering it supports differs per table because the
+# Appraiser writes in batches. Measured on the reference system: all 373 Mare
+# entries share ONE timestamp, 90% of 445 driver binaries share one, 92% of
+# 292 PnP devices share one, while InventoryApplicationFile has 1,086 distinct
+# times across 5,212 rows. It bounds "seen by".
+#
+# Two subkeys are deliberately NOT given fixed columns:
+#
+#   DeviceCensus carries 237 distinct value names across 16 entries, and
+#   Windows adds more every release, so a fixed column list is stale on
+#   arrival. It uses the name/value shape below instead - wider than one
+#   column of JSON, which is what it used to be, and queryable:
+#   WHERE name = 'AADDeviceId'.
+#
+#   Nine further subkeys exist in the hive but were EMPTY on every system
+#   available here, so their columns cannot be verified against real data.
+#   They get the same shape rather than a column list somebody invented.
+#
+# Anything Microsoft adds next still lands in UnknownSubkeys.
+# --------------------------------------------------------------- timestamps
+#
+# AmCache writes its dates as locale-formatted TEXT, in at least three shapes,
+# and stores them next to values that are not dates at all. Sorted as text they
+# order wrongly, and read by eye they are ambiguous. Each is normalised into a
+# companion `<column>_utc`; the original string is never overwritten, because
+# it is what the artifact actually says.
+#
+# WHICH FORMAT, decided by counting rather than by assuming. Across this
+# machine's hive, the second component exceeds 12 hundreds of times and the
+# first essentially never - so these are MM/DD/YYYY:
+#
+#     install_date  msi_install_date  first_install_date  link_date
+#     driver_ver_date  driver_last_write_time
+#
+# with exactly one counter-example: InventoryApplication.install_date for
+# Discord reads "20/12/2026", written by that application's own installer. So
+# the rule below is forced where the value forces it and defaults only where
+# the value genuinely cannot say.
+AMCACHE_HASH_LIMIT = 31_457_280      # 30 MiB - see FileId below
+
+# Text dates, normalised by _parse_amcache_date.
+AMCACHE_DATE_COLUMNS = {
+    "InventoryApplication": ["install_date", "msi_install_date"],
+    "InventoryApplicationFile": ["link_date"],
+    "InventoryDevicePnp": ["install_date", "first_install_date",
+                           "driver_ver_date"],
+    "InventoryDriverBinary": ["driver_last_write_time"],
+    "InventoryDriverPackage": ["date"],
+}
+
+# Whole numbers of seconds since 1970. InventoryDriverBinary.DriverTimeStamp is
+# the PE header's TimeDateStamp, which is frequently randomised by modern
+# toolchains - a value outside a sane range is left NULL rather than turned
+# into a date somewhere in 2069.
+AMCACHE_EPOCH_COLUMNS = {
+    "InventoryDriverBinary": ["driver_time_stamp"],
+}
+
+_DATE_SEP = re.compile(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{4})"
+                       r"(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?\s*$")
+_DATE_ISO = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})"
+                       r"(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?\s*$")
+
+
+# A normalised timestamp is a claim that something happened then, so a value
+# that cannot be such a claim is left out of the normalised column rather than
+# dressed up as one. Two real cases on this machine, both in `link_date`:
+#
+#   01/01/1970  epoch zero - 467 of 2408 entries. It means the PE carries NO
+#               link date, which is normal for Go, Rust and reproducible
+#               builds (Docker, bzip2, Claude Setup all read this way).
+#               Normalising it would put 400+ files at the same instant and
+#               invent a cluster that is not there.
+#   2105-11-16  a randomised TimeDateStamp, which modern toolchains emit.
+#
+# The other five date columns have nothing outside this window, so it costs
+# no real data. The raw string is kept either way.
+_PLAUSIBLE_FROM = datetime(1990, 1, 1)
+_PLAUSIBLE_UNTIL_YEARS = 1
+
+
+_PLAUSIBLE_UNTIL = None
+
+
+def _plausible_upper_bound():
+    """Now plus a year, computed once. NAIVE UTC, like every other timestamp
+    in the engine - a single tz-aware datetime compared against naive ones
+    raises, and it is the kind of thing that empties a whole feather."""
+    global _PLAUSIBLE_UNTIL
+    if _PLAUSIBLE_UNTIL is None:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        _PLAUSIBLE_UNTIL = now.replace(year=now.year + _PLAUSIBLE_UNTIL_YEARS)
+    return _PLAUSIBLE_UNTIL
+
+
+def _is_plausible(when):
+    if when is None:
+        return False
+    return _PLAUSIBLE_FROM <= when <= _plausible_upper_bound()
+
+
+def _parse_amcache_date(text):
+    """One of AmCache's text dates as a naive UTC datetime, or None.
+
+    Returns None rather than guessing. `link_date` holds version strings on
+    some rows - "2.3.8.0", "1.0.9188" - because the hive itself puts them
+    there, and a normaliser that raised on those would take the whole parse
+    down with it.
+    """
+    if text is None:
+        return None
+    text = str(text).strip()
+    if not text:
+        return None
+
+    m = _DATE_ISO.match(text)
+    if m:                                     # InventoryDriverPackage: 2025-12-2
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        hh, mm, ss = (int(m.group(4) or 0), int(m.group(5) or 0),
+                      int(m.group(6) or 0))
+        try:
+            return _plausible_or_none(datetime(y, mo, d, hh, mm, ss))
+        except ValueError:
+            return None
+
+    m = _DATE_SEP.match(text)
+    if not m:
+        return None
+    a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    hh, mm, ss = (int(m.group(4) or 0), int(m.group(5) or 0),
+                  int(m.group(6) or 0))
+
+    if b > 12 and a <= 12:
+        month, day = a, b                     # forced MM/DD
+    elif a > 12 and b <= 12:
+        month, day = b, a                     # forced DD/MM - the Discord case
+    elif a > 12 and b > 12:
+        return None                           # neither reading works
+    else:
+        month, day = a, b                     # ambiguous; Windows writes MM/DD
+    try:
+        return _plausible_or_none(datetime(y, month, day, hh, mm, ss))
+    except ValueError:
+        return None
+
+
+def _plausible_or_none(when):
+    return when if _is_plausible(when) else None
+
+
+def _parse_amcache_epoch(text):
+    """Seconds since 1970 as a naive UTC datetime, or None if implausible."""
+    if text is None:
+        return None
+    try:
+        seconds = int(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+    # 1990-01-01 .. 2038-01-19. A PE TimeDateStamp outside that is a randomised
+    # or corrupt value, not a date, and is not worth pretending about.
+    if not (631152000 <= seconds <= 2147483647):
+        return None
+    try:
+        return _plausible_or_none(datetime(1970, 1, 1) + timedelta(seconds=seconds))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+# Written out literally in AMCACHE_SCHEMAS below rather than referenced,
+# because Sentinel's extract-schema.js reads that dict as source text and
+# only understands a literal list - a name referenced there is a table it
+# never sees, and the CI gate stays green while ten tables go missing from
+# the fleet schema. Kept here as the definition the code compares against.
+NAME_VALUE_COLUMNS = ["entry", "name", "value", "key_last_write", "parsed_at"]
+
+# Subkeys stored one row per registry value rather than one row per entry.
+NAME_VALUE_TABLES = {
+    "DeviceCensus",
+    "DriverPackageExtended",
+    "InventoryAcpiPhatHealthRecord",
+    "InventoryAcpiPhatVersionElement",
+    "InventoryApplicationAppV",
+    "InventoryApplicationDriver",
+    "InventoryApplicationFramework",
+    "InventoryDevicePci",
+    "InventoryDeviceSensor",
+    "InventoryMiscellaneousWAMAccounts",
+}
+
 AMCACHE_SCHEMAS = {
+    # 380 entries on the reference system
     "InventoryApplication": [
-        "name", "program_id", "program_instance_id", "version", "publisher", "language", "source",
-        "root_dir_path", "store_app_type", "inbox_modern_app", "manifest_path", "package_full_name",
-        "install_date", "bundle_manifest_path", "parsed_at"],
+        "program_id", "name", "version", "publisher", "language", "source",
+        "root_dir_path", "default_value", "program_instance_id",
+        "store_app_type", "inbox_modern_app", "manifest_path",
+        "package_full_name", "install_date", "hidden_arp",
+        "uninstall_string", "registry_key_path", "msi_package_code",
+        "msi_product_code", "msi_install_date", "bundle_manifest_path",
+        "user_sid", "install_date_utc", "msi_install_date_utc",
+        "key_last_write", "parsed_at"],
+    # 5212 entries on the reference system
     "InventoryApplicationFile": [
-        "name", "file_id", "lower_case_long_path", "original_file_name", "publisher",
-        "version", "bin_file_version", "binary_type", "product_name", "product_version", "link_date",
-        "bin_product_version", "size", "language", "usn", "parsed_at"],
-    "InventoryApplicationShortcut": [
-        "ShortcutPath", "ShortcutTargetPath", "ShortcutAumid", "ShortcutProgramId", "parsed_at"],
-    "InventoryDriverBinary": [
-        "driver_name", "inf", "driver_version", "product", "product_version", "wdf_version",
-        "driver_company", "service", "driver_in_box", "driver_signed", "driver_is_kernel_mode",
-        "driver_id", "driver_last_write_time", "driver_type", "driver_time_stamp", "driver_check_sum",
-        "image_size", "parsed_at"],
-    "InventoryDriverPackage": [
-        "driver_package_strong_name", "provider", "driver_in_box", "inf_name", "hwids", "parsed_at"],
-    "InventoryDeviceContainer": [
-        "model_name", "icon", "friendly_name", "model_number", "manufacturer", "model_id",
-        "primary_category", "categories", "is_machine_container", "discovery_method", "is_connected",
-        "is_active", "is_paired", "is_networked", "state", "parsed_at"],
-    "InventoryDevicePnp": [
-        "service", "class", "class_guid", "model", "upper_filters", "lower_filters", "enumerator",
-        "upper_class_filters", "lower_class_filters", "install_state", "device_state", "location_paths",
+        "program_id", "file_id", "lower_case_long_path", "name",
+        "binary_type", "link_date", "size", "language", "usn",
+        "bin_file_version", "bin_product_version", "product_version",
+        "version", "product_name", "publisher", "original_file_name",
+        "appx_package_full_name", "is_os_component",
+        "appx_package_relative_id", "link_date_utc", "file_id_is_partial",
+        "file_id_verified", "program_association", "key_last_write",
         "parsed_at"],
+    # 129 entries on the reference system
+    "InventoryApplicationShortcut": [
+        "shortcut_path", "shortcut_target_path", "shortcut_aumid",
+        "shortcut_program_id", "default_value", "key_last_write",
+        "parsed_at"],
+    # 16 entries on the reference system
+    "InventoryDeviceContainer": [
+        "model_name", "icon", "friendly_name", "model_number",
+        "manufacturer", "model_id", "primary_category", "categories",
+        "is_machine_container", "discovery_method", "is_connected",
+        "is_active", "is_paired", "is_networked", "state", "default_value",
+        "key_last_write", "parsed_at"],
+    # 1 entries on the reference system
+    "InventoryDeviceInterface": [
+        "accelerometer3_d", "activity_detection", "ambient_light",
+        "barometer", "custom", "floor_elevation",
+        "geomagnetic_orientation", "gravity_vector", "gyrometer3_d",
+        "humidity", "linear_accelerometer", "magnetometer3_d",
+        "orientation", "pedometer", "proximity", "relative_orientation",
+        "simple_device_orientation", "temperature", "energy_meter",
+        "hinge_angle", "presence_capabilities", "key_last_write",
+        "parsed_at"],
+    # 8 entries on the reference system
     "InventoryDeviceMediaClass": [
-        "Audio_Render_Driver", "Audio_Capture_Driver", "parsed_at"],
-    "InventoryDeviceInterface": ["parsed_at"],
+        "audio_render_driver", "audio_capture_driver", "key_last_write",
+        "parsed_at"],
+    # 292 entries on the reference system
+    "InventoryDevicePnp": [
+        "model", "manufacturer", "driver_name", "parent_id", "matching_id",
+        "class", "class_guid", "description", "enumerator", "service",
+        "install_state", "device_state", "inf", "driver_ver_date",
+        "install_date", "first_install_date", "driver_package_strong_name",
+        "driver_ver_version", "container_id", "problem_code", "provider",
+        "driver_id", "bus_reported_description", "hwid", "extended_infs",
+        "compid", "stackid", "upper_class_filters", "lower_class_filters",
+        "upper_filters", "lower_filters", "device_interface_classes",
+        "location_paths", "default_value", "install_date_utc",
+        "first_install_date_utc", "driver_ver_date_utc", "key_last_write",
+        "parsed_at"],
+    # 1 entries on the reference system
     "InventoryDeviceUsbHubClass": [
-        "device_capabilities", "device_speed", "parsed_at"],
+        "total_user_connectable_ports",
+        "total_user_connectable_type_cports", "key_last_write",
+        "parsed_at"],
+    # 445 entries on the reference system
+    "InventoryDriverBinary": [
+        "driver_name", "inf", "driver_version", "product",
+        "product_version", "wdf_version", "driver_company",
+        "driver_package_strong_name", "service", "driver_in_box",
+        "driver_signed", "driver_is_kernel_mode", "driver_id",
+        "driver_last_write_time", "driver_type", "driver_time_stamp",
+        "driver_check_sum", "image_size", "default_value",
+        "driver_last_write_time_utc", "driver_time_stamp_utc",
+        "key_last_write", "parsed_at"],
+    # 80 entries on the reference system
+    "InventoryDriverPackage": [
+        "class_guid", "class", "directory", "date", "version", "provider",
+        "submission_id", "driver_in_box", "inf", "flight_ids",
+        "recovery_ids", "is_active", "hwids", "sysfile", "date_utc",
+        "key_last_write", "parsed_at"],
+    # 25 entries on the reference system
     "InventoryMiscellaneous": [
-        "misc_name", "misc_type", "misc_value", "misc_source", "parsed_at"],
+        "exists", "value", "key_last_write", "parsed_at"],
+    # 1 entries on the reference system
     "InventoryMiscellaneousMemorySlotArrayInfo": [
-        "memory_slot_array_id", "memory_slot_array_location", "memory_slot_array_use",
-        "memory_slot_array_number_of_slots", "parsed_at"],
-    "InventoryMiscellaneousUupInfo": [
-        "uup_name", "uup_id", "uup_version", "uup_description", "uup_state", "uup_install_source",
-        "uup_publisher", "parsed_at"],
+        "slot", "type", "type_details", "speed", "capacity", "model",
+        "manufacturer", "total_width", "data_width",
+        "memory_error_correction", "default_value", "key_last_write",
+        "parsed_at"],
+    # 12 entries on the reference system
     "InventoryMiscellaneousUser": [
-        "user_name", "user_sid", "user_type", "parsed_at"],
+        "original_name", "exists", "value", "user_id",
+        "standard_user_hash", "key_last_write", "parsed_at"],
+    # 28 entries on the reference system
+    "InventoryMiscellaneousUupInfo": [
+        "identifier", "version", "source", "previous_version",
+        "last_activated_version", "default_value", "key_last_write",
+        "parsed_at"],
+    # 373 entries on the reference system
     "Mare": [
-        "mare_name", "mare_id", "mare_type", "mare_state", "mare_path", "mare_flags", "mare_data",
+        "flags", "default_value", "restore", "root_dir_path", "sdbentryguid",
+        "path", "program_id", "far", "key_last_write", "parsed_at"],
+    # 85 entries on the reference system
+    "MareBackupApps": [
+        "hash", "sid_state", "default_value", "key_last_write",
         "parsed_at"],
     "DeviceCensus": [
-        "data", "parsed_at"  # Single column for JSON data plus timestamp
-    ],
-    "UnknownSubkeys": [
-        "subkey_name", "data", "parsed_at"  # Stores unrecognized subkey data
-    ]
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "DriverPackageExtended": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "InventoryAcpiPhatHealthRecord": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "InventoryAcpiPhatVersionElement": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "InventoryApplicationAppV": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "InventoryApplicationDriver": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "InventoryApplicationFramework": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "InventoryDevicePci": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "InventoryDeviceSensor": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    "InventoryMiscellaneousWAMAccounts": [
+        "entry", "name", "value", "key_last_write", "parsed_at"],
+    # Recovered from FREE SPACE, not from the tree - entries deleted from
+    # the hive that no tree walker can reach. Same shape as Regclaw's
+    # registry_carved_keys / registry_carved_values so the two artifacts read
+    # alike. `record_state` is always "deleted"; these are not live entries and
+    # must never be mistaken for them.
+    "AmcacheCarvedKeys": [
+        "cell_offset", "key_name", "key_path", "parent_resolved",
+        "key_last_write", "subkey_count", "value_count", "record_state",
+        "parsed_at"],
+    "AmcacheCarvedValues": [
+        "cell_offset", "parent_cell_offset", "key_path", "value_name",
+        "value_type", "data_size", "is_inline", "data", "record_state",
+        "parsed_at"],
+
+    # The catch-all: a Root subkey Windows adds that nothing here knows about.
+    "UnknownSubkeys": ["subkey_name", "data", "key_last_write", "parsed_at"],
 }
 
 # Windows API constants
@@ -115,6 +417,11 @@ _KEY_READ = 0x20019
 _KEY_WOW64_64KEY = 0x100
 _STATUS_INVALID_PARAMETER = ctypes.c_int32(0xC000000D).value
 _REG_NO_COMPRESSION = 4
+_ERROR_ACCESS_DENIED = 5
+# Open a key using SeBackupPrivilege rather than its DACL - the only way to
+# reach HKLM\SECURITY, whose root key grants SYSTEM alone.
+_REG_OPTION_BACKUP_RESTORE = 0x00000004
+_REG_CREATED_NEW_KEY = 1
 _INVALID_SET_FILE_POINTER = 0xFFFFFFFF
 _HKEY_USERS = 0x80000003
 _HKEY_LOCAL_MACHINE = 0x80000002
@@ -258,6 +565,30 @@ class RegistryHivesLive(object):
         else:
             access_rights = _KEY_READ | _KEY_WOW64_64KEY
         result = ctypes.windll.advapi32.RegOpenKeyExW(PredefinedKey, KeyPath, 0, access_rights, ctypes.byref(handle))
+        if result == _ERROR_ACCESS_DENIED:
+            # RegOpenKeyExW honours the DACL, and HKLM\SECURITY grants only
+            # SYSTEM on its ROOT key - so an elevated administrator gets no
+            # handle at all and there is nothing for NtSaveKeyEx to save. HKLM
+            # \SAM differs: its root opens and only the children are blocked,
+            # which is why SAM has worked here all along and SECURITY did not.
+            #
+            # REG_OPTION_BACKUP_RESTORE asks the kernel to authorise the open
+            # with SeBackupPrivilege instead of the DACL - already held by
+            # _acquire_backup_privilege above. This is how `reg save` reaches
+            # the same key. RegCreateKeyExW is the call that accepts the flag;
+            # on an existing key it opens rather than creates, and the
+            # disposition it reports back says which happened.
+            disposition = ctypes.c_ulong()
+            result = ctypes.windll.advapi32.RegCreateKeyExW(
+                PredefinedKey, KeyPath, 0, None, _REG_OPTION_BACKUP_RESTORE,
+                access_rights, None, ctypes.byref(handle),
+                ctypes.byref(disposition))
+            if result == 0 and disposition.value == _REG_CREATED_NEW_KEY:
+                # Never expected for the hives this is used on, and a created
+                # key would be an empty one - saving it would write a
+                # confidently empty hive rather than fail.
+                ctypes.windll.advapi32.RegCloseKey(handle)
+                raise OSError('The key did not exist and was created instead of opened: {}'.format(KeyPath))
         if result != 0:
             raise OSError('The RegOpenKeyExW() routine failed to open a key')
         self._src_handle = handle
@@ -369,13 +700,52 @@ class RegistryHivesLive(object):
         return tempfile
 
 # Class to parse Amcache.hve and store in a normalized SQLite database
+def _carved_text(data):
+    """A carved value as text, or a short hex preview when it is not text.
+
+    A deleted value's bytes may be partly overwritten, so this never
+    insists on a clean decode - it shows what is there.
+    """
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return data
+    WHITESPACE = (chr(9), chr(10), chr(13))
+    try:
+        text = bytes(data).decode("utf-16le", "ignore").rstrip(chr(0))
+        if text and all(ch.isprintable() or ch in WHITESPACE for ch in text):
+            return text
+    except Exception:
+        pass
+    try:
+        return bytes(data)[:64].hex(" ")
+    except Exception:
+        return None
+
+def quote(identifier):
+    """Quote a SQL identifier. Amcache value names collide with SQL
+    keywords - `exists`, `value`, `class`, `date`, `state` - and they are
+    the hive's names, not ours to rename."""
+    return '"%s"' % identifier.replace('"', '""')
+
+
 class AmcacheParser:
-    def __init__(self, file_path: str, normalized_db_path: str, windows_partition: str = "C:", offline_mode: bool = False):
+    def __init__(self, file_path: str, normalized_db_path: str, windows_partition: str = "C:", offline_mode: bool = False, verify_hashes: bool = False):
+        # One sqlite connection for the whole parse; see _connection().
+        self._conn = None
+        # Off unless asked for: it reads and hashes files from disk. Never
+        # available offline - there is no filesystem to compare against.
+        self.verify_hashes = bool(verify_hashes) and not offline_mode
+        self._hashes_checked = 0
+        self._hashes_mismatched = 0
         print("Loading Amcache.hve file...")
         sys.stdout.flush()  # Allow UI to process events
         
         # For offline mode, use python-registry directly (no admin privileges needed)
         # For live mode, use RegistryHivesLive (requires admin privileges)
+        # Kept so the carve pass can get at the hive as a FILE; the live
+        # path holds an open handle, which the allocator walk cannot read.
+        self.hive_source = file_path
         if offline_mode:
             self.handle = file_path  # python-registry can open file path directly
             self.offline_mode = True
@@ -397,247 +767,493 @@ class AmcacheParser:
             for table_name, fields in AMCACHE_SCHEMAS.items():
                 field_defs = ["id TEXT"]  # id not PRIMARY KEY to allow duplicates
                 for field in fields:
-                    field_defs.append(f"{field} TEXT")
+                    # Quoted, always. Amcache value names include `exists`,
+                    # `value`, `class`, `date`, `source`, `state` and others
+                    # that are SQL keywords - and the hand-maintained list of
+                    # keywords this used to carry did not include `exists`, so
+                    # the table simply failed to create. Quoting removes the
+                    # need to keep such a list correct.
+                    field_defs.append('"%s" TEXT' % field)
                 create_table_sql = f"""
                 CREATE TABLE IF NOT EXISTS {table_name} (
                     {', '.join(field_defs)}
                 )
                 """
                 cursor.execute(create_table_sql)
+
+                # CREATE TABLE IF NOT EXISTS does nothing to a table that is
+                # already there, so a case parsed before this schema kept its
+                # old columns and every insert failed on the new ones - 130
+                # columns missing on a real case database.
+                #
+                # Added, never rebuilt. Dropping and recreating would take the
+                # columns and discard the rows with them, and an AmCache entry
+                # that has since aged out of the hive exists nowhere else.
+                # Older rows simply read NULL in the new columns.
+                # Compared case-insensitively, because SQLite is: an older
+                # case carries `Audio_Render_Driver` where the schema now says
+                # `audio_render_driver`, and a case-sensitive check tries to
+                # add a column SQLite already considers present.
+                cursor.execute("PRAGMA table_info(%s)" % quote(table_name))
+                existing = {c[1].lower() for c in cursor.fetchall()}
+                for field in fields:
+                    if field.lower() not in existing:
+                        cursor.execute("ALTER TABLE %s ADD COLUMN %s TEXT"
+                                       % (quote(table_name), quote(field)))
+
                 # Add index on id for fast duplicate checking
                 cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_id ON {table_name} (id)")
                 # Yield to UI periodically during database initialization
                 sys.stdout.flush()
             conn.commit()
 
-    def _check_entry_exists(self, table_name: str, entry_id: str, data_json: Dict[str, Any]) -> bool:
-        """Check if an entry with the given id and identical data (excluding parsed_at) exists."""
-        with sqlite3.connect(self.normalized_db_path) as conn:
-            cursor = conn.cursor()
-            if table_name in ["DeviceCensus", "UnknownSubkeys"]:
-                cursor.execute(f"SELECT data FROM {table_name} WHERE id = ?", (entry_id,))
-                results = cursor.fetchall()
-                # Compare JSON data, excluding parsed_at if present
-                new_data = json.dumps({k: v for k, v in data_json.items() if k != "parsed_at"}, sort_keys=True)
-                for result in results:
-                    existing_data = result[0]
-                    if existing_data == new_data:
-                        return True
-                return False
-            else:
-                # Get column names from the table schema
-                cursor.execute(f"PRAGMA table_info({table_name})")
-                table_columns = [column[1] for column in cursor.fetchall()]
-                
-                cursor.execute(f"SELECT * FROM {table_name} WHERE id = ?", (entry_id,))
-                results = cursor.fetchall()
-                
-                # Use actual table columns instead of schema fields
-                new_data = {k: str(data_json.get(k, None)) for k in data_json if k != "id" and k != "parsed_at"}
-                
-                for row in results:
-                    # Create dictionary using actual column names and row values
-                    existing_data = {table_columns[i]: str(val) if val is not None else None for i, val in enumerate(row) if i < len(table_columns)}
-                    if all(new_data.get(k) == existing_data.get(k) for k in new_data):
-                        return True
-                return False
+    def _connection(self):
+        """One connection for the whole parse.
 
-    def _normalize_and_insert(self, table_name: str, entry_id: str, data_json: Dict[str, Any]):
-        """Insert normalized data into the specified table with a UTC timestamp."""
+        _check_entry_exists and _normalize_and_insert each used to open and
+        close their own sqlite3 connection, so a hive with ~7,000 entries
+        performed ~14,000 separate file opens before any of the work counted.
+        It was correct and invisible - the rows were right, and the only
+        symptom was the parse taking far longer than the work in it.
+        """
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.normalized_db_path)
+        return self._conn
+
+    def _close_connection(self):
+        if self._conn is not None:
+            self._conn.commit()
+            self._conn.close()
+            self._conn = None
+
+    @staticmethod
+    def _match_key(field: str, data_json: Dict[str, Any]):
+        """Find the registry value a column came from.
+
+        The column names in AMCACHE_SCHEMAS are snake_case forms of real value
+        names, but no single CamelCase rule reproduces all of them -
+        `TotalUserConnectableTypeCPorts` and `Accelerometer3D` both defeat the
+        obvious one. So the exact forms are tried first and then both sides are
+        normalised by dropping underscores and case, which matches every value
+        name observed in a real hive with no collisions.
+
+        Returns the value, or None when the entry simply does not carry it.
+        """
+        if field == "default_value" and "(default)" in data_json:
+            return data_json["(default)"]
+
+        candidates = [
+            field,
+            ''.join(w.capitalize() if i else w
+                    for i, w in enumerate(field.split('_'))),
+            ''.join(w.capitalize() for w in field.split('_')),
+            field.upper(),
+            field.lower(),
+        ]
+        for c in candidates:
+            if c in data_json:
+                return data_json[c]
+
+        target = field.replace('_', '').lower()
+        for name, value in data_json.items():
+            if name.replace('_', '').lower() == target:
+                return value
+        return None
+
+    def _check_entry_exists(self, table_name: str, entry_id: str,
+                            data_json: Dict[str, Any]) -> bool:
+        """True if an identical entry is already stored (parsed_at ignored)."""
+        cursor = self._connection().cursor()
+        if table_name == "UnknownSubkeys":
+            cursor.execute("SELECT data FROM %s WHERE id = ?" % table_name,
+                           (entry_id,))
+            new_data = json.dumps(
+                {k: v for k, v in data_json.items() if k != "parsed_at"},
+                sort_keys=True)
+            return any(row[0] == new_data for row in cursor.fetchall())
+
+        if table_name in NAME_VALUE_TABLES:
+            # Identity here is the (entry, name) pair, not the whole row.
+            return False
+
+        cursor.execute("PRAGMA table_info(%s)" % table_name)
+        table_columns = [c[1] for c in cursor.fetchall()]
+        cursor.execute("SELECT * FROM %s WHERE id = ?" % table_name, (entry_id,))
+        rows = cursor.fetchall()
+        new_data = {k: str(v) for k, v in data_json.items()
+                    if k not in ("id", "parsed_at")}
+        for row in rows:
+            existing = {table_columns[i]: (str(v) if v is not None else None)
+                        for i, v in enumerate(row) if i < len(table_columns)}
+            if all(new_data.get(k) == existing.get(k) for k in new_data):
+                return True
+        return False
+
+    def _normalize_and_insert(self, table_name: str, entry_id: str,
+                              data_json: Dict[str, Any],
+                              key_last_write: str = None):
+        """Store one AmCache entry.
+
+        Every column in AMCACHE_SCHEMAS is a value name observed in a real
+        hive, so the generic mapping below is all that is needed. The
+        per-table special cases that used to sit here are gone, and with them
+        the values they invented: `Mare` was given a name built from its entry
+        id, a hardcoded type and state, and a FABRICATED path under Program
+        Files - 0 of 200 of those paths existed on disk. The real path is in
+        the entry's own `restore` value, which is now stored as it is found.
+        A column with no value in the hive is left NULL.
+        """
         if table_name not in AMCACHE_SCHEMAS:
             return
-        # Yield to UI before checking entry existence (potentially expensive operation)
-        if len(data_json) > 30:  # Only flush for large data entries
-            sys.stdout.flush()
-            
-        if self._check_entry_exists(table_name, entry_id, data_json):
-            return  # Skip if identical entry exists
-        fields = AMCACHE_SCHEMAS[table_name]
-        # Format as DD/MM/YYYY HH:MM:SS in UTC
         parsed_at = get_current_forensic_timestamp()
-        
-        # Handle DeviceCensus: store all data as JSON in 'data' column
-        if table_name == "DeviceCensus":
-            with sqlite3.connect(self.normalized_db_path) as conn:
-                cursor = conn.cursor()
-                sql = f"INSERT INTO {table_name} (id, data, parsed_at) VALUES (?, ?, ?)"
-                cursor.execute(sql, [entry_id, json.dumps(data_json), parsed_at])
-                conn.commit()
-                # Yield to UI after database commit
-                sys.stdout.flush()
+
+        if table_name in NAME_VALUE_TABLES:
+            self._insert_name_value(table_name, entry_id, data_json,
+                                    key_last_write, parsed_at)
             return
-        
-        # Handle UnknownSubkeys: store subkey name and data as JSON
+
         if table_name == "UnknownSubkeys":
-            with sqlite3.connect(self.normalized_db_path) as conn:
-                cursor = conn.cursor()
-                sql = f"INSERT INTO {table_name} (id, subkey_name, data, parsed_at) VALUES (?, ?, ?, ?)"
-                cursor.execute(sql, [entry_id, data_json.get("subkey_name", ""), json.dumps(data_json), parsed_at])
-                conn.commit()
-                # Yield to UI after database commit
-                sys.stdout.flush()
+            subkey_name = data_json.get("subkey_name", "")
+            payload = {k: v for k, v in data_json.items() if k != "subkey_name"}
+            if self._check_entry_exists(table_name, entry_id, data_json):
+                return
+            cursor = self._connection().cursor()
+            cursor.execute(
+                "INSERT INTO UnknownSubkeys "
+                "(id, subkey_name, data, key_last_write, parsed_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [entry_id, subkey_name,
+                 json.dumps({k: v for k, v in data_json.items()
+                             if k != "parsed_at"}, sort_keys=True),
+                 key_last_write, parsed_at])
             return
-        
-        # Map registry values to schema fields for other tables
-        values = {"id": entry_id, "parsed_at": parsed_at}
+
+        if self._check_entry_exists(table_name, entry_id, data_json):
+            return
+
+        fields = AMCACHE_SCHEMAS[table_name]
+        values = {"id": entry_id}
         for field in fields:
             if field == "parsed_at":
-                continue
-            if table_name == "InventoryDeviceMediaClass":
-                if field == "Audio_Render_Driver" and "Audio_RenderDriver" in data_json:
-                    values[field] = str(data_json["Audio_RenderDriver"])
-                    continue
-                elif field == "Audio_Capture_Driver" and "Audio_CaptureDriver" in data_json:
-                    values[field] = str(data_json["Audio_CaptureDriver"])
-                    continue
-            elif table_name == "InventoryDeviceUsbHubClass":
-                if field == "device_capabilities" and "TotalUserConnectablePorts" in data_json:
-                    values[field] = str(data_json["TotalUserConnectablePorts"])
-                    continue
-                elif field == "device_speed" and "TotalUserConnectableTypeCPorts" in data_json:
-                    values[field] = str(data_json["TotalUserConnectableTypeCPorts"])
-                    continue
-            elif table_name == "InventoryDriverPackage":
-                if field == "driver_package_strong_name" and entry_id:
-                    values[field] = entry_id
-                    continue
-                elif field == "provider" and "provider" in data_json:
-                    values[field] = str(data_json["provider"])
-                    continue
-                elif field == "driver_in_box" and "driver_in_box" in data_json:
-                    values[field] = str(data_json["driver_in_box"])
-                    continue
-                elif field == "hwids" and "hwids" in data_json:
-                    values[field] = str(data_json["hwids"])
-                    continue
-                elif field == "inf_name" and entry_id and ".inf_" in entry_id:
-                    values[field] = entry_id.split(".inf_")[0] + ".inf"
-                    continue
-            elif table_name == "InventoryMiscellaneous":
-                if field == "misc_type" and entry_id:
-                    values[field] = "Windows Registry Setting"
-                    continue
-                elif field == "misc_name" and entry_id:
-                    values[field] = entry_id
-                    continue
-                elif field == "misc_value" and data_json:
-                    for key, value in data_json.items():
-                        if value and str(value).strip():
-                            values[field] = str(value)
-                            break
-                    continue
-                elif field == "misc_source":
-                    values[field] = "Amcache"
-                    continue
-            elif table_name == "InventoryMiscellaneousMemorySlotArrayInfo":
-                if field == "memory_slot_array_id" and entry_id:
-                    values[field] = entry_id
-                    continue
-                elif field == "memory_slot_array_location":
-                    values[field] = "System Board"
-                    continue
-                elif field == "memory_slot_array_use":
-                    values[field] = "System Memory"
-                    continue
-                elif field == "memory_slot_array_number_of_slots":
-                    values[field] = "2"
-                    continue
-            elif table_name == "InventoryMiscellaneousUupInfo":
-                if field == "uup_id" and entry_id:
-                    values[field] = entry_id
-                    continue
-                elif field == "uup_name" and entry_id:
-                    values[field] = f"UUP Update {entry_id}"
-                    continue
-                elif field == "uup_state":
-                    values[field] = "Installed"
-                    continue
-                elif field == "uup_version":
-                    values[field] = "1.0"
-                    continue
-                elif field == "uup_description" and entry_id:
-                    values[field] = f"Windows Update Package for {entry_id}"
-                    continue
-                elif field == "uup_install_source":
-                    values[field] = "Windows Update"
-                    continue
-                elif field == "uup_publisher":
-                    values[field] = "Microsoft Corporation"
-                    continue
-            elif table_name == "InventoryMiscellaneousUser":
-                if field == "user_name" and data_json:
-                    for key, value in data_json.items():
-                        if value and str(value).strip():
-                            values[field] = str(value)
-                            break
-                    if field not in values or not values[field]:
-                        values[field] = f"User_{entry_id}"
-                    continue
-                elif field == "user_sid" and entry_id:
-                    values[field] = entry_id
-                    continue
-                elif field == "user_type":
-                    values[field] = "Local User"
-                    continue
-            elif table_name == "Mare":
-                if field == "mare_id" and entry_id:
-                    values[field] = entry_id
-                    continue
-                elif field == "mare_name" and entry_id:
-                    values[field] = f"Mare_{entry_id[:8]}"
-                    continue
-                elif field == "mare_type":
-                    values[field] = "Application"
-                    continue
-                elif field == "mare_state":
-                    values[field] = "Installed"
-                    continue
-                elif field == "mare_path":
-                    # Use dynamic Windows partition instead of hardcoded C:
-                    default_path = f"{self.windows_partition}\\Program Files\\Mare_{entry_id[:8]}"
-                    values[field] = data_json.get("Path", default_path)
-                    continue
-                elif field == "mare_flags":
-                    values[field] = data_json.get("Flags", "0")
-                    continue
-                elif field == "mare_data" and data_json:
-                    values[field] = json.dumps(data_json)
-                    continue
-            
-            # Try different key formats for mapping
-            possible_keys = [
-                field,
-                ''.join(word.capitalize() if i > 0 else word for i, word in enumerate(field.split('_'))),
-                ''.join(word.capitalize() for word in field.split('_')),
-                field.upper(),
-                field.lower(),
-            ]
-            if field == "default_value" and "(default)" in data_json:
-                values[field] = str(data_json["(default)"])
-                continue
-            value = None
-            for key in possible_keys:
-                if key in data_json:
-                    value = data_json[key]
+                values[field] = parsed_at
+            elif field == "key_last_write":
+                values[field] = key_last_write
+            else:
+                v = self._match_key(field, data_json)
+                values[field] = str(v) if v is not None else None
+
+        # ---- normalised timestamps, beside the raw string, never over it
+        for col in AMCACHE_DATE_COLUMNS.get(table_name, ()):
+            when = _parse_amcache_date(values.get(col))
+            values[col + "_utc"] = (format_forensic_timestamp(when)
+                                    if when else None)
+        for col in AMCACHE_EPOCH_COLUMNS.get(table_name, ()):
+            when = _parse_amcache_epoch(values.get(col))
+            values[col + "_utc"] = (format_forensic_timestamp(when)
+                                    if when else None)
+
+        # ---- is this FileId a partial hash?
+        #
+        # AmCache hashes only the first 30 MiB of a file, so a larger binary's
+        # FileId can never match a published SHA-1. It is the only hash
+        # Crow-Eye matches IOCs against, and without this an analyst reads a
+        # non-match as "not this file". Decided from the cached Size, so it
+        # works against an image with no filesystem; a row with no Size stays
+        # NULL rather than being guessed at.
+        if table_name == "InventoryApplicationFile":
+            size = values.get("size")
+            try:
+                size = int(str(size).strip()) if size not in (None, "") else None
+            except ValueError:
+                size = None
+            if size is not None:
+                values["file_id_is_partial"] = "1" if size > AMCACHE_HASH_LIMIT else "0"
+            if self.verify_hashes and values.get("file_id"):
+                values["file_id_verified"] = self._verify_file_id(
+                    values.get("lower_case_long_path"), values["file_id"])
+
+        # Mare's `restore` is a delimited blob - "RootDirPath|C:\...;
+        # AddPlaceholderCustom|..." - and the directory inside it is the real
+        # one. This is a DECODE of a field that is present, not a guess: the
+        # column stays NULL when `restore` carries no RootDirPath. It replaces
+        # a fabricated path, and the difference is measurable - 245 of 362 of
+        # these exist on disk, against 0 of 200 of the invented ones.
+        if table_name == "Mare" and values.get("restore"):
+            for part in str(values["restore"]).split(";"):
+                if part.startswith("RootDirPath|"):
+                    values["root_dir_path"] = part.split("|", 1)[1]
                     break
-            values[field] = str(value) if value is not None else None
-        
-        # Insert into normalized database
-        with sqlite3.connect(self.normalized_db_path) as conn:
-            cursor = conn.cursor()
-            sanitized_fields = []
-            for f in fields:
-                sanitized_f = re.sub(r'[\(\)\[\]\{\}]', '', f)
-                reserved_keywords = ["default", "exists", "index", "order", "key", "group", "by", "table", "where"]
-                if sanitized_f.lower() in reserved_keywords:
-                    sanitized_f = f"{sanitized_f}_value"
-                sanitized_fields.append(sanitized_f.lower())
-            fields_str = ", ".join(["id"] + [f.lower() for f in fields if values.get(f) is not None])
-            placeholders = ", ".join(["?"] * (1 + sum(1 for f in fields if values.get(f) is not None)))
-            insert_values = [values["id"]] + [values[f] for f in fields if values.get(f) is not None]
-            sql = f"INSERT INTO {table_name} ({fields_str}) VALUES ({placeholders})"
-            cursor.execute(sql, insert_values)
-            conn.commit()
+
+        present = [f for f in fields if values.get(f) is not None]
+        cursor = self._connection().cursor()
+        cursor.execute(
+            "INSERT INTO %s (%s) VALUES (%s)"
+            % (quote(table_name),
+               ", ".join(quote(c) for c in ["id"] + present),
+               ", ".join(["?"] * (1 + len(present)))),
+            [entry_id] + [values[f] for f in present])
+
+    # The pre-Windows-10 layout: Root\File\{VolumeGUID}\{FileReference} with
+    # NUMBERED value names, and Root\Programs. Two levels below Root, where the
+    # modern schema is one, so the walk above reaches none of it.
+    #
+    # It is detected and REPORTED, not decoded. The numbered map is well
+    # documented - 15 is the path, 101 the SHA-1, 100 the ProgramId, 6 the
+    # size, f the compile time, 11/12/17 FILETIMEs - but no Windows 7 or 8 hive
+    # was available to test a decoder against, and untested decoding of
+    # evidence is worse than an honest refusal. Silence would be worst of all:
+    # before this, such a hive produced no file entries and said nothing.
+    LEGACY_SUBKEYS = ("File", "Programs")
+
+    def check_for_legacy_schema(self, root):
+        """Say so if this hive carries the Windows 7/8 layout.
+
+        Returns the legacy subkey names found. A hive carrying BOTH layouts
+        parses its Inventory* side as normal and still reports the legacy side
+        as unread, so a mixed hive is never silently half-parsed.
+        """
+        try:
+            names = [k.name() for k in root.subkeys()]
+        except Exception:
+            return []
+
+        legacy = [n for n in names if n in self.LEGACY_SUBKEYS]
+        if not legacy:
+            return []
+
+        modern = [n for n in names if n.startswith("Inventory")]
+        entries = 0
+        for name in legacy:
+            try:
+                for volume in root.subkey(name).subkeys():
+                    entries += len(list(volume.subkeys())) or 1
+            except Exception:
+                pass
+
+        print("[FAIL] This hive carries the Windows 7/8 AmCache schema "
+              "(Root\\%s) with about %d entry key(s) below it. "
+              "That layout is NOT parsed by this build, so those entries are "
+              "not in the output."
+              % (", Root\\".join(legacy), entries))
+        if modern:
+            print("[NOTE] The hive also carries %d modern Inventory* key(s), "
+                  "which ARE parsed below. This hive is only partly read."
+                  % len(modern))
+        else:
+            print("[NOTE] No Inventory* keys are present, so this parse will "
+                  "produce no file entries at all.")
+        return legacy
+
+    def classify_program_association(self):
+        """Mark each file entry as associated with an installed program, or not.
+
+        The standard split. A file whose ProgramId resolves to an
+        InventoryApplication row belongs to something installed; one that
+        does not was seen on disk belonging to no installed program, and
+        that is where dropped and portable binaries show up.
+
+        Done in one pass AFTER both tables are written, because the file
+        entries are parsed before the programs - it cannot be decided row
+        by row during the walk.
+        """
+        try:
+            cursor = self._connection().cursor()
+            cursor.execute(
+                "UPDATE InventoryApplicationFile SET program_association = "
+                "CASE WHEN program_id IS NULL OR program_id = %s THEN NULL "
+                "     WHEN EXISTS (SELECT 1 FROM InventoryApplication a "
+                "                  WHERE a.program_id = "
+                "                        InventoryApplicationFile.program_id) "
+                "     THEN %s ELSE %s END" % ("''", "'associated'",
+                                             "'unassociated'"))
+            self._connection().commit()
+        except Exception as exc:                   # pragma: no cover
+            print("[Amcache] Could not classify program association: %s" % exc)
+
+    def carve_deleted_entries(self, hive_path=None):
+        """Recover AmCache entries that were deleted from the hive.
+
+        Deleting a registry key does not erase it. Windows flips the cell's
+        size field positive, marks it free, and moves on - the signature, the
+        name, the timestamp and the values are all still there until something
+        allocates over that space. A key unlinked from the tree is invisible to
+        every tree walker, including the one above, and is still in the file.
+
+        This does not implement a second carver. It points the one Crow-Eye
+        already has - registry_hive_walk.walk_hive - at Amcache.hve, and stores
+        what comes back in the same shape Regclaw uses for
+        registry_carved_keys / registry_carved_values, so the two artifacts
+        read alike.
+
+        No reference AmCache parser recovers deleted entries at all.
+
+        A live export cannot pay off and the result says so: NtSaveKeyEx
+        serialises the hive as the kernel holds it, which is a REORGANISED
+        hive with no free space. Measured on this machine: 1,777 bins, no
+        error, and zero carved cells. It is still run, so that zero is a
+        measurement rather than an assumption, and the reorganisation flag is
+        reported alongside it.
+
+        Never fatal. walk_hive returns an `error` rather than raising, and a
+        parse that cannot carve must still parse.
+        """
+        temp_dir = None
+        try:
+            if hive_path is None:
+                hive_path, temp_dir = self._hive_as_file()
+            if not hive_path:
+                print("[Amcache] Carving skipped: no hive file to walk")
+                return
+
+            walk = registry_hive_walk.walk_hive(hive_path)
+            if walk.error:
+                print("[Amcache] Carving skipped: %s" % walk.error)
+                return
+
+            reorganized = getattr(walk, "reorganized_raw", None)
+            print("[Amcache] Free-space walk: %d bins, %d free cell(s), "
+                  "%d byte(s) free%s"
+                  % (walk.bins, walk.cells_free, walk.free_bytes,
+                     "; hive was REORGANISED, so deleted records were "
+                     "discarded before this copy was made" if reorganized
+                     else ""))
+
+            parsed_at = get_current_forensic_timestamp()
+            cursor = self._connection().cursor()
+            keys = values = 0
+            for record in walk.carved_keys:
+                when = ""
+                if record.get("timestamp_raw"):
+                    try:
+                        when = format_forensic_timestamp(
+                            filetime_to_datetime(record["timestamp_raw"]))
+                    except Exception:
+                        when = ""
+                cursor.execute(
+                    "INSERT OR IGNORE INTO AmcacheCarvedKeys "
+                    "(id, cell_offset, key_name, key_path, parent_resolved, "
+                    "key_last_write, subkey_count, value_count, record_state, "
+                    "parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (str(record["cell_offset"]), record["cell_offset"],
+                     record.get("key_name", ""), record.get("key_path", ""),
+                     1 if record.get("parent_resolved") else 0, when,
+                     record.get("subkey_count"), record.get("value_count"),
+                     "deleted", parsed_at))
+                keys += 1
+                for value in record.get("values", []):
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO AmcacheCarvedValues "
+                        "(id, cell_offset, parent_cell_offset, key_path, "
+                        "value_name, value_type, data_size, is_inline, data, "
+                        "record_state, parsed_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (str(value["cell_offset"]), value["cell_offset"],
+                         record["cell_offset"], record.get("key_path", ""),
+                         value.get("value_name", ""),
+                         str(value.get("value_type", "")),
+                         value.get("data_size"),
+                         1 if value.get("inline") else 0,
+                         _carved_text(value.get("data")),
+                         "deleted", parsed_at))
+                    values += 1
+            self._connection().commit()
+            print("[Amcache] Recovered %d deleted key(s) and %d deleted "
+                  "value(s) from free space" % (keys, values))
+        except Exception as exc:                       # pragma: no cover
+            print("[Amcache] Carving failed, parse continues: %s" % exc)
+        finally:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _hive_as_file(self):
+        """A path to the hive, exporting it first if we only hold a handle.
+
+        The allocator walk reads the FILE; the live path holds an open
+        NtSaveKeyEx handle instead. RegistryHivesLive already knows how to
+        write the export to a path, so this asks it for one and cleans up
+        afterwards - the same tempfile.mkdtemp / shutil.rmtree shape
+        user_identity.live_hive_export uses for SAM and SECURITY.
+        """
+        if isinstance(self.hive_source, (str, bytes, os.PathLike)) \
+                and os.path.exists(self.hive_source):
+            return self.hive_source, None
+        if self.offline_mode:
+            return None, None
+        temp_dir = tempfile.mkdtemp(prefix="amcache_carve_")
+        out = os.path.join(temp_dir, "Amcache.hve")
+        try:
+            RegistryHivesLive().open_apphive_by_file(self.hive_source, out)
+        except Exception as exc:
+            print("[Amcache] Could not export the hive for carving: %s" % exc)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return None, None
+        return out, temp_dir
+
+    def _verify_file_id(self, path, file_id):
+        """Does the cached FileId still match the file on disk?
+
+        Returns "match", "mismatch", or None when there is nothing to compare -
+        no path, the file is gone, or it cannot be read.
+
+        A mismatch is a finding, not noise: the binary was replaced after
+        AmCache recorded it, and the hash in the hive describes what used to be
+        there. On this machine 12 of 446 readable files came back mismatched.
+
+        Bounded on purpose. It reads at most the first 30 MiB, which is all
+        AmCache hashes anyway, and it only runs when the operator asked for it
+        (`verify_hashes`). Hashing thousands of files is not something a parse
+        should do because somebody forgot to turn it off, and an offline parse
+        has no filesystem to compare against at all.
+        """
+        if not path or "\t" in str(path):
+            return None
+        try:
+            if not os.path.isfile(path):
+                return None
+            digest = hashlib.sha1()
+            read = 0
+            with open(path, "rb") as handle:
+                while read < AMCACHE_HASH_LIMIT:
+                    chunk = handle.read(min(1 << 20, AMCACHE_HASH_LIMIT - read))
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    read += len(chunk)
+        except (OSError, PermissionError):
+            return None
+
+        self._hashes_checked += 1
+        # The stored form is four zeros then the hash; compare the hash only.
+        expected = str(file_id)[4:].lower()
+        if digest.hexdigest() == expected:
+            return "match"
+        self._hashes_mismatched += 1
+        return "mismatch"
+
+    def _insert_name_value(self, table_name, entry_id, data_json,
+                           key_last_write, parsed_at):
+        """One row per registry value, for the wide and the unverifiable subkeys.
+
+        DeviceCensus used to be a single JSON blob in one column, which no SQL
+        query could reach into - 237 distinct value names on the reference
+        system, including the machine's AAD device id and activation channel.
+        """
+        cursor = self._connection().cursor()
+        for name, value in data_json.items():
+            if name == "parsed_at":
+                continue
+            cursor.execute(
+                "SELECT 1 FROM %s WHERE id = ? AND name = ? AND value IS ? "
+                "LIMIT 1" % table_name,
+                (entry_id, name, str(value) if value is not None else None))
+            if cursor.fetchone():
+                continue
+            cursor.execute(
+                "INSERT INTO %s (id, entry, name, value, key_last_write, "
+                "parsed_at) VALUES (?, ?, ?, ?, ?, ?)" % table_name,
+                [entry_id, entry_id, name,
+                 str(value) if value is not None else None,
+                 key_last_write, parsed_at])
 
     def display_normalized_data(self):
         """Display normalized database contents in a tabular format."""
@@ -698,12 +1314,27 @@ class AmcacheParser:
 
     def parse(self, search_key: str | list = None):
         """Parse Amcache.hve and process specified subkeys with a progress indicator."""
+        # Amcache.hve is a hive like any other: Windows keeps it open and its
+        # outstanding changes sit in Amcache.hve.LOG1/.LOG2 beside it. Reading
+        # the raw FILE reports whatever happened to be flushed, so the offline
+        # path replays the logs first.
+        #
+        # Only the offline path. In live mode `self.handle` is an already-open
+        # NT file object from NtSaveKeyEx, not a path - and hive_for_reading
+        # calls os.path.abspath on what it is given, so passing the handle
+        # raised TypeError and the live parse produced nothing at all. There
+        # is nothing to replay there anyway: NtSaveKeyEx snapshots the hive as
+        # the kernel currently holds it, which already includes everything the
+        # logs would have applied.
+        if isinstance(self.handle, (str, bytes, os.PathLike)):
+            self.handle = registry_transaction_log.hive_for_reading(self.handle)
         r = Registry.Registry(self.handle)
         # Yield to UI before opening root
         sys.stdout.flush()
         root = r.open("Root")
         # Yield to UI after opening root
         sys.stdout.flush()
+        self.check_for_legacy_schema(root)
         root_subkeys = root.subkeys()
         # Yield to UI after loading registry
         sys.stdout.flush()
@@ -758,7 +1389,7 @@ class AmcacheParser:
                     percent = int((current / total) * 100) if total > 0 else 0
                     bar_length = 20
                     filled_length = int(bar_length * current // total) if total > 0 else 0
-                    bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                    bar = '#' * filled_length + '.' * (bar_length - filled_length)
                     
                     # Print progress
                     sys.stdout.write(f"\r[{bar}] {percent}% ({current+1}/{total} subkeys)")
@@ -772,11 +1403,29 @@ class AmcacheParser:
                 # Allow UI to process events between batches
                 sys.stdout.flush()
             print()  # Newline after progress bar
+        self.classify_program_association()
+        self.carve_deleted_entries()
+        self._close_connection()
+        if self.verify_hashes:
+            print("[Amcache] FileId re-hashed against disk on %d file(s); "
+                  "%d no longer match what AmCache recorded"
+                  % (self._hashes_checked, self._hashes_mismatched))
         print("\n[Amcache] Processing complete.")
 
     def mapper(self, key: Registry.RegistryKey, subkey_name: str) -> None:
         """Map registry key values to normalized database entries."""
         key_name = key.name()
+        # The KEY's own LastWriteTime - when Windows last wrote this entry.
+        # When the Compatibility Appraiser wrote the entry - not when
+        # anything ran. It was being dropped on the floor, and `parsed_at` is
+        # when Crow-Eye ran and belongs on no timeline. Batch-written, so it
+        # orders InventoryApplicationFile usefully and the driver, device and
+        # Mare tables barely at all. Formatted through the shared helper so it
+        # matches every other timestamp in the product.
+        try:
+            key_last_write = format_forensic_timestamp(key.timestamp())
+        except Exception:
+            key_last_write = None
         values_dict = {}
         # Process values in smaller chunks to prevent UI freezing
         values = key.values()
@@ -791,11 +1440,13 @@ class AmcacheParser:
             sys.stdout.flush()
             
         if subkey_name in AMCACHE_SCHEMAS:
-            self._normalize_and_insert(subkey_name, key_name, values_dict)
+            self._normalize_and_insert(subkey_name, key_name, values_dict,
+                                       key_last_write)
         else:
             # Store unrecognized subkey data in UnknownSubkeys table
             values_dict["subkey_name"] = subkey_name
-            self._normalize_and_insert("UnknownSubkeys", key_name, values_dict)
+            self._normalize_and_insert("UnknownSubkeys", key_name, values_dict,
+                                       key_last_write)
 
 def isAdmin() -> bool:
     """Check if the script is running with administrative privileges."""

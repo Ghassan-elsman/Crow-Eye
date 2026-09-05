@@ -195,7 +195,7 @@ class CorrelationEngine:
         
         try:
             # Validate configuration before execution
-            validation_errors = self._validate_configuration(wing, feather_paths)
+            validation_errors = self._validate_configuration(wing, feather_paths, result)
             if validation_errors:
                 result.errors.extend(validation_errors)
                 return result
@@ -256,14 +256,22 @@ class CorrelationEngine:
         
         return result
     
-    def _validate_configuration(self, wing: Wing, feather_paths: Dict[str, str]) -> List[str]:
+    def _validate_configuration(self, wing: Wing, feather_paths: Dict[str, str],
+                                result: Optional['CorrelationResult'] = None) -> List[str]:
         """
         Validate wing configuration before execution.
-        
+
+        Args:
+            result: optional CorrelationResult to receive non-fatal findings.
+                Anything that does not stop the wing running belongs there, not
+                in the returned list - the caller aborts the wing on anything
+                this returns.
+
         Returns:
             List of validation errors (empty if valid)
         """
         errors = []
+        warnings = []
         rules = wing.correlation_rules
         
         # Validate time_window_minutes > 0
@@ -288,36 +296,43 @@ class CorrelationEngine:
                     f"has no corresponding database path"
                 )
         
-        # Validate anchor_priority list contains valid artifact types
-        try:
-            from ..config.artifact_type_registry import get_registry
-            registry = get_registry()
-            valid_artifact_types = set(registry.get_all_types())
-        except Exception:
-            # Fallback to hard-coded set if registry fails
-            valid_artifact_types = {
-                "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
-                "Jumplists", "LNK", "MFT", "USN", "Registry", "Browser"
-            }
-        
-        for artifact_type in rules.anchor_priority:
-            if artifact_type not in valid_artifact_types:
-                errors.append(
-                    f"Configuration warning: anchor_priority contains unknown artifact type '{artifact_type}'. "
-                    f"Valid types: {', '.join(sorted(valid_artifact_types))}"
-                )
-        
-        # Validate minimum_matches vs available feathers
+        # Check anchor_priority against this wing's OWN feathers. These are
+        # warnings and are deliberately NOT appended to `errors`: an entry that
+        # matches no feather is an inert preference, and this list used to be
+        # validated against the 17 coarse categories in artifact_type_registry
+        # while wings name concrete artifact types - which is what
+        # _select_anchor_feather() below compares against.
+        from ..wings.core.wing_model import validate_anchor_priority
+        for message in validate_anchor_priority(
+                rules.anchor_priority,
+                [f.artifact_type for f in (wing.feathers or [])]):
+            warnings.append(f"Configuration warning: {message}")
+
+        # Validate minimum_matches vs available feathers.
+        #
+        # The arithmetic here was always right; the message was not. It said the
+        # anchor "is not counted toward minimum_matches", which is the correct
+        # rule, while both engines were comparing minimum_matches against the
+        # TOTAL feather count - so a wing saying 1 required one feather, and a
+        # match that corroborated nothing was emitted as a correlation. The
+        # engines now ask CorrelationRules.required_feather_count(), which is
+        # what this text describes.
         total_feathers = len(wing.feathers)
-        available_non_anchor_feathers = total_feathers - 1 # Subtract 1 for anchor
-        
-        if rules.minimum_matches > available_non_anchor_feathers:
+        required = rules.required_feather_count()
+
+        if required > total_feathers:
             errors.append(
                 f"Configuration error: minimum_matches ({rules.minimum_matches}) "
-                f"exceeds available non-anchor feathers ({available_non_anchor_feathers}). "
-                f"Note: The anchor feather is always included but not counted toward minimum_matches."
+                f"requires a match to span {required} feathers, but this wing "
+                f"declares only {total_feathers}. minimum_matches counts the "
+                f"feathers that must CORROBORATE, in addition to the first one "
+                f"the identity was observed in, so a wing needs at least "
+                f"minimum_matches + 1 feathers to produce any match at all."
             )
-        
+
+        if warnings and result is not None:
+            result.warnings.extend(warnings)
+
         return errors
     
     def _load_feathers(self, wing: Wing, feather_paths: Dict[str, str], result: CorrelationResult):

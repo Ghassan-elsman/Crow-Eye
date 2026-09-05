@@ -5,10 +5,12 @@ This module provides specialized parsing functions for complex binary structures
 found in Windows registry keys such as OpenSaveMRU, LastSaveMRU, BAM, DAM, and RecentDocs.
 """
 
+import re
 import struct
 import logging
 from datetime import datetime, timedelta, timezone
-from utils.time_utils import format_forensic_timestamp, filetime_to_datetime, systemtime_to_datetime
+from utils.time_utils import (format_forensic_timestamp, filetime_to_datetime,
+                              systemtime_to_datetime, unix_timestamp_to_datetime)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1211,7 +1213,31 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
 
 
 
-def _convert_dos_datetime(dos_time: int) -> str:
+# The evidence machine's timezone bias, in signed minutes, for the DOS
+# date/time readings that carry no zone of their own. Set once per parse by
+# set_evidence_bias(); zero means "not known", and a DOS value is then left on
+# the machine's own wall clock rather than shifted by a guess.
+_dos_bias_minutes = 0
+
+
+def set_evidence_bias(bias):
+    """Record the evidence machine's UTC bias for this parse.
+
+    Called once, after TimeZoneInfo has been read, and before any shell item is
+    decoded. Returns the signed minutes it will use so the caller can record
+    which offset was applied.
+    """
+    global _dos_bias_minutes
+    _dos_bias_minutes = signed_bias(bias)
+    return _dos_bias_minutes
+
+
+def evidence_bias():
+    """The bias in force, in signed minutes. Zero means not known."""
+    return _dos_bias_minutes
+
+
+def _convert_dos_datetime(dos_time: int, bias=None) -> str:
     """
     Convert DOS datetime format to ISO 8601 string.
     
@@ -1262,9 +1288,21 @@ def _convert_dos_datetime(dos_time: int) -> str:
             logger.debug(f"Rejecting suspicious DOS datetime: year={year} (likely garbage data)")
             return ""
         
-        # Validate the date is actually valid (e.g., not Feb 30)
-        # Create UTC-aware datetime
-        dt = datetime(year, month, day, hours, minutes, seconds, tzinfo=timezone.utc)
+        # A DOS date/time is the EVIDENCE machine's local wall clock. It has
+        # no timezone in it and never had one, so stamping tzinfo=timezone.utc
+        # here does not convert anything - it relabels a local reading as UTC
+        # and every Shellbag timestamp in the case is then wrong by the
+        # evidence machine's offset.
+        #
+        # Windows defines local = UTC + bias, so UTC = local + bias. With the
+        # bias known the value becomes a real UTC moment; without it the local
+        # reading is returned unchanged and the caller records that it is
+        # local, because inventing a zone is the error being fixed.
+        dt = datetime(year, month, day, hours, minutes, seconds,
+                      tzinfo=timezone.utc)
+        offset = _dos_bias_minutes if bias is None else signed_bias(bias)
+        if offset:
+            dt = dt + timedelta(minutes=offset)
         return format_forensic_timestamp(dt)
         
     except Exception as e:
@@ -2822,3 +2860,1293 @@ def parse_taskcache_actions(binary_data: bytes) -> dict:
     except Exception as e:
         logger.error(f"Error parsing TaskCache Actions: {e}")
     return out
+
+
+def parse_security_descriptor(binary_data: bytes) -> dict:
+    """Owner, group and ACE count from a self-relative security descriptor.
+
+    The registry stores one descriptor per DISTINCT set of permissions, shared
+    by every key that uses it, which is why a 23 MB hive can hold 69,624 keys
+    without tens of megabytes of duplicated ACLs. What matters forensically is
+    less the ACL itself than how many keys share it: a key with a descriptor of
+    its own, where its siblings share one, has had its permissions changed.
+
+    Layout (self-relative form): revision, sbz1, control word, then four
+    offsets - owner, group, SACL, DACL - each relative to the START of the
+    descriptor, and zero when absent. The ACL header is revision, size, and an
+    ACE count.
+
+    Returns {} rather than raising: a descriptor read out of a hive may be from
+    a freed cell and need not be well formed.
+    """
+    out = {}
+    try:
+        if not binary_data or len(binary_data) < 20:
+            return out
+        revision = binary_data[0]
+        if revision != 1:
+            return out
+        control = struct.unpack_from('<H', binary_data, 2)[0]
+        off_owner, off_group, off_sacl, off_dacl = struct.unpack_from(
+            '<IIII', binary_data, 4)
+
+        out['revision'] = revision
+        out['control'] = control
+
+        for label, offset in (('owner_sid', off_owner), ('group_sid', off_group)):
+            if 0 < offset < len(binary_data):
+                sid, _ = binary_sid_to_string(binary_data, offset)
+                if sid:
+                    out[label] = sid
+
+        # An ACL present but empty is not the same as no ACL at all: the first
+        # means "nobody", the second means "no restriction expressed here".
+        for label, offset in (('dacl_ace_count', off_dacl),
+                              ('sacl_ace_count', off_sacl)):
+            if 0 < offset and offset + 8 <= len(binary_data):
+                _rev, _size, count = struct.unpack_from('<HHH', binary_data, offset)
+                out[label] = count
+            elif offset == 0:
+                out[label] = None
+
+        out['size'] = len(binary_data)
+    except Exception as e:
+        logger.debug(f"security descriptor decode failed: {e}")
+    return out
+
+
+def normalise_install_date(value):
+    """An Uninstall key's InstallDate, as a timestamp or as nothing.
+
+    The value arrives in two unrelated shapes and neither is a timestamp:
+
+        "20250908"    a YYYYMMDD string, which is what most installers write
+        1784409493    a Unix epoch, which some write instead
+
+    Both were being stored verbatim, side by side in one column, so nothing
+    downstream could sort or compare it - and a raw epoch beside a real
+    timestamp is the exact "formatted string in a numeric column" failure that
+    stops a column meaning anything.
+
+    A date-only value becomes midnight because the registry records no time of
+    day. That is the conventional reading and it keeps the column sortable; the
+    column's own name says the granularity is a date.
+
+    Anything that is neither shape returns "" - an empty cell is a true
+    statement, and a garbage value in a time column is not.
+    """
+    if value in (None, ""):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    # Already ours - leave it alone.
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", text):
+        return text
+
+    digits = text.strip()
+    if not digits.isdigit():
+        return ""
+
+    if len(digits) == 8:
+        try:
+            when = datetime.strptime(digits, "%Y%m%d")
+        except ValueError:
+            return ""
+        if not (1990 <= when.year <= 2100):
+            return ""
+        return format_forensic_timestamp(when.replace(tzinfo=timezone.utc))
+
+    # A Unix epoch. Bounded so a version number or a size cannot be read as one.
+    try:
+        seconds = int(digits)
+    except ValueError:
+        return ""
+    if not (631152000 <= seconds <= 4102444800):        # 1990 .. 2100
+        return ""
+    return format_forensic_timestamp(unix_timestamp_to_datetime(seconds))
+
+
+def signed_bias(value):
+    """A timezone bias as signed minutes.
+
+    REG_DWORD is unsigned, and a UTC offset is not. Egypt Standard Time is
+    UTC+2 and its Bias is -120, which read unsigned is 4,294,967,176 - the
+    number that was being stored. Anything comparing bias > 0 got the sign
+    backwards, and the value could not be used to correct a local timestamp at
+    all.
+
+    Windows computes local time as UTC + bias, so a NEGATIVE bias is a zone
+    ahead of UTC. Returns 0 for anything that is not a plausible offset rather
+    than passing nonsense through.
+    """
+    if value in (None, ""):
+        return 0
+    try:
+        raw = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if raw > 0x7FFFFFFF:
+        raw -= 0x100000000
+    # No real zone is more than a day from UTC.
+    return raw if abs(raw) <= 24 * 60 else 0
+
+
+def utc_offset_label(bias):
+    """The bias as the offset a person reads, for example "+02:00".
+
+    Named the way a reader expects rather than the way Windows stores it: the
+    sign is inverted, because local = UTC + bias means a bias of -120 is UTC+2.
+    """
+    minutes = -signed_bias(bias)
+    sign = "+" if minutes >= 0 else "-"
+    minutes = abs(minutes)
+    return "%s%02d:%02d" % (sign, minutes // 60, minutes % 60)
+
+
+TIMEZONE_KEY = "\\".join(("System", "CurrentControlSet", "Control",
+                              "TimeZoneInformation"))
+
+
+def read_evidence_bias(read_values, hive, key_path=None):
+    """Set the evidence bias from a SYSTEM hive, early, and return the minutes.
+
+    This exists because of an ordering trap. The TimeZoneInfo table is written
+    late in a parse, and shell items are decoded long before it - so setting
+    the bias where the table is written applies it to nothing at all, while
+    looking entirely correct in the diff.
+
+    `read_values` is the parser's own value reader, so this makes no assumption
+    about how the hive is opened.
+    """
+    path = key_path or TIMEZONE_KEY
+    try:
+        values = read_values(hive, path) or {}
+    except Exception as exc:
+        logger.debug("evidence bias: cannot read %s: %s", path, exc)
+        return set_evidence_bias(0)
+    raw = 0
+    for name, item in values.items():
+        if str(name).lower() == "bias":
+            raw = item[0] if isinstance(item, (tuple, list)) else item
+            break
+    return set_evidence_bias(raw)
+
+
+# The network adapter class. Each numbered subkey under it is one adapter, and
+# NetCfgInstanceId is the interface GUID that ties it to the Tcpip interface
+# key of the same name.
+ADAPTER_CLASS_GUID = "{4d36e972-e325-11ce-bfc1-08002be10318}"
+
+
+def normalise_mac(text):
+    r"""A NetworkAddress override as a readable MAC, or "" if it is not one.
+
+    NetworkAddress is the ONLY MAC the registry holds, and it exists only when
+    somebody has overridden the adapter's burned-in address. The value that was
+    being read instead - MacAddress under Tcpip\Parameters\Interfaces - does
+    not exist at all: checked against a real hive, ten interfaces and not one
+    of them had it. The live parser named the column in its INSERT and filled
+    it from a branch that never fired, so it looked like a working column and
+    was empty on every row.
+
+    Stored without separators, twelve hex digits, so this puts them back.
+    """
+    if not text:
+        return ""
+    raw = "".join(ch for ch in str(text) if ch.isalnum()).upper()
+    if len(raw) != 12 or any(ch not in "0123456789ABCDEF" for ch in raw):
+        return ""
+    return ":".join(raw[i:i + 2] for i in range(0, 12, 2))
+
+
+def parse_startup_approved(binary_data):
+    r"""One StartupApproved entry: is this autostart enabled, and since when.
+
+    Explorer records here whether each Run / Run32 / StartupFolder entry is
+    actually allowed to launch. Without it a persistence table lists everything
+    the Run key holds as though it all ran - on the reference system six of ten
+    HKCU Run entries are disabled and were being reported as live.
+
+    The value is always 12 bytes: a state byte, three bytes of padding, and a
+    FILETIME. The rule is even-enabled, odd-disabled, and the data says so
+    rather than a document: across every entry on the reference system the
+    states are 0x02, 0x03, 0x04 and 0x06, and **only 0x03 carries a timestamp**
+    - the other three are zero. A time only exists once something has been
+    switched off, which is exactly what a disabled-at field should look like.
+
+    The raw byte is returned alongside so nobody has to take the mapping on
+    trust.
+
+    Returns {state, state_byte, disabled_at} - disabled_at is "" unless the
+    entry is disabled and the timestamp is a plausible one.
+    """
+    out = {"state": "unknown", "state_byte": None, "disabled_at": ""}
+    if not binary_data or len(binary_data) < 1:
+        return out
+    try:
+        raw = bytes(binary_data)
+    except Exception:
+        return out
+
+    first = raw[0]
+    out["state_byte"] = "0x%02X" % first
+    out["state"] = "disabled" if (first & 1) else "enabled"
+
+    if len(raw) >= 12 and out["state"] == "disabled":
+        try:
+            when = struct.unpack_from("<Q", raw, 4)[0]
+        except Exception:
+            when = 0
+        if when:
+            # parse_filetime range-checks it, so a zero or a misread stays "".
+            out["disabled_at"] = parse_filetime(raw[4:12])
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rendering a raw registry value so a person can read it
+#
+# Five tables store one row per registry value with the data as text, and that
+# text was `str(data)` - so a REG_BINARY landed in the database as a Python
+# bytes repr, `b'\x00\x00\n\x00...'`, and a REG_DWORD holding a signed number
+# landed as its unsigned reading. Each value needs its OWN decode: under one
+# key alone, Bias is signed minutes, StandardStart is a transition rule,
+# StandardName is a resource reference and DynamicDaylightTimeDisabled is a
+# flag. That is what these rules are.
+#
+# The raw text is never overwritten. A decode has to be checkable against the
+# original, which is also why every decoder here returns the bytes it read.
+# ---------------------------------------------------------------------------
+
+REG_SZ_TYPES = (1, 2, 7)          # REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ
+
+
+def _as_bytes(data):
+    """The value's data as bytes, or None if it is not binary."""
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    return None
+
+
+def bytes_as_hex(data, limit=256):
+    """Binary data as spaced hex - what a raw column should hold.
+
+    Hex rather than a Python repr: `b'\\x00\\x00\\n\\x00'` hides that the third
+    byte is 0x0A behind an escape, and it cannot be pasted into anything that
+    reads bytes.
+    """
+    raw = _as_bytes(data)
+    if raw is None:
+        return ""
+    return " ".join("%02X" % b for b in raw[:limit])
+
+
+# --- time zone -------------------------------------------------------------
+
+_DOW_NAMES = ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
+              "Friday", "Saturday")
+_MONTH_NAMES = ("", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November",
+                "December")
+_OCCURRENCE = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "last"}
+
+
+def parse_tz_transition_rule(binary_data):
+    r"""A StandardStart / DaylightStart value: when the clocks change.
+
+    **This is not a SYSTEMTIME, and reading it as one produces a plausible
+    wrong answer rather than an error.** The 16 bytes under
+    `Control\TimeZoneInformation` carry SYSTEMTIME's fields with wDayOfWeek
+    moved to the END:
+
+        wYear, wMonth, wDay, wHour, wMinute, wSecond, wMilliseconds, wDayOfWeek
+
+    Measured, not assumed. The same rule is stored in the documented order in
+    the `TZI` blob under `Time Zones\<TimeZoneKeyName>`, and the two agree
+    field for field on both values of the reference system:
+
+        StandardStart    00 00 | 0a 00 | 05 00 | 17 00 | 3b 00 | 3b 00 | e7 03 | 04 00
+        TZI StandardDate 00 00 | 0a 00 | 04 00 | 05 00 | 17 00 | 3b 00 | 3b 00 | e7 03
+
+    Read as a plain SYSTEMTIME the first gives "23 Friday of October at
+    59:59:999" - hour 59 and second 999, both impossible, and neither of them
+    an error a caller would notice.
+
+    wYear is 0 and wDay is an occurrence 1-5 where 5 means "last", because this
+    is a recurring rule and not a point in time. A month of 0 means the zone
+    does not change its clocks.
+
+    Returns {month, day_of_week, occurrence, hour, minute, second,
+    millisecond, rule, raw_hex, valid}.
+    """
+    out = {"month": None, "day_of_week": None, "occurrence": None,
+           "hour": None, "minute": None, "second": None, "millisecond": None,
+           "rule": "", "raw_hex": "", "valid": False}
+    raw = _as_bytes(binary_data)
+    if not raw or len(raw) < 16:
+        return out
+    out["raw_hex"] = bytes_as_hex(raw, 16)
+    try:
+        year, month, day, hour, minute, second, ms, dow = struct.unpack_from(
+            "<8H", raw, 0)
+    except Exception:
+        return out
+
+    out.update({"month": month, "day_of_week": dow, "occurrence": day,
+                "hour": hour, "minute": minute, "second": second,
+                "millisecond": ms})
+
+    if month == 0:
+        out["rule"] = "no seasonal change"
+        out["valid"] = True
+        return out
+
+    out["valid"] = (1 <= month <= 12 and dow <= 6 and 1 <= day <= 5
+                    and hour <= 23 and minute <= 59 and second <= 59
+                    and ms <= 999 and year == 0)
+    if not out["valid"]:
+        # Say so rather than printing a sentence built out of impossible
+        # numbers. An undecoded value is safer than a confident wrong one.
+        out["rule"] = "unrecognised transition rule"
+        return out
+
+    out["rule"] = "%s %s of %s at %02d:%02d:%02d.%03d" % (
+        _OCCURRENCE.get(day, str(day)), _DOW_NAMES[dow], _MONTH_NAMES[month],
+        hour, minute, second, ms)
+    return out
+
+
+def tz_rule_from_tzi(binary_data, daylight=False):
+    """The same rule out of a `TZI` blob, in the DOCUMENTED SYSTEMTIME order.
+
+    REG_TZI_FORMAT is three LONGs then two SYSTEMTIMEs: StandardDate at 12,
+    DaylightDate at 28. Used to cross-check parse_tz_transition_rule against a
+    second copy of the same fact rather than trusting one reading of one blob.
+    """
+    raw = _as_bytes(binary_data)
+    if not raw or len(raw) < 44:
+        return None
+    off = 28 if daylight else 12
+    try:
+        year, month, dow, day, hour, minute, second, ms = struct.unpack_from(
+            "<8H", raw, off)
+    except Exception:
+        return None
+    return {"month": month, "day_of_week": dow, "occurrence": day,
+            "hour": hour, "minute": minute, "second": second,
+            "millisecond": ms}
+
+
+def tz_rules_agree(rule, tzi_rule):
+    """Whether a decoded Start value matches the TZI copy of the same rule."""
+    if not rule or not tzi_rule:
+        return None
+    keys = ("month", "day_of_week", "occurrence", "hour", "minute", "second",
+            "millisecond")
+    return all(rule.get(k) == tzi_rule.get(k) for k in keys)
+
+
+TIME_ZONES_KEY = "\\".join(("SOFTWARE", "Microsoft", "Windows NT",
+                            "CurrentVersion", "Time Zones"))
+
+
+def resolve_time_zone_names(read_values, time_zone_key_name):
+    r"""The plain-English zone names, out of the evidence's own SOFTWARE hive.
+
+    `Control\TimeZoneInformation` stores StandardName and DaylightName as MUI
+    resource references - `@tzres.dll,-342` - which is what was being recorded
+    and is not a name anybody can read. The text sits under
+    `Time Zones\<TimeZoneKeyName>` as `Std`, `Dlt` and `Display`, in the hive
+    being examined.
+
+    Read from the evidence rather than resolved through SHLoadIndirectString,
+    for the reason MUI_RESOURCE_NAMES already gives: the API answers about the
+    machine running Crow-Eye, in its language, so an image acquired elsewhere
+    would be described using the analyst's locale. A hive lookup gives live and
+    offline the same answer.
+
+    `read_values` is a callable taking a key path and returning {name: data},
+    so the two parsers pass their own reader and this stays shared.
+
+    Returns {standard_name, daylight_name, display_name} - empty strings when
+    the key is not readable, never a guess.
+    """
+    out = {"standard_name": "", "daylight_name": "", "display_name": ""}
+    if not read_values or not time_zone_key_name:
+        return out
+    try:
+        values = read_values("%s\\%s" % (TIME_ZONES_KEY, time_zone_key_name))
+    except Exception:
+        return out
+    if not values:
+        return out
+    for name, data in values.items():
+        low = name.lower()
+        if low == "std":
+            out["standard_name"] = str(data)
+        elif low == "dlt":
+            out["daylight_name"] = str(data)
+        elif low == "display":
+            out["display_name"] = str(data)
+    return out
+
+
+# --- BAM / DAM -------------------------------------------------------------
+
+# What the last uint32 of a BAM entry says, derived from the data and not from
+# a document. On the reference system the field at offset 16 is 0 on all 53
+# entries whose value name is an NT device path to an executable and 1 on all
+# 60 whose name is a package family name - a 113/113 split, confirmed a second
+# time by reading the live registry directly (112 entries, no exceptions).
+#
+# It is recorded with the raw number beside it, because one machine agreeing
+# with itself twice is evidence and not proof.
+BAM_NAME_KINDS = {0: "device path", 1: "package family name"}
+
+
+def parse_bam_blob(binary_data):
+    r"""One BAM / DAM value: 24 bytes, and only 12 of them were being read.
+
+        [0:8]   FILETIME - the last execution
+        [8:16]  zero on every entry seen
+        [16:20] uint32 - see BAM_NAME_KINDS
+        [20:24] uint32 - 2 on every entry seen
+
+    The field at 16 is the only one that discriminates, and it was discarded.
+    The column that claimed to hold flags read a value named `Flags` that these
+    keys do not have, so it was 0 on all 113 rows - a constant presented as a
+    finding.
+
+    The trailing uint32 is recorded as the number it is. It is 2 everywhere on
+    the reference system, which is not enough to name it, so it is named for
+    where it sits and left undescribed rather than given an invented meaning.
+
+    Returns {last_execution, name_kind, name_kind_raw, trailing_value,
+    reserved_is_zero, raw_hex}.
+    """
+    out = {"last_execution": "", "name_kind": "", "name_kind_raw": None,
+           "trailing_value": None, "reserved_is_zero": None, "raw_hex": ""}
+    raw = _as_bytes(binary_data)
+    if not raw:
+        return out
+    out["raw_hex"] = bytes_as_hex(raw, 24)
+    if len(raw) >= 8:
+        out["last_execution"] = parse_filetime(raw[:8])
+    if len(raw) >= 16:
+        out["reserved_is_zero"] = (raw[8:16] == b"\x00" * 8)
+    if len(raw) >= 20:
+        try:
+            kind = struct.unpack_from("<I", raw, 16)[0]
+            out["name_kind_raw"] = kind
+            out["name_kind"] = BAM_NAME_KINDS.get(kind, "")
+        except Exception:
+            pass
+    if len(raw) >= 24:
+        try:
+            out["trailing_value"] = struct.unpack_from("<I", raw, 20)[0]
+        except Exception:
+            pass
+    return out
+
+
+# BAM's own bookkeeping values. They are not programs, and writing them as
+# though they were gave two rows an app_name and a process_path of "Version"
+# and "SequenceNumber" - paths that do not exist on any machine.
+BAM_METADATA_VALUES = {"version", "sequencenumber"}
+
+
+def is_bam_metadata(value_name):
+    return str(value_name or "").strip().lower() in BAM_METADATA_VALUES
+
+
+# --- NetworkList -----------------------------------------------------------
+
+# Documented enumerations. A code that is not here renders as its number: an
+# unrecognised category is a number this does not know, not a category it can
+# name.
+NETWORK_CATEGORIES = {0: "Public", 1: "Private", 2: "Domain"}
+NETWORK_NAME_TYPES = {
+    0x06: "wired",
+    0x17: "VPN",
+    0x47: "wireless",
+    0x53: "mobile broadband",
+}
+NETWORK_MANAGED = {0: "not domain-managed", 1: "domain-managed"}
+
+
+def _enum_label(table, value):
+    """`<label> (<n>)`, or just the number when the code is not known."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    name = table.get(n)
+    return "%s (%d)" % (name, n) if name else str(n)
+
+
+def network_category_label(value):
+    return _enum_label(NETWORK_CATEGORIES, value)
+
+
+def network_name_type_label(value):
+    """What kind of network this is.
+
+    Replaces an `is_hidden` column that was derived from `NameType == 6`. 6 is
+    a WIRED network; the reference system's 0x47 is wireless, so the column
+    said "not hidden" for a reason that had nothing to do with hiding. It was
+    also a verdict where the registry only offers a fact.
+    """
+    return _enum_label(NETWORK_NAME_TYPES, value)
+
+
+def network_managed_label(value):
+    return _enum_label(NETWORK_MANAGED, value)
+
+
+# --- Tcpip interfaces ------------------------------------------------------
+
+def parse_dhcp_gateway_hardware(binary_data):
+    r"""`DhcpGatewayHardware`: the gateway's address and its MAC.
+
+        [0:4]  gateway IPv4, in order
+        [4:8]  uint32 hardware address length (6)
+        [8:..] the hardware address
+
+    Worth decoding because it is a second, independent record of the same fact
+    NetworkList keeps: on the reference system this yields 192.168.100.1 and
+    04:8C:16:1C:64:9B, and `NetworkList\Signatures\Unmanaged` records that same
+    MAC as the DefaultGatewayMac of the network named "emad". Two keys written
+    by different components agreeing is worth more than either alone.
+
+    Returns {gateway_ip, gateway_mac, raw_hex}. The MAC belongs to the GATEWAY -
+    it is not this interface's own hardware address, and must not be recorded
+    as one.
+    """
+    out = {"gateway_ip": "", "gateway_mac": "", "raw_hex": ""}
+    raw = _as_bytes(binary_data)
+    if not raw or len(raw) < 8:
+        return out
+    out["raw_hex"] = bytes_as_hex(raw, 32)
+    try:
+        out["gateway_ip"] = ".".join(str(b) for b in raw[0:4])
+        length = struct.unpack_from("<I", raw, 4)[0]
+        if 0 < length <= 8 and len(raw) >= 8 + length:
+            out["gateway_mac"] = ":".join("%02X" % b
+                                          for b in raw[8:8 + length])
+    except Exception:
+        pass
+    return out
+
+
+def unix_seconds_label(value):
+    """A DHCP lease time as a UTC timestamp.
+
+    LeaseObtainedTime, LeaseTerminatesTime, T1 and T2 are Unix epoch seconds.
+    They were stored as bare integers, so a lease obtained in September 2025
+    read as 1757332381 and sorted as text.
+    """
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return ""
+    if seconds <= 0:
+        return ""
+    try:
+        return format_forensic_timestamp(unix_timestamp_to_datetime(seconds))
+    except Exception:
+        return ""
+
+
+# --- the renderer the raw tables use ---------------------------------------
+#
+# Keyed on (context, value name). A value with no rule falls through to the
+# generic rendering, which is the same shape Regclaw's _carved_data_text
+# already uses: text decoded, everything else hex.
+
+def _tz_bias(data, _type):
+    """Bias and ActiveTimeBias ARE the offset from UTC."""
+    minutes = signed_bias(data)
+    return "%d minutes  (UTC%s)" % (minutes, utc_offset_label(minutes))
+
+
+def _tz_season_bias(data, _type):
+    """StandardBias and DaylightBias are ADDED to Bias, not offsets themselves.
+
+    Rendering them as "UTC+01:00" said Egypt was an hour ahead of Greenwich in
+    summer, when what DaylightBias -60 means is that another hour is added to
+    the standing -120 while daylight time is in force. A number that is right
+    and a label that is wrong is worse than the number on its own.
+    """
+    minutes = signed_bias(data)
+    if minutes == 0:
+        return "0 minutes  -  no additional shift"
+    return "%d minutes  -  clocks move %s %d:%02d while this season is in force" % (
+        minutes, "forward" if minutes < 0 else "back",
+        abs(minutes) // 60, abs(minutes) % 60)
+
+
+def _tz_rule(data, _type):
+    return parse_tz_transition_rule(data)["rule"]
+
+
+def _yes_no(data, _type):
+    """One vocabulary for switches, everywhere.
+
+    This said "Yes"/"No" while system_configuration said "enabled"/"disabled"
+    and the timezone rule wrote a sentence - the same 1, three different words,
+    depending only on which table the analyst happened to be looking at.
+    """
+    return decode_switch(data) or str(data)
+
+# ---------------------------------------------------------------------------
+#  Registry value decoding: locales, switches, flag fields, shell item lists
+#
+#  These live here, beside the timezone and networklist rules, because this is
+#  the file that decodes registry values. They spent a while in
+#  registry_extra_keys.py where nothing else could reach them, which is how
+#  `system_configuration` came to decode a locale while `network_interfaces`
+#  next door rendered the same kind of value as raw text.
+#
+#  Everything here is name-driven and context-free: an LCID is an LCID whatever
+#  key it sits under, so `render_registry_value` can fall back to these for any
+#  artifact rather than needing a rule per table.
+# ---------------------------------------------------------------------------
+
+# Every locale Windows itself names, read out of the OS with GetLocaleInfoEx /
+# GetLocaleInfoW rather than typed by hand - 207 of the 208 in Python's
+# `locale.windows_locale`, plus the two legacy Bhutan ids modern Windows has
+# dropped. Embedded as a table rather than called at runtime so an offline
+# image decodes the same way on any examiner's machine.
+LCIDS = {
+    "0004": "Chinese (Simplified, Mainland China)",
+    "0401": "Arabic (Saudi Arabia)",
+    "0402": "Bulgarian (Bulgaria)",
+    "0403": "Catalan (Catalan)",
+    "0404": "Chinese (Traditional, Taiwan)",
+    "0405": "Czech (Czechia)",
+    "0406": "Danish (Denmark)",
+    "0407": "German (Germany)",
+    "0408": "Greek (Greece)",
+    "0409": "English (United States)",
+    "040A": "Spanish (Spain, International Sort)",
+    "040B": "Finnish (Finland)",
+    "040C": "French (France)",
+    "040D": "Hebrew (Israel)",
+    "040E": "Hungarian (Hungary)",
+    "040F": "Icelandic (Iceland)",
+    "0410": "Italian (Italy)",
+    "0411": "Japanese (Japan)",
+    "0412": "Korean (Korea)",
+    "0413": "Dutch (Netherlands)",
+    "0414": "Norwegian Bokm?l (Norway)",
+    "0415": "Polish (Poland)",
+    "0416": "Portuguese (Brazil)",
+    "0417": "Romansh (Switzerland)",
+    "0418": "Romanian (Romania)",
+    "0419": "Russian (Russia)",
+    "041A": "Croatian (Croatia)",
+    "041B": "Slovak (Slovakia)",
+    "041C": "Albanian (Albania)",
+    "041D": "Swedish (Sweden)",
+    "041E": "Thai (Thailand)",
+    "041F": "Turkish (T?rkiye)",
+    "0420": "Urdu (Pakistan)",
+    "0421": "Indonesian (Indonesia)",
+    "0422": "Ukrainian (Ukraine)",
+    "0423": "Belarusian (Belarus)",
+    "0424": "Slovenian (Slovenia)",
+    "0425": "Estonian (Estonia)",
+    "0426": "Latvian (Latvia)",
+    "0427": "Lithuanian (Lithuania)",
+    "0428": "Tajik (Cyrillic, Tajikistan)",
+    "0429": "Persian (Iran)",
+    "042A": "Vietnamese (Vietnam)",
+    "042B": "Armenian (Armenia)",
+    "042C": "Azerbaijani (Latin, Azerbaijan)",
+    "042D": "Basque (Basque)",
+    "042E": "Upper Sorbian (Germany)",
+    "042F": "Macedonian (North Macedonia)",
+    "0432": "Setswana (South Africa)",
+    "0434": "isiXhosa (South Africa)",
+    "0435": "isiZulu (South Africa)",
+    "0436": "Afrikaans (South Africa)",
+    "0437": "Georgian (Georgia)",
+    "0438": "Faroese (Faroe Islands)",
+    "0439": "Hindi (India)",
+    "043A": "Maltese (Malta)",
+    "043B": "Sami, Northern (Norway)",
+    "043E": "Malay (Malaysia)",
+    "043F": "Kazakh (Kazakhstan)",
+    "0440": "Kyrgyz (Kyrgyzstan)",
+    "0441": "Kiswahili (Kenya)",
+    "0442": "Turkmen (Turkmenistan)",
+    "0443": "Uzbek (Latin, Uzbekistan)",
+    "0444": "Tatar (Russia)",
+    "0445": "Bengali (India)",
+    "0446": "Punjabi (India)",
+    "0447": "Gujarati (India)",
+    "0448": "Odia (India)",
+    "0449": "Tamil (India)",
+    "044A": "Telugu (India)",
+    "044B": "Kannada (India)",
+    "044C": "Malayalam (India)",
+    "044D": "Assamese (India)",
+    "044E": "Marathi (India)",
+    "044F": "Sanskrit (India)",
+    "0450": "Mongolian (Mongolia)",
+    "0451": "Tibetan (China)",
+    "0452": "Welsh (United Kingdom)",
+    "0453": "Khmer (Cambodia)",
+    "0454": "Lao (Laos)",
+    "0456": "Galician (Galician)",
+    "0457": "Konkani (India)",
+    "045A": "Syriac (Syria)",
+    "045B": "Sinhala (Sri Lanka)",
+    "045D": "Inuktitut (Syllabics, Canada)",
+    "045E": "Amharic (Ethiopia)",
+    "0461": "Nepali (Nepal)",
+    "0462": "Western Frisian (Netherlands)",
+    "0463": "Pashto (Afghanistan)",
+    "0464": "Filipino (Philippines)",
+    "0465": "Divehi (Maldives)",
+    "0468": "Hausa (Latin, Nigeria)",
+    "046A": "Yoruba (Nigeria)",
+    "046B": "Quechua (Bolivia)",
+    "046C": "Sesotho sa Leboa (South Africa)",
+    "046D": "Bashkir (Russia)",
+    "046E": "Luxembourgish (Luxembourg)",
+    "046F": "Kalaallisut (Greenland)",
+    "0478": "Yi (China)",
+    "047A": "Mapuche (Chile)",
+    "047C": "Mohawk (Canada)",
+    "047E": "Breton (France)",
+    "0480": "Uyghur (China)",
+    "0481": "M?ori (New Zealand)",
+    "0482": "Occitan (France)",
+    "0483": "Corsican (France)",
+    "0484": "Alsatian (France)",
+    "0485": "Sakha (Russia)",
+    "0486": "K?iche? (Latin, Guatemala)",
+    "0487": "Kinyarwanda (Rwanda)",
+    "0488": "Wolof (Senegal)",
+    "048C": "Persian (Afghanistan)",
+    "0801": "Arabic (Iraq)",
+    "0804": "Chinese (Simplified, Mainland China)",
+    "0807": "German (Switzerland)",
+    "0809": "English (United Kingdom)",
+    "080A": "Spanish (Mexico)",
+    "080C": "French (Belgium)",
+    "0810": "Italian (Switzerland)",
+    "0813": "Dutch (Belgium)",
+    "0814": "Norwegian Nynorsk (Norway)",
+    "0816": "Portuguese (Portugal)",
+    "081A": "Serbian (Latin, Serbia and Montenegro (Former))",
+    "081D": "Swedish (Finland)",
+    "0820": "Urdu (India)",
+    "082C": "Azerbaijani (Cyrillic, Azerbaijan)",
+    "082E": "Lower Sorbian (Germany)",
+    "083B": "Sami, Northern (Sweden)",
+    "083C": "Irish (Ireland)",
+    "083E": "Malay (Brunei)",
+    "0843": "Uzbek (Cyrillic, Uzbekistan)",
+    "0850": "Mongolian (Traditional Mongolian, China)",
+    "0851": "Dzongkha (Bhutan)",
+    "085D": "Inuktitut (Latin, Canada)",
+    "085F": "Central Atlas Tamazight (Latin, Algeria)",
+    "086B": "Quechua (Ecuador)",
+    "0C01": "Arabic (Egypt)",
+    "0C04": "Chinese (Traditional, Hong Kong SAR)",
+    "0C07": "German (Austria)",
+    "0C09": "English (Australia)",
+    "0C0A": "Spanish (Spain, International Sort)",
+    "0C0C": "French (Canada)",
+    "0C1A": "Serbian (Cyrillic, Serbia and Montenegro (Former))",
+    "0C3B": "Sami, Northern (Finland)",
+    "0C6B": "Quechua (Peru)",
+    "1001": "Arabic (Libya)",
+    "1004": "Chinese (Simplified, Singapore)",
+    "1007": "German (Luxembourg)",
+    "1009": "English (Canada)",
+    "100A": "Spanish (Guatemala)",
+    "100C": "French (Switzerland)",
+    "101A": "Croatian (Bosnia & Herzegovina)",
+    "103B": "Sami, Lule (Norway)",
+    "1401": "Arabic (Algeria)",
+    "1404": "Chinese (Traditional, Macao SAR)",
+    "1407": "German (Liechtenstein)",
+    "1409": "English (New Zealand)",
+    "140A": "Spanish (Costa Rica)",
+    "140C": "French (Luxembourg)",
+    "141A": "Bosnian (Latin, Bosnia & Herzegovina)",
+    "143B": "Sami, Lule (Sweden)",
+    "1801": "Arabic (Morocco)",
+    "1809": "English (Ireland)",
+    "180A": "Spanish (Panama)",
+    "180C": "French (Monaco)",
+    "181A": "Serbian (Latin, Bosnia & Herzegovina)",
+    "183B": "Sami, Southern (Norway)",
+    "1C01": "Arabic (Tunisia)",
+    "1C09": "English (South Africa)",
+    "1C0A": "Spanish (Dominican Republic)",
+    "1C1A": "Serbian (Cyrillic, Bosnia and Herzegovina)",
+    "1C3B": "Sami, Southern (Sweden)",
+    "2001": "Arabic (Oman)",
+    "2009": "English (Jamaica)",
+    "200A": "Spanish (Venezuela)",
+    "201A": "Bosnian (Cyrillic, Bosnia and Herzegovina)",
+    "203B": "Sami, Skolt (Finland)",
+    "2129": "Tibetan (Bhutan)",
+    "2401": "Arabic (Yemen)",
+    "2409": "English (Caribbean)",
+    "240A": "Spanish (Colombia)",
+    "243B": "Sami, Inari (Finland)",
+    "2801": "Arabic (Syria)",
+    "2809": "English (Belize)",
+    "280A": "Spanish (Peru)",
+    "2C01": "Arabic (Jordan)",
+    "2C09": "English (Trinidad & Tobago)",
+    "2C0A": "Spanish (Argentina)",
+    "3001": "Arabic (Lebanon)",
+    "3009": "English (Zimbabwe)",
+    "300A": "Spanish (Ecuador)",
+    "3401": "Arabic (Kuwait)",
+    "3409": "English (Philippines)",
+    "340A": "Spanish (Chile)",
+    "3801": "Arabic (United Arab Emirates)",
+    "380A": "Spanish (Uruguay)",
+    "3C01": "Arabic (Bahrain)",
+    "3C0A": "Spanish (Paraguay)",
+    "4001": "Arabic (Qatar)",
+    "4009": "English (India)",
+    "400A": "Spanish (Bolivia)",
+    "4409": "English (Malaysia)",
+    "440A": "Spanish (El Salvador)",
+    "4809": "English (India)",
+    "480A": "Spanish (Honduras)",
+    "4C0A": "Spanish (Nicaragua)",
+    "500A": "Spanish (Puerto Rico)",
+    "540A": "Spanish (United States)",
+    "7C04": "Chinese (Traditional, Hong Kong SAR)",
+}
+
+# Value names that hold a 0/1 switch. An explicit list, never a name pattern:
+# the pattern tried while scoping this matched `Version` (it ends in "on"), and
+# in a case where Version happens to be 1 that renders as "enabled".
+#
+# Curated, not harvested. Eighty-one value names in a real case hold only 0 or
+# 1, and most are NOT switches - TcbLoaderStartTimestamp and ResumeChecksumTime
+# are timestamps that happen to be zero, LowDiskMinimumMBytes is a megabyte
+# count that happens to be one, StandardBias is minutes, and Category, SetupType
+# and ErrorMode are enumerations whose 0 means something specific. A wrong
+# decode is worse than none, so a name earns its place here by being a
+# documented switch.
+SWITCH_SETTINGS = frozenset((
+    # Explorer / shell
+    "AlwaysShowExt", "Hidden", "HideFileExt", "ShowSuperHidden",
+    "HideDrivesWithNoMedia", "SeparateProcess", "AlwaysUnloadDLL",
+    "DisableThumbnailCache", "DisableThumbsDBOnNetworkFolders",
+    "ShellErrorMode", "SilentTerminate",
+    # UAC and logon
+    "EnableLUA", "EnableInstallerDetection", "EnableSecureUIAPaths",
+    "EnableUIADesktopToggle", "PromptOnSecureDesktop",
+    "ValidateAdminCodeSignatures", "FilterAdministratorToken",
+    "LocalAccountTokenFilterPolicy", "AutoAdminLogon", "ForceAutoLogon",
+    "DontDisplayLastUserName", "DisableCAD", "EnableFirstLogonAnimation",
+    # Network identity and TCP/IP
+    "EnableDHCP", "IPEnableRouter", "ForwardBroadcasts",
+    "SyncDomainWithMembership", "StrictTimeWaitSeqCheck", "IsServerNapAware",
+    "DhcpConnForceBroadcastFlag", "EnableLinkedConnections",
+    "AllowRemoteRPC", "EnableSecuritySignature", "RequireSecuritySignature",
+    "AllowInsecureGuestAuth", "RequireSignOrSeal", "SealSecureChannel",
+    "SignSecureChannel", "DisablePasswordChange", "RefusePasswordChange",
+    "SMB1", "SMB2", "RestrictNullSessAccess",
+    # Remote Desktop
+    "fDenyTSConnections", "UserAuthentication", "fDisableCdm",
+    "fAllowToGetHelp", "fSingleSessionPerUser", "fPromptForPassword",
+    "fDisableClip", "fDisableLPT", "fDisableCcm",
+    # Credentials and LSA
+    "UseLogonCredential", "AllowProtectedCreds", "DisableDomainCreds",
+    "EveryoneIncludesAnonymous", "NoLMHash", "RestrictAnonymous",
+    "RestrictAnonymousSAM", "LimitBlankPasswordUse",
+    "EnableVirtualizationBasedSecurity", "RunAsPPL",
+    # Defender / SmartScreen / attachments
+    "DisableAntiSpyware", "DisableRealtimeMonitoring",
+    "DisableBehaviorMonitoring", "DisableScriptScanning",
+    "DisableIOAVProtection", "SaveZoneInformation", "EnableSmartScreen",
+    "SpyNetReporting",
+    # Policy lockdowns
+    "DisableTaskMgr", "DisableRegistryTools", "DisableCMD", "NoRun",
+    "NoControlPanel", "NoFolderOptions",
+    # Zone policy
+    "AutoDetect", "IntranetName", "UNCAsIntranet", "ProxyByPass",
+    "ProxyEnable",
+    # Power and boot
+    "HiberbootEnabled", "HibernateEnabled", "HBFlagsSwitch",
+    "HypervisorLaunchTypeReflect", "Preshutdown", "NoInteractiveServices",
+    # Scripting hosts
+    "UseWINSAFER", "ActiveDebugging", "DisplayLogo",
+    # Time and locale
+    "DynamicDaylightTimeDisabled", "ServiceDllUnloadOnStop",
+    # Search / indexing / servicing
+    "DebugTranFiles", "AcceleratedInstallRequired", "IsOOBEInProgress",
+    "OOBEInProgress", "SystemSetupInProgress", "RestartSetup",
+    "RemoveWindowsOld", "SetupSupported", "FlightPendingCommit",
+    "UpdateDesiredVisibility", "ComponentizedBuild",
+    "CoreWorkerSupportsPrivateNamespaces", "StartWorkerOnServiceStart",
+    "MidisrvTransferComplete", "LoadAppInit_DLLs",
+    "RequireSignedAppInit_DLLs",
+))
+
+# Value names that look like switches and are NOT. Listed explicitly so a later
+# widening of SWITCH_SETTINGS cannot quietly swallow one of them.
+NEVER_A_SWITCH = frozenset((
+    "Version", "Type", "Start", "State", "Count", "Size", "Order", "Index",
+    "Category", "Managed", "NameType", "AddressType", "SetupType",
+    "SetupPhase", "ErrorMode", "DefaultColor", "CSDVersion", "CSDReleaseType",
+    "StandardBias", "DaylightBias", "Bias", "ActiveTimeBias",
+    "LowDiskMinimumMBytes", "DhcpGatewayHardwareCount", "PowerSettingProfile",
+    "ConsentPromptBehaviorAdmin", "ConsentPromptBehaviorUser",
+    "ScRemoveOption", "NoDriveTypeAutoRun", "LastIpuStatus", "LsaCfgFlags",
+))
+
+# W32Time NtpServer trailing flags, e.g. "time.windows.com,0x9".
+NTP_SERVER_FLAGS = (
+    (0x01, "special interval"),
+    (0x02, "use as fallback only"),
+    (0x04, "symmetric active"),
+    (0x08, "client"),
+)
+
+# A .lnk begins with a 76-byte header whose second field is this GUID.
+_LNK_HEADER = bytes.fromhex("4C000000") + bytes.fromhex(
+    "0114020000000000C000000000000046")
+
+
+def decode_lcid(raw):
+    """`0409` -> `English (United States) [LCID 0x0409]`, or "" if unknown."""
+    code = str(raw or "").strip().upper().lstrip("0").rjust(4, "0")
+    name = LCIDS.get(code)
+    return "%s [LCID 0x%s]" % (name, code) if name else ""
+
+
+def decode_switch(value):
+    """A 0/1 switch as words. "" for anything that is not exactly 0 or 1."""
+    text = str("" if value is None else value).strip()
+    if text == "0":
+        return "disabled"
+    if text == "1":
+        return "enabled"
+    return ""
+
+
+def decode_ntp_server(raw):
+    """`time.windows.com,0x9` -> the host plus what the flag byte asks for."""
+    text = str(raw or "")
+    if "," not in text:
+        return ""
+    host, _, flags = text.rpartition(",")
+    flags = flags.strip()
+    try:
+        bits = int(flags, 16) if flags.lower().startswith("0x") else int(flags)
+    except ValueError:
+        return ""
+    named = [label for bit, label in NTP_SERVER_FLAGS if bits & bit]
+    if not named:
+        return ""
+    return "%s (%s)" % (host.strip(), ", ".join(named))
+
+
+def decode_filetime_at(data, offset):
+    """A FILETIME embedded at a known offset inside a blob."""
+    if not isinstance(data, (bytes, bytearray)) or len(data) < offset + 8:
+        return ""
+    try:
+        return parse_filetime(bytes(data[offset:offset + 8])) or ""
+    except Exception:
+        return ""
+
+
+def expand_environment_strings(text, env):
+    r"""Expand %VARIABLES% using values read from the EVIDENCE, not this machine.
+
+    `os.path.expandvars` would reach for the analyst's own environment, and on
+    an offline image that is somebody else's computer: a machine installed to
+    D:\Windows would be reported as C:\Windows because that is where the
+    examiner's Windows lives. The caller supplies what it read from the hive,
+    and a variable that is not in there is left standing rather than guessed.
+    """
+    if not env or not text:
+        return ""
+    out = str(text)
+    for name, value in env.items():
+        if not value:
+            continue
+        token = ("%" + str(name) + "%").lower()
+        lowered = out.lower()
+        start = lowered.find(token)
+        while start != -1:
+            out = out[:start] + str(value) + out[start + len(token):]
+            lowered = out.lower()
+            start = lowered.find(token)
+    return out if out != str(text) else ""
+
+
+def shell_item_lists(data):
+    """The ItemIDLists inside a Taskband Favorites blob.
+
+    Layout, read off the bytes rather than assumed: each record is a 0x00 byte,
+    a 4-byte little-endian length, then that many bytes of a standard shell
+    ItemIDList; the sequence ends at 0xFF. On the reference system all eleven
+    records account for every one of the 11,036 bytes.
+
+    Bounded on every axis - a record header that is not 0x00, a length running
+    past the buffer, or more than 512 records ends the walk. A blob this cannot
+    read returns nothing, and the caller keeps the hex.
+    """
+    out, offset = [], 0
+    if not isinstance(data, (bytes, bytearray)):
+        return out
+    data = bytes(data)
+    while offset + 5 <= len(data) and len(out) < 512:
+        if data[offset] != 0x00:
+            break                                   # 0xFF terminator, or junk
+        size = int.from_bytes(data[offset + 1:offset + 5], "little")
+        end = offset + 5 + size
+        if size <= 0 or end > len(data):
+            break
+        out.append(data[offset + 5:end])
+        offset = end
+    return out
+
+
+def shell_item_names(idlist):
+    """The names in one ItemIDList, outermost first.
+
+    `parse_shell_item_id` reads the 2-byte size at offset 0 and the type at
+    offset 2, so each item is passed WITH its size prefix. Stripping it shifts
+    every field by two and quietly returns a name two characters short -
+    "ave.lnk" for "Brave.lnk".
+    """
+    names, offset, seen = [], 0, 0
+    while offset + 2 <= len(idlist) and seen < 64:
+        size = int.from_bytes(idlist[offset:offset + 2], "little")
+        if size == 0:
+            break
+        if size < 3 or offset + size > len(idlist):
+            break
+        try:
+            parsed = parse_shell_item_id(idlist[offset:offset + size]) or {}
+        except Exception:
+            parsed = {}
+        name = (parsed.get("file_name") or parsed.get("special_folder")
+                or parsed.get("drive_letter") or "")
+        if name:
+            names.append(str(name))
+        offset += size
+        seen += 1
+    return names
+
+
+def decode_taskband(data):
+    r"""The pinned taskbar items, in the order Explorer stores them.
+
+    Verified against the reference system: the five filesystem records decode
+    to exactly the five .lnk files in `User Pinned\TaskBar`, and the other six
+    are the Applications folder GUID - Store apps pinned by AUMID, which have
+    no .lnk at all. That is why the count is larger than that folder's.
+    """
+    lists = shell_item_lists(data)
+    if not lists:
+        return ""
+    pinned, apps = [], 0
+    for idlist in lists:
+        names = shell_item_names(idlist)
+        leaf = names[-1] if names else ""
+        if leaf and not leaf.startswith("{"):
+            pinned.append(leaf)
+        else:
+            apps += 1
+    parts = []
+    if pinned:
+        parts.append("%d pinned: %s" % (len(pinned), ", ".join(pinned)))
+    if apps:
+        parts.append("%d by app id (no shortcut)" % apps)
+    return "; ".join(parts)
+
+
+def decode_favorites_resolve(data):
+    """How many shortcuts Taskband kept beside the pins, and their sizes.
+
+    FavoritesResolve is NOT the same layout as Favorites: it is a run of
+    `<4-byte length><.lnk file>` records. Each embedded shortcut carries the
+    target path, so a full decode belongs to the LNK parser rather than here -
+    what this reports is the count, checked against the shortcut signature so
+    the number means something rather than being a guess at the framing.
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        return ""
+    data = bytes(data)
+    offset, records, total = 0, 0, 0
+    while offset + 4 <= len(data) and records < 512:
+        size = int.from_bytes(data[offset:offset + 4], "little")
+        body = data[offset + 4:offset + 4 + size]
+        if size <= 0 or offset + 4 + size > len(data):
+            break
+        if not body.startswith(_LNK_HEADER):
+            break                                   # not the framing we think
+        records += 1
+        total += size
+        offset += 4 + size
+    if not records:
+        return ""
+    return ("%d resolved shortcut(s), %d bytes - target paths are in the "
+            "shortcuts themselves" % (records, total))
+
+
+def decode_by_name(value_name, data, value_type=None, env=None):
+    r"""The decoders that hold whatever key the value came from.
+
+    This is the fallback layer: a locale, a switch, an NTP flag field or an
+    unexpanded %VARIABLE% means the same thing under any key, so every artifact
+    gets them without needing a rule of its own.
+    """
+    name = str(value_name or "").strip()
+
+    if name in ("Default", "InstallLanguage", "InstallLanguageFallback"):
+        return decode_lcid(data)
+
+    if name == "NtpServer":
+        return decode_ntp_server(data)
+
+    if name in NEVER_A_SWITCH:
+        return ""
+    if name in SWITCH_SETTINGS:
+        return decode_switch(data)
+
+    if isinstance(data, str) and "%" in data:
+        expandable = (value_type in (2, "REG_EXPAND_SZ")
+                      or data.count("%") >= 2)
+        if expandable:
+            return expand_environment_strings(data, env)
+    return ""
+
+
+REGISTRY_VALUE_RULES = {
+    "timezone": {
+        "bias": _tz_bias,
+        "activetimebias": _tz_bias,
+        "standardbias": _tz_season_bias,
+        "daylightbias": _tz_season_bias,
+        "standardstart": _tz_rule,
+        "daylightstart": _tz_rule,
+        "dynamicdaylighttimedisabled":
+            lambda d, t: "enabled - the clocks are held fixed" if _truthy(d)
+            else "disabled - seasonal changes apply",
+    },
+    # The flat configuration keys. Only the values that need a rule of their
+    # own are here; locales, switches and %VARIABLE% expansion are handled by
+    # the name-driven fallback in render_registry_value, which serves every
+    # context rather than this one.
+    "system_configuration": {
+        "health": lambda d, t: (
+            "last state change %s" % decode_filetime_at(d, 8))
+            if decode_filetime_at(d, 8) else "",
+        "favorites": lambda d, t: decode_taskband(d),
+        "favoritesresolve": lambda d, t: decode_favorites_resolve(d),
+    },
+    "networklist": {
+        "defaultgatewaymac": lambda d, t: format_mac_address(d),
+        "category": lambda d, t: network_category_label(d),
+        "nametype": lambda d, t: network_name_type_label(d),
+        "managed": lambda d, t: network_managed_label(d),
+        "datecreated": lambda d, t: parse_systemtime(d),
+        "datelastconnected": lambda d, t: parse_systemtime(d),
+    },
+    "bam": {},          # every binary value is an entry; handled below
+    "network_interfaces": {
+        "leaseobtainedtime": lambda d, t: unix_seconds_label(d),
+        "leaseterminatestime": lambda d, t: unix_seconds_label(d),
+        "t1": lambda d, t: unix_seconds_label(d),
+        "t2": lambda d, t: unix_seconds_label(d),
+        "dhcpgatewayhardware": lambda d, t: _gateway_hardware_label(d),
+        "enabledhcp": _yes_no,
+        "isservernapaware": _yes_no,
+        "dhcpconnforcebroadcastflag": _yes_no,
+    },
+}
+
+
+def _truthy(value):
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError):
+        return bool(value)
+
+
+def _gateway_hardware_label(data):
+    got = parse_dhcp_gateway_hardware(data)
+    if not got["gateway_ip"]:
+        return ""
+    if got["gateway_mac"]:
+        return "gateway %s at %s" % (got["gateway_ip"], got["gateway_mac"])
+    return "gateway %s" % got["gateway_ip"]
+
+
+def _bam_label(value_name, data):
+    if is_bam_metadata(value_name):
+        return "BAM bookkeeping, not a program"
+    got = parse_bam_blob(data)
+    if not got["last_execution"]:
+        return ""
+    bits = [got["last_execution"]]
+    if got["name_kind"]:
+        bits.append("name is a %s" % got["name_kind"])
+    return "  -  ".join(bits)
+
+
+def render_registry_value(context, value_name, data, value_type=None, env=None):
+    """The readable form of one raw registry value.
+
+    `context` names the artifact, because the same value name means different
+    things under different keys - which is the whole reason this is a table of
+    rules and not one function with a long if.
+
+    Three layers, in order:
+
+      1. the context's own rule, for values that mean something particular
+         under that key;
+      2. `decode_by_name`, for the things that mean the same under ANY key - a
+         locale, a 0/1 switch, an NTP flag field, an unexpanded %VARIABLE%.
+         This layer is why one move made twenty tables decodable instead of
+         one: without it every artifact would need its own copy of the same
+         four rules;
+      3. hex, for bytes nothing above could read.
+
+    `env` is the expansion environment read from the EVIDENCE; without it no
+    %VARIABLE% is expanded, which is the correct answer for an offline image
+    whose SystemRoot is not the examiner's.
+
+    Never raises: a value it cannot decode comes back as text or hex, which is
+    still better than the Python bytes repr that was being stored.
+    """
+    try:
+        name = str(value_name or "").strip().lower()
+        if context == "bam":
+            return _bam_label(value_name, data)
+        rule = REGISTRY_VALUE_RULES.get(context, {}).get(name)
+        if rule is not None:
+            got = rule(data, value_type)
+            if got:
+                return got
+        got = decode_by_name(value_name, data, value_type, env)
+        if got:
+            return got
+        raw = _as_bytes(data)
+        if raw is None:
+            return ""          # text values are already readable as stored
+        return bytes_as_hex(raw)
+    except Exception as exc:               # pragma: no cover
+        logger.debug("render_registry_value(%s/%s): %s", context, value_name, exc)
+        return ""

@@ -23,6 +23,7 @@ import json
 import logging
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
+from timeline.data import artifact_map as _artifact_map
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -39,80 +40,11 @@ class TimestampIndexer:
     # Comprehensive timestamp column mappings for all artifact types
     # Format: artifact_type -> [(table_name, timestamp_column, timestamp_type, description)]
     # Updated to match actual database schemas in case directory
-    TIMESTAMP_MAPPINGS = {
-        'Prefetch': [
-            ('prefetch_data', 'last_executed', 'executed', 'Last execution time'),
-            ('prefetch_data', 'created_on', 'created', 'File creation time'),
-            ('prefetch_data', 'modified_on', 'modified', 'File modification time'),
-            ('prefetch_data', 'accessed_on', 'accessed', 'File access time'),
-        ],
-        'LNK': [
-            ('LNK_Files', 'Time_Creation', 'created', 'Link file creation time'),
-            ('LNK_Files', 'Time_Modification', 'modified', 'Link file modification time'),
-            ('LNK_Files', 'Time_Access', 'accessed', 'Link file access time'),
-            ('Automatic_JumpLists', 'Time_Creation', 'created', 'Automatic JumpList creation time'),
-            ('Automatic_JumpLists', 'Time_Modification', 'modified', 'Automatic JumpList modification time'),
-            ('Automatic_JumpLists', 'Time_Access', 'accessed', 'Automatic JumpList access time'),
-            ('Custom_JumpLists', 'Time_Creation', 'created', 'Custom JumpList creation time'),
-            ('Custom_JumpLists', 'Time_Modification', 'modified', 'Custom JumpList modification time'),
-            ('Custom_JumpLists', 'Time_Access', 'accessed', 'Custom JumpList access time'),
-        ],
-        'Registry': [
-            ('UserAssist', 'last_execution', 'executed', 'UserAssist last execution time'),
-            ('UserAssist', 'focus_time', 'accessed', 'UserAssist focus time'),
-            ('MUICache', 'timestamp', 'various', 'MUICache timestamp'),
-            ('InstalledSoftware', 'install_date', 'installed', 'Installed software timestamp'),
-            ('ComputerNameInfo', 'installation_date', 'installed', 'Computer installation date'),
-            ('Auto', 'last_install_time', 'installed', 'Autorun last install time'),
-            ('Auto', 'scheduled_install_time', 'created', 'Autorun scheduled install time'),
-            ('WindowsUpdateInfo', 'last_check_time', 'accessed', 'Windows Update last check time'),
-            ('WindowsUpdateInfo', 'last_install_time', 'installed', 'Windows Update last install time'),
-            ('WindowsUpdateInfo', 'scheduled_install_time', 'created', 'Windows Update scheduled install time'),
-            ('ShutdownInfo', 'shutdown_time', 'executed', 'System shutdown time'),
-            ('WordWheelQuery', 'access_date', 'accessed', 'WordWheel query access date'),
-            ('RunMRU', 'access_date', 'accessed', 'Run dialog MRU access date'),
-            ('Network_list', 'connection_date', 'accessed', 'Network connection date'),
-            ('OpenSaveMRU', 'access_date', 'accessed', 'Open/Save MRU access date'),
-            ('LastSaveMRU', 'access_date', 'accessed', 'Last Save MRU access date'),
-        ],
-        'BAM': [
-            ('BAM', 'last_execution', 'executed', 'Background Activity Moderator execution time'),
-        ],
-        'Amcache': [
-            ('InventoryApplication', 'install_date', 'installed', 'Application install date'),
-            ('InventoryApplicationFile', 'link_date', 'linked', 'Application file link date'),
-            ('InventoryDriverBinary', 'driver_last_write_time', 'modified', 'Driver last write time'),
-            ('InventoryDriverBinary', 'driver_time_stamp', 'created', 'Driver timestamp'),
-        ],
-        'Shimcache': [
-            ('shimcache_entries', 'last_modified', 'modified', 'Shimcache last modified time'),
-        ],
-        'RecycleBin': [
-            ('recycle_bin_entries', 'deletion_time', 'deleted', 'File deletion time'),
-        ],
-        'ShellBag': [
-            ('Shellbags', 'created_date', 'created', 'First interaction time'),
-            ('Shellbags', 'modified_date', 'modified', 'Last interaction time'),
-            ('Shellbags', 'access_date', 'accessed', 'Access time'),
-            ('Shellbags', 'accessed_date', 'accessed', 'Accessed date fallback'),
-        ],
-        'SRUM': [
-            ('srum_application_usage', 'timestamp', 'various', 'Application usage timestamp'),
-            ('srum_network_connectivity', 'timestamp', 'various', 'Network connectivity timestamp'),
-            ('srum_network_data_usage', 'timestamp', 'various', 'Network data usage timestamp'),
-            ('srum_energy_usage', 'timestamp', 'various', 'Energy usage timestamp'),
-            ('srum_app_timeline', 'timestamp', 'various', 'Application timeline timestamp'),
-        ],
-        'USN': [
-            ('journal_events', 'timestamp', 'various', 'USN journal entry timestamp'),
-        ],
-        'MFT': [
-            ('mft_records', 'created_time', 'created', 'File creation time'),
-            ('mft_records', 'modified_time', 'modified', 'File modification time'),
-            ('mft_records', 'accessed_time', 'accessed', 'File access time'),
-            ('mft_records', 'mft_modified_time', 'mft_modified', 'MFT record modification time'),
-        ],
-    }
+    # Shared with the data manager - see artifact_map. This was a second
+    # copy that drifted: it filed ShellBags under `ShellBag`, lacked DAM
+    # and USB storage, and listed UserAssist.focus_time, which is a
+    # duration rather than a timestamp.
+    TIMESTAMP_MAPPINGS = dict(_artifact_map.TIMESTAMP_MAPPINGS)
     
     # Primary timestamp columns for each artifact type (used for main timeline display)
     # Updated to match actual database schemas

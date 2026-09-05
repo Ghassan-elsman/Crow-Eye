@@ -157,6 +157,42 @@ The same data is exposed on
 `TimeWindowScanningEngine._last_window_correlation_stats` for
 programmatic inspection by other engines/tools.
 
+## The built-in Wings, and what each one asks
+
+Eleven ship by default. Check this list before authoring a new one - the
+overlap is usually with a wing that already exists.
+
+| Wing | The question it answers |
+|---|---|
+| Execution Proof | What ran on this machine, corroborated across Prefetch, ShimCache, AmCache, LNK, jump lists and SRUM |
+| Execution Without Trace | What ran but left no Prefetch entry, and whether timestamps were tampered with |
+| Persistence Mechanisms | What will run again - Run keys, services, scheduled tasks, Active Setup, Safe Mode, App Paths |
+| Account Logon | Who authenticated, and what they did in that session |
+| Brute Force / Spray | Repeated failed authentication |
+| Lateral Movement | How this host was reached, or reached others |
+| USB / Removable Media | What was plugged in, and what was taken |
+| User Activity | Where the user went and what they opened |
+| Anti-Forensics | What was cleared, wiped or hidden |
+| Ransomware Mass Encryption | A mass-rewrite burst |
+| **Security Control Tampering** | **Were the defences on at the time?** Mark-of-the-Web handling, VBS and Credential Guard, SMB signing, the zone map, fast startup, event log channels |
+
+**The persistence correction.** `AutoStartPrograms` lists what the Run keys
+hold; Windows records separately, in `StartupApproved`, whether each of those
+is actually allowed to launch. The rows carry `startup_state` and
+`disabled_at`, and the Persistence wing has a rule on each state:
+
+* `pers_autostart_disabled` - the entry does **not** run at logon. On the
+  reference system six of ten Run entries were disabled, two of them since
+  February, and every one of them had been reported as live persistence.
+* `pers_autostart_enabled` - Windows confirms it does run.
+* A row whose `startup_state` is `unknown` matches **neither**. Most autostart
+  locations have no StartupApproved equivalent at all, and silence is not
+  consent - never report an `unknown` row as enabled.
+
+This is an annotation, not a score penalty: `WeightedScoringEngine` clamps
+negative weights to zero, so a disabled entry is labelled rather than
+discounted. When summarising persistence, say which entries actually run.
+
 ## When you (EYE) should author a Wing
 
 Call `correlation_create_wing` when **all** of these are true:

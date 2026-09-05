@@ -323,9 +323,126 @@ hosts, WinSCP, WinRAR/7-Zip history, Sysinternals EULA acceptance) under `applic
 `SOFTWARE\Microsoft\Windows NT\CurrentVersion`. `ProductName` there still reads "Windows 10" on
 Windows 11 - Microsoft froze it. The build number is the truth: 22000+ is Windows 11.
 
+## Keys nothing used to read
+
+Nineteen keys that hold real data and were opened by no parser. One of them corrects a finding
+rather than adding one.
+
+| Table | Key | Why it matters |
+|---|---|---|
+| `startup_approved` | `CurrentVersion\Explorer\StartupApproved` | **Whether each autostart entry is actually allowed to launch, and when it was switched off.** A Run value is a request; this is the answer. Byte 0 of the 12-byte value carries the state, bytes 4-11 a FILETIME present only when disabled |
+| `app_paths` | `CurrentVersion\App Paths` | How a bare command name resolves to an executable. The path is the key's **default value** - change it and typing the name runs something else, with no path anywhere to give it away |
+| `safe_boot_services` | `Control\SafeBoot\{Minimal,Network}` | What still starts in Safe Mode - the boot people use to clean a machine, which is exactly why persistence gets placed here. `entry_type` is the key's default value (`Service` or `Driver`) |
+| `zone_map` | `Internet Settings\ZoneMap` | Hosts, protocols and ranges assigned to a security zone. A host moved into Trusted Sites (zone 2) runs content every other zone blocks |
+| `app_permissions` | `CapabilityAccessManager\ConsentStore` | Which applications hold consent for microphone, camera or location, and when each last used it. The registry's own record of surveillance-capable access |
+| `shared_dlls` | `CurrentVersion\SharedDLLs` | Reference counts for shared libraries. Mostly inventory, and occasionally the only surviving record that a DLL was ever installed |
+| `hid_devices` | `Enum\HID` | Human interface devices enumerated - keyboards, mice, and anything presenting itself as one |
+| `network_cards` | `Windows NT\CurrentVersion\NetworkCards` | The adapter inventory by installation index. Names cards that no longer have an interface, which is how a removed adapter leaves a trace |
+| `system_configuration` | the flat config keys | Settings rather than artifacts: power and fast startup, locale, time source, TCP/IP identity, search scope, shell folders, taskbar. Same shape as `SecurityPosture`, which holds the security-relevant subset |
+
+**`AutoStartPrograms` alone overstates persistence.** It lists what the Run keys hold, and Windows
+records separately whether each of those is enabled. Join them - `startup_state` and `disabled_at`
+carry the answer onto the row. A row with **no** matching approval entry reads `unknown`, never
+`enabled`: most autostart locations have no StartupApproved equivalent at all, and treating silence
+as consent is how six disabled programs get reported as live persistence.
+
+**Five settings go to `SecurityPosture`, not here**, so no value is stored twice:
+`SaveZoneInformation` (Mark of the Web suppression), `EnableVirtualizationBasedSecurity` and
+`LsaCfgFlags` (whether LSASS was protected, and therefore whether credential theft was possible),
+`RequireSecuritySignature` and `AllowInsecureGuestAuth` (SMB), and `HiberbootEnabled` - fast
+startup, which decides whether a "shutdown" was a real one and therefore whether ShimCache was
+flushed at all.
+
+**`key_path` is hive-rooted and control-set-normalised** in all nine: `SOFTWARE\Microsoft\...`,
+`Software\Microsoft\...` for user hives, and `SYSTEM\CurrentControlSet\...` - the offline parser
+rewrites the control set it actually read (`ControlSet001`) to `CurrentControlSet` so the two
+parsers can be diffed on this column.
+
 ## Timestamp Interpretation
 **WARNING**: The `timestamp` column represents when Crow-eye parsed the registry, NOT when keys were modified.
 Use `last_write_time` for forensic timeline analysis.
+
+**`last_written` is the KEY's write time, never the value's.** The registry stores a timestamp per
+key and none per value, so on a table whose rows are values it is an **upper bound**: the value was
+set at or before that moment, and a key holding ten values gives all ten the same one. `time_basis`
+says which case a row is in - `key upper bound` for the common case, and an exact time only where
+`registry_value_changes` recovered the write from a transaction log. Reading it as "this entry was
+added at this time" is the misreading the column exists to prevent.
+
+## Raw values and their decoded form
+
+Five tables store one row per registry value: `time_zone`, `network_interfaces`,
+`Network_list`, `BAM` and `DAM`. Each has a **`decoded`** column beside its raw
+one. The raw column keeps exactly what the registry held - a REG_BINARY still
+reads as a Python bytes repr there - because a decode has to be checkable
+against the original. **Query `decoded` when you want the meaning; query the raw
+column only to verify one.**
+
+Every value under one key can need a different decode, which is why there is a
+rule table rather than one conversion. Under `TimeZoneInformation` alone:
+
+| Value | Raw | `decoded` |
+|---|---|---|
+| `Bias` | `4294967176` | `-120 minutes  (UTC+02:00)` |
+| `StandardBias` / `DaylightBias` | `0` / `4294967236` | an **additional** shift while that season is in force, not a UTC offset |
+| `StandardName` / `DaylightName` | `@tzres.dll,-342` | the name read from `Time Zones\<TimeZoneKeyName>\Std` in this evidence's own SOFTWARE hive |
+| `StandardStart` / `DaylightStart` | 16 bytes | `last Thursday of October at 23:59:59.999` |
+
+**`StandardStart` and `DaylightStart` are not SYSTEMTIME.** They carry
+SYSTEMTIME's fields with `wDayOfWeek` moved to the end. Read the documented way
+they give an hour of 59 and a second of 999 - impossible values, returned
+without an error. `TimeZoneInfo.agrees_with_tzi` records whether the decoded
+rules matched the `TZI` blob, which stores the same two transitions in the
+documented order; `yes` means two independent readings agreed.
+
+`TimeZoneInfo.bias` is **signed minutes**, and Windows computes local = UTC +
+bias, so a NEGATIVE bias is a zone AHEAD of UTC. `utc_offset` carries the form a
+person reads.
+
+## BAM and DAM entries
+
+The value's data is 24 bytes: a FILETIME, eight zero bytes, then two 32-bit
+fields. `name_kind` decodes the first of those: **`device path`** means the
+value name is an NT path to an executable, **`package family name`** means it
+identifies a packaged app instead. On the reference system that split every one
+of 113 entries correctly, and `name_kind_raw` keeps the number it was read from.
+`trailing_value` is the last field, recorded as the number it is - it was 2 on
+every entry seen, which is not enough to name it.
+
+`Version` and `SequenceNumber` are the BAM key's own bookkeeping. Their rows
+carry no `app_name` and no `process_path`, because neither is a program.
+
+There is no `execution_flags` column. It read a value named `Flags` that these
+keys do not have, so it was 0 on every row.
+
+## Networks
+
+`NetworkProfiles` is one row per network, joining
+`NetworkList\Signatures\Unmanaged` (gateway MAC, DNS suffix, signature) to
+`NetworkList\Profiles` (name, category, name type, dates) on `ProfileGuid`.
+Use it when a question is about a network; `Network_list` is the raw per-value
+layer underneath it.
+
+- `category_label` - Public, Private or Domain, with the raw code beside it.
+- `name_type_label` - wired, wireless, VPN or mobile broadband. There is no
+  `is_hidden` column: it was derived from `NameType == 6`, which is a WIRED
+  network, and it stated a verdict the registry does not.
+- `dns_suffix` - carried through as found. `<none>` is what Windows itself
+  writes when a network has no suffix; it is an answer, not a missing value.
+- `date_created` and `date_last_connected` come from 16-byte SYSTEMTIME values
+  and are **the evidence machine's local clock**, not UTC, unlike `last_written`
+  and `parsed_at` beside them.
+
+`NetworkInterfacesInfo.gateway_hardware_mac` and `gateway_ip` are decoded from
+`DhcpGatewayHardware` and describe the **gateway**, not the interface.
+`mac_address` on the same row is this adapter's own address and is populated
+only when somebody OVERRODE the burned-in one - empty there means no override,
+not missing data. The gateway MAC is a second independent record of what
+`NetworkProfiles.gateway_mac` holds for the same network, so the two agreeing
+is corroboration rather than a restatement.
+
+`lease_obtained` and `lease_expires` are decoded from Unix epoch seconds and
+date when the machine held an address on that network.
 
 ## Common Queries
 - Find persistence mechanisms in Run keys
@@ -358,11 +475,64 @@ Per artifact table, not against a generic one:
   SELECT subkey, name, row_data, key_last_write, user_name FROM RecentDocs
   ORDER BY key_last_write DESC;
   ```
-- **Folder access history:**
+- **Folder view history** - not "folder access", and not necessarily a
+  person. `bag_views` says which kind of shell view wrote the bag:
   ```sql
-  SELECT file_name, modified_date, accessed_date, user_name FROM Shellbags
-  WHERE file_name != '' ORDER BY modified_date DESC;
+  SELECT file_name, bag_views, modified_date, accessed_date, user_name
+  FROM Shellbags WHERE file_name != '' ORDER BY modified_date DESC;
   ```
+- **Which folders were only ever seen through a program's file dialog:**
+  ```sql
+  SELECT file_name, node_slot, registry_path FROM Shellbags
+  WHERE bag_views = 'ComDlg';
+  ```
+  A shellbag records that a container was rendered as a shell view under that
+  account. Explorer hosts shell views; so does every common File Open/Save
+  dialog, inside whatever program opened it. Answering *who* needs another
+  artifact - `LastSaveMRU.application` names the program that last used a
+  dialog in a folder, and UserAssist, RecentDocs and Prefetch say what was
+  running at the time.
+- **What a raw registry value actually means** - the persistence and
+  configuration tables carry a decoded column beside the raw one:
+  `data_decoded` on the ASEP tables, `value_decoded` on the configuration
+  tables, `row_decoded` on `machine_run` / `shutdown_information` /
+  `Windows_lastupdate_subkeys`. It is **empty when there was nothing to
+  decode**, never a copy of the raw value, so filter on `<> ''`:
+  ```sql
+  SELECT name, data, data_decoded, user_name FROM user_shell_folders
+  WHERE data_decoded <> '';
+  ```
+  ```sql
+  -- every autostart entry Explorer has switched OFF
+  SELECT location, program_name, command, startup_state, disabled_at
+  FROM AutoStartPrograms WHERE startup_state = 'disabled';
+  ```
+  Match `= 'disabled'`, not `!= 'enabled'`: `startup_state` has three values,
+  and most rows are `unknown` - an autostart location StartupApproved does not
+  govern at all. On a reference system that is 319 of 331 rows, so
+  `!= 'enabled'` returns nearly the whole table and reads as though almost
+  everything were switched off.
+  A `%VARIABLE%` is expanded from the **evidence's** environment, never the
+  analyst's - so an image installed to `D:\Windows` reads as `D:\...`, and a
+  variable the hive does not define is left standing rather than guessed. When
+  the question is what the registry holds, quote the raw column; when it is
+  what the value means, quote the decoded one.
+- **When was this key written?** `last_written` is the KEY's write time and so
+  an upper bound on every value under it; `time_basis` says whether it is exact.
+  The pair is on the configuration and coverage tables (`explorer_advanced`,
+  `file_exts`, `startup_approved`, `app_paths` and ~44 others) - **not** on the
+  ASEP tables, which carry `hive, key_path, name, data, data_decoded, type,
+  user_name, parsed_at` and nothing else:
+  ```sql
+  SELECT setting, value, last_written, time_basis
+  FROM explorer_advanced ORDER BY last_written DESC;
+  ```
+  `value (txn log)` is the exact moment that value changed, recovered from the
+  transaction log. `key upper bound` means only "at or before" - never report
+  one as when something happened. Most rows are `key upper bound`; on a
+  reference system every one of 2,369 dated rows was, because the transaction
+  logs held no change for those particular values. An empty `time_basis` means
+  the pass could not date the row at all.
 - **Is this parse stale?** Always worth asking of an offline case:
   ```sql
   SELECT hive_name, was_dirty, replayed, entries_applied, reason FROM registry_hive_state;
@@ -386,3 +556,35 @@ worded:
 - **Timing drift is not a defect.** Execution times, DHCP lease blobs, installed-software versions
   and drive letters all move between an image and a later live parse - and a package upgrade means
   the *image* can hold rows the live machine no longer has.
+
+
+## What a tree walk cannot reach
+
+Every ordinary registry reader walks the tree: start at the root, follow the
+subkey lists, report what you reach. Three things are invisible that way, and
+Crow-Eye's offline parser walks the hive's allocator instead to reach them.
+
+**Deleted keys and values (`registry_carved_keys`, `registry_carved_values`).**
+Deleting a key does not erase it. Windows flips the cell's size field from
+negative to positive and moves on; the signature, name, timestamp and pointers
+stay until something allocates over them. Measured on a reference machine, one
+SOFTWARE hive held 1,451 keys and 6,347 values in free space. A carved key
+keeps its own last-written time, which dates the activity rather than the
+deletion. It is **not** evidence that a person deleted anything - uninstallers,
+driver updates and profile maintenance free cells constantly.
+
+**Class names (`registry_class_names`).** A key can carry a class name, a
+second string stored separately from its name. Most keys have none. It is where
+`Control\Lsa\{JD,Skew1,GBG,Data}` keep the machine's boot key, so it is a
+place data can sit in plain text that most registry viewers never render.
+
+**Security descriptors (`registry_security_descriptors`).** Identical
+descriptors are stored once and shared across keys, each carrying a count of
+how many use it. That makes an outlier structurally visible: a key with a
+descriptor of its own, where its siblings share one used by thousands, has had
+its permissions changed - and weakened permissions on a persistence key leave
+no other trace.
+
+**Evidence integrity (`registry_hive_state.source_sha256`).** Log replay works
+on a copy; the original is opened read-only. The hash of the file as found is
+recorded so the case itself can show the evidence was never written to.

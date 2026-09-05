@@ -99,8 +99,8 @@ class DatabaseSearchIntegration:
             'RunMRU_table': ('File Activity', 'RunMRU_table', None, 'id', ['command', 'mru_position']),
             'muicache_entries': ('File Activity', 'MUICache_table', None, 'id', ['application_path', 'application_name', 'app_path']),
             'MUICache_table': ('File Activity', 'MUICache_table', None, 'id', ['application_path', 'application_name']),
-            'shellbags_entries': ('File Activity', 'Shellbags_table', None, 'id', ['path', 'shell_type', 'file_name']),
-            'Shellbags_table': ('File Activity', 'Shellbags_table', None, 'id', ['path', 'shell_type']),
+            'shellbags_entries': ('File Activity', 'Shellbags_table', None, 'id', ['file_name', 'registry_path', 'parent_path']),
+            'Shellbags_table': ('File Activity', 'Shellbags_table', None, 'id', ['file_name', 'registry_path', 'parent_path']),
             'wordwheel_query': ('File Activity', 'WordWheelQuery_table', None, 'id', ['search_term', 'mru_position']),
             'WordWheelQuery': ('File Activity', 'WordWheelQuery_table', None, 'id', ['search_term', 'mru_position']),
             'WordWheelQuery_table': ('File Activity', 'WordWheelQuery_table', None, 'id', ['search_term', 'mru_position']),
@@ -249,14 +249,29 @@ class DatabaseSearchIntegration:
             if not mapping:
                 self.logger.warning(f"No mapping found for table: {table}")
                 parent_widget = getattr(self.parent, 'main_window', None)
-                QtWidgets.QMessageBox.information(
-                    parent_widget,
-                    "Navigation Not Supported",
-                    f"Navigation to table '{table}' is not yet supported.\n\n"
-                    f"Database: {database}\n"
-                    f"Table: {table}\n"
-                    f"Row ID: {row_id}"
-                )
+
+                # Imported and third-party databases are searchable but have no
+                # artifact tab to jump to - they are not Crow-Eye's own
+                # artifacts. Say that, rather than "not yet supported", which
+                # reads as a missing feature and leaves the analyst waiting for
+                # a tab that is never coming.
+                db_lower = str(database).lower()
+                if "imported" in db_lower:
+                    title = "Imported Evidence"
+                    body = (f"This match is in imported evidence, which has no "
+                            f"artifact tab to open - it is not one of "
+                            f"Crow-Eye's own parsed artifacts.\n\n"
+                            f"The result itself is complete:\n\n"
+                            f"Database: {database}\n"
+                            f"Table: {table}\n"
+                            f"Row ID: {row_id}")
+                else:
+                    title = "Navigation Not Supported"
+                    body = (f"Navigation to table '{table}' is not yet supported.\n\n"
+                            f"Database: {database}\n"
+                            f"Table: {table}\n"
+                            f"Row ID: {row_id}")
+                QtWidgets.QMessageBox.information(parent_widget, title, body)
                 return
             
             tab_name, table_attr, loader_attr, id_column, match_columns = mapping

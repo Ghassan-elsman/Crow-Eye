@@ -53,7 +53,17 @@ class CorrelationMatch:
     
     # NEW: Semantic mapping data
     semantic_data: Optional[Dict[str, Any]] = None
-    
+
+    # The anchor's own window: when its records start and end, and how many it
+    # contributed. `matches` has had these three columns, a migration for them
+    # and a write path reading them off this object since the schema was
+    # written - but the fields were never declared here, so
+    # `getattr(match, 'anchor_start_time', None)` returned None and all three
+    # were NULL on every match ever persisted.
+    anchor_start_time: Optional[str] = None
+    anchor_end_time: Optional[str] = None
+    anchor_record_count: Optional[int] = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary"""
         # Ensure feather_records is JSON-serializable

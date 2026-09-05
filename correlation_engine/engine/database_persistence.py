@@ -18,7 +18,29 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
+import logging
+
 from .correlation_result import CorrelationResult, CorrelationMatch
+
+logger = logging.getLogger(__name__)
+
+
+def _json_safe(obj):
+    """Recursively make a value JSON-serializable.
+
+    Feather metadata carries datetimes - timestamp ranges and health-check
+    stamps - and `json.dumps` refuses them. Only one of the four places that
+    serialize this dict handled it, so the other three raised as soon as they
+    were actually reached.
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(item) for item in obj]
+    return obj
+
 
 
 class StreamingMatchWriter:
@@ -288,21 +310,7 @@ class StreamingMatchWriter:
         # Serialize feather_metadata to JSON if provided
         feather_metadata_json = None
         if feather_metadata:
-            import json
-            from datetime import datetime
-            
-            # Convert datetime objects to strings for JSON serialization
-            def convert_datetime(obj):
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                elif isinstance(obj, dict):
-                    return {k: convert_datetime(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [convert_datetime(item) for item in obj]
-                return obj
-            
-            serializable_metadata = convert_datetime(feather_metadata)
-            feather_metadata_json = json.dumps(serializable_metadata)
+            feather_metadata_json = json.dumps(_json_safe(feather_metadata))
         
         cursor.execute("""
             UPDATE results SET 
@@ -852,25 +860,135 @@ class ResultsDatabase:
             warnings: List of warning messages
         """
         cursor = self.conn.cursor()
+
+        # Derive the totals from the `results` rows this execution summarises,
+        # rather than trusting whatever the caller passed.
+        #
+        # The execution row is the first thing an analyst opens, and it was
+        # wrong about its own run: `total_matches`, `total_wings` and
+        # `total_records_scanned` all read 0 while `results` held 127,226
+        # matches for one wing. `total_wings` was never written by this method
+        # at all, and the other two were only as good as the argument supplied.
+        # Computing them from the child rows means the summary cannot disagree
+        # with what it summarises.
+        derived_matches = derived_wings = derived_scanned = None
+        try:
+            row = cursor.execute("""
+                SELECT COUNT(*), COALESCE(SUM(total_matches), 0),
+                       COALESCE(SUM(total_records_scanned), 0)
+                FROM results WHERE execution_id = ?
+            """, (execution_id,)).fetchone()
+            if row and row[0]:
+                derived_wings, derived_matches, derived_scanned = row[0], row[1], row[2]
+        except sqlite3.Error as e:
+            # An older database without the column shape - fall back to the
+            # caller's values rather than losing the update entirely.
+            logger.debug("Could not derive execution totals from results: %s", e)
+
+        if derived_matches is not None:
+            final_matches, final_scanned, final_wings = (
+                derived_matches, derived_scanned, derived_wings)
+        else:
+            # This execution owns no results rows.
+            #
+            # The pipeline creates one execution per wing (linked by
+            # run_group_id) but finalises only the LAST one, passing the sum of
+            # every wing. So the last execution was being stamped with a total
+            # it did not own while the execution that DID own the results kept
+            # reporting 0 - on the reference case, execution 2 claimed 2,378
+            # matches owning none, and execution 1 owned 2,357 and said 0.
+            #
+            # Writing someone else's total here would make that worse, so the
+            # caller's figures are only used when there is genuinely nothing to
+            # derive from, and the run-group pass below fixes the siblings.
+            final_matches, final_scanned, final_wings = (
+                total_matches, total_records_scanned, 0)
+            if total_matches:
+                logger.info(
+                    "Execution %s owns no results rows; recording the caller's "
+                    "totals and reconciling the rest of the run group",
+                    execution_id)
+
         cursor.execute("""
             UPDATE executions SET
                 execution_duration_seconds = ?,
                 total_matches = ?,
+                total_wings = ?,
                 total_records_scanned = ?,
                 errors = ?,
                 warnings = ?
             WHERE execution_id = ?
         """, (
             execution_duration,
-            total_matches,
-            total_records_scanned,
+            final_matches,
+            final_wings,
+            final_scanned,
             json.dumps(errors) if errors else None,
             json.dumps(warnings) if warnings else None,
             execution_id
         ))
         self.conn.commit()
-        print(f"[Database] Updated execution {execution_id} stats: {total_matches:,} matches")
-    
+        print(f"[Database] Updated execution {execution_id} stats: "
+              f"{final_matches:,} matches across {final_wings} wing(s), "
+              f"{final_scanned:,} records scanned")
+
+        self.reconcile_run_group(execution_id)
+
+    def reconcile_run_group(self, execution_id: int) -> int:
+        """Make every execution in this run group agree with its own results.
+
+        One run creates one execution per wing, tied together by
+        `run_group_id`, but only the last of them is finalised. Its siblings
+        keep whatever they were inserted with - zeros - even though they own
+        the results rows and the matches. An analyst opening the run sees an
+        execution claiming thousands of matches next to ones claiming none,
+        and neither figure describes what that execution actually holds.
+
+        Each sibling is recomputed from the results rows it owns. Returns how
+        many rows were corrected, so a caller can tell whether the run was
+        already consistent.
+        """
+        cursor = self.conn.cursor()
+        try:
+            row = cursor.execute(
+                "SELECT run_group_id FROM executions WHERE execution_id = ?",
+                (execution_id,)).fetchone()
+        except sqlite3.Error:
+            return 0
+        if not row or not row[0]:
+            return 0
+
+        try:
+            siblings = cursor.execute(
+                "SELECT execution_id FROM executions WHERE run_group_id = ? "
+                "AND execution_id != ?", (row[0], execution_id)).fetchall()
+        except sqlite3.Error:
+            return 0
+
+        corrected = 0
+        for (sibling_id,) in siblings:
+            try:
+                totals = cursor.execute("""
+                    SELECT COUNT(*), COALESCE(SUM(total_matches), 0),
+                           COALESCE(SUM(total_records_scanned), 0)
+                    FROM results WHERE execution_id = ?
+                """, (sibling_id,)).fetchone()
+            except sqlite3.Error:
+                continue
+            if not totals or not totals[0]:
+                continue
+            cursor.execute("""
+                UPDATE executions
+                SET total_wings = ?, total_matches = ?, total_records_scanned = ?
+                WHERE execution_id = ?
+            """, (totals[0], totals[1], totals[2], sibling_id))
+            corrected += 1
+            print(f"[Database] Reconciled execution {sibling_id}: "
+                  f"{totals[1]:,} matches across {totals[0]} wing(s)")
+        if corrected:
+            self.conn.commit()
+        return corrected
+
     def save_execution(self, pipeline_name: str, execution_time: float, 
                       results: List[CorrelationResult], output_dir: str,
                       case_name: str = "", investigator: str = "",
@@ -1024,7 +1142,7 @@ class ResultsDatabase:
             # Serialize feather_metadata to JSON
             feather_metadata_json = None
             if result.feather_metadata:
-                feather_metadata_json = json.dumps(result.feather_metadata)
+                feather_metadata_json = json.dumps(_json_safe(result.feather_metadata))
             
             # Update the existing result record to point to the new execution
             cursor.execute("""
@@ -1065,7 +1183,7 @@ class ResultsDatabase:
             # Serialize feather_metadata to JSON
             feather_metadata_json = None
             if result.feather_metadata:
-                feather_metadata_json = json.dumps(result.feather_metadata)
+                feather_metadata_json = json.dumps(_json_safe(result.feather_metadata))
             
             cursor.execute("""
                 INSERT INTO results (
@@ -1180,6 +1298,12 @@ class ResultsDatabase:
         else:
             feather_records_data = feather_records_json
         
+        # Two writers put rows in `matches`: this one, and
+        # StreamingMatchWriter.write_match. They must agree on the columns, or
+        # a match means different things depending on whether the run happened
+        # to trip streaming mode. This list was missing the three anchor-window
+        # columns the streaming writer already wrote, so every match from a
+        # non-streamed wing came back with no anchor window at all.
         cursor.execute("""
             INSERT INTO matches (
                 match_id, result_id, timestamp, match_score, confidence_score,
@@ -1187,8 +1311,10 @@ class ResultsDatabase:
                 anchor_feather_id, anchor_artifact_type, matched_application,
                 matched_file_path, matched_event_id, is_duplicate,
                 weighted_score_value, weighted_score_interpretation,
-                feather_records, score_breakdown, compressed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                feather_records, score_breakdown, compressed,
+                anchor_start_time, anchor_end_time, anchor_record_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?)
         """, (
             match.match_id,
             result_id,
@@ -1208,7 +1334,10 @@ class ResultsDatabase:
             weighted_score_interpretation,
             feather_records_data,
             json.dumps(match.score_breakdown) if match.score_breakdown else None,
-            compressed
+            compressed,
+            getattr(match, 'anchor_start_time', None),
+            getattr(match, 'anchor_end_time', None),
+            getattr(match, 'anchor_record_count', None)
         ))
     
     def update_result_count(self, result_id: int, total_matches: int, 
@@ -1233,7 +1362,7 @@ class ResultsDatabase:
         # Serialize feather_metadata to JSON if provided
         feather_metadata_json = None
         if feather_metadata:
-            feather_metadata_json = json.dumps(feather_metadata)
+            feather_metadata_json = json.dumps(_json_safe(feather_metadata))
         
         # Update results table
         cursor.execute("""

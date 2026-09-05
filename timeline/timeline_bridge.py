@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread
 
 from timeline.utils.value_parser import parsable_num_adapter
+from utils.time_utils import get_current_utc, format_forensic_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,16 @@ class UniversalTimestampParser:
             
             # 4. Mac/Cocoa Absolute Time (seconds since 2001)
             # e.g. 631152000 is ~20 years after 2001 (approx 2021)
-            if 0 < value < 1_500_000_000:
+            #
+            # The floor is one day, not zero. A bare number smaller than that
+            # is a version fragment, a count or a fraction - never a moment -
+            # and reading it as "seconds since 2001" made every one of them
+            # land on 2001-01-01. AmCache stores a version string in
+            # `link_date` on some rows, one of which is "0.5", and that single
+            # value became the left edge of the whole timeline: the case span
+            # read 2001 to 2026 on a machine whose oldest real evidence was
+            # 2010.
+            if 86_400 < value < 1_500_000_000:
                 cand = cls.COCOA_EPOCH + __import__('datetime').timedelta(seconds=value)
                 if cls.MIN_VALID_YEAR <= cand.year <= cls.MAX_VALID_YEAR:
                     return cand
@@ -253,7 +263,15 @@ class TimelineBridge(QObject):
                 conn = sqlite3.connect(db_path)
                 # Register the dynamic value parser as a custom SQLite function
                 conn.create_function("PARSABLE_NUM", 1, parsable_num_adapter)
-                
+                # And the timestamp normaliser. SQLite's own `datetime()`
+                # returns NULL for anything it does not recognise - and
+                # returning NULL is not an error, so a WHERE clause built on it
+                # simply matches nothing. AmCache stores `02/14/2026 00:00:00`
+                # and raw Unix epochs, so every AmCache query on this timeline
+                # had been returning zero rows for as long as they existed.
+                conn.create_function("NORM_TS", 1, self._norm_ts)
+
+
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute(sql, params)
@@ -514,28 +532,72 @@ class TimelineBridge(QObject):
     # SLOT: Get Time Bounds across all databases
     # ──────────────────────────────────────────────
     
+    # Which columns define the case SPAN. Deliberately a short list, and
+    # deliberately not "everything the map plots":
+    #
+    #   * SPEED. Running MIN/MAX over all 71 record-time columns takes 10.7
+    #     seconds on this case, most of it the MFT - 205,052 records by four
+    #     columns, plus 348,090 $FN rows by four more. The span does not need
+    #     them; `mft_usn_correlated.usn_timestamp` already covers file activity.
+    #   * NOISE. An MFT full of 1601 sentinels and randomised PE link dates
+    #     would stretch the window across centuries with nothing in most of it.
+    #
+    # Every entry here must still be a column `artifact_map` plots, which
+    # `timeline/tests` asserts - that is what catches the next rename. The
+    # entry that made this list worth writing down was AmCache's raw
+    # `link_date`, which holds version strings ("6.4.7.0", "0.5"): the span
+    # read 2000 to 2028 on a machine whose real evidence runs 2010 to 2026.
+    _BOUNDS_SOURCES = [
+        ("Log_Claw.db", "SystemLogs", "EventTimestampUTC"),
+        ("Log_Claw.db", "SecurityLogs", "EventTimestampUTC"),
+        ("Log_Claw.db", "ApplicationLogs", "EventTimestampUTC"),
+        ("srum_data.db", "srum_application_usage", "timestamp"),
+        ("srum_data.db", "srum_network_data_usage", "timestamp"),
+        ("mft_usn_correlated_analysis.db", "mft_usn_correlated",
+         "usn_timestamp"),
+        ("prefetch_data.db", "prefetch_data", "last_executed"),
+        ("shimcache.db", "shimcache_entries", "last_modified"),
+        ("recyclebin_analysis.db", "recycle_bin_entries", "deletion_time"),
+        ("LnkDB.db", "LNK_Files", "Time_Access"),
+        ("LnkDB.db", "Automatic_JumpLists", "Time_Access"),
+        ("LnkDB.db", "Custom_JumpLists", "Time_Access"),
+        # The registry was not represented here at all, and it is the largest
+        # source of events in most cases. A case parsed with "Parse Registry"
+        # alone therefore had no time bounds, and the timeline opened on "No
+        # forensic data available" while the bridge held 4,600 plottable rows.
+        ("registry_data.db", "ScheduledTasks", "task_registered"),
+        ("registry_data.db", "ScheduledTasks", "last_run"),
+        ("registry_data.db", "registry_value_changes", "changed_at"),
+        ("registry_data.db", "UserAssist", "last_execution"),
+        ("registry_data.db", "BAM", "last_execution"),
+        ("registry_data.db", "InstalledSoftware", "install_date"),
+        ("registry_data.db", "Network_list", "connection_date"),
+        ("registry_data.db", "USBStorageDevices", "first_connected"),
+        ("registry_data.db", "USBStorageDevices", "last_connected"),
+        ("registry_data.db", "Shellbags", "created_date"),
+        ("registry_data.db", "Shellbags", "modified_date"),
+        ("registry_data.db", "Shellbags", "accessed_date"),
+        ("registry_data.db", "ShutdownInfo", "shutdown_time"),
+        ("amcache.db", "InventoryApplicationFile", "link_date_utc"),
+        ("amcache.db", "InventoryApplication", "install_date_utc"),
+    ]
+
     @pyqtSlot(result=str)
     def getTimeBounds(self) -> str:
-        """Get the earliest and latest timestamps across all databases."""
+        """The earliest and latest EXACT times anywhere in the case."""
         all_timestamps = []
-        
-        # Quick queries to find min/max from key tables
-        queries = [
-            ("Log_Claw.db", "SELECT MIN(EventTimestampUTC) as mn, MAX(EventTimestampUTC) as mx FROM SystemLogs"),
-            ("Log_Claw.db", "SELECT MIN(EventTimestampUTC) as mn, MAX(EventTimestampUTC) as mx FROM SecurityLogs"),
-            ("srum_data.db", "SELECT MIN(timestamp) as mn, MAX(timestamp) as mx FROM srum_application_usage"),
-            ("srum_data.db", "SELECT MIN(timestamp) as mn, MAX(timestamp) as mx FROM srum_network_data_usage"),
-            ("mft_usn_correlated_analysis.db", "SELECT MIN(usn_timestamp) as mn, MAX(usn_timestamp) as mx FROM mft_usn_correlated WHERE usn_timestamp IS NOT NULL"),
-            ("prefetch_data.db", "SELECT MIN(last_executed) as mn, MAX(last_executed) as mx FROM prefetch_data"),
-            ("shimcache.db", "SELECT MIN(last_modified) as mn, MAX(last_modified) as mx FROM shimcache_entries"),
-            ("recyclebin_analysis.db", "SELECT MIN(deletion_time) as mn, MAX(deletion_time) as mx FROM recycle_bin_entries"),
-            ("LnkDB.db", "SELECT MIN(Time_Access) as mn, MAX(Time_Access) as mx FROM (SELECT Time_Access FROM LNK_Files UNION ALL SELECT Time_Access FROM Automatic_JumpLists UNION ALL SELECT Time_Access FROM Custom_JumpLists)"),
-        ]
-        
-        for db_name, sql in queries:
-            rows = self._query_db(db_name, sql)
-            for row in rows:
-                for key in ['mn', 'mx']:
+
+        for db_name, table, column in self._BOUNDS_SOURCES:
+            # Order on the normalised value, not the stored string. A
+            # `MM/DD/YYYY` column sorts by month, and a column holding a
+            # version string on some rows sorts by whatever that is.
+            expr = ('datetime(NORM_TS("%s"))' % column
+                    if self._needs_normalising(db_name, table, column)
+                    else 'datetime("%s")' % column)
+            sql = ('SELECT MIN({e}) as mn, MAX({e}) as mx FROM "{t}" '
+                   'WHERE {e} IS NOT NULL'.format(e=expr, t=table))
+            for row in self._query_db(db_name, sql):
+                for key in ("mn", "mx"):
                     parsed = self.parser.parse(row.get(key))
                     if parsed:
                         all_timestamps.append(parsed)
@@ -551,9 +613,19 @@ class TimelineBridge(QObject):
                     if parsed:
                         all_timestamps.append(parsed)
 
+        # Nothing in a case happened after the case was collected. A PE link
+        # date is routinely randomised into the future - AmCache carries one
+        # reading 2027-06-19 here - and one such value stretched the visible
+        # window nine months past the end of the evidence, so the timeline
+        # opened on a stretch of empty screen.
+        horizon = format_forensic_timestamp(get_current_utc())
+        real = [t for t in all_timestamps if t <= horizon]
+        if real:
+            all_timestamps = real
+
         if not all_timestamps:
             return json.dumps({"start": None, "end": None})
-        
+
         all_timestamps.sort()
         return json.dumps({
             "start": all_timestamps[0],
@@ -994,22 +1066,36 @@ class TimelineBridge(QObject):
     
     @pyqtSlot(str, str, result=str)
     def getMftUsnData(self, start: str, end: str) -> str:
-        """Get MFT/USN correlated file activity with time-sliced coverage."""
-        base_sql = """
-            SELECT fn_filename, reconstructed_path,
-                   si_creation_time, si_modification_time,
-                   usn_timestamp, usn_reason, is_deleted
-            FROM mft_usn_correlated
-            WHERE (datetime(usn_timestamp) BETWEEN datetime(?) AND datetime(?))
-               OR (datetime(si_modification_time) BETWEEN datetime(?) AND datetime(?))
+        """Get MFT/USN correlated file activity with time-sliced coverage.
+
+        The column list comes from `artifact_map` now. It used to name three
+        columns of the nine the map plots, so every $FILE_NAME time on 202,729
+        correlated records was fetched by nothing at all - and $SI against $FN
+        is the comparison an examiner makes to spot a timestomp.
         """
-        # Time slicing MFT is tricky due to multiple timestamp columns, 
-        # using usn_timestamp as the primary coverage driver.
-        # MFT/USN has 4 placeholders in the base SQL
-        rows = self._query_time_sliced("mft_usn_correlated_analysis.db", 
-                                      base_sql, (start, end, start, end), "usn_timestamp", 1000)
-        
-        ts_cols = ['si_creation_time', 'si_modification_time', 'usn_timestamp']
+        # The correlator's output is preferred: the same file events, with the
+        # MFT record's own times beside each. Where it has not been run, the
+        # raw journal is all there is - and until this fallback existed a case
+        # with 314,469 USN records and no correlation run showed no file
+        # activity at all, because the only query the bridge had named a
+        # database that was not there.
+        if not self._get_db_path("mft_usn_correlated_analysis.db"):
+            return json.dumps(self._mapped_rows(
+                "USN_journal.db", "USN", "journal_events", start, end,
+                extra_cols=("filename as fn_filename, volume_letter, "
+                            "reason as usn_reason,"),
+                order_by="timestamp"))
+
+        base_sql, n_pairs, ts_cols = self._mapped_query(
+            "MftUsn", "mft_usn_correlated",
+            extra_cols="fn_filename, reconstructed_path, usn_reason, is_deleted,")
+        if not base_sql:
+            return json.dumps([])
+        # Time slicing needs one column to drive coverage; the USN entry is the
+        # one that actually spreads across the window.
+        rows = self._query_time_sliced(
+            "mft_usn_correlated_analysis.db", base_sql,
+            tuple([start, end] * n_pairs), "usn_timestamp", 1000)
         rows = self._parse_timestamps_in_rows(rows, ts_cols)
         return json.dumps(rows)
     
@@ -1111,9 +1197,12 @@ class TimelineBridge(QObject):
         """Get BAM (Background Activity Moderator) and DAM data."""
         results = {}
         
-        # BAM
+        # BAM. It has no run_count and never has - BAM records one last-run
+        # time per executable, not a count - so this whole query threw and the
+        # panel showed nothing. `app_name` is the decoded program name the
+        # parser derives from the value name.
         bam_sql = """
-            SELECT process_path, last_execution, sid, PARSABLE_NUM(run_count) as run_count
+            SELECT process_path, last_execution, sid, app_name
             FROM BAM
             WHERE datetime(last_execution) BETWEEN datetime(?) AND datetime(?)
             ORDER BY last_execution
@@ -1143,11 +1232,18 @@ class TimelineBridge(QObject):
         result = {}
         
         # OpenSaveMRU
+        # An MRU list stores no time per entry, so `access_date` is empty by
+        # design and the parser refuses to guess. `key_last_write` is the
+        # containing key's own time - it dates the newest entry in the list,
+        # and every row carries it. Keyed on access_date this returned nothing
+        # from 246 OpenSaveMRU rows and 20 LastSaveMRU rows.
         open_sql = """
-            SELECT extension, file_name as filename, file_path, access_date,
+            SELECT extension, file_name as filename, file_path,
+                   key_last_write as access_date, 1 as bounded_time,
                    'opensavemru' as tsType
             FROM OpenSaveMRU
-            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?) ORDER BY access_date
+            WHERE datetime(key_last_write) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY key_last_write
         """
         result['open_save_mru'] = self._parse_timestamps_in_rows(
             self._query_db("registry_data.db", open_sql, (start, end)),
@@ -1156,10 +1252,12 @@ class TimelineBridge(QObject):
         
         # LastSaveMRU
         last_sql = """
-            SELECT type as extension, folder_name as filename, folder_path, access_date,
+            SELECT type as extension, folder_name as filename, folder_path,
+                   key_last_write as access_date, 1 as bounded_time,
                    application, 'lastsavemru' as tsType
             FROM LastSaveMRU
-            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?) ORDER BY access_date
+            WHERE datetime(key_last_write) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY key_last_write
         """
         result['last_save_mru'] = self._parse_timestamps_in_rows(
             self._query_db("registry_data.db", last_sql, (start, end)),
@@ -1182,12 +1280,16 @@ class TimelineBridge(QObject):
         )
 
         # RecentDocs
+        # RecentDocs holds subkey/name/row_data/key_last_write - never
+        # file_name, file_path, extension or access_date. This query threw on
+        # every case and the panel showed an empty section.
         recent_docs_sql = """
-            SELECT rowid as id, file_name as filename, file_path as path, extension, access_date,
+            SELECT rowid as id, row_data as filename, row_data as path,
+                   subkey as extension, key_last_write as access_date,
                    'linked' as tsType
             FROM RecentDocs
-            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?)
-            ORDER BY access_date
+            WHERE datetime(key_last_write) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY key_last_write
         """
         result['recent_docs'] = self._parse_timestamps_in_rows(
             self._query_db("registry_data.db", recent_docs_sql, (start, end)),
@@ -1231,27 +1333,21 @@ class TimelineBridge(QObject):
             ['installation_date']
         )
 
-        # Auto (Autoruns)
-        auto_sql = """
-            SELECT * FROM Auto
-            WHERE datetime(last_install_time) BETWEEN datetime(?) AND datetime(?)
-               OR datetime(scheduled_install_time) BETWEEN datetime(?) AND datetime(?)
-        """
-        result['auto'] = self._parse_timestamps_in_rows(
-            self._query_db("registry_data.db", auto_sql, (start, end, start, end)),
-            ['last_install_time', 'scheduled_install_time']
-        )
+        # `Auto` was an abandoned draft of WindowsUpdateInfo and no parser has
+        # written it for a long time. The query below it reads the real table.
 
         # WindowsUpdateInfo
+        # `scheduled_install_time` is NOT a time. It holds Windows Update's
+        # `ScheduledInstallTime` policy value - the hour of day, an integer
+        # 0-23 - and filtering or plotting on it is meaningless.
         winupdate_sql = """
             SELECT * FROM WindowsUpdateInfo
             WHERE datetime(last_check_time) BETWEEN datetime(?) AND datetime(?)
                OR datetime(last_install_time) BETWEEN datetime(?) AND datetime(?)
-               OR datetime(scheduled_install_time) BETWEEN datetime(?) AND datetime(?)
         """
         result['windows_update'] = self._parse_timestamps_in_rows(
-            self._query_db("registry_data.db", winupdate_sql, (start, end, start, end, start, end)),
-            ['last_check_time', 'last_install_time', 'scheduled_install_time']
+            self._query_db("registry_data.db", winupdate_sql, (start, end, start, end)),
+            ['last_check_time', 'last_install_time']
         )
 
         # NetworkInterfacesInfo and NetworkListProfiles are deliberately NOT
@@ -1304,8 +1400,9 @@ class TimelineBridge(QObject):
 
         # WordWheelQuery
         wordwheel_sql = """
-            SELECT *, 'wordwheelquery' as tsType FROM WordWheelQuery
-            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?)
+            SELECT *, key_last_write as access_date, 1 as bounded_time,
+                   'wordwheelquery' as tsType FROM WordWheelQuery
+            WHERE datetime(key_last_write) BETWEEN datetime(?) AND datetime(?)
         """
         result['wordwheel'] = self._parse_timestamps_in_rows(
             self._query_db("registry_data.db", wordwheel_sql, (start, end)),
@@ -1314,8 +1411,9 @@ class TimelineBridge(QObject):
 
         # RunMRU
         run_mru_sql = """
-            SELECT * FROM RunMRU
-            WHERE datetime(access_date) BETWEEN datetime(?) AND datetime(?)
+            SELECT *, key_last_write as access_date, 1 as bounded_time
+            FROM RunMRU
+            WHERE datetime(key_last_write) BETWEEN datetime(?) AND datetime(?)
         """
         result['run_mru'] = self._parse_timestamps_in_rows(
             self._query_db("registry_data.db", run_mru_sql, (start, end)),
@@ -1332,75 +1430,411 @@ class TimelineBridge(QObject):
             ['connection_date']
         )
 
+        # ---- artifacts the parsers collect that the timeline never plotted --
+        #
+        # `bounded_time` marks a row whose time is the containing KEY's write
+        # time rather than the record's own. The front end draws those hollow
+        # and hides them behind a toggle, because a key time is an upper bound
+        # on every value under it and a solid marker at a precise point claims
+        # more than the evidence does.
+
+        # Scheduled tasks - the scheduler's own per-task times, so NOT bounded.
+        tasks_sql = """
+            SELECT rowid as id, task_path as filename, task_path as path,
+                   command, run_context, task_registered, last_run,
+                   last_completed, last_result, 'scheduledtask' as tsType
+            FROM ScheduledTasks
+            WHERE datetime(task_registered) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(last_run) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(last_completed) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY COALESCE(task_registered, last_run)
+        """
+        result['scheduled_tasks'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", tasks_sql,
+                           (start, end, start, end, start, end)),
+            ['task_registered', 'last_run', 'last_completed']
+        )
+
+        # Value changes recovered from the transaction log. `changed_at` is the
+        # exact moment that value changed - the one registry time that is not
+        # an upper bound.
+        changes_sql = """
+            SELECT rowid as id, key_path as path, value_name as filename,
+                   change_kind, changed_at, hive_name,
+                   'registrychange' as tsType
+            FROM registry_value_changes
+            WHERE changed_at IS NOT NULL AND trim(changed_at) <> ''
+              AND datetime(changed_at) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY changed_at
+        """
+        result['registry_changes'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", changes_sql, (start, end)),
+            ['changed_at']
+        )
+
+        # USB storage. Device property FILETIMEs read from the acquired hive -
+        # empty on every live case until the USBSTOR block stopped raising
+        # NameError on an unassigned variable.
+        usbstor_sql = """
+            SELECT rowid as id, friendly_name as filename, serial_number,
+                   vendor_id, product_id, first_connected, last_connected,
+                   last_removed, 'usbstorage' as tsType
+            FROM USBStorageDevices
+            WHERE datetime(first_connected) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(last_connected) BETWEEN datetime(?) AND datetime(?)
+               OR datetime(last_removed) BETWEEN datetime(?) AND datetime(?)
+            ORDER BY COALESCE(last_connected, first_connected)
+        """
+        result['usb_storage'] = self._parse_timestamps_in_rows(
+            self._query_db("registry_data.db", usbstor_sql,
+                           (start, end, start, end, start, end)),
+            ['first_connected', 'last_connected', 'last_removed']
+        )
+
+        # Network profiles. `date_created` and `date_last_connected` are the
+        # profile's OWN times, unlike the `last_written` on the same table -
+        # they were mapped and read by nothing, so a wireless network first
+        # joined three years ago appeared on the timeline nowhere.
+        result['network_profiles'] = self._mapped_rows(
+            "registry_data.db", "Registry", "NetworkProfiles", start, end,
+            extra_cols=("profile_name as filename, key_path as path, "
+                        "description, gateway_mac, category_label, "
+                        "'networkprofile' as tsType,"),
+            order_by="date_created")
+
+        # SAM accounts. When an account last signed in and when its
+        # password was last set - two of the first questions in an intrusion,
+        # and neither reached the timeline. They come from `user_identity.py`
+        # rather than Regclaw, which is why nothing that reads one file per
+        # artifact family ever noticed.
+        result['user_accounts'] = self._mapped_rows(
+            "registry_data.db", "Registry", "UserAccounts", start, end,
+            extra_cols=("username as filename, display_name, user_sid, rid, "
+                        "account_type, account_enabled, "
+                        "'useraccount' as tsType,"),
+            order_by="last_logon")
+
+        # Per-app capability use: microphone, camera, location. The record's
+        # own start/stop times, beside the same table's key write time.
+        result['app_permissions'] = self._mapped_rows(
+            "registry_data.db", "Registry", "app_permissions", start, end,
+            extra_cols=("app as filename, key_path as path, capability, "
+                        "permission, 'apppermission' as tsType,"),
+            order_by="last_used_start")
+
+        # Every remaining registry table whose only time is its key's write
+        # time. One query shape, so a table added later is one line here.
+        result['key_times'] = self._registry_key_time_rows(start, end)
+
         return json.dumps(result)
-    
+
+    # Per table: the analyst-facing label, the column naming what the row is
+    # about, and the column holding the key path (None where the table has
+    # none). The TIME column and whether the table records a `time_basis` come
+    # from `artifact_map`, so this cannot drift away from the map that decides
+    # what gets plotted - which is how three separate copies of this list came
+    # to disagree in the first place.
+    #
+    # The MRU tables are deliberately absent: they are key times too, but each
+    # already has its own query above with the columns an MRU row needs.
+    _KEY_TIME_LABELS = {
+        "AutoStartPrograms": ("Autostart entry", "program_name", "key_path"),
+        "DefenderExclusions": ("Defender exclusion", "value", "key_path"),
+        "SecurityPosture": ("Security setting", "setting", "key_path"),
+        "file_exts": ("File type handler", "extension", "key_path"),
+        "FeatureUsage": ("Feature usage", "program", "key_path"),
+        "CompatibilityAssistant": ("Compatibility Assistant", "program_path", "key_path"),
+        "ConnectedDevices": ("Connected device", "friendly_name", "key_path"),
+        "MountPoints2": ("Volume opened", "mount_id", "key_path"),
+        "OfficeDocuments": ("Office document", "document", "key_path"),
+        "FirewallRules": ("Firewall rule", "rule_name", "key_path"),
+        "app_paths": ("App path", "app_name", "key_path"),
+        "shared_dlls": ("Shared DLL", "dll_path", "key_path"),
+        "startup_approved": ("Startup approval", "entry_name", "key_path"),
+        "explorer_advanced": ("Explorer setting", "setting", "key_path"),
+        "windows_script_host": ("Script host setting", "setting", "key_path"),
+        "winevt_channels": ("Event log channel", "channel", "key_path"),
+        "zone_map": ("Zone policy", "scope", "key_path"),
+        "system_configuration": ("System configuration", "setting", "key_path"),
+        # SECURITY hive. Small tables, but an audit policy or an LSA secret
+        # changing is worth more on a timeline than most of the rows above.
+        "audit_policy": ("Audit policy", "name", "key_path"),
+        "lsa_policy": ("LSA policy", "name", "key_path"),
+        "lsa_secrets": ("LSA secret", "secret_name", "key_path"),
+        "local_groups": ("Local group", "group_name", None),
+        # Deleted keys recovered by carving - 2,106 dated rows on an ordinary
+        # machine, and none of them reached the timeline before.
+        "registry_carved_keys": ("Deleted key (carved)", "key_name", "key_path"),
+    }
+
+    @property
+    def _key_time_sources(self):
+        """(label, table, name column, time column, path column, basis column).
+
+        Built from `artifact_map`, so a table added to the plotting map and
+        given a label here is drawn; one given a label and no map entry is
+        not, rather than being drawn under rules nothing else agrees with.
+        """
+        from timeline.data import artifact_map as _am
+
+        out = []
+        for table, column, _kind, basis in _am._KEY_TIME_TABLES:
+            meta = self._KEY_TIME_LABELS.get(table)
+            if not meta:
+                continue
+            label, name_col, path_col = meta
+            out.append((label, table, name_col, column, path_col, basis))
+        return out
+
+    def _registry_key_time_rows(self, start: str, end: str) -> list:
+        """Rows whose only time is the containing key's last-write time.
+
+        Every one is an upper bound, so each row is tagged `bounded_time` and
+        carries its `time_basis` where the parser records one. A table missing
+        from the case, or missing the label column, is skipped rather than
+        failing the lot - these tables come and go between parser versions.
+        """
+        rows = []
+        for label, table, name_col, time_col, path_col, basis in self._key_time_sources:
+            sql = """
+                SELECT rowid as id, {name} as filename, {path} as path,
+                       {time} as access_date, {basis} as time_basis,
+                       1 as bounded_time, '{label}' as subType,
+                       'keytime' as tsType
+                FROM {table}
+                WHERE {time} IS NOT NULL AND trim({time}) <> ''
+                  AND datetime({time}) BETWEEN datetime(?) AND datetime(?)
+            """.format(name=name_col, table=table, time=time_col,
+                       path=path_col or "''",
+                       basis=basis or "'key upper bound'",
+                       label=label.replace("'", ""))
+            got = self._query_db("registry_data.db", sql, (start, end))
+            if got:
+                rows.extend(self._parse_timestamps_in_rows(got, ['access_date']))
+        return rows
+
+    # ──────────────────────────────────────────────
+    # Queries built from the map
+    # ──────────────────────────────────────────────
+
+    def _norm_ts(self, value):
+        """SQLite `NORM_TS()` - any stored timestamp format to `YYYY-MM-DD ...`.
+
+        Backed by the same `UniversalTimestampParser` that normalises the value
+        one step later, so the filter and the display agree by construction.
+        """
+        try:
+            return self.parser.parse(value)
+        except Exception:
+            return None
+
+    def _needs_normalising(self, db_name: str, table: str, column: str) -> bool:
+        """Does SQLite's own `datetime()` understand what this column holds?
+
+        Probed against one real value and cached, rather than assumed. Wrapping
+        every column would put a Python call on every row of every query -
+        202,729 correlated MFT records times nine columns - to fix three
+        AmCache tables.
+        """
+        key = (db_name, table, column)
+        cache = self.__dict__.setdefault("_norm_probe", {})
+        if key in cache:
+            return cache[key]
+        verdict = False
+        try:
+            rows = self._query_db(
+                db_name,
+                'SELECT datetime("{c}") as iso, "{c}" as raw FROM "{t}" '
+                'WHERE "{c}" IS NOT NULL AND trim("{c}") <> \'\' '
+                'LIMIT 1'.format(c=column, t=table))
+            if rows and rows[0].get("iso") is None and rows[0].get("raw"):
+                verdict = True
+        except Exception:
+            verdict = False
+        cache[key] = verdict
+        return verdict
+
+    def _mapped_time_columns(self, artifact: str, table: str) -> list:
+        """The RECORD time columns `artifact_map` plots for one table.
+
+        Reading them from the map instead of writing them out here is what
+        stops a query and the map disagreeing. `getMftUsnData` selected three
+        of the nine columns the map names, so six populated time columns -
+        every $FN time on 202,729 records - were fetched by nothing.
+
+        Key write times are excluded: they have their own query shape, which
+        tags each row `bounded_time` so the front end draws it hollow. Letting
+        one through here would put a key upper bound on screen as an exact
+        moment - `NetworkProfiles` is the table that would do it, carrying two
+        record times and a `last_written` side by side.
+        """
+        from timeline.data import artifact_map as _am
+        return [e[1] for e in _am.TIMESTAMP_MAPPINGS.get(artifact, [])
+                if e[0] == table and not _am.is_key_time(e)]
+
+    def _mapped_query(self, artifact: str, table: str, extra_cols: str = "",
+                      order_by: str = "", where_extra: str = "",
+                      normalise: tuple = ()):
+        """(sql, params_needed, time_columns) for one mapped table.
+
+        One row per RECORD carrying all of its times, not one row per time -
+        that is the shape the front end already expands with
+        `getForensicTimestamps`, and the other shape would turn 202,729
+        correlated records into 1.6 million points.
+
+        `params_needed` is how many (start, end) pairs the caller must supply:
+        the WHERE is an OR across every mapped time column, because a record
+        whose only in-window time is its third one still belongs on screen.
+        """
+        cols = self._mapped_time_columns(artifact, table)
+        if not cols:
+            return None, 0, []
+        selected = ", ".join('"%s"' % c for c in cols)
+
+        def _expr(c):
+            # NORM_TS only where SQLite cannot read the stored format itself.
+            return ('datetime(NORM_TS("%s"))' % c if c in normalise
+                    else 'datetime("%s")' % c)
+
+        window = "\n               OR ".join(
+            '%s BETWEEN datetime(?) AND datetime(?)' % _expr(c) for c in cols)
+        sql = """
+            SELECT rowid as id, {extra}{selected}
+            FROM {table}
+            WHERE ({window}){extra_where}
+            {order}
+        """.format(
+            extra=(extra_cols.rstrip().rstrip(",") + ", ") if extra_cols else "",
+            selected=selected, table=table, window=window,
+            extra_where=(" AND " + where_extra) if where_extra else "",
+            order=("ORDER BY " + order_by) if order_by else "",
+        )
+        return sql, len(cols), cols
+
+    def _mapped_rows(self, db_name: str, artifact: str, table: str,
+                     start: str, end: str, extra_cols: str = "",
+                     order_by: str = "", where_extra: str = "",
+                     params_extra: tuple = ()) -> list:
+        """Run `_mapped_query` and parse its timestamps."""
+        cols_all = self._mapped_time_columns(artifact, table)
+        normalise = tuple(c for c in cols_all
+                          if self._needs_normalising(db_name, table, c))
+        sql, n_pairs, cols = self._mapped_query(
+            artifact, table, extra_cols, order_by, where_extra, normalise)
+        if not sql:
+            return []
+        params = tuple([start, end] * n_pairs) + tuple(params_extra)
+        return self._parse_timestamps_in_rows(
+            self._query_db(db_name, sql, params), cols)
+
+    # ──────────────────────────────────────────────
+    # SLOT: Event logs
+    # ──────────────────────────────────────────────
+
+    @pyqtSlot(str, str, bool, result=str)
+    def getEventLogData(self, start: str, end: str, include_all: bool) -> str:
+        """Windows Event Log records for the artifact lane.
+
+        The event log is the largest time source in a case and, until this
+        slot existed, 41,109 of 43,802 records on an ordinary machine reached
+        the timeline through nothing at all - `getSessionData` reads eighteen
+        hard-coded IDs for the session band and no other query touches these
+        tables. A service install, a process creation and a cleared log were
+        all invisible.
+
+        By default only `SIGNIFICANT_EVENT_IDS` are returned, each carrying its
+        meaning in words, because one ID alone (5379, a credential-manager
+        read) is 22,012 rows and would bury everything else. `include_all`
+        lifts the filter.
+        """
+        from timeline.data import artifact_map as _am
+
+        rows = []
+        for table in _am.EVENT_LOG_TABLES:
+            wanted = [str(i) for i, (log, _lab)
+                      in _am.SIGNIFICANT_EVENT_IDS.items() if log == table]
+            if not include_all and not wanted:
+                continue
+            where_extra = ("" if include_all
+                           else "EventID IN (%s)" % ", ".join(wanted))
+            got = self._mapped_rows(
+                "Log_Claw.db", "Logs", table, start, end,
+                extra_cols=("EventID, Source, EventType, User, ComputerName, "
+                            "EventDescription, '%s' as source_log, "
+                            "'eventlog' as tsType," % table),
+                order_by="EventTimestampUTC",
+                where_extra=where_extra)
+            for r in got:
+                # The marker reads "Service installed", not "7045".
+                meaning = _am.SIGNIFICANT_EVENT_IDS.get(r.get("EventID"))
+                r["subType"] = meaning[1] if meaning else (
+                    "Event %s" % r.get("EventID"))
+                r["significant"] = 1 if meaning else 0
+                r["filename"] = r["subType"]
+            rows.extend(got)
+        rows.sort(key=lambda r: r.get("EventTimestampUTC") or "")
+        return json.dumps(rows)
+
     # ──────────────────────────────────────────────
     # SLOT: Lane 6 — AmCache, ShimCache, RecycleBin
     # ──────────────────────────────────────────────
     
     @pyqtSlot(str, str, result=str)
     def getAmcacheData(self, start: str, end: str) -> str:
-        """Get AmCache data — lightweight columns only."""
+        """Get AmCache data — lightweight columns only.
+
+        Keys unchanged: `App.jsx` merges these three by name. Only the SQL
+        moved, so the map decides which times are read.
+        """
         result = {}
+
+        result['application_files'] = self._mapped_rows(
+            "amcache.db", "Amcache", "InventoryApplicationFile", start, end,
+            extra_cols="name,")
+
+        result['applications'] = self._mapped_rows(
+            "amcache.db", "Amcache", "InventoryApplication", start, end,
+            extra_cols="name,")
         
-        # InventoryApplicationFile — just name + timestamp
-        app_file_sql = """
-            SELECT name, link_date
-            FROM InventoryApplicationFile
-            WHERE datetime(link_date) BETWEEN datetime(?) AND datetime(?)
-        """
-        app_file_rows = self._query_time_sliced("amcache.db", app_file_sql, (start, end), "link_date", 1000)
-        result['application_files'] = self._parse_timestamps_in_rows(app_file_rows, ['link_date'])
-        
-        # InventoryApplication
-        app_sql = """
-            SELECT name, install_date
-            FROM InventoryApplication
-            WHERE datetime(install_date) BETWEEN datetime(?) AND datetime(?)
-        """
-        app_rows = self._query_time_sliced("amcache.db", app_sql, (start, end), "install_date", 1000)
-        result['applications'] = self._parse_timestamps_in_rows(app_rows, ['install_date'])
-        
-        # InventoryDriverBinary
-        driver_sql = """
-            SELECT driver_name, driver_time_stamp, driver_last_write_time
-            FROM InventoryDriverBinary
-            WHERE datetime(driver_time_stamp) BETWEEN datetime(?) AND datetime(?)
-               OR datetime(driver_last_write_time) BETWEEN datetime(?) AND datetime(?)
-        """
-        driver_rows = self._query_db("amcache.db", driver_sql, (start, end, start, end))
-        result['drivers'] = self._parse_timestamps_in_rows(driver_rows, ['driver_time_stamp', 'driver_last_write_time'])
-        
+        result['drivers'] = self._mapped_rows(
+            "amcache.db", "Amcache", "InventoryDriverBinary", start, end,
+            extra_cols="driver_name,")
+
+        # Device and driver-package installation. When a piece of hardware or
+        # a driver first appeared on this machine is asked in most USB and
+        # rogue-device investigations, and AmCache records it - three dates on
+        # InventoryDevicePnp alone, none of them previously read.
+        result['devices'] = self._mapped_rows(
+            "amcache.db", "Amcache", "InventoryDevicePnp", start, end,
+            extra_cols=("model as filename, manufacturer, driver_name, "
+                        "class, service, 'amcachedevice' as tsType,"))
+        result['driver_packages'] = self._mapped_rows(
+            "amcache.db", "Amcache", "InventoryDriverPackage", start, end,
+            extra_cols=("inf as filename, provider, class, version, "
+                        "'amcachedriverpkg' as tsType,"))
+
         return json.dumps(result)
     
     @pyqtSlot(str, str, result=str)
     def getShimcacheData(self, start: str, end: str) -> str:
-        """Get ShimCache entries."""
-        sql = """
-            SELECT id, filename, path, last_modified, last_modified_readable,
-                   data_size, entry_size, cache_entry_position
-            FROM shimcache_entries
-            WHERE datetime(last_modified) BETWEEN datetime(?) AND datetime(?)
-            ORDER BY last_modified
-        """
-        rows = self._query_db("shimcache.db", sql, (start, end))
-        rows = self._parse_timestamps_in_rows(rows, ['last_modified'])
-        return json.dumps(rows)
-    
+        """Get ShimCache entries. Time columns from `artifact_map`."""
+        return json.dumps(self._mapped_rows(
+            "shimcache.db", "Shimcache", "shimcache_entries", start, end,
+            extra_cols=("filename, path, last_modified_readable, data_size, "
+                        "entry_size, cache_entry_position,"),
+            order_by="last_modified"))
+
     @pyqtSlot(str, str, result=str)
     def getRecyclebinData(self, start: str, end: str) -> str:
-        """Get Recycle Bin entries."""
-        sql = """
-            SELECT original_filename, original_path, deletion_time,
-                   PARSABLE_NUM(formatted_file_size) as file_size_raw, formatted_file_size,
-                   user_sid, file_signature, recovery_status
-            FROM recycle_bin_entries
-            WHERE datetime(deletion_time) BETWEEN datetime(?) AND datetime(?)
-            ORDER BY deletion_time
-        """
-        rows = self._query_db("recyclebin_analysis.db", sql, (start, end))
-        rows = self._parse_timestamps_in_rows(rows, ['deletion_time'])
-        return json.dumps(rows)
+        """Get Recycle Bin entries. Time columns from `artifact_map`."""
+        return json.dumps(self._mapped_rows(
+            "recyclebin_analysis.db", "RecycleBin", "recycle_bin_entries",
+            start, end,
+            extra_cols=("original_filename, original_path, "
+                        "PARSABLE_NUM(formatted_file_size) as file_size_raw, "
+                        "formatted_file_size, user_sid, file_signature, "
+                        "recovery_status,"),
+            order_by="deletion_time"))
     
     # ──────────────────────────────────────────────
     # SLOT: SRUM Energy (supplementary)
@@ -1426,30 +1860,48 @@ class TimelineBridge(QObject):
     
     @pyqtSlot(str, str, str, result=str)
     def getEventDetail(self, db_name: str, table_name: str, row_id: str) -> str:
-        """Get full row detail for a specific event (on double-click)."""
-        # Whitelist tables to prevent SQL injection
-        ALLOWED_TABLES = {
-            'SystemLogs', 'ApplicationLogs', 'SecurityLogs',
-            'srum_application_usage', 'srum_network_connectivity',
-            'srum_network_data_usage', 'srum_energy_usage', 'srum_app_timeline',
-            'mft_usn_correlated', 'prefetch_data', 'LNK_Files', 'Automatic_JumpLists', 'Custom_JumpLists',
-            'BAM', 'DAM', 'Shellbags', 'OpenSaveMRU', 'LastSaveMRU', 'RecentDocs', 'RunMRU',
-            'WordWheelQuery', 'Network_list', 'NetworkListProfiles', 'NetworkInterfacesInfo',
-            'USBStorageDevices', 'ShutdownInfo', 'InstalledSoftware', 'WindowsUpdateInfo',
-            'shimcache_entries', 'recycle_bin_entries',
-            'InventoryApplicationFile', 'InventoryApplication', 'InventoryDriverBinary',
-        }
-        
-        if table_name not in ALLOWED_TABLES:
+        """Get full row detail for a specific event (on double-click).
+
+        The allow-list is derived from `artifact_map`, not written out. It was
+        a fourth hand-maintained copy of the same table list and it had gone
+        stale in the worst possible way: it named none of the tables added
+        recently - ScheduledTasks, registry_value_changes, registry_carved_keys,
+        the SECURITY-hive tables, all 26 key-time tables, mft_records,
+        journal_events - so double-clicking any of those rows returned
+        `Table not allowed` and `EventDetailModal` fell back to the summary
+        row. The modal opened, showed six fields instead of thirty, and said
+        nothing about why.
+
+        Still an allow-list, and still a fixed one: the caller cannot widen it,
+        it just no longer has to be remembered.
+        """
+        from timeline.data import artifact_map as _am
+
+        allowed = set()
+        for entries in _am.TIMESTAMP_MAPPINGS.values():
+            allowed.update(e[0] for e in entries)
+        allowed.update(t for t, _c, _k, _b in _am._KEY_TIME_TABLES)
+        # Tables the timeline shows but does not plot a time from.
+        allowed.update((
+            "USBDevices", "NetworkListProfiles", "NetworkInterfacesInfo",
+            "srum_app_timeline", "DAM",
+        ))
+
+        if table_name not in allowed:
             return json.dumps({'error': f'Table not allowed: {table_name}'})
-        
-        # Determine the ID column
-        id_col = 'id'
-        if table_name in ('SystemLogs', 'ApplicationLogs', 'SecurityLogs'):
-            id_col = 'rowid'
-        elif table_name in ('LNK_Files', 'Automatic_JumpLists', 'Custom_JumpLists'):
-            id_col = 'rowid'
-        
+
+        # Which column identifies a row. `id` where the parser writes one,
+        # `rowid` otherwise - and getting this wrong returns "Not found"
+        # rather than an error.
+        id_col = 'rowid'
+        try:
+            cols = {r['name'] for r in self._query_db(
+                db_name, f'PRAGMA table_info("{table_name}")')}
+            if 'id' in cols:
+                id_col = 'id'
+        except Exception:
+            pass
+
         sql = f"SELECT * FROM [{table_name}] WHERE {id_col} = ? LIMIT 1"
         rows = self._query_db(db_name, sql, (row_id,))
         
@@ -1568,21 +2020,37 @@ class TimelineBridge(QObject):
             return self._query_db("LnkDB.db", union_sql, (start, end))
 
         def fetch_artifacts_registry():
-            """Exhaustive Lane 5 Aggregation: Synchronized with 33-field Manifest"""
+            """Per-day registry counts for the heatmap and week views.
+
+            The (table, column) list used to be written out here by hand, and
+            it was the THIRD copy of that list in the codebase. It had drifted
+            the same way the other two had: the four MRU tables keyed on
+            `access_date`, which the MRU parser leaves empty by design;
+            `UserAssist.focus_time`, which is a duration stored as "0.00s";
+            `NetworkListProfiles`, `Registry_Run`, `JumpList` and
+            `AppX_Execution`, none of which exist. Nine of eighteen entries
+            counted nothing, and the heatmap simply showed fewer days.
+
+            Now derived from `artifact_map`, so a parser change reaches the
+            heatmap the same way it reaches everything else.
+
+            RECORD times only. The 2,161 key write times are an upper bound
+            apiece, most of them stamped on install day, and pouring them into
+            a per-day heatmap would put one enormous block where the machine
+            was built and read as activity.
+            """
+            from timeline.data import artifact_map as _am
+
+            tables = []
+            for artifact, entries in _am.TIMESTAMP_MAPPINGS.items():
+                if _am.ARTIFACT_DB_MAPPING.get(artifact) != "registry_data.db":
+                    continue
+                for entry in entries:
+                    if _am.is_key_time(entry):
+                        continue
+                    tables.append((entry[0], entry[1]))
+
             query_parts = []
-            # List of (table_name, date_column) pairs from the master forensic manifest
-            tables = [
-                ("OpenSaveMRU", "access_date"), ("LastSaveMRU", "access_date"), 
-                ("RecentDocs", "access_date"), ("UserAssist", "focus_time"),
-                ("BAM", "last_execution"), ("DAM", "last_execution"),
-                ("ComputerNameInfo", "installation_date"), ("Network_list", "connection_date"),
-                ("NetworkListProfiles", "timestamp"), ("WordWheelQuery", "access_date"),
-                ("Shellbags", "created_date"), ("Shellbags", "modified_date"),
-                ("Shellbags", "accessed_date"), ("RunMRU", "access_date"),
-                ("InstalledSoftware", "install_date"), ("Registry_Run", "timestamp"),
-                ("JumpList", "last_access"), ("AppX_Execution", "last_execution")
-            ]
-            
             for table, date_col in tables:
                 if self._table_exists("registry_data.db", table):
                     # Robust SQL: Filter out 'N/A' or empty dates at the database level to prevent NULL days

@@ -24,12 +24,42 @@
       "forensic_strength": "high"
     },
     {
+      "id": "ScheduledTasks",
+      "name": "Scheduled Tasks",
+      "description": "Windows Task Scheduler entries from the registry TaskCache",
+      "default_weight": 0.25,
+      "default_tier": 2,
+      "anchor_priority": 3,
+      "category": "primary_evidence",
+      "forensic_strength": "high"
+    },
+    {
+      "id": "Persistence",
+      "name": "Persistence (ASEP)",
+      "description": "Auto-start extensibility points: Winlogon, IFEO, AppInit_DLLs, Active Setup, COM hijacking and related registry launch points",
+      "default_weight": 0.25,
+      "default_tier": 2,
+      "anchor_priority": 4,
+      "category": "primary_evidence",
+      "forensic_strength": "high"
+    },
+    {
+      "id": "UserAccounts",
+      "name": "User Accounts",
+      "description": "Local accounts from SAM merged with ProfileList: names, SIDs, logon counts and account flags",
+      "default_weight": 0.1,
+      "default_tier": 3,
+      "anchor_priority": 5,
+      "category": "contextual_evidence",
+      "forensic_strength": "medium"
+    },
+    {
       "id": "SRUM",
       "name": "System Resource Usage Monitor",
       "description": "Windows SRUM database artifacts",
       "default_weight": 0.2,
       "default_tier": 2,
-      "anchor_priority": 3,
+      "anchor_priority": 8,
       "category": "supporting_evidence",
       "forensic_strength": "medium"
     },
@@ -39,7 +69,7 @@
       "description": "Windows AmCache execution artifacts",
       "default_weight": 0.15,
       "default_tier": 2,
-      "anchor_priority": 4,
+      "anchor_priority": 9,
       "category": "supporting_evidence",
       "forensic_strength": "medium"
     },
@@ -49,7 +79,7 @@
       "description": "Windows Application Compatibility Cache",
       "default_weight": 0.15,
       "default_tier": 2,
-      "anchor_priority": 5,
+      "anchor_priority": 10,
       "category": "supporting_evidence",
       "forensic_strength": "medium"
     },
@@ -59,7 +89,7 @@
       "description": "Windows Jump List artifacts",
       "default_weight": 0.1,
       "default_tier": 3,
-      "anchor_priority": 6,
+      "anchor_priority": 11,
       "category": "contextual_evidence",
       "forensic_strength": "low"
     },
@@ -69,7 +99,7 @@
       "description": "Windows shortcut files",
       "default_weight": 0.1,
       "default_tier": 3,
-      "anchor_priority": 7,
+      "anchor_priority": 12,
       "category": "contextual_evidence",
       "forensic_strength": "low"
     },
@@ -79,7 +109,7 @@
       "description": "NTFS Master File Table entries",
       "default_weight": 0.05,
       "default_tier": 4,
-      "anchor_priority": 8,
+      "anchor_priority": 13,
       "category": "background_evidence",
       "forensic_strength": "low"
     },
@@ -89,7 +119,7 @@
       "description": "NTFS Update Sequence Number Journal",
       "default_weight": 0.05,
       "default_tier": 4,
-      "anchor_priority": 9,
+      "anchor_priority": 14,
       "category": "background_evidence",
       "forensic_strength": "low"
     },
@@ -99,7 +129,7 @@
       "description": "Windows Registry artifacts",
       "default_weight": 0.1,
       "default_tier": 3,
-      "anchor_priority": 10,
+      "anchor_priority": 15,
       "category": "contextual_evidence",
       "forensic_strength": "medium"
     },
@@ -109,7 +139,7 @@
       "description": "Web browser history and artifacts",
       "default_weight": 0.1,
       "default_tier": 3,
-      "anchor_priority": 11,
+      "anchor_priority": 16,
       "category": "contextual_evidence",
       "forensic_strength": "low"
     },
@@ -119,8 +149,28 @@
       "description": "Network connection logs and artifacts",
       "default_weight": 0.15,
       "default_tier": 2,
-      "anchor_priority": 12,
+      "anchor_priority": 17,
       "category": "supporting_evidence",
+      "forensic_strength": "medium"
+    },
+    {
+      "id": "SecurityPosture",
+      "name": "Security Posture",
+      "description": "Security-relevant registry settings, defender exclusions, firewall and port-proxy exposure",
+      "default_weight": 0.15,
+      "default_tier": 2,
+      "anchor_priority": 6,
+      "category": "supporting_evidence",
+      "forensic_strength": "medium"
+    },
+    {
+      "id": "DeviceHistory",
+      "name": "Device History",
+      "description": "Portable devices, Bluetooth, SCSI, printers and per-user mount points",
+      "default_weight": 0.1,
+      "default_tier": 3,
+      "anchor_priority": 7,
+      "category": "contextual_evidence",
       "forensic_strength": "medium"
     }
   ]

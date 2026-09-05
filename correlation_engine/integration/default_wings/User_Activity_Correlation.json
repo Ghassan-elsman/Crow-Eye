@@ -6,16 +6,15 @@
   "proves": "User actively interacted with the system",
   "author": "Crow-Eye Team",
   "created_date": "2024-12-23T00:00:00Z",
-  "last_modified": "2024-12-23T00:00:00Z",
+  "last_modified": "2026-08-22T00:00:00Z",
   "version": "1.0",
-  
   "feathers": [
     {
       "feather_config_name": "UserAssist_CrowEyeFeather",
       "feather_database_path": "feathers/UserAssist_CrowEyeFeather.db",
       "artifact_type": "Registry",
       "feather_id": "userassist",
-      "weight": 0.30,
+      "weight": 0.3,
       "tier": 1,
       "tier_name": "Explicit user interaction"
     },
@@ -24,7 +23,7 @@
       "feather_database_path": "feathers/RecentDocs_CrowEyeFeather.db",
       "artifact_type": "Registry",
       "feather_id": "recentdocs",
-      "weight": 0.20,
+      "weight": 0.2,
       "tier": 1,
       "tier_name": "Explicit user interaction"
     },
@@ -33,7 +32,7 @@
       "feather_database_path": "feathers/OpenSaveMRU_CrowEyeFeather.db",
       "artifact_type": "Registry",
       "feather_id": "opensavemru",
-      "weight": 0.20,
+      "weight": 0.2,
       "tier": 1,
       "tier_name": "Explicit user interaction"
     },
@@ -42,7 +41,7 @@
       "feather_database_path": "feathers/LastSaveMRU_CrowEyeFeather.db",
       "artifact_type": "Registry",
       "feather_id": "lastsavemru",
-      "weight": 0.20,
+      "weight": 0.2,
       "tier": 1,
       "tier_name": "Explicit user interaction"
     },
@@ -60,7 +59,7 @@
       "feather_database_path": "feathers/TypedPaths_CrowEyeFeather.db",
       "artifact_type": "Registry",
       "feather_id": "typedpaths",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 2,
       "tier_name": "Navigation & exploration"
     },
@@ -81,9 +80,17 @@
       "weight": 0.05,
       "tier": 3,
       "tier_name": "File system activity"
+    },
+    {
+      "feather_id": "app_perms",
+      "artifact_type": "AppPermissions",
+      "feather_config_name": "AppPermissions_CrowEyeFeather",
+      "feather_database_path": "feathers/AppPermissions_CrowEyeFeather.db",
+      "tier": 2,
+      "tier_name": "Capability consent and last use",
+      "weight": 0.1
     }
   ],
-  
   "time_window_minutes": 180,
   "minimum_matches": 1,
   "target_application": "",
@@ -96,12 +103,11 @@
     "MFT"
   ],
   "use_weighted_scoring": true,
-  
   "scoring": {
     "enabled": true,
     "score_interpretation": {
       "confirmed": {
-        "min": 0.60,
+        "min": 0.6,
         "label": "Confirmed User Activity"
       },
       "likely": {
@@ -114,7 +120,6 @@
       }
     }
   },
-  
   "semantic_rules": [
     {
       "rule_id": "user_file_access",
@@ -124,7 +129,7 @@
       "conditions": [
         {
           "feather_id": "recentdocs",
-          "field_name": "target_path",
+          "field_name": "row_data",
           "operator": "wildcard",
           "value": "*"
         },
@@ -166,7 +171,7 @@
       "conditions": [
         {
           "feather_id": "userassist",
-          "field_name": "name",
+          "field_name": "program_path",
           "operator": "wildcard",
           "value": "*"
         }
@@ -232,7 +237,7 @@
         },
         {
           "feather_id": "userassist",
-          "field_name": "name",
+          "field_name": "program_path",
           "operator": "wildcard",
           "value": "*"
         }
@@ -250,13 +255,13 @@
       "conditions": [
         {
           "feather_id": "userassist",
-          "field_name": "name",
+          "field_name": "program_path",
           "operator": "wildcard",
           "value": "*"
         },
         {
           "feather_id": "recentdocs",
-          "field_name": "target_path",
+          "field_name": "row_data",
           "operator": "wildcard",
           "value": "*"
         },
@@ -280,7 +285,7 @@
       "conditions": [
         {
           "feather_id": "recentdocs",
-          "field_name": "target_path",
+          "field_name": "row_data",
           "operator": "wildcard",
           "value": "*"
         },
@@ -319,9 +324,34 @@
       "scope": "wing",
       "category": "file_access",
       "severity": "info"
+    },
+    {
+      "rule_id": "ua_capability_last_used",
+      "name": "Application Used A Capability",
+      "semantic_value": "Application Used A Capability",
+      "scope": "wing",
+      "category": "user_activity",
+      "severity": "info",
+      "confidence": 0.85,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "app_perms",
+          "field_name": "last_used_start",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "tactic": [
+        "collection"
+      ],
+      "technique_id": [
+        "T1123",
+        "T1125"
+      ],
+      "description": "Windows records, per application, when it last used the microphone, camera or location. That is the registry's own record of surveillance-capable access and it carries a real event time, so it places on the timeline beside whatever else the user was doing."
     }
   ],
-  
   "tags": [
     "user_activity",
     "default",

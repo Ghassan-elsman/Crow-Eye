@@ -202,23 +202,49 @@ class DatabaseManager:
         }
     }
     
-    # Alternative filenames that may contain the same artifacts
-    # This aligns with UI categories and common outputs from Crow Eye collectors
+    # Which real file holds each logical artifact, when the configured filename
+    # is not on disk.
+    #
+    # `Log_Claw.db` used to be listed here for almost everything, and it exists
+    # in every case, so it always won - and it is tried BEFORE the table
+    # signatures below, so the matching that would have found `Shellbags` in
+    # `registry_data.db` never ran. Five entries in the search tree named after
+    # registry and LNK artifacts each offered the three Windows Event Log
+    # tables, and ticking "ShellBags" searched the event log.
+    #
+    # Where each artifact actually lives, read out of a real case:
+    #   Shellbags, UserAssist, MUICache, BAM, DAM  -> registry_data.db
+    #   LNK_Files, Automatic_JumpLists, Custom_JumpLists -> LnkDB.db
+    #   SystemLogs, SecurityLogs, ApplicationLogs  -> Log_Claw.db
     ALT_NAME_MAP: Dict[str, List[str]] = {
-        "amcache_data.db": ["amcache.db", "Log_Claw.db"],
-        "shimcache_data.db": ["shimcache.db", "Log_Claw.db"],
-        "lnk_data.db": ["LnkDB.db", "Log_Claw.db"],
-        "jumplist_data.db": ["Log_Claw.db"],
+        "amcache_data.db": ["amcache.db"],
+        "shimcache_data.db": ["shimcache.db"],
+        "lnk_data.db": ["LnkDB.db"],
+        "jumplist_data.db": ["LnkDB.db"],
         "mft_data.db": ["mft_claw_analysis.db", "MFT_data.db"],  # Support both naming conventions
         "usn_data.db": ["USN_journal.db"],
         "recyclebin_data.db": ["recyclebin_analysis.db"],
+        # The one place `Log_Claw.db` belongs.
         "eventlog_data.db": ["Log_Claw.db"],
-        "registry_data.db": ["Log_Claw.db"],
-        "shellbags_data.db": ["Log_Claw.db"],
-        "userassist_data.db": ["Log_Claw.db"],
-        "muicache_data.db": ["Log_Claw.db"],
-        "bam_dam_data.db": ["Log_Claw.db"],
+        "shellbags_data.db": ["registry_data.db"],
+        "userassist_data.db": ["registry_data.db"],
+        "muicache_data.db": ["registry_data.db"],
+        "bam_dam_data.db": ["registry_data.db"],
     }
+
+    # Logical names that are a SUBSET of a shared database rather than a file of
+    # their own: four registry tables and the two LNK ones. An entry for these
+    # must offer only its own tables - `registry_data.db` has 124, and a
+    # "ShellBags" checkbox that searches all of them means nothing.
+    #
+    # Explicit membership, because `TABLE_SIGNATURES` exists for every name
+    # including `registry_data.db`, whose own signatures (`registry_`, `reg_`,
+    # `hive_`) match a handful of its 124 tables. Scoping by signature across
+    # the board would cut the Registry entry down to that handful.
+    SHARED_DB_ARTIFACTS = frozenset((
+        "shellbags_data.db", "userassist_data.db", "muicache_data.db",
+        "bam_dam_data.db", "lnk_data.db", "jumplist_data.db",
+    ))
 
     # Table signatures used to detect artifacts when they are stored as tables
     # inside a consolidated/aggregator database (e.g., Log_Claw.db)
@@ -226,8 +252,11 @@ class DatabaseManager:
         # Execution Evidence
         "amcache_data.db": ["amcache", "amcache_entries", "amcache_programs"],
         "shimcache_data.db": ["shimcache", "shim_cache", "appcompat"],
-        "lnk_data.db": ["lnk", "shortcut", "lnk_entries"],
-        "jumplist_data.db": ["jumplist", "jump_list", "dest_list"],
+        # `jlce` is the name an older build wrote (`JLCE`, `Custom_JLCE`); it
+        # keeps an archived case searchable. No other table anywhere contains
+        # that string.
+        "lnk_data.db": ["lnk", "shortcut", "lnk_entries", "jlce"],
+        "jumplist_data.db": ["jumplist", "jump_list", "dest_list", "jlce"],
         "prefetch_data.db": ["prefetch", "prefetch_files"],
         "userassist_data.db": ["userassist", "user_assist"],
         "bam_dam_data.db": ["bam", "dam", "background_activity"],
@@ -269,6 +298,29 @@ class DatabaseManager:
         if not self.case_directory.exists():
             self.logger.warning(f"Case directory does not exist: {self.case_directory}")
     
+    @classmethod
+    def _scope_to_artifact(cls, db_name: str, tables: List[str]) -> List[str]:
+        """The tables a logical name denotes, when it is not a whole file.
+
+        `shellbags_data.db` is the `Shellbags` table inside `registry_data.db`,
+        not the other 123 tables beside it - a "ShellBags" checkbox that
+        searches the whole registry means nothing, and the tree would list 124
+        children under each of four registry-artifact entries.
+
+        Names that own their file are returned untouched, and so is a shared
+        name whose tables are not present: an entry with nothing to offer is
+        better than one silently offering the whole database.
+        """
+        if db_name not in cls.SHARED_DB_ARTIFACTS:
+            return tables
+        signatures = cls.TABLE_SIGNATURES.get(db_name, [])
+        if not signatures:
+            return tables
+        scoped = [t for t in tables
+                  if any(t.lower().startswith(sig) or sig in t.lower()
+                         for sig in signatures)]
+        return scoped
+
     def discover_databases(self) -> List[DatabaseInfo]:
         """
         Discover all artifact databases in the case directory.
@@ -368,6 +420,7 @@ class DatabaseManager:
                 try:
                     # When resolved, connect() will use the mapped path
                     tables = self.get_tables(db_name)
+                    tables = self._scope_to_artifact(db_name, tables)
                     db_info.tables = tables
                     db_info.accessible = True
                     self.logger.debug(f"Database {db_name} is accessible with {len(tables)} tables")

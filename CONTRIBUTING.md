@@ -34,6 +34,7 @@ This section provides a comprehensive overview of all project documentation to h
 ### Core Documentation
 
 - **[README.md](README.md)**: Project overview, vision, features, installation, and basic usage
+- **[docs/changing-a-parser.md](docs/changing-a-parser.md)**: The checklist for adding a parser or changing one - what to reuse, and every place that must be updated or the data stays invisible (GUI, correlation engine, Eye knowledge base, Sentinel schema)
 - **[TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md)**: Complete technical documentation including:
   - Complete project structure and file organization
   - Architecture diagrams and system design

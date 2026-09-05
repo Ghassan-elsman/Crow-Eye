@@ -122,13 +122,76 @@ def _get_wing_anchor_priority_from_registry() -> List[str]:
         ]
 
 
+def validate_anchor_priority(anchor_priority, feather_artifact_types) -> List[str]:
+    """Check a wing's anchor_priority against the wing's OWN feathers.
+
+    `anchor_priority` is a preference order, not a schema. Anchor selection
+    walks it and takes the first entry matching one of this wing's
+    `FeatherSpec.artifact_type` values (see
+    `correlation_engine.engine.correlation_engine._select_anchor_feather`), so
+    the only vocabulary that means anything here is the artifact types this
+    wing's feathers actually declare. An entry that matches nothing is a
+    preference that can never apply - inert, not invalid - and a wing is still
+    perfectly runnable with one: selection simply falls through to the next
+    entry, or to the fallback.
+
+    Both callers used to validate this list against
+    `artifact_type_registry.get_all_types()`, which returns 17 coarse
+    CATEGORIES (`Registry`, `Logs`, `Persistence`...) while wings name concrete
+    artifact types (`SecurityLogs`, `ShellBags`, `AutoStartPrograms`). Nine of
+    the eleven shipped Wings were rejected outright by that check and never ran
+    - each one recorded as an empty execution with a validation error, and
+    reported in the Summary tab as a wing that found nothing.
+
+    Returns a list of WARNING strings. It never returns errors, and callers
+    must not promote these to errors.
+    """
+    warnings: List[str] = []
+    own_types = {t for t in (feather_artifact_types or []) if t}
+
+    known_types = set()
+    try:
+        from .artifact_detector import ArtifactDetector
+        known_types = set(ArtifactDetector.get_all_artifact_types())
+    except Exception:
+        # Without the detector every unmatched entry still warns below; the
+        # wording just cannot distinguish "unknown type" from "no such feather
+        # in this wing".
+        known_types = set()
+
+    for artifact_type in (anchor_priority or []):
+        if artifact_type in own_types:
+            continue
+        if artifact_type in known_types:
+            warnings.append(
+                f"anchor_priority lists '{artifact_type}', but this wing has no "
+                f"'{artifact_type}' feather - that priority can never apply"
+            )
+        else:
+            warnings.append(
+                f"anchor_priority lists '{artifact_type}', which is not an "
+                f"artifact type this wing's feathers declare"
+                + (f" (known types include: {', '.join(sorted(own_types))})"
+                   if own_types else "")
+            )
+    return warnings
+
+
 @dataclass
 class CorrelationRules:
     """Correlation rules for the wing"""
     time_window_minutes: int = 180 # Default: 3 hours for better correlation accuracy
-    # Number of distinct feathers an identity/anchor must appear in to count
-    # as a correlation — NOT a total event count. See time_based_engine.py
-    # ~5413-5428 where this is compared against feather_count.
+    # Number of feathers that must CORROBORATE, beyond the first. Not a total
+    # event count, and not a total feather count.
+    #
+    # So the shipped default of 1 means a match must appear in 2 distinct
+    # feathers: one to observe it and one to corroborate it. Use
+    # `required_feather_count()` rather than comparing this value directly -
+    # every engine was comparing it against the raw feather count, which made
+    # 1 mean "one feather", i.e. no corroboration at all. On the reference case
+    # that emitted 125,029 single-feather rows out of 127,226 "matches": 98.3%
+    # of the output correlated nothing, and the ~2,200 real correlations were
+    # buried under it.
     minimum_matches: int = 1
     show_partial_matches: bool = True
     max_time_range_years: int = 20 # Maximum time span to prevent false timestamps from expanding range
@@ -154,10 +217,29 @@ class CorrelationRules:
         "USN": "timestamp"
     })
     
+    def required_feather_count(self) -> int:
+        """How many distinct feathers a match must span to be emitted.
+
+        One to observe, plus `minimum_matches` to corroborate. This is the
+        single definition of the floor - every engine must ask this rather
+        than compare `minimum_matches` against a feather count itself, which
+        is how the same field came to mean "corroborating feathers" in the
+        wing schema and the validator, and "total feathers" in both engines.
+
+        The floor is never below 2: a finding that appears in one source and
+        nowhere else has not been correlated with anything, and calling it a
+        correlation is the thing this engine exists not to do. An analyst who
+        wants every identity emitted sets
+        `scanning_config.min_feathers_override = 0`, which bypasses this, or
+        turns on `low_confidence_review_mode` to see the below-threshold
+        groups labelled as such.
+        """
+        return max(2, int(self.minimum_matches) + 1)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'CorrelationRules':
         """Create from dictionary"""

@@ -6,9 +6,8 @@
   "proves": "An actor attempted to remove forensic traces or tamper with logging",
   "author": "Crow-Eye Team",
   "created_date": "2026-05-18T00:00:00Z",
-  "last_modified": "2026-05-18T00:00:00Z",
+  "last_modified": "2026-08-22T00:00:00Z",
   "version": "1.0",
-
   "feathers": [
     {
       "feather_config_name": "SecurityLogs_CrowEyeFeather",
@@ -24,7 +23,7 @@
       "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
       "artifact_type": "Prefetch",
       "feather_id": "prefetch",
-      "weight": 0.20,
+      "weight": 0.2,
       "tier": 1,
       "tier_name": "Wiper / tampering tool execution"
     },
@@ -42,7 +41,7 @@
       "feather_database_path": "feathers/RecycleBin_CrowEyeFeather.db",
       "artifact_type": "RecycleBin",
       "feather_id": "recyclebin",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 2,
       "tier_name": "Recycle Bin context"
     },
@@ -81,9 +80,26 @@
       "weight": 0.05,
       "tier": 3,
       "tier_name": "Defender autostart tamper"
+    },
+    {
+      "feather_id": "system_config",
+      "artifact_type": "SystemConfiguration",
+      "feather_config_name": "SystemConfiguration_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemConfiguration_CrowEyeFeather.db",
+      "tier": 2,
+      "tier_name": "Configuration that hides evidence",
+      "weight": 0.08
+    },
+    {
+      "feather_id": "winevt",
+      "artifact_type": "WinevtChannels",
+      "feather_config_name": "WinevtChannels_CrowEyeFeather",
+      "feather_database_path": "feathers/WinevtChannels_CrowEyeFeather.db",
+      "tier": 2,
+      "tier_name": "Event log channel configuration",
+      "weight": 0.07
     }
   ],
-
   "time_window_minutes": 180,
   "minimum_matches": 1,
   "target_application": "",
@@ -101,40 +117,64 @@
     "AutoStartPrograms"
   ],
   "use_weighted_scoring": true,
-
   "scoring": {
     "enabled": true,
     "score_interpretation": {
-      "confirmed":  { "min": 0.70, "label": "Confirmed Anti-Forensics" },
-      "probable":   { "min": 0.40, "label": "Probable Anti-Forensics" },
-      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
-      "not_proven": { "min": 0.00, "label": "Not Proven" }
+      "confirmed": {
+        "min": 0.7,
+        "label": "Confirmed Anti-Forensics"
+      },
+      "probable": {
+        "min": 0.4,
+        "label": "Probable Anti-Forensics"
+      },
+      "weak": {
+        "min": 0.2,
+        "label": "Weak / Partial Evidence"
+      },
+      "not_proven": {
+        "min": 0.0,
+        "label": "Not Proven"
+      }
     }
   },
-
   "semantic_rules": [
     {
       "rule_id": "af_security_log_cleared",
       "name": "Security Audit Log Cleared (1102)",
       "semantic_value": "Security Log Cleared",
-      "description": "Security event 1102 — the audit log was cleared. Single loudest red flag.",
+      "description": "Security event 1102 \u2014 the audit log was cleared. Single loudest red flag.",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "1102" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "1102"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
       "category": "anti_forensics",
       "severity": "critical",
-      "technique_id": ["T1070.001"],
-      "tactic": ["defense-evasion"]
+      "technique_id": [
+        "T1070.001"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "af_system_log_cleared",
       "name": "System Event Log Cleared (104)",
       "semantic_value": "System Log Cleared",
-      "description": "System event 104 — a non-Security event log was cleared",
+      "description": "System event 104 \u2014 a non-Security event log was cleared",
       "conditions": [
-        { "feather_id": "system_logs", "field_name": "EventID", "operator": "equals", "value": "104" }
+        {
+          "feather_id": "system_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "104"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -147,7 +187,12 @@
       "semantic_value": "Wiper Tool Run",
       "description": "Prefetch evidence of a known wiping / log-cleanup tool (sdelete.exe, cipher.exe, wevtutil.exe, bcdedit.exe, fsutil.exe, eraser.exe, ccleaner.exe, etc.)",
       "conditions": [
-        { "feather_id": "prefetch", "field_name": "executable_name", "operator": "regex", "value": "\\b(?:sdelete|cipher|wevtutil|bcdedit|fsutil|eraser|ccleaner|wipe(?:disk|file|info)?|sysclean|cleanmgr|forfiles|del\\.exe|cmd\\.exe.*\\/c\\s*del)\\b" }
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "regex",
+          "value": "\\b(?:sdelete|cipher|wevtutil|bcdedit|fsutil|eraser|ccleaner|wipe(?:disk|file|info)?|sysclean|cleanmgr|forfiles|del\\.exe|cmd\\.exe.*\\/c\\s*del)\\b"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -158,10 +203,20 @@
       "rule_id": "af_log_cleared_and_wiper",
       "name": "Log Cleared AND Wiper Ran (AND)",
       "semantic_value": "Coordinated Log Tampering",
-      "description": "A log-clear event AND a wiper tool execution within the same window — strong signal of deliberate tampering",
+      "description": "A log-clear event AND a wiper tool execution within the same window \u2014 strong signal of deliberate tampering",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID",         "operator": "equals",   "value": "1102" },
-        { "feather_id": "prefetch",      "field_name": "executable_name", "operator": "wildcard", "value": "*" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "1102"
+        },
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -172,18 +227,29 @@
       "rule_id": "af_mass_delete",
       "name": "Mass Delete Burst in USN Journal (Threshold)",
       "semantic_value": "Mass File Deletion",
-      "description": "A genuine burst of >=20 FILE_DELETE entries in USN within 5 minutes — characteristic of cleanup activity. Uses a threshold rule so a single deletion no longer trips the signal.",
+      "description": "A genuine burst of >=20 FILE_DELETE entries in USN within 5 minutes \u2014 characteristic of cleanup activity. Uses a threshold rule so a single deletion no longer trips the signal.",
       "rule_type": "threshold",
       "threshold": {
-        "condition": { "feather_id": "mft_usn", "field_name": "reason", "operator": "contains", "value": "FILE_DELETE" },
+        "condition": {
+          "feather_id": "mft_usn",
+          "field_name": "reason",
+          "operator": "contains",
+          "value": "FILE_DELETE"
+        },
         "min_count": 20,
         "within_minutes": 5
       },
       "scope": "wing",
       "category": "anti_forensics",
       "severity": "high",
-      "technique_id": ["T1070.004", "T1485"],
-      "tactic": ["defense-evasion", "impact"]
+      "technique_id": [
+        "T1070.004",
+        "T1485"
+      ],
+      "tactic": [
+        "defense-evasion",
+        "impact"
+      ]
     },
     {
       "rule_id": "af_defender_tamper",
@@ -191,17 +257,81 @@
       "semantic_value": "Security Tooling Tamper",
       "description": "Service stopped / disabled OR Defender autostart removed OR audit policy change in System logs",
       "conditions": [
-        { "feather_id": "services",   "field_name": "service_name", "operator": "contains", "value": "Defender" },
-        { "feather_id": "autostart",  "field_name": "name",         "operator": "contains", "value": "Defender" },
-        { "feather_id": "system_logs","field_name": "EventID",      "operator": "equals",   "value": "7036" }
+        {
+          "feather_id": "services",
+          "field_name": "service_name",
+          "operator": "contains",
+          "value": "Defender"
+        },
+        {
+          "feather_id": "autostart",
+          "field_name": "name",
+          "operator": "contains",
+          "value": "Defender"
+        },
+        {
+          "feather_id": "system_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "7036"
+        }
       ],
       "logic_operator": "OR",
       "scope": "wing",
       "category": "anti_forensics",
       "severity": "high"
+    },
+    {
+      "rule_id": "af_fast_startup",
+      "name": "Fast Startup Masks A Shutdown",
+      "semantic_value": "Fast Startup Masks A Shutdown",
+      "scope": "wing",
+      "category": "anti_forensics",
+      "severity": "low",
+      "confidence": 0.9,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "system_config",
+          "field_name": "setting",
+          "operator": "equals",
+          "value": "HiberbootEnabled"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1070"
+      ],
+      "description": "HiberbootEnabled decides whether a shutdown was a real one. With fast startup on, the machine hibernates the kernel session rather than shutting down, so ShimCache is never flushed to the registry and an absence of entries proves nothing. Context for reading every other artifact, not an accusation in itself."
+    },
+    {
+      "rule_id": "af_channel_disabled",
+      "name": "Event Log Channel Disabled",
+      "semantic_value": "Event Log Channel Disabled",
+      "scope": "wing",
+      "category": "anti_forensics",
+      "severity": "medium",
+      "confidence": 0.6,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "winevt",
+          "field_name": "enabled",
+          "operator": "equals",
+          "value": "0"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1562.002"
+      ],
+      "description": "A disabled channel explains a silence that would otherwise read as nothing having happened. Judge against the known-good defaults first: TaskScheduler/Operational and DNS-Client/Operational ship disabled, and calling those tampering is a false positive."
     }
   ],
-
   "tags": [
     "anti_forensics",
     "tampering",

@@ -48,6 +48,13 @@ ICON_NAMES = (
     "branch_vline", "branch_more", "branch_end", "branch_closed", "branch_open",
 )
 
+# Raster brand artwork, deliberately NOT in ICON_NAMES. These are the Feather /
+# Wing illustrations shared with the website, not authored UI glyphs, and they
+# cannot be expressed as SVG. ICON_NAMES is manifest-tested against icons/*.svg
+# in both directions, so listing them there would fail that test; they get their
+# own tuple and their own coverage instead.
+RASTER_ICON_NAMES = ("feather", "wing")
+
 
 class CrowEyeIcons:
     """QIcon factories for the Crow-Eye SVG asset set.
@@ -69,6 +76,29 @@ class CrowEyeIcons:
         icon = QIcon(str(path)) if path.exists() else QIcon()
         cls._CACHE[name] = icon
         return icon
+
+    @classmethod
+    def _load_raster(cls, name: str) -> QIcon:
+        """Same contract as _load, for the .png brand artwork.
+
+        Separate from _load because that one hardcodes the .svg extension.
+        The source PNGs are 256px so Qt downsamples at every call site rather
+        than upscaling a small asset."""
+        key = f"raster:{name}"
+        cached = cls._CACHE.get(key)
+        if cached is not None:
+            return cached
+        path = _ICONS_DIR / f"{name}.png"
+        icon = QIcon(str(path)) if path.exists() else QIcon()
+        cls._CACHE[key] = icon
+        return icon
+
+    # ── Brand artwork (raster) ───────────────────────────────
+    @classmethod
+    def feather(cls) -> QIcon: return cls._load_raster("feather")
+
+    @classmethod
+    def wing(cls) -> QIcon: return cls._load_raster("wing")
 
     # ── Status ───────────────────────────────────────────────
     @classmethod
@@ -241,6 +271,36 @@ def status_label_html(severity: str, text: str, size_px: int = 14) -> str:
         return text
     path = (_ICONS_DIR / f"{icon_name}.svg").as_posix()
     return f'<img src="{path}" width="{size_px}" height="{size_px}"> {text}'
+
+
+def icon_label_html(name: str, text: str, size_px: int = 16) -> str:
+    """Rich-text fragment pairing any Crow-Eye icon with `text`.
+
+    Like `status_label_html` but takes a direct icon name rather than a
+    severity tag, and resolves .svg or .png so the raster brand artwork
+    (feather / wing) works as well as the authored glyph set. Used for
+    QGroupBox headings, which have no icon API of their own.
+
+    Returns bare text if no asset matches, so a caller never ends up with a
+    broken-image box in the UI."""
+    for ext in ("svg", "png"):
+        path = _ICONS_DIR / f"{name}.{ext}"
+        if path.exists():
+            return (f'<img src="{path.as_posix()}" width="{size_px}" '
+                    f'height="{size_px}"> {text}')
+    return text
+
+
+def group_title_label(name: str, text: str, size_px: int = 16) -> QLabel:
+    """A QLabel styled as a group-box heading, with an icon before the text.
+
+    QGroupBox has no setIcon, so the pattern is: clear the box's own title
+    and insert this as the first row of its layout. Weight and size are set
+    to match the title it replaces so the box still reads as a heading."""
+    label = QLabel()
+    label.setTextFormat(Qt.RichText)
+    label.setText(icon_label_html(name, f"<b>{text}</b>", size_px=size_px))
+    return label
 
 
 def apply_status_to_label(

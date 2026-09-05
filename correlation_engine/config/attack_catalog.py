@@ -52,6 +52,45 @@ TECHNIQUES: Dict[str, tuple] = {
     "T1485": ("Data Destruction", "impact"),
     "T1486": ("Data Encrypted for Impact", "impact"),
     "T1490": ("Inhibit System Recovery", "impact"),
+
+    # ---- techniques the registry-key wings cite -------------------------
+    # An unknown ID still works - it is labelled "Unknown technique" and the
+    # rollup carries on - so nothing here was blocking a wing. But a coverage
+    # rollup that cannot name half of what it covers is not much of a rollup,
+    # and several of these were already cited by the shipped wings.
+    "T1547.001": ("Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder",
+                  "persistence"),
+    "T1547.014": ("Boot or Logon Autostart Execution: Active Setup", "persistence"),
+    "T1053.005": ("Scheduled Task/Job: Scheduled Task", "persistence"),
+    "T1546.012": ("Event Triggered Execution: Image File Execution Options Injection",
+                  "persistence"),
+    "T1562.002": ("Impair Defenses: Disable Windows Event Logging", "defense-evasion"),
+    "T1562.009": ("Impair Defenses: Safe Mode Boot", "defense-evasion"),
+    "T1553": ("Subvert Trust Controls", "defense-evasion"),
+    "T1553.005": ("Subvert Trust Controls: Mark-of-the-Web Bypass", "defense-evasion"),
+    "T1112": ("Modify Registry", "defense-evasion"),
+    "T1557": ("Adversary-in-the-Middle", "credential-access"),
+    "T1200": ("Hardware Additions", "initial-access"),
+    "T1016": ("System Network Configuration Discovery", "discovery"),
+    "T1123": ("Audio Capture", "collection"),
+    "T1125": ("Video Capture", "collection"),
+
+    # ---- techniques the behaviour and evasion semantic rules cite ---------
+    # Those 22 rules shipped with no ATT&CK tags at all, so the coverage
+    # rollup and the GUI's coverage bar were computed over an empty set and
+    # read as "no techniques covered" on every case.
+    "T1218": ("System Binary Proxy Execution", "defense-evasion"),
+    "T1218.011": ("System Binary Proxy Execution: Rundll32", "defense-evasion"),
+    "T1105": ("Ingress Tool Transfer", "command-and-control"),
+    "T1071": ("Application Layer Protocol", "command-and-control"),
+    "T1572": ("Protocol Tunneling", "command-and-control"),
+    "T1046": ("Network Service Discovery", "discovery"),
+    "T1087": ("Account Discovery", "discovery"),
+    "T1548.002": ("Abuse Elevation Control Mechanism: Bypass User Account Control",
+                  "privilege-escalation"),
+    "T1110.002": ("Brute Force: Password Cracking", "credential-access"),
+    "T1222": ("File and Directory Permissions Modification", "defense-evasion"),
+    "T1036.007": ("Masquerading: Double File Extension", "defense-evasion"),
 }
 
 # Ordered tactics for stable, kill-chain-ordered rollup display.

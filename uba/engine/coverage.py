@@ -40,6 +40,20 @@ _SOURCE_LABEL = {
     "BrowserHistory": "Registry — browser history", "RecentDocs": "Registry — recent docs",
     "OpenSaveMRU": "Registry — open/save history", "LastSaveMRU": "Registry — save history",
     "TypedPaths": "Registry — typed paths", "WordWheelQuery": "Registry — search terms",
+    # The artifacts the registry parsers collect that gained rules 2026-09-03.
+    # Without a label here the panel shows the bare table name, which is the
+    # database's vocabulary rather than the analyst's.
+    "ScheduledTasks": "Registry — scheduled tasks (TaskCache)",
+    "DefenderExclusions": "Registry — Defender exclusions",
+    "SecurityPosture": "Registry — security settings",
+    "file_exts": "Registry — file type handlers",
+    "clsid_inprocserver32": "Registry — COM in-process servers",
+    "FeatureUsage": "Registry — Explorer feature usage",
+    "CompatibilityAssistant": "Registry — Compatibility Assistant",
+    "ConnectedDevices": "Registry — connected devices",
+    "MountPoints2": "Registry — volumes opened by a user",
+    "OfficeDocuments": "Registry — Office document history",
+    "system_configuration": "Registry — system configuration",
     "RunMRU": "Registry — Run history", "TimeZoneInfo": "Registry — time zone",
 }
 

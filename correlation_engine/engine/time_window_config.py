@@ -81,16 +81,28 @@ class TimeWindowScanningConfig:
     progress_reporting_interval: int = 100 # Report progress every N windows
 
     # Identity grouping tunables. When set, min_feathers_override overrides
-    # wing.correlation_rules.minimum_matches in _correlate_window_records.
+    # wing.correlation_rules.required_feather_count() in
+    # _correlate_window_records.
+    #
     # low_confidence_review_mode surfaces sub-threshold identity groups as
-    # matches with confidence_category="Low - below threshold" so analysts
-    # can review them instead of having them silently dropped. Default
-    # changed to True so the engine never silently discards evidence —
-    # every identity that forms a group becomes a match (high- or low-
-    # confidence). Operators who want strict drops can flip it back to
-    # False explicitly.
+    # matches with confidence_category="Low - below threshold".
+    #
+    # It defaulted to True, on the reasoning that the engine should never
+    # silently discard evidence. The concern is right; the default was not.
+    # Emitting every sub-threshold group meant 125,029 of 127,226 "matches"
+    # on the reference case spanned a single feather - one artifact row echoed
+    # back - and the ~2,200 real cross-source correlations were buried under
+    # them in a 2 GB database. Drowning a finding hides it just as effectively
+    # as dropping it, and costs the analyst more to dig out.
+    #
+    # Nothing is silent at False: `below_threshold_skipped` counts every
+    # dropped group, `below_threshold_groups` keeps a sample with its
+    # identities and feathers, both are reported in the engine's evidence
+    # accounting, and the log line names this flag as the way to see them as
+    # Low matches. So the default is now "correlations", and the full firehose
+    # is one flag away.
     min_feathers_override: Optional[int] = None
-    low_confidence_review_mode: bool = True
+    low_confidence_review_mode: bool = False
     
     # Wing adaptation settings
     adapt_wing_time_window: bool = True # Use wing's time_window_minutes

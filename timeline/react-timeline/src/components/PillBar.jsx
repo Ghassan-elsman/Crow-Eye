@@ -14,7 +14,8 @@ function PillBar({ state, data }) {
     const c = {
       sessions: 0, srum_app: 0, srum_net: 0, mft_usn: 0,
       prefetch: 0, lnk: 0, bam: 0, registry: 0, amcache: 0,
-      shimcache: 0, recyclebin: 0
+      shimcache: 0, recyclebin: 0, key_times: 0, event_logs: 0,
+      all_event_ids: 0
     };
 
     const countDots = (arr) => {
@@ -42,11 +43,23 @@ function PillBar({ state, data }) {
       else if (src.type === 'amcache') c.amcache += dots;
       else if (src.type === 'shimcache') c.shimcache += dots;
       else if (src.type === 'recyclebin') c.recyclebin += dots;
+      else if (src.type === 'keytime') c.key_times += dots;
       else {
         // Anything else in registry is counted towards 'Registry'
         c.registry += dots;
       }
     });
+
+    // Counted straight from the payload. The `src.type` branches above
+    // rely on getArtifactSources returning {type, items}, and the one
+    // imported here returns a flat item list - so they never match.
+    c.key_times = countDots(data.registry?.key_times);
+
+    // The event log arrives as its own top-level array, and the pill that
+    // widens it shows the same count - turning it on changes which rows the
+    // bridge returns, so both pills describe the one lane.
+    c.event_logs = countDots(data.event_logs);
+    c.all_event_ids = c.event_logs;
 
     return c;
   }, [data]);

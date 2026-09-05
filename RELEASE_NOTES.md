@@ -2,6 +2,189 @@
 
 ---
 
+## Version 0.13.0 — Registry Depth & Timeline Coverage Release
+
+**Release date:** 2026-09-05
+
+**Baseline:** **v0.12.7**, the previous release. Every figure below was measured against that tree.
+
+Two themes. The registry is now read as a **file** as well as through the running system, which reaches keys the live API will not return, the free space where deleted keys and values still sit, and two structures a tree walk cannot see at all — registry tables go from 29 to 81. And the artifacts the parsers already collect now reach the rest of the application: the Timeline plots 133 time columns where it plotted 53, Database Search resolves each artifact to its own database, and the Eye gains a chronology tool that sweeps every database in the case.
+
+| | v0.12.7 | 0.13.0 |
+|---|---:|---:|
+| Registry tables | 29 | **81** |
+| AmCache tables | 17 | **29** |
+| Timeline artifact types / time columns / databases | 13 / 53 / 8 | **17 / 133 / 11** |
+| UBA behaviours | 40 | **53** |
+| Eye forensic tools | 30 | **31** |
+| Default Wings | 10 | **11** |
+| Test files in this repository | 59 | **68** |
+
+---
+
+### The registry read as a file, past the ACL
+
+A live parse reads the running registry through `winreg`, which is the right way to reach the merged view, volatile keys, `CurrentControlSet` and the redirected 32-bit view — none of which exist in a hive file. Some keys, though, are denied to `winreg` even for an elevated administrator, and the API returns nothing rather than an error that distinguishes denied from empty.
+
+- Measured on a live machine, elevated: walking `HKLM\SYSTEM\CurrentControlSet\Enum\USB` through `winreg` reaches **110 keys**; the same hive read as a file yields **868**. The device `Properties` subkeys are among those denied, and they hold the FILETIMEs recording when a USB device was last connected.
+- Crow-Eye already had two ways through, and the registry parser could reach neither: `crow_claw`'s file accessor (standard copy → Volume Shadow Copy → raw disk) and the `SeBackupPrivilege` + `NtSaveKeyEx` export used for `HKLM\SAM` and `HKLM\SECURITY`. Both are now available to it. It falls back through them in order and records which one it used.
+- **The evidence is never written to.** The hive file is copied out and the copy is what gets read; the copy's SHA-256 is recorded with the parse, so the case itself carries the proof rather than a test.
+- **Every hive reader replays the transaction logs.** A hive Windows has not finished writing keeps its most recent changes in `.LOG1`/`.LOG2`, and replaying them onto a working copy is what makes the read reflect the state the machine was in. The offline registry parser did this; AmCache, ShimCache, SRUM, the SECURITY hive reader and the user-identity reader each opened the raw file. The replay is now done once per hive and shared by all of them.
+- **A parse can decline to create a Volume Shadow Copy.** Acquisition wants one made if none exists; a parse should not have to write to the machine holding the evidence in order to read it. That choice now belongs to the analyst rather than the accessor.
+
+### Deleted keys and values, class names, and key security
+
+Deleting a registry key does not erase it. Windows flips the cell's size field from negative to positive, marks the space free, and moves on; the signature, the name, the timestamp and the pointers remain until something allocates over them. Walking the registry *tree* cannot see any of it.
+
+Crow-Eye now walks the hive's **allocator** as well as its tree, and records what only that pass reaches:
+
+- **Deleted keys and values.** On the hives this was written against, **1,451 keys and 6,347 values** sat in free space in `SOFTWARE` alone. They land in `registry_carved_keys` and `registry_carved_values`, with the time still attached where the record carries one.
+- **Class names.** An `nk` record can carry a second string beside its name, in its own cell, and it is where the four keys under `Control\Lsa` keep the machine's boot key. Most registry viewers do not render the field. It is now in `registry_class_names`.
+- **Key security.** Owner, group and DACL, from the shared security descriptors a hive stores once and points many keys at (`registry_security_descriptors`). The SACL is deliberately not requested: it needs a privilege that, if refused, fails the whole call rather than that one part.
+- **Every row recovered from free space is marked as such**, in a `record_state` column present in each table that can show one, so an analyst reading any table can tell a carved row from a live one without knowing which table means what.
+- A hive is compacted from time to time, which rewrites its free space, so the parser also records **how much recoverable history the file still holds** — absence of carved records is then a measurement rather than an implication.
+
+### Nineteen keys that nothing was reading
+
+Publishing an article listing every registry key Crow-Eye opens made the opposite question answerable — what does it not open — and **nineteen keys** came back that hold real data on a reference system.
+
+- **Explorer's `StartupApproved` records whether each autostart entry is allowed to launch.** Six of ten HKCU `Run` entries on the reference system are disabled, which `AutoStartPrograms` now reports alongside the entry itself.
+- The rest arrive as new tables: `app_paths`, `app_permissions`, `hid_devices`, `network_cards`, `NetworkProfiles`, `safe_boot_services`, `shared_dlls`, `startup_approved`, `system_configuration`, `zone_map`, `registry_key_times`, `registry_value_changes`, and the three carving tables above — **52 new registry tables since v0.12.7, 29 → 81**, with nothing removed. Sixteen come from this pass, the rest from accuracy work that had not yet reached a release.
+- The collectors take the *reader* as an argument, so the live parser passes its `winreg` readers and the offline parser its hive readers, and **the two produce the same rows from the same code**. A key absent on a given Windows build produces a shorter list, never a failed parse.
+
+### Shellbag timestamps are converted with the evidence machine's bias
+
+A DOS date/time — the format Shellbags and shell items store — carries no timezone. It is the **evidence machine's** wall clock, and labelling it UTC relabels a local reading rather than converting it.
+
+- The parse now takes the evidence machine's UTC bias and converts with it, so the value becomes a real UTC moment.
+- Where the bias is not known, the local reading is returned **unchanged and recorded as local** rather than given a zone it does not have. Not knowing is something the case can now state.
+- Shellbag times in a case parsed by an earlier version were stored as local time under a UTC label; re-parsing the evidence produces the corrected value.
+
+### AmCache records what the hive actually holds
+
+- **17 → 29 tables.** Every column is a registry value name *observed* in a real `Amcache.hve` rather than inferred from documentation, and the comment above each table records how many entries that subkey held on the reference system.
+- **`key_last_write` is captured** — the moment the Compatibility Appraiser wrote the entry. It is a bound rather than an event time, and how much ordering it supports differs per table because the Appraiser writes in batches: all 373 `Mare` entries share one timestamp, 90% of 445 driver binaries share one, while `InventoryApplicationFile` has 1,086 distinct times across 5,212 rows. The notes on the column say so.
+- **`DeviceCensus` and nine subkeys that were empty on every available system now use a name/value shape** — `WHERE name = 'AADDeviceId'` — rather than a fixed column list. `DeviceCensus` alone carries 237 distinct value names across 16 entries and Windows adds more each release, so a hand-written column list is stale on arrival. Anything Microsoft adds next lands in `UnknownSubkeys` rather than being dropped.
+- **AmCache's dates are locale-formatted text in at least three shapes**, and are now normalised on the way in — which is also what lets AmCache appear on the Timeline.
+
+### The ShimCache trailing blob is decoded
+
+The data blob at the end of a ShimCache record is an **array of 12-byte slots**, each `(tag, type, value)` as three little-endian DWORDs. Every blob length on 165 live records was a multiple of 12.
+
+Only the tags the bytes established are named, each checked against something read independently of the cache:
+
+- **The executable's machine type** agreed with the PE header of the file on disk on **296 of 300** files that still exist; the four disagreements are files replaced since the cache recorded them, which is the artifact being right rather than the decode being wrong.
+- **An operating-system-binary flag**, 164 of 165 against "path under `C:\Windows`", where the single exception is a third-party driver package staged in `DriverStore` — the flag is right and the path was the imperfect proxy.
+- The remaining tags sit at 94–97% correlation, close enough to the base rates to be coincidence. They are recorded and left unnamed.
+
+### One map decides what the Timeline plots
+
+The map deciding what the Timeline plots lived in two files that had drifted apart: one filed Shellbags under `Shellbags` and the other under `ShellBag`; one had DAM and USB storage and the other did not; one carried `UserAssist.focus_time`, which is a duration rather than a time. There is now one map, `timeline/data/artifact_map.py`, and both halves of it are required for an artifact to appear.
+
+- **53 → 133 mapped time columns, 13 → 17 artifact types, 8 → 11 databases.**
+- **AmCache plots for the first time.** Its dates are locale text (`MM/DD/YYYY …`) and SQLite's `datetime()` returns NULL for those rather than raising, so the lane drew nothing; normalising them on ingest fixes it.
+- **Windows Event Log coverage is no longer a handful of event IDs.** 65 significant IDs are mapped by name, and the remaining records are reachable rather than absent.
+- **Deleted-file activity, `$FILE_NAME` times and filename changes** from the MFT/USN correlation now plot, as do user accounts, network profiles and app permissions.
+- **A registry key's write time is drawn as an upper bound**, not an event time — writing any value under a key updates the whole key. Those columns are labelled as bounded (`≤ T`) in the lane, the tooltip and the detail view, and can be switched off so a timeline reads as exact times only.
+- **`parsed_at` — when Crow-Eye ran — is bookkeeping and cannot be plotted as evidence** anywhere.
+- DAM, Scheduled Tasks and registry changes have their own colours; the renderer's palette is kept in step with the map the shipping timeline draws from.
+
+### Database Search resolves each artifact to its own database
+
+- **Each entry in the search tree now searches the database that holds it.** The resolver consulted a name map before the table signatures, and `Log_Claw.db` was listed there for almost everything, so five entries named after registry and LNK artifacts offered the three Windows Event Log tables. Signatures decide now.
+- **Imported evidence can be searched.** Imported and custom databases were discovered and enhanced with their table lists, then dropped before reaching the tree, because the tree was built from five hand-written category lists. Databases are grouped by the category each one already carries, which `DatabaseManager` had been setting all along.
+- **One read per physical file.** Six logical names resolve to the single `Log_Claw.db`; the search now reads it once, reports each hit once, and no longer spends five other databases' share of the per-database result cap on duplicates.
+- **The timestamp detector reads the Timeline's map** instead of guessing from column names, and no longer treats `account_expires` and `account_created` as counters because "account" contains "count".
+
+### Eye: chronology, and knowing what the model can do
+
+- **New tool — `query_timeline`.** One chronological sweep across every database in the case, driven by the same map the Timeline plots from. It needs no correlation run and no embedding server, and it replaces a per-database `query_database` walk in which any database the model does not think of is simply missing from the answer.
+- **Sealed chronology answers record what was searched.** The window and the artifacts reached are part of the provenance, because "nothing happened then" is a claim about coverage; without it an absent database cannot be told from an empty one. The exact-versus-bounded split is sealed too, so a key's upper bound cannot be used to support "X happened at T".
+
+### User Behavior Analytics — 40 → 53 behaviours
+
+- Thirteen new rule-driven behaviours, chiefly around registry-recorded activity.
+- **A bag's view kind is stated where it is known.** Windows files an Explorer window's view settings separately from a common file dialog's, and the parser records which, so the caveat is kept only where the case genuinely cannot tell.
+- **A key write time is phrased as a bound** in the narrative, for the same reason the Timeline labels it as one.
+- The coverage panel names the new registry artifacts rather than showing the bare table name.
+
+### Correlation: rules, feathers and run records
+
+- **Semantic rules keep every declared field.** Rules were rebuilt by hand-listing constructor arguments, so `technique_id`, `tactic`, `rule_type`, the multi-indicator flags and the advanced-rule blocks were parsed and then discarded. Rules are now built through the same path that declares them, and `disabled` is read from a field that exists, so switching a rule off works.
+- **Time-window queries keep one timezone convention.** Timestamps inside the time-based engine are naive UTC; converting to and from Unix seconds through the standard library's defaults reads a naive value as local, and asking for an aware one yields a value that cannot be compared against the window. Both conversions now go through helpers that hold the convention, and the reason is written where the next person will look.
+- **The user column survives feather generation.** The generator dropped the last column by position to strip parser bookkeeping; the schema had moved, and `user_name` was the column being dropped from Shellbags, MUICache, OpenSaveMRU and LastSaveMRU — the column those wings correlate on. Bookkeeping columns are excluded by name now.
+- **A result row is written after the numbers it describes exist**, and the two writers of that table agree on its columns.
+- **Sub-threshold groups are no longer emitted by default.** `low_confidence_review_mode` defaulted to on so that nothing would be discarded silently. Nothing is silent with it off either: every dropped group is counted, a sample is kept with its identities and feathers, both are reported in the run's evidence accounting, and the log names the flag that shows them as Low matches.
+- **Execution totals are derived from the result rows they summarise** rather than from whatever the caller passed.
+- **Semantic evidence names what matched** — the value the analyst can see and the source it came from — instead of echoing the rule's own pattern.
+- **The ATT&CK catalogue names the techniques the registry Wings cite**, so a coverage roll-up can name what it covers.
+- **The cascade-tree setting is read.** The identity view's configuration import raised on every launch and the exception was swallowed.
+- **Code that could never run has been removed** rather than left as a spare: Python keeps the last definition of a repeated name, and one of the dead copies was a `query_identities_by_anchor_time` that ignored the time window the live one honours.
+- **A new default Wing: Security Control Tampering** (10 → 11 rule packs shipped).
+
+### Wings validate against the artifact types they name
+
+A wing's `anchor_priority` is the order in which it prefers to anchor a correlation, and anchor selection matches those entries against the artifact types of **the wing's own feathers**. Validation compared them against a list of 17 coarse categories instead (`Registry`, `Logs`, `Persistence`), so a wing naming a concrete type — `SecurityLogs`, `ShellBags`, `AutoStartPrograms`, `SystemConfiguration`, `SystemLogs` — was rejected before it started, and a rejected wing looks on screen like a wing that found nothing.
+
+- Anchor priority is now checked against the wing's own feathers, and an entry that matches nothing is a **warning rather than a refusal**: a preference that cannot apply is inert. All eleven shipped Wings run.
+- **Eleven artifact types reached the artifact detector under their table names only.** The sixteen registry tables added this release arrived as `startup_approved` and `zone_map` while the feather generator and the Wings use the CamelCase artifact type (`StartupApproved`, `ZoneMap`). Both forms are registered now, so the Feather Builder offers them.
+- **Each identity wing writes one result row.** The row is created when the wing starts and updated when it reports; the identity engine now records which row it streamed into, so the report updates that row rather than adding a second copy of it.
+
+### Changes that affect a case correlated by an earlier version
+
+Three changes alter how findings from an earlier version read. Existing cases are never modified — they are read correctly by 0.13.0 — but a case correlated before this release should be re-read with these in mind, and re-correlating it is the way to get the new definitions applied.
+
+- **What counts as a match.** `minimum_matches` meant "the feathers that must corroborate" in the wing schema and in the validator, and "total feathers" in both engines, so a wing saying `1` accepted a single feather and corroborated nothing. There is now one definition of the floor — one feather to observe, plus `minimum_matches` to corroborate, never below two — and every engine asks for it. A run made by an earlier version therefore contains single-feather rows that this release would not emit.
+- **What a confidence score means.** With weighted scoring off, the score was the number of feathers a match spanned, written into the field consumers read as a normalised 0–1 value and judge against the 0.7 / 0.4 / 0.2 thresholds, so a match could render above "Confirmed" on a raw count. The score is now normalised; the count is still reported, under a name that says what it is.
+- **Match counts recorded per identity wing.** Execution totals are the sum of a run's result rows, and an identity wing's row was written twice, so totals recorded by an earlier version count each identity wing's matches twice. A case opened in 0.13.0 is read correctly without being rewritten.
+
+### A multi-wing run reads each feather once
+
+- **Results are built once, when the run finishes.** Each completed wing used to rebuild the unified identity view from the database — every match of every wing so far, re-read and re-parsed on the interface thread — while the next wing was already running. Wings now report as they finish and the results are assembled once, at the end.
+- **A feather is read once per run, not once per wing.** Each wing executes in its own pipeline run, so each re-opened every feather it names and re-derived every identity, and the shipped Wings share feathers heavily (`mft_usn` appears in eight of eleven). A run-scoped cache keyed on the feather file's identity rather than its path does that work once and hands each wing its own copy. A feather rewritten mid-run is never served from the previous contents, and the cache reports what it reused in the execution log.
+- **Results start loading the moment the run ends.** The "Execution Complete" notice ran its own event loop, so the signal that builds the Results Viewer fired only after it was dismissed. The notice no longer blocks, and the results load underneath it with the same "Loading identity data…" progress the load-from-database path uses.
+- **One wing is ticked when a pipeline loads — the widest one.** Every wing used to arrive checked, so pressing Execute on a default pipeline ran all eleven. The default is the wing drawing on the most feathers (Execution Proof, with 14); **Select All** is one click away.
+- **The Identity engine is the default.** The pipeline default was the Time-Window engine while the Execution tab's dropdown said Identity-Based, so which one ran depended on whether a pipeline had been loaded. A new pipeline — including the one a new case creates for itself — now says `identity_based`, and the dropdown resolves its default by name rather than by position in a list whose order is not a contract. **Pipelines you already have are left alone:** a saved pipeline naming an engine keeps it, and one saved before the field existed still reads as time-window, because changing that would alter how an existing case runs.
+- **The Correlation Engine opens on Pipeline Manager**, rather than reopening wherever the last session stopped. The explicit **Load Session** action still restores the tab it recorded.
+
+### The Wing Breakdown says what happened to each wing
+
+- A **Status** column — Completed, Failed or Skipped — with the wing's own error or skip reason in the tooltip, so a wing that could not run does not read as a wing that found nothing.
+- Each wing's **own** duration rather than the pipeline run's wall clock, so a live run and the same run read back from the database agree.
+- Wings are numbered once across the run; the numbering used to restart inside each execution.
+- **The header no longer clips its own labels**, and a wing's full name is shown rather than elided. A stylesheet on the surrounding frame was being inherited by the table inside it — a `QTableWidget` is a `QFrame` — which pushed the header into its own border.
+
+### Eye-Describe: every section addressable, every byte map drawn from a real artifact
+
+The anatomy pages at **crow-eye.com/Eye-Describe** take each artifact apart byte by byte. They are part of the product but not part of the download: they are live on the site, and they are what the Anatomy button in the application opens.
+
+- **Every section is addressable — 130 of 130.** `registry_anatomy`, which documents UserAssist, BAM and DAM, RecentDocs, TypedPaths, WordWheelQuery, USBSTOR, MountedDevices, TaskCache and MUICache, had eleven sections, five sub-headings and no ids, so nothing could link into it and a search for "UserAssist forensics" had nowhere to land. Slugs are named for the artifact (`#userassist`, `#bam-dam`, `#usb-devices`) rather than for the phrasing of a heading.
+- **The hub is an index rather than a card wall** — a 23-row artifact table saying what each artifact records and where it is taken apart, with the registry artifacts pointing at the sections that document them, and the two long-form guides (the boot process, and the registry's own internals) reachable from the front door.
+- **A page that names a structure another page dissects says so.** Cross-page references went **14 → 22**, and the link check now matches single-quoted `href`s as well as double-quoted ones.
+- **The byte maps are drawn from real artifacts, not hand-written hex.** Four pages carry a live map — AmCache, Registry, ShimCache and Shellbags — and three of them are regenerated from the machine's own hive by their own generator, so the page cannot drift from the artifact. A test runs each generator and fails if the committed page moves.
+
+### An Anatomy button above every documented table
+
+An examiner reading a table of Shellbag rows had no route from the row in front of them to what that row is.
+
+- **51 tables across 11 artifact pages** carry a button that opens the Eye-Describe explanation at the section describing their own records, rather than at the top of a page.
+- Only tables a page genuinely documents get one; a button that landed on a directory instead of an explanation would teach an examiner to stop trusting it.
+- The anchors are a contract with the site, and a test checks every one of them against the pages themselves, so a section renamed there cannot quietly break a button here. They are the ids the addressability pass created, which is why the two halves ship together.
+
+### Fixes
+
+- **The five forensic-image parsing strategies (E01 and the rest) load.** They were imported under a bare module name with no package, so the import ladder inside each one fell through to an absolute branch that could not resolve. They are imported as a package now, and a test loads all five.
+- **Parsing in a separate process reports to the loading screen.** `print()` from a spawned process reaches nobody, because the dialog captures stdout in the parent; those log lines are forwarded through the same progress channel the rest of the run uses.
+- **Registry tables are filled by column name rather than by position**, so a schema change cannot reorder what an examiner is reading.
+
+### Under the hood
+
+- **59 → 68 test files in this repository.** The correlation engine's own suite (another ninety-odd checks) is not published: its fixtures carry case state, so `correlation_engine/tests/` stays out of the repo. The ones here are mostly the uncomfortable kind — that both registry parsers agree on *content* rather than on row count, that every decoded value matches something read independently of the artifact, that no GUI column is written by nothing, that a semantic rule can actually fire, that a parser's console output survives a `cp1252` terminal, and that the Timeline's map and the databases agree.
+- **`docs/changing-a-parser.md`** — the canonical procedure for changing or adding a parser, including the places a new table has to be registered or its rows are written and never displayed.
+- The README architecture diagram shows **dirty-hive replay**: transaction logs applied to a working copy, so a hive Windows had not finished writing is read in the state it was in.
+
+---
+
 ## Version 0.12.7 — Correlation Correctness & Provenance Release
 
 **Release date:** 2026-08-08

@@ -273,8 +273,6 @@ class IdentityExtractor:
                 )
         
         return identities
-        
-        return identities
     
     def handle_empty_value(self, value: str, value_type: str) -> bool:
         """

@@ -3561,7 +3561,6 @@ def query_by_score(results: CorrelationResult,
 
 **Dependents**:
 - `gui/correlation_results_view.py`
-- `gui/semantic_filter_panel.py`
 
 **Impact Analysis**:
 - **LOW IMPACT** - Changes only affect result querying

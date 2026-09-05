@@ -1,0 +1,22 @@
+{
+  "gemini::gemma-4-31b-it": {
+    "support": "text_protocol",
+    "confidence": "known",
+    "source": "family_registry",
+    "evidence": "Gemma on the Gemini API supports neither system_instruction nor tools",
+    "probed_at": 1785073198.6749706,
+    "backend": "gemini",
+    "model": "gemma-4-31b-it",
+    "probe_version": 1
+  },
+  "gemini::gemini-2.5-flash": {
+    "support": "native",
+    "confidence": "known",
+    "source": "family_registry",
+    "evidence": "'gemini-2' is a documented function-calling family",
+    "probed_at": 1785073198.6855896,
+    "backend": "gemini",
+    "model": "gemini-2.5-flash",
+    "probe_version": 1
+  }
+}

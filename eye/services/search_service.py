@@ -83,6 +83,28 @@ class ForensicSearchService:
             return agg
 
         usable = [d for d in db_infos if getattr(d, "accessible", False) and getattr(d, "exists", False)]
+
+        # One read per physical FILE. Six of the configured logical names -
+        # jumplist, eventlog, shellbags, userassist, muicache, bam_dam - all
+        # resolve to the one `Log_Claw.db`, because those artifacts live as
+        # tables inside it. Iterating the logical list read its 43,802 rows six
+        # times and reported every hit six times; worse, the per-database cap
+        # below is `max_total // len(usable)`, so the duplicates were also
+        # taking five other databases' share of the results.
+        seen, deduped, aliases = set(), [], {}
+        for info in usable:
+            try:
+                key = str(Path(info.path).resolve()).lower()
+            except Exception:
+                key = str(getattr(info, "path", info.name)).lower()
+            if key in seen:
+                aliases.setdefault(key, []).append(info.name)
+                continue
+            seen.add(key)
+            aliases.setdefault(key, []).append(info.name)
+            deduped.append(info)
+        usable = deduped
+
         if not usable:
             return agg
 

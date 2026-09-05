@@ -233,8 +233,20 @@ class SimpleResultsTableWidget(QTableWidget):
                     # Skip metadata and internal keys (Requirements 3.7, 4.7)
                     if field_name.startswith('_'):
                         continue
-                    if isinstance(field_info, dict) and 'semantic_value' in field_info:
-                        return str(field_info['semantic_value'])
+                    if isinstance(field_info, dict):
+                        # The shape the semantic phase actually writes: the
+                        # value lives inside `semantic_mappings`, not at the
+                        # top of the entry. Looking only at the top level made
+                        # this column render "-" for every match that had a
+                        # finding - 746 of them on the reference case.
+                        mappings = field_info.get('semantic_mappings')
+                        if isinstance(mappings, list) and mappings:
+                            first = mappings[0]
+                            if isinstance(first, dict) and first.get('semantic_value'):
+                                return str(first['semantic_value'])
+                        # Legacy shape: the value sits directly on the entry.
+                        if 'semantic_value' in field_info:
+                            return str(field_info['semantic_value'])
                     elif isinstance(field_info, str) and field_name != '_reason':
                         return field_info
         

@@ -550,7 +550,13 @@ class PipelineManagerTab(QWidget):
 
 class MainWindow(QMainWindow):
     """Main application window with tabbed interface"""
-    
+
+    # Which tab is which. Eight places decide what the analyst is looking at
+    # by writing a bare integer; named, the decision can be read.
+    TAB_PIPELINE_MANAGER = 0
+    TAB_EXECUTION = 1
+    TAB_RESULTS = 2
+
     pipeline_loaded = pyqtSignal(PipelineConfig)
     
     def __init__(self):
@@ -906,7 +912,7 @@ class MainWindow(QMainWindow):
             self.pipeline_loaded.emit(self.current_pipeline)
             
             # Switch to execution tab
-            self.tab_widget.setCurrentIndex(1)
+            self.tab_widget.setCurrentIndex(self.TAB_EXECUTION)
             
             self.show_notification(f"Loaded pipeline: {self.current_pipeline.pipeline_name}", "success")
             return True
@@ -1013,7 +1019,7 @@ class MainWindow(QMainWindow):
         self.pipeline_builder.clear()
         
         # Switch to pipeline manager tab
-        self.tab_widget.setCurrentIndex(0)
+        self.tab_widget.setCurrentIndex(self.TAB_PIPELINE_MANAGER)
         
         self.show_notification("Ready to create new pipeline", "info")
     
@@ -1270,7 +1276,7 @@ class MainWindow(QMainWindow):
                     )
         else:
             # User cancelled, switch back to Pipeline Manager tab
-            self.tab_widget.setCurrentIndex(0)
+            self.tab_widget.setCurrentIndex(self.TAB_PIPELINE_MANAGER)
             self.show_notification("No pipeline selected", "info")
     
     def _load_session_state(self):
@@ -1292,11 +1298,18 @@ class MainWindow(QMainWindow):
             last_pipeline = session_data.get('last_pipeline')
             if last_pipeline and os.path.exists(last_pipeline):
                 self.load_pipeline(last_pipeline)
-                
-                # Restore tab
-                last_tab = session_data.get('last_tab', 0)
-                self.tab_widget.setCurrentIndex(last_tab)
-                
+
+                # Open on Pipeline Manager, whatever the last session ended on.
+                #
+                # This used to apply `last_tab` from session.json, and before
+                # that `load_pipeline` had already jumped to Execution - so the
+                # window opened wherever the previous session happened to stop,
+                # which for anyone who had just run a correlation was the
+                # Results tab. This must stay AFTER load_pipeline(), which sets
+                # the tab itself. `last_tab` is still written to session.json
+                # and still honoured by the explicit Load Session action.
+                self.tab_widget.setCurrentIndex(self.TAB_PIPELINE_MANAGER)
+
                 print(f"[Main Window] Restored session: {last_pipeline}")
                 
         except Exception as e:
@@ -1343,12 +1356,20 @@ class MainWindow(QMainWindow):
         
         return True
     
-    def closeEvent(self, event):
-        """Handle window close event - auto-save pipeline and session"""
+    def _autosave_on_close(self):
+        """Auto-save the pipeline, session state and geometry.
+
+        This was the body of a SECOND `closeEvent` defined earlier in the class
+        than the real one. Python keeps the last definition, so none of it ever
+        ran - the pipeline was not auto-saved, the session state was not
+        written, and the docstring saying otherwise had been wrong for as long
+        as both definitions existed. It is a plain method now, called from the
+        one closeEvent, so there is no way for it to be shadowed again.
+        """
         try:
             # Get current pipeline from builder
             pipeline = self.pipeline_builder.get_pipeline_config()
-            
+
             if pipeline and self.pipeline_builder.name_input.text().strip():
                 # Auto-save pipeline if it has a name
                 from pathlib import Path
@@ -1368,24 +1389,24 @@ class MainWindow(QMainWindow):
                 # Save pipeline
                 try:
                     self.save_pipeline(str(pipeline_file))
+                    # save_pipeline clears is_modified on success, which is what
+                    # stops closeEvent prompting for changes it has just saved.
                     print(f"[Main Window] Auto-saved pipeline on close: {pipeline_file}")
                 except Exception as e:
                     print(f"[Main Window] Failed to auto-save pipeline: {e}")
-            
+
             # Save session state
             self._save_session_state()
-            
+
             # Save window geometry
             self.settings.setValue("geometry", self.saveGeometry())
-            
+
             print("[Main Window] Closed with auto-save")
-            
+
         except Exception as e:
-            print(f"[Main Window] Error in closeEvent: {e}")
-        
-        # Accept the close event
-        event.accept()
-    
+            print(f"[Main Window] Error during auto-save on close: {e}")
+
+
     def _load_settings(self):
         """Load application settings"""
         # Restore window geometry
@@ -1411,53 +1432,61 @@ class MainWindow(QMainWindow):
     
     def _on_wing_completed(self, wing_summary: dict) -> None:
         """
-        Handle individual wing completion.
-        
-        Creates a new result tab for the completed wing.
-        Each tab contains:
-        1. Wing-specific summary section (charts + stats)
-        2. Tree view with detailed results
-        
-        Requirements: 4.2, 4.3, 6.2
-        
-        Args:
-            wing_summary: Dictionary containing:
-                - wing_name: str
-                - wing_index: int
-                - total_wings: int
-                - engine_type: str
-                - execution_id: str
-                - database_path: str
-                - total_matches: int
-                - feather_metadata: dict
-        """
-        print(f"[MainWindow] Wing completed: {wing_summary.get('wing_name')}")
+        Note a wing finishing. Builds nothing.
 
-        # Create (or update) the result tab for this wing. Identity wings all
-        # share one unified tab, so use the returned index instead of count()-1
-        # (updating an existing tab does not append).
-        tab_index = self.results_viewer.create_wing_result_tab(wing_summary)
-        if tab_index is None:
-            tab_index = self.results_viewer.enhanced_tab_widget.tab_widget.count() - 1
-        self.results_viewer.enhanced_tab_widget.tab_widget.setCurrentIndex(tab_index)
-    
+        This used to call `create_wing_result_tab` immediately, which for
+        identity wings rebuilt the unified viewer from the database — every
+        match of every wing so far, re-read and re-parsed on the UI thread —
+        after each wing, while the next wing was already running. Results are
+        now built once, when the run finishes, in `_on_execution_completed`.
+
+        Args:
+            wing_summary: the per-wing summary emitted by the execution worker
+        """
+        wing_name = wing_summary.get('wing_name', 'Unknown Wing')
+        wing_index = wing_summary.get('wing_index', 0)
+        total_wings = wing_summary.get('total_wings', 0)
+        matches = wing_summary.get('total_matches', 0)
+        print(f"[MainWindow] Wing completed: {wing_name} "
+              f"({wing_index}/{total_wings}, {matches} matches) — "
+              f"results are built when the run finishes")
+
+        # A new run starts at wing 1 (the worker always numbers from 1), so that
+        # is where the accumulator resets — a previous run's wings must not be
+        # rebuilt into this one's tabs.
+        if wing_index == 1 or not hasattr(self, '_run_wing_summaries'):
+            self._run_wing_summaries = []
+        self._run_wing_summaries.append(wing_summary)
+
     def _on_execution_completed(self, summary: dict):
         """
         Handle execution completion - all wings finished.
-        
+
         Requirements: 4.5, 5.1, 6.1, 6.3
-        
-        Updates Summary tab with aggregate statistics across ALL wings
-        and switches to Summary tab.
+
+        Builds every result tab for the run in one pass, then updates the
+        Summary tab with aggregate statistics across ALL wings.
         """
         print(f"[MainWindow] All wings completed")
-        
+
+        # Build the run's tabs once. Prefer the worker's own list; fall back to
+        # what wing_completed collected if a caller emitted only the aggregate.
+        wing_summaries = summary.get('wing_summaries') or \
+            getattr(self, '_run_wing_summaries', [])
+        if wing_summaries:
+            # With progress: this is the moment the run ends and the results
+            # start loading, and a run's worth of matches takes long enough
+            # that a silent window reads as a hang.
+            self.results_viewer.create_run_result_tabs(wing_summaries,
+                                                       show_progress=True)
+        self._run_wing_summaries = []
+
         # Update Summary tab with aggregate statistics
         self.results_viewer.update_summary_tab(summary)
-        
+
         # Switch to Results tab (index 2)
-        self.tab_widget.setCurrentIndex(2)
-        
+        self.tab_widget.setCurrentIndex(self.TAB_RESULTS)
+
         # Switch to Summary tab within Results (index 0)
         self.results_viewer.enhanced_tab_widget.tab_widget.setCurrentIndex(0)
     
@@ -1510,7 +1539,7 @@ class MainWindow(QMainWindow):
                 self.results_viewer.load_last_results(output_dir, progress_callback=update_progress)
                 
                 # Switch to Results tab
-                self.tab_widget.setCurrentIndex(2)
+                self.tab_widget.setCurrentIndex(self.TAB_RESULTS)
                 
                 # Switch to Summary tab within Results (index 0)
                 self.results_viewer.enhanced_tab_widget.tab_widget.setCurrentIndex(0)
@@ -1698,7 +1727,7 @@ class MainWindow(QMainWindow):
             progress.setValue(100)
             
             # Switch to Results tab
-            self.tab_widget.setCurrentIndex(2)
+            self.tab_widget.setCurrentIndex(self.TAB_RESULTS)
             
             # Switch to Summary tab within Results (index 0)
             self.results_viewer.enhanced_tab_widget.tab_widget.setCurrentIndex(0)
@@ -1736,13 +1765,29 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
     
     def closeEvent(self, event):
-        """Handle window close event"""
-        # Check for unsaved changes
+        """Handle window close event - auto-save, then confirm, then close.
+
+        The auto-save runs FIRST, and that ordering is the whole point.
+        `_check_unsaved_changes` opens a modal QMessageBox whenever the pipeline
+        is modified, and a modal blocks forever anywhere there is nobody to
+        answer it - which is why closing this window inside a test hung the
+        process indefinitely after every assertion had already passed.
+
+        Auto-saving first means there is nothing unsaved left to ask about:
+        `save_pipeline` clears `is_modified`, so the check returns True without
+        prompting. The prompt still appears for the case it exists for - a
+        modification that could NOT be auto-saved, such as a pipeline with no
+        name - and there it is a real question worth asking.
+        """
+        # Persist first: pipeline, session state, geometry.
+        self._autosave_on_close()
+
+        # Only prompts if something is still modified after the auto-save.
         if not self._check_unsaved_changes():
             event.ignore()
             return
-        
+
         # Save settings
         self._save_settings()
-        
+
         event.accept()

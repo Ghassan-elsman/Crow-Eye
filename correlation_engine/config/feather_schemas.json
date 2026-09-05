@@ -13,7 +13,6 @@
     "  identity_columns_preferred     Field-extraction priority for raw identity.",
     "  table_kind                     Coarse category for downstream tooling."
   ],
-
   "prefetch_data": {
     "artifact_type": "Prefetch",
     "primary_timestamp_column": "last_executed",
@@ -24,21 +23,18 @@
     "identity_columns_preferred": ["executable_name", "filename"],
     "table_kind": "execution_evidence"
   },
-
   "InventoryApplicationFile": {
     "artifact_type": "AmCache",
     "primary_timestamp_column": "link_date",
     "identity_columns_preferred": ["name", "original_file_name", "lower_case_long_path"],
     "table_kind": "execution_evidence"
   },
-
   "InventoryApplication": {
     "artifact_type": "AmCache",
     "primary_timestamp_column": "install_date",
     "identity_columns_preferred": ["name", "publisher"],
     "table_kind": "installation_evidence"
   },
-
   "shimcache_entries": {
     "artifact_type": "ShimCache",
     "primary_timestamp_column": "last_modified",
@@ -46,7 +42,6 @@
     "identity_columns_preferred": ["package_family_name", "filename", "path"],
     "table_kind": "execution_evidence"
   },
-
   "LNK_Files": {
     "artifact_type": "LNK",
     "primary_timestamp_column": "Time_Modification",
@@ -55,7 +50,6 @@
     "identity_columns_preferred": ["Local_Path", "Source_Name"],
     "table_kind": "user_activity"
   },
-
   "Automatic_JumpLists": {
     "artifact_type": "Jumplists",
     "primary_timestamp_column": "Time_Modification",
@@ -63,7 +57,6 @@
     "identity_columns_preferred": ["Source_Name", "AppDesc", "Local_Path"],
     "table_kind": "user_activity"
   },
-
   "Custom_JumpLists": {
     "artifact_type": "Jumplists",
     "primary_timestamp_column": "Time_Modification",
@@ -71,64 +64,53 @@
     "identity_columns_preferred": ["Source_Name", "AppDesc", "Local_Path"],
     "table_kind": "user_activity"
   },
-
   "journal_events": {
     "artifact_type": "USN",
     "primary_timestamp_column": "timestamp",
-    "secondary_timestamp_columns": ["parsed_at"],
     "identity_columns_preferred": ["filename"],
     "table_kind": "filesystem_metadata"
   },
-
   "SystemLogs": {
     "artifact_type": "Logs",
     "primary_timestamp_column": "EventTimestampUTC",
     "identity_columns_preferred": ["Source", "EventID"],
     "table_kind": "event_log"
   },
-
   "ApplicationLogs": {
     "artifact_type": "Logs",
     "primary_timestamp_column": "EventTimestampUTC",
     "identity_columns_preferred": ["Source", "EventID"],
     "table_kind": "event_log"
   },
-
   "SecurityLogs": {
     "artifact_type": "Logs",
     "primary_timestamp_column": "EventTimestampUTC",
     "identity_columns_preferred": ["Source", "EventID"],
     "table_kind": "event_log"
   },
-
   "srum_application_usage": {
     "artifact_type": "SRUM",
     "primary_timestamp_column": "timestamp",
     "identity_columns_preferred": ["app_name", "app_path"],
     "table_kind": "resource_usage"
   },
-
   "UserAssist": {
     "artifact_type": "Registry",
     "primary_timestamp_column": "last_execution",
-    "secondary_timestamp_columns": ["timestamp"],
     "identity_columns_preferred": ["program_path"],
     "table_kind": "execution_evidence"
   },
-
   "BAM": {
     "artifact_type": "Registry",
     "primary_timestamp_column": "last_execution",
     "identity_columns_preferred": ["app_name", "process_path", "name"],
     "table_kind": "execution_evidence"
   },
-
   "MUICache": {
     "artifact_type": "Registry",
     "identity_columns_preferred": ["app_name", "app_path"],
     "table_kind": "user_activity"
   },
-
   "Shellbags": {
     "artifact_type": "Registry",
     "primary_timestamp_column": "modified_date",
@@ -136,69 +118,58 @@
     "identity_columns_preferred": ["file_name", "parent_path"],
     "table_kind": "user_activity"
   },
-
   "OpenSaveMRU": {
     "artifact_type": "Registry",
     "primary_timestamp_column": "access_date",
     "identity_columns_preferred": ["file_name", "name", "file_path"],
     "table_kind": "user_activity"
   },
-
   "InstalledSoftware": {
     "artifact_type": "Registry",
     "primary_timestamp_column": "install_date",
-    "secondary_timestamp_columns": ["timestamp"],
     "identity_columns_preferred": ["display_name"],
     "table_kind": "installation_evidence"
   },
-
   "SystemServices": {
     "artifact_type": "Registry",
     "identity_columns_preferred": ["service_name", "display_name", "image_path"],
     "table_kind": "system_state"
   },
-
   "AutoStartPrograms": {
     "artifact_type": "Registry",
     "identity_columns_preferred": ["program_name", "command"],
     "table_kind": "system_state"
   },
-
   "TypedPaths": {
     "artifact_type": "Registry",
     "_comment": "row_data is the current column; data is the name older case databases used. Both listed so a case parsed by an earlier build still resolves identity to the typed path rather than falling through to name, which is only the MRU index (url1, url2).",
     "identity_columns_preferred": ["row_data", "data", "name"],
     "table_kind": "user_activity"
   },
-
   "RecentDocs": {
     "artifact_type": "Registry",
     "_comment": "Same row_data/data history as TypedPaths.",
     "identity_columns_preferred": ["row_data", "data", "name"],
     "table_kind": "user_activity"
   },
-
   "USBDevices": {
     "artifact_type": "Registry",
     "primary_timestamp_column": "last_connected",
     "identity_columns_preferred": ["friendly_name"],
     "table_kind": "device_evidence"
   },
-
   "BrowserHistory": {
     "artifact_type": "Browser",
     "primary_timestamp_column": "timestamp",
     "identity_columns_preferred": ["title"],
     "table_kind": "user_activity"
   },
-
   "recycle_bin_entries": {
     "artifact_type": "Registry",
     "primary_timestamp_column": "deletion_time",
     "identity_columns_preferred": ["original_filename", "original_path"],
     "table_kind": "filesystem_metadata"
   },
-
   "mft_records": {
     "artifact_type": "MFT",
     "primary_timestamp_column": "created_time",
@@ -206,7 +177,6 @@
     "identity_columns_preferred": ["file_name"],
     "table_kind": "filesystem_metadata"
   },
-
   "mft_usn_correlated": {
     "artifact_type": "MFT",
     "primary_timestamp_column": "si_creation_time",
@@ -222,5 +192,102 @@
     ],
     "identity_columns_preferred": ["fn_filename", "reconstructed_path"],
     "table_kind": "filesystem_metadata"
+  },
+  "_doc_registry_keys_the_engine_could_not_see": [
+    "Fourteen tables that had no feather at all until the engine was",
+    "wired to them. Nine came from the round that added them to the",
+    "parsers; five were already holding evidence nothing could reach -",
+    "ScheduledTasks among them, which is a top-tier persistence artifact.",
+    "",
+    "last_written is the KEY's write time, so on a table whose rows are",
+    "values it is an upper bound shared by every row under that key.",
+    "Where a table has a real event time - disabled_at, last_run,",
+    "last_used_start - that is primary and last_written is secondary."
+  ],
+  "startup_approved": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "disabled_at",
+    "secondary_timestamp_columns": ["last_written"],
+    "identity_columns_preferred": ["entry_name", "scope"],
+    "table_kind": "system_state"
+  },
+  "app_paths": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["app_name", "executable_path"],
+    "table_kind": "system_state"
+  },
+  "safe_boot_services": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["entry_name", "boot_mode"],
+    "table_kind": "system_state"
+  },
+  "ScheduledTasks": {
+    "artifact_type": "ScheduledTasks",
+    "primary_timestamp_column": "last_run",
+    "secondary_timestamp_columns": ["task_registered", "last_completed"],
+    "identity_columns_preferred": ["task_path", "command"],
+    "table_kind": "system_state"
+  },
+  "active_setup": {
+    "artifact_type": "Registry",
+    "identity_columns_preferred": ["name", "data"],
+    "table_kind": "system_state"
+  },
+  "shared_dlls": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["dll_path"],
+    "table_kind": "installation_evidence"
+  },
+  "hid_devices": {
+    "artifact_type": "DeviceHistory",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["device_desc", "device_id", "instance_id"],
+    "table_kind": "device_evidence"
+  },
+  "network_cards": {
+    "artifact_type": "Network",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["description", "service_name"],
+    "table_kind": "system_state"
+  },
+  "zone_map": {
+    "artifact_type": "SecurityPosture",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["host", "protocol"],
+    "table_kind": "system_state"
+  },
+  "app_permissions": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "last_used_start",
+    "secondary_timestamp_columns": ["last_used_stop", "last_written"],
+    "identity_columns_preferred": ["app", "capability"],
+    "table_kind": "user_activity"
+  },
+  "system_configuration": {
+    "artifact_type": "SecurityPosture",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["setting", "area"],
+    "table_kind": "system_state"
+  },
+  "SecurityPosture": {
+    "artifact_type": "SecurityPosture",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["setting"],
+    "table_kind": "system_state"
+  },
+  "FirewallRules": {
+    "artifact_type": "Network",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["rule_name", "display_name", "application"],
+    "table_kind": "system_state"
+  },
+  "winevt_channels": {
+    "artifact_type": "SecurityPosture",
+    "primary_timestamp_column": "last_written",
+    "identity_columns_preferred": ["channel", "source"],
+    "table_kind": "system_state"
   }
 }

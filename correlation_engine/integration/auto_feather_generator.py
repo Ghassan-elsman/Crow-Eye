@@ -23,6 +23,59 @@ from .feather_mappings import get_feather_mappings
 logger = logging.getLogger(__name__)
 
 
+# Parser bookkeeping - when the parser wrote the row, never when the thing
+# happened. Excluded from every feather by NAME, never by position.
+#
+# It used to be `exclude_last_column: True`, which dropped whichever column
+# happened to be last. That was tuned to a schema that has since moved, and by
+# the time anyone looked it was cutting `user_name` off four user-activity
+# feathers - Shellbags, MUICache, OpenSaveMRU and LastSaveMRU - the column that
+# attributes an artifact to a person. Nothing failed; the feathers were simply
+# built without it. Meanwhile three AmCache feathers carried `parsed_at` in as
+# though it were evidence, because their flag said False.
+#
+# `parsed_at` is the canonical name and the ONLY one safe to exclude globally.
+#
+# The legacy aliases - timestamp, analyzing_date, created_at, parsed_timestamp -
+# are NOT safe to exclude by name, and treating them as though they were is a
+# mistake worth recording: a first pass at this fix stripped
+# `srum_application_usage.timestamp`, which is the SRUM event time and the most
+# important column in the table. Measured across the reference cases, the same
+# spelling means two different things:
+#
+#     MUICache.timestamp                 110 rows,    1 distinct -> parse time
+#     SystemServices.timestamp           814 rows,    4 distinct -> parse time
+#     srum_application_usage.timestamp 30190 rows,  191 distinct -> EVENT time
+#     srum_network_data_usage.timestamp 32002 rows, 2026 distinct -> EVENT time
+#
+# So a legacy alias is bookkeeping only where its mapping says so, and each such
+# declaration is checked against that distinct-value evidence by
+# test_feathers_keep_their_evidence.
+BOOKKEEPING_COLUMNS = frozenset({"parsed_at"})
+
+# Names that are bookkeeping in some tables and evidence in others. Listing one
+# of these in a mapping's `bookkeeping_columns` is a per-table claim.
+AMBIGUOUS_BOOKKEEPING_NAMES = frozenset({
+    "timestamp", "analyzing_date", "created_at", "parsed_timestamp",
+})
+
+
+def is_bookkeeping_column(name, mapping=None) -> bool:
+    """True if `name` is bookkeeping - globally, or for this mapping's table.
+
+    `mapping` is optional so callers that only have a column name still get the
+    unambiguous `parsed_at` answer, but anything deciding what to put in a
+    feather must pass it, or a genuine event time gets thrown away.
+    """
+    if not name:
+        return False
+    lowered = str(name).strip().lower()
+    if lowered in BOOKKEEPING_COLUMNS:
+        return True
+    declared = (mapping or {}).get('bookkeeping_columns') or ()
+    return lowered in {str(c).strip().lower() for c in declared}
+
+
 class AutoFeatherGenerator:
     """
     Generates Feathers automatically from Crow-Eye parser output.
@@ -181,34 +234,88 @@ class AutoFeatherGenerator:
                 source_location = "live_acquisition (offline parser)"
                 logger.debug(f"Found source database in live_acquisition: {source_db_path}")
         
-        # If not found in either location, raise error
-        if not source_db_path:
-            raise FileNotFoundError(
-                f"Source database '{mapping['source_db']}' not found in either:\n"
-                f" - {self.target_artifacts_dir}\n"
-                f" - {self.live_acquisition_dir}"
-            )
-        
+        # If the database is not in either location, the parser that writes it
+        # was never run for this case. That is ordinary - an analyst may parse
+        # the registry and nothing else - and it must not take down every wing
+        # that references the feather. Same reasoning as the absent-table case
+        # below, one level up.
+        db_missing = source_db_path is None
+        if db_missing:
+            if not mapping.get('fallback_columns'):
+                raise FileNotFoundError(
+                    f"Source database '{mapping['source_db']}' not found in either:\n"
+                    f" - {self.target_artifacts_dir}\n"
+                    f" - {self.live_acquisition_dir}\n"
+                    f"and the mapping declares no fallback_columns"
+                )
+            source_db_path = target_artifacts_path  # for the metadata only
+            source_location = "absent (empty feather)"
+            logger.info(
+                "Source database %s not present in this case - generating an "
+                "empty %s so wings still resolve",
+                mapping['source_db'], mapping['name'])
+
         logger.debug(f"Generating {mapping['name']} from {source_location}: {source_db_path}")
-        
+
         source_conn = None
         try:
-            # Connect to source database
-            source_conn = sqlite3.connect(str(source_db_path))
+            # Connect to source database. An absent database becomes an empty
+            # one, so the table-missing branch below builds the feather from the
+            # mapping's declared columns - one path for both kinds of absence
+            # rather than a second copy of the builder.
+            source_conn = sqlite3.connect(
+                ":memory:" if db_missing else str(source_db_path))
             source_cursor = source_conn.cursor()
             
             # Get table schema
             source_cursor.execute(f"PRAGMA table_info({mapping['source_table']})")
             columns = source_cursor.fetchall()
             
+            table_missing = not columns
+            if table_missing:
+                # A table this build of the parsers does not write - most often
+                # a case parsed before it existed.
+                #
+                # This used to raise, which failed the mapping, which failed
+                # dependency validation, which killed EVERY wing referencing the
+                # feather - not just that one reference. So adding a mapping for
+                # a new table would silently disable whole wings on every older
+                # case in the analyst's folder.
+                #
+                # Build the feather empty instead, from the columns the mapping
+                # declares. The wing resolves, contributes no matches, and says
+                # so. `fallback_columns` is checked against the parser's real
+                # CREATE TABLE by a test, because a declared shape that drifts
+                # from the schema is worse than none.
+                fallback = mapping.get('fallback_columns') or []
+                if not fallback:
+                    raise Exception(
+                        f"Table {mapping['source_table']} not found in "
+                        f"{source_db_path.name} and the mapping declares no "
+                        f"fallback_columns - cannot build an empty feather")
+                # Shaped like PRAGMA table_info rows: (cid, name, type, ...)
+                columns = [(i, name, col_type, 0, None, 0)
+                           for i, (name, col_type) in enumerate(fallback)]
+                logger.info(
+                    "Table %s absent from %s - generating an empty feather from "
+                    "the %d declared column(s) so wings still resolve",
+                    mapping['source_table'], source_db_path.name, len(fallback))
+
+            # Drop parser bookkeeping columns by name, whatever position they
+            # sit in. See BOOKKEEPING_COLUMNS for why this is not positional.
+            dropped = [c[1] for c in columns if is_bookkeeping_column(c[1], mapping)]
+            if dropped:
+                columns = [c for c in columns
+                           if not is_bookkeeping_column(c[1], mapping)]
+                logger.debug(
+                    f"Excluded bookkeeping column(s) from "
+                    f"{mapping['source_table']}: {', '.join(dropped)}")
             if not columns:
-                raise Exception(f"Table {mapping['source_table']} not found or empty")
-            
-            # Exclude last column if specified
-            if mapping.get('exclude_last_column', False):
-                columns = columns[:-1]
-                logger.debug(f"Excluded last column from {mapping['source_table']}")
-            
+                raise Exception(
+                    f"Table {mapping['source_table']} has nothing but bookkeeping "
+                    f"columns ({', '.join(dropped)}) - refusing to build an "
+                    f"evidence-free feather")
+
             # Sanitize column names and filter out None/empty (Fixes "no such column: None")
             valid_columns = []
             for col in columns:
@@ -241,10 +348,15 @@ class AutoFeatherGenerator:
                 query += f" WHERE {mapping['filter']}"
                 logger.debug(f"Applied filter: {mapping['filter']}")
             
-            # Execute query to get data
-            source_cursor.execute(query)
-            rows = source_cursor.fetchall()
-            
+            # Execute query to get data. There is nothing to select when the
+            # table is absent - the columns above came from the mapping, not
+            # from the database.
+            if table_missing:
+                rows = []
+            else:
+                source_cursor.execute(query)
+                rows = source_cursor.fetchall()
+
             logger.debug(f"Retrieved {len(rows)} rows from {mapping['source_table']}")
             
             # Create output Feather database
@@ -283,7 +395,13 @@ class AutoFeatherGenerator:
                     ('auto_generated', 'true'),
                     ('filter', mapping.get('filter', '')),
                     ('row_count', str(len(rows))),
-                    ('exclude_last_column', str(mapping.get('exclude_last_column', False)))
+                    # What was actually dropped, by name. The old key recorded
+                    # a boolean flag that said nothing about which column went,
+                    # which is why four feathers could lose `user_name` without
+                    # leaving a trace anywhere. Kept under the same key so
+                    # anything reading existing feather metadata still finds it.
+                    ('exclude_last_column', ', '.join(dropped) if dropped else 'none'),
+                    ('source_table_present', 'false' if table_missing else 'true')
                 ]
                 
                 for key, value in metadata_entries:

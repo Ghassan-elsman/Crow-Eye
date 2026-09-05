@@ -508,6 +508,271 @@ class ForensicHandlers:
             return False
         return abs((d1 - d2).total_seconds()) <= minutes * 60
 
+    # ------------------------------------------------------------------
+    #  query_timeline - "what happened at 14:30?"
+    # ------------------------------------------------------------------
+
+    # Which column names a row, in the order a person would read them. Same
+    # idea as the timeline's own name resolution: the first one the table
+    # actually has wins, and a row that has none is still returned with its
+    # table and rowid so it can be looked up.
+    _NAME_COLUMNS = (
+        "fn_filename", "filename", "file_name", "original_filename",
+        "executable_name", "program_name", "program_path", "app_name",
+        "name", "task_path", "rule_name", "friendly_name", "driver_name",
+        "profile_name", "value_name", "search_term", "command", "setting",
+        "extension", "document", "key_name", "secret_name", "group_name",
+        "entry_name", "channel", "scope", "program", "dll_path", "value",
+        "path", "full_path", "reconstructed_path", "key_path",
+    )
+    # Columns that say what KIND of thing the row is, beyond its name.
+    _DETAIL_COLUMNS = (
+        "EventID", "EventDescription", "Source", "User", "usn_reason",
+        "change_kind", "run_context", "record_state", "recovery_status",
+        "startup_state", "decoded", "meaning", "category_label",
+    )
+    _MAX_ROWS = 300
+
+    def handle_query_timeline(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Everything that happened in a window, across every artifact.
+
+        This is the tool for "what happened around 14:30 on the 12th". Without
+        it a time question means guessing which of eleven databases to open and
+        issuing `query_database` against each in turn - and any database the
+        model does not think of is simply missing from the answer, silently.
+
+        Reads `timeline/data/artifact_map.py`, the same map the timeline plots
+        from, so what this returns and what the analyst sees on the timeline
+        are the same set of times by construction.
+
+        Rows come back as CANDIDATES with `database`, `table` and `rowid`:
+        confirm any of them with `query_database` before quoting it, the way
+        `semantic_search_artifacts` is confirmed. Every row says whether its
+        time is exact or a key upper bound - a registry key's write time
+        belongs to every value under that key and dates none of them, so a
+        bounded row can never be the sole support for "X happened at T".
+        """
+        import sqlite3
+        from datetime import timedelta
+
+        try:
+            from timeline.data import artifact_map as amap
+        except Exception as exc:                       # pragma: no cover
+            return {"success": False,
+                    "error": f"Timestamp map unavailable: {exc}"}
+
+        db_service = getattr(self.cm, "database_service", None)
+        if db_service is None:
+            return {"success": False, "error": "No case database service."}
+
+        start, end, err = self._timeline_window(params)
+        if err:
+            return {"success": False, "error": err}
+
+        include_bounded = bool(params.get("include_bounded", False))
+
+        # Event log records worth reading by default. Same curated set the
+        # timeline draws, so the tool and the screen agree about what counts.
+        routine_ids = None
+        if not params.get("include_routine_events", False):
+            routine_ids = [str(i) for i in amap.SIGNIFICANT_EVENT_IDS]
+        wanted = params.get("artifact_types")
+        if isinstance(wanted, str):
+            wanted = [w.strip() for w in wanted.split(",") if w.strip()]
+        wanted = set(wanted) if wanted else None
+        try:
+            limit = int(params.get("limit", self._MAX_ROWS) or self._MAX_ROWS)
+        except (TypeError, ValueError):
+            limit = self._MAX_ROWS
+        limit = max(1, min(self._MAX_ROWS, limit))
+
+        rows: List[Dict[str, Any]] = []
+        searched, skipped, total = [], [], 0
+
+        for artifact, entries in amap.TIMESTAMP_MAPPINGS.items():
+            if wanted and artifact not in wanted:
+                continue
+            db_name = amap.ARTIFACT_DB_MAPPING.get(artifact)
+            if not db_name:
+                continue
+            try:
+                conn = db_service._open_ro(db_name)
+            except Exception:
+                skipped.append(db_name)
+                continue
+            searched.append(artifact)
+            try:
+                for entry in entries:
+                    table, column = entry[0], entry[1]
+                    bounded = amap.is_key_time(entry)
+                    if bounded and not include_bounded:
+                        continue
+                    got, n = self._timeline_rows(
+                        conn, db_name, artifact, table, column, entry,
+                        bounded, start, end, limit, routine_ids)
+                    total += n
+                    rows.extend(got)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        rows.sort(key=lambda r: r.get("timestamp") or "")
+        shown = rows[:limit]
+
+        note = ""
+        if total > len(shown):
+            note = (f"Showing {len(shown)} of {total} events in this window. "
+                    f"Narrow the window, or pass artifact_types, for the rest.")
+        if not include_bounded:
+            note += (" Registry key write times are excluded; pass "
+                     "include_bounded=true to add them, and treat each as an "
+                     "upper bound rather than a moment.")
+        if routine_ids is not None:
+            note += (" Event log records are limited to the "
+                     f"{len(routine_ids)} IDs worth reading (logon, process "
+                     "creation, service install, log cleared, account change "
+                     "and the rest); pass include_routine_events=true for "
+                     "every record.")
+
+        return {
+            "success": True,
+            "window": {"start": start, "end": end},
+            "events": shown,
+            "total_in_window": total,
+            "artifacts_searched": sorted(set(searched)),
+            "databases_absent": sorted(set(skipped)),
+            "note": note.strip(),
+        }
+
+    def _timeline_window(self, params):
+        """(start, end, error) from either an explicit range or `around`."""
+        from datetime import timedelta
+
+        start = params.get("start_time")
+        end = params.get("end_time")
+        around = params.get("around") or params.get("around_time")
+
+        if around:
+            centre = self._parse_dt(around)
+            if centre is None:
+                return None, None, (f"Could not read a time from "
+                                    f"around='{around}'. Use "
+                                    f"'YYYY-MM-DD HH:MM:SS'.")
+            try:
+                minutes = int(params.get("window_minutes", 30) or 30)
+            except (TypeError, ValueError):
+                minutes = 30
+            minutes = max(1, min(60 * 24 * 7, minutes))
+            lo = centre - timedelta(minutes=minutes)
+            hi = centre + timedelta(minutes=minutes)
+            fmt = "%Y-%m-%d %H:%M:%S"
+            return lo.strftime(fmt), hi.strftime(fmt), None
+
+        if not start or not end:
+            return None, None, ("Give either start_time and end_time, or "
+                                "around plus window_minutes.")
+        if self._parse_dt(start) is None or self._parse_dt(end) is None:
+            return None, None, ("start_time and end_time must be "
+                                "'YYYY-MM-DD HH:MM:SS'.")
+        return str(start), str(end), None
+
+    def _timeline_rows(self, conn, db_name, artifact, table, column, entry,
+                       bounded, start, end, limit, routine_ids=None):
+        """Rows from one (table, column), and how many there were in total.
+
+        The count is taken separately from the rows so `total_in_window` is
+        honest about what the cap hid - reporting `len(rows)` as the total
+        would tell the model it had seen everything.
+        """
+        import sqlite3
+
+        try:
+            cols = [r[1] for r in conn.execute(
+                'PRAGMA table_info("%s")' % table)]
+        except sqlite3.Error:
+            return [], 0
+        if not cols or column not in cols:
+            return [], 0
+
+        name_col = next((c for c in self._NAME_COLUMNS if c in cols), None)
+        details = [c for c in self._DETAIL_COLUMNS if c in cols][:3]
+
+        select = ['rowid as _rowid', '"%s" as _when' % column]
+        if name_col:
+            select.append('"%s" as _name' % name_col)
+        for d in details:
+            select.append('"%s"' % d)
+
+        where = ('WHERE datetime("{c}") BETWEEN datetime(?) AND datetime(?)'
+                 .format(c=column))
+        if routine_ids is not None and "EventID" in cols:
+            # The event log is mostly routine. On this machine one ID alone -
+            # 5379, the credential manager reading its own store - is 22,012
+            # records, and 4798 (a process enumerated a user's group
+            # membership) another 4,077. Returned unfiltered they crowd out
+            # the logon, the process creation and the service install that the
+            # question was actually about, and the model spends its context on
+            # them. `include_routine_events` lifts this.
+            where += " AND EventID IN (%s)" % ", ".join(routine_ids)
+
+        try:
+            total = conn.execute(
+                'SELECT count(*) FROM "%s" %s' % (table, where),
+                (start, end)).fetchone()[0]
+            cur = conn.execute(
+                'SELECT %s FROM "%s" %s ORDER BY "%s" LIMIT %d'
+                % (", ".join(select), table, where, column, limit),
+                (start, end))
+            fetched = [dict(r) for r in cur.fetchall()]
+        except sqlite3.Error:
+            return [], 0
+
+        described = entry[3] if len(entry) > 3 else ""
+        is_log = table in ("SystemLogs", "SecurityLogs", "ApplicationLogs")
+        out = []
+        for r in fetched:
+            # Normalise before sorting. The stored formats differ per parser -
+            # `2026-02-14 04:33:18` from the event log,
+            # `2026-02-14T04:26:23.916647+00:00` from the MFT - and sorting
+            # those as strings puts every `T` after every space, so a merged
+            # chronology comes out interleaved wrongly and reads as though the
+            # file activity happened after the log entries.
+            raw = r.get("_when")
+            when = self._parse_dt(raw)
+            row = {
+                "timestamp": (when.strftime("%Y-%m-%d %H:%M:%S")
+                              if when else raw),
+                "exactness": "key upper bound" if bounded else "exact",
+                "artifact": artifact,
+                "database": db_name,
+                "table": table,
+                "rowid": r.get("_rowid"),
+                "time_column": column,
+                "kind": entry[2],
+                "what": r.get("_name") or "",
+            }
+            if described:
+                row["means"] = described
+            for d in details:
+                if r.get(d) not in (None, ""):
+                    row[d] = r[d]
+            if is_log:
+                # An event log row has no name column; what it IS is its ID.
+                # `4688` tells a reader nothing, so the same table of meanings
+                # the timeline labels its markers from is used here.
+                try:
+                    from timeline.data import artifact_map as _am
+                    meaning = _am.SIGNIFICANT_EVENT_IDS.get(
+                        int(r.get("EventID") or 0))
+                except Exception:
+                    meaning = None
+                row["what"] = (meaning[1] if meaning
+                               else "Event %s" % r.get("EventID"))
+            out.append(row)
+        return out, total
+
     def handle_semantic_search_artifacts(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Semantic (embedding) discovery over forensic data rows.
 

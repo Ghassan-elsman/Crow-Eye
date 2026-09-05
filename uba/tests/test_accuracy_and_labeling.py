@@ -28,6 +28,37 @@ def test_shellbags_do_not_claim_browsing(artifacts_dir):
         assert "application" in e["caveat"].lower()
 
 
+def test_shellbags_say_which_kind_of_view_wrote_them(artifacts_dir):
+    """A ComDlg bag and a Shell bag must not read the same.
+
+    Windows records which under Bags, the parser stores it in `bag_views`, and
+    the whole point of reading it is that the report stops hedging every row
+    the same way. A case with no such column keeps the blanket wording, which
+    is the third branch here.
+    """
+    eng = run(artifacts_dir)
+    sb = [e for e in all_events(eng) if e["activity"] == "folder_browsing"]
+    by_folder = {}
+    for e in sb:
+        by_folder[e["details"].get("folder", "")] = e
+
+    dialog = [e for e in sb if e["details"].get("view_kind") == "ComDlg"]
+    window = [e for e in sb if e["details"].get("view_kind") == "Shell"]
+    unknown = [e for e in sb if not e["details"].get("view_kind")]
+    assert dialog and window and unknown, (
+        "the fixture must exercise all three branches: got %d dialog, %d "
+        "window, %d unknown" % (len(dialog), len(window), len(unknown)))
+
+    assert "file dialog" in dialog[0]["description"].lower()
+    assert "explorer" in window[0]["description"].lower()
+    assert len({dialog[0]["description"], window[0]["description"],
+                unknown[0]["description"]}) == 3, (
+        "the three branches produced fewer than three distinct descriptions")
+    # And the guarantee the blanket caveat carried has to survive the split.
+    for e in sb:
+        assert "application" in e["caveat"].lower(), e["caveat"]
+
+
 def test_file_open_has_caveat(artifacts_dir):
     eng = run(artifacts_dir)
     fo = [e for e in all_events(eng) if e["activity"] == "file_opened"]

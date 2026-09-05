@@ -19,7 +19,7 @@ Use these artifacts to track user movement through the file system and folder ac
 
 | Artifact | Database | Key Tables | Significance |
 | :--- | :--- | :--- | :--- |
-| **ShellBags** | `registry_data.db` | `Shellbags` | Records which folders a user opened/viewed in Explorer. Includes `modified_date` of the folder view. |
+| **ShellBags** | `registry_data.db` | `Shellbags` | Records that a container was rendered as a **shell view** under that account - which is not the same as a person browsing to it. Explorer hosts shell views, and so does every File Open/Save dialog inside another program. `bag_views` says which: `Shell` an Explorer window, `ComDlg` a dialog, `Shell,ComDlg` both, empty where the key has no `NodeSlot`. `LastSaveMRU.application` names the program. `modified_date` is the folder's own timestamp, not the time of the view. |
 | **Jump Lists** | `LnkDB.db` | `JLCE`, `Custom_JLCE` | Tracks "Pinned" and "Recent" items in taskbar menus. Proof of user interaction with specific files/folders. |
 | **RunMRU** | `registry_data.db` | `RunMRU` | Records commands typed into the 'Run' dialog box (Win+R). |
 | **WordWheelQuery** | `registry_data.db` | `WordWheelQuery` | Tracks search terms entered into the Windows Explorer search bar. |

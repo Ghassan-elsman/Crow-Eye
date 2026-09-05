@@ -171,8 +171,6 @@ correlation_engine/gui/
 ├── main.py                    # Entry point
 ├── main_window.py             # Main application window
 ├── pipeline_builder.py        # Pipeline creation/editing
-├── config_library.py          # Configuration browser
-├── component_detail.py        # Component details display
 ├── execution_control.py       # Execution orchestration
 ├── results_viewer.py          # Results display and filtering
 └── README.md                  # This file

@@ -73,6 +73,8 @@ class FeatherBuilderWindow(QMainWindow):
     def init_ui(self):
         """Initialize the user interface."""
         self.setWindowTitle("Crow-Eye Feather Builder")
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.setWindowIcon(CrowEyeIcons.feather())
         self.setGeometry(100, 100, 1200, 800)
         
         # Create central widget

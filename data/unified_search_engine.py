@@ -438,6 +438,10 @@ class UnifiedDatabaseSearchEngine:
             # Filter to only accessible databases
             enhanced_db_infos = [db for db in enhanced_db_infos if db.accessible]
             
+            # One read per physical file, whatever the tree called it.
+            enhanced_db_infos, tables, db_aliases = self._one_entry_per_file(
+                enhanced_db_infos, tables)
+
             if not enhanced_db_infos:
                 self.logger.warning("No accessible databases found for time-filtered search.")
                 if completion_callback:
@@ -449,6 +453,11 @@ class UnifiedDatabaseSearchEngine:
             if databases:
                 db_infos = [db for db in db_infos if db.name in databases]
             
+            db_infos = [d for d in db_infos
+                        if getattr(d, "exists", False) and getattr(d, "accessible", False)]
+            db_infos, tables, db_aliases = self._one_entry_per_file(
+                db_infos, tables)
+
             if not db_infos:
                 self.logger.warning("No databases found or specified for search.")
                 if completion_callback:
@@ -481,6 +490,7 @@ class UnifiedDatabaseSearchEngine:
                     db_tables = None
                     if tables and enhanced_db_info.name in tables:
                         db_tables = tables[enhanced_db_info.name]
+                    db_tables = self._tables_or_all(db_tables, enhanced_db_info)
                     
                     results = self._search_database_with_time_filter(
                         enhanced_db_info=enhanced_db_info,
@@ -517,6 +527,7 @@ class UnifiedDatabaseSearchEngine:
                     db_tables = None
                     if tables and db_info.name in tables:
                         db_tables = tables[db_info.name]
+                    db_tables = self._tables_or_all(db_tables, db_info)
                     
                     results = self._search_database(
                         db_info=db_info,
@@ -561,6 +572,102 @@ class UnifiedDatabaseSearchEngine:
             completion_callback(all_results)
 
         return all_results
+
+    @staticmethod
+    def _tables_or_all(db_tables, info):
+        """An EMPTY table list is not "every table" - it is nothing.
+
+        `DatabaseSearchEngine.search` reads `tables=None` as everything and
+        `tables=[]` as nothing, and the two arrive from the same place: the
+        dialog builds `selected[name] = []` and then appends whichever table
+        children are checked. A database checked with no child checked would
+        search nothing at all and report zero hits, which is indistinguishable
+        from a database that simply has none.
+
+        Fall back to the entry's OWN tables, which for an artifact scoped
+        inside a shared file (`shellbags_data.db` -> `Shellbags`) is its
+        artifact and not the other 123 tables beside it.
+        """
+        if db_tables:
+            return db_tables
+        if db_tables is None:
+            return None
+        own = getattr(info, "tables", None)
+        if isinstance(own, dict):
+            own = list(own)
+        return list(own) if own else None
+
+    @staticmethod
+    def _one_entry_per_file(infos, tables):
+        """Collapse several logical names that resolve to the same file.
+
+        Six of the configured names - jumplist, eventlog, shellbags,
+        userassist, muicache and bam_dam - all resolve to the one physical
+        `Log_Claw.db`, because those artifacts live as TABLES inside it. Both
+        search paths iterated the logical list, so its 43,802 rows were read
+        six times per search and every hit was reported six times.
+
+        The tree keeps showing them separately, which is right: an examiner
+        looks for "UserAssist", not for a filename. Only the reading is
+        collapsed.
+
+        Returns `(infos, tables, aliases)`; `aliases` maps the surviving name
+        to every logical name that resolved to the same file, so a hit can
+        still say which artifact it belongs to.
+        """
+        from pathlib import Path
+
+        import copy
+
+        kept, seen, aliases = [], {}, {}
+        merged = dict(tables or {})
+        for info in infos:
+            try:
+                key = str(Path(info.path).resolve()).lower()
+            except Exception:
+                key = str(getattr(info, "path", info.name)).lower()
+            if key not in seen:
+                seen[key] = info
+                aliases[info.name] = [info.name]
+                kept.append(info)
+                continue
+
+            first = seen[key]
+            aliases[first.name].append(info.name)
+            if tables:
+                # A table selected under ANY of the names has to survive, and a
+                # name with no restriction means "every table" - which wins.
+                if first.name not in merged or info.name not in merged:
+                    merged.pop(first.name, None)
+                else:
+                    merged[first.name] = sorted(
+                        set(merged[first.name]) | set(merged[info.name]))
+                merged.pop(info.name, None)
+
+        # Report a collapsed entry under its FILE name. Which logical name
+        # happens to survive is an accident of iteration order - `Log_Claw.db`
+        # came out as "jumplist_data.db" - and an event log hit labelled
+        # "jumplist_data.db" tells the examiner something untrue about where
+        # the evidence is.
+        renamed = []
+        for info in kept:
+            names = aliases.get(info.name, [info.name])
+            file_name = Path(info.path).name
+            if len(names) > 1 and info.name != file_name:
+                shown = copy.copy(info)
+                try:
+                    shown.name = file_name
+                except Exception:
+                    shown = info
+                if tables and info.name in merged:
+                    merged[file_name] = merged.pop(info.name)
+                aliases[file_name] = names
+                aliases.pop(info.name, None)
+                renamed.append(shown)
+            else:
+                renamed.append(info)
+
+        return renamed, (merged if tables else tables), aliases
 
     def _search_database(
         self,

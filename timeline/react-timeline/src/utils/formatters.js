@@ -140,6 +140,15 @@ export const ARTIFACT_CONFIG = {
   shimcache:  { label: 'ShimCache',        color: '#14b8a6', icon: 'archive' },
   recyclebin: { label: 'Recycle Bin',      color: '#ef4444', icon: 'trash' },
   imported:   { label: 'Imported Evidence', color: '#64748b', icon: 'inbox' },
+  // Registry KEY write times. Off by default: they are upper bounds,
+  // not moments, and on a reference system there are ~2,200 of them,
+  // most written once at install. Drawn hollow when switched on.
+  key_times:  { label: 'Registry key times (<=)', color: '#64748b', icon: 'key' },
+  // Windows Event Log. The curated set - process creation, service install,
+  // log cleared, account change, RDP - is on; everything else is behind the
+  // pill below, because one ID alone is half the log.
+  event_logs: { label: 'Event Logs',       color: '#0ea5e9', icon: 'clipboard' },
+  all_event_ids: { label: 'All event IDs', color: '#475569', icon: 'clipboard' },
 };
 
 /**
@@ -238,10 +247,37 @@ export const FORENSIC_TS_FIELDS = [
   'Time_Access', 'Time_Creation', 'Time_Modification', 
   'install_date', 'installation_date', 'link_date', 'driver_last_write_time', 'driver_time_stamp',
   'created_on', 'modified_on', 'accessed_on', 'deletion_time',
-  'last_install_time', 'scheduled_install_time', 'last_check_time', 'shutdown_time',
-  'focus_time', 'created_date', 'modified_date', 'accessed_date', 'access_date',
+  'last_install_time', 'last_check_time', 'shutdown_time',
+  'created_date', 'modified_date', 'accessed_date', 'access_date',
   'connection_date', 'last_modified', 'last_modified_readable',
+  // ScheduledTasks, registry_value_changes and USBStorageDevices. Every
+  // one of these is a real event time and none of them was listed, so
+  // those rows reached the front end and drew no dot at all.
+  'task_registered', 'last_run', 'last_completed', 'changed_at',
+  'first_connected', 'last_connected', 'last_removed',
+  'date_created', 'date_last_connected', 'last_written', 'last_write',
   'si_creation_time', 'usn_timestamp', 'EventTimestampUTC', 'creation_time',
+  // The rest of what `artifact_map` plots. A column the bridge fetches and
+  // this list omits arrives in the payload and draws no dot at all - which
+  // is silent, and is how the $FILE_NAME times reached the front end and
+  // vanished. `test_front_end_reads_every_mapped_time` keeps the two in step.
+  //
+  // $SI and $FN, from mft_usn_correlated and mft_records/mft_file_names.
+  'si_modification_time', 'si_access_time', 'si_mft_entry_change_time',
+  'fn_creation_time', 'fn_modification_time', 'fn_access_time',
+  'fn_mft_entry_change_time', 'change_timestamp',
+  'created_time', 'modified_time', 'accessed_time', 'mft_modified_time',
+  'created', 'modified', 'accessed', 'mft_modified',
+  // AmCache's normalised columns - the raw ones hold MM/DD/YYYY text and,
+  // in link_date, version strings.
+  'link_date_utc', 'install_date_utc', 'msi_install_date_utc',
+  'driver_last_write_time_utc', 'driver_time_stamp_utc',
+  // MRU and carved keys carry the containing key's write time.
+  'key_last_write', 'event_timestamp',
+  // SAM accounts, per-app capability use, and AmCache device installs.
+  'last_logon', 'password_last_set',
+  'last_used_start', 'last_used_stop',
+  'first_install_date_utc', 'driver_ver_date_utc', 'date_utc',
   'Last_Run_Time_0', 'Last_Run_Time_1', 'Last_Run_Time_2', 'Last_Run_Time_3',
   'Last_Run_Time_4', 'Last_Run_Time_5', 'Last_Run_Time_6', 'Last_Run_Time_7'
 ];
@@ -328,12 +364,14 @@ export function getPrimaryTimestamp(obj) {
     (Array.isArray(obj.run_times) ? obj.run_times[0] : obj.run_times) ||
     obj.Time_Access || obj.Time_Creation || obj.Time_Modification ||
     obj.si_creation_time || obj.usn_timestamp || obj.link_date ||
-    obj.install_date || obj.installation_date || obj.last_install_time || obj.scheduled_install_time ||
+    obj.install_date || obj.installation_date || obj.last_install_time ||
     obj.driver_time_stamp || obj.driver_last_write_time || obj.last_modified || obj.last_modified_readable ||
     obj.deletion_time || obj.access_date || obj.accessed_date || obj.last_check_time ||
     obj.modified_date || obj.created_date || obj.first_connected || obj.last_connected || obj.last_removed || obj.connection_date ||
     obj.EventTimestampUTC || obj.creation_time || obj.created_on || obj.modified_on || obj.accessed_on ||
-    obj.shutdown_time || obj.focus_time;
+    obj.task_registered || obj.last_run || obj.last_completed ||
+    obj.changed_at || obj.last_written || obj.last_write ||
+    obj.shutdown_time;
 
   return cleanForensicDate(raw);
 }

@@ -8,14 +8,13 @@
   "created_date": "2024-12-23T00:00:00Z",
   "last_modified": "2024-12-23T00:00:00Z",
   "version": "1.0",
-  
   "feathers": [
     {
       "feather_config_name": "Prefetch_CrowEyeFeather",
       "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
       "artifact_type": "Prefetch",
       "feather_id": "prefetch",
-      "weight": 0.40,
+      "weight": 0.4,
       "tier": 1,
       "tier_name": "Direct execution evidence"
     },
@@ -60,7 +59,7 @@
       "feather_database_path": "feathers/LNK_CrowEyeFeather.db",
       "artifact_type": "LNK",
       "feather_id": "lnk",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 3,
       "tier_name": "User-triggered execution traces"
     },
@@ -69,7 +68,7 @@
       "feather_database_path": "feathers/AutomaticJumplist_CrowEyeFeather.db",
       "artifact_type": "Jumplists",
       "feather_id": "jumplist_auto",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 3,
       "tier_name": "User-triggered execution traces"
     },
@@ -78,7 +77,7 @@
       "feather_database_path": "feathers/CustomJumplist_CrowEyeFeather.db",
       "artifact_type": "Jumplists",
       "feather_id": "jumplist_custom",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 3,
       "tier_name": "User-triggered execution traces"
     },
@@ -87,7 +86,7 @@
       "feather_database_path": "feathers/SRUM_ApplicationUsage_CrowEyeFeather.db",
       "artifact_type": "SRUM",
       "feather_id": "srum_app",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 4,
       "tier_name": "Runtime + behavior correlation"
     },
@@ -96,7 +95,7 @@
       "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
       "artifact_type": "MFT",
       "feather_id": "mft_usn",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 4,
       "tier_name": "File system evidence"
     },
@@ -137,7 +136,6 @@
       "tier_name": "User navigation evidence"
     }
   ],
-  
   "time_window_minutes": 180,
   "minimum_matches": 1,
   "target_application": "",
@@ -156,20 +154,19 @@
     "Registry"
   ],
   "use_weighted_scoring": true,
-  
   "scoring": {
     "enabled": true,
     "score_interpretation": {
       "confirmed": {
-        "min": 0.70,
+        "min": 0.7,
         "label": "Confirmed Execution"
       },
       "probable": {
-        "min": 0.40,
+        "min": 0.4,
         "label": "Probable Execution"
       },
       "weak": {
-        "min": 0.20,
+        "min": 0.2,
         "label": "Weak / Partial"
       },
       "not_proven": {
@@ -178,7 +175,6 @@
       }
     }
   },
-  
   "semantic_rules": [
     {
       "rule_id": "exec_prefetch_run",
@@ -218,8 +214,12 @@
     },
     {
       "rule_id": "exec_user_launched",
-      "technique_id": ["T1204"],
-      "tactic": ["execution"],
+      "technique_id": [
+        "T1204"
+      ],
+      "tactic": [
+        "execution"
+      ],
       "name": "User-Launched Application (AND)",
       "semantic_value": "User Launched Application",
       "description": "LNK file AND Prefetch together indicate user-initiated execution",
@@ -306,7 +306,7 @@
       "rule_id": "exec_confirmed_run",
       "name": "Confirmed Execution (AND)",
       "semantic_value": "Confirmed Program Execution",
-      "description": "Prefetch AND ShimCache together confirm program execution. Severity is 'info' because confirmed-execution is the baseline forensic finding the wing was built to surface — chrome.exe, notepad.exe, calc.exe etc. all match. Tagging this 'high' would drown the analyst in execution noise; the wing's weighted scoring escalates to 'Confirmed Execution' label via score thresholds (>=0.70), which is the correct surface for analyst attention.",
+      "description": "Prefetch AND ShimCache together confirm program execution. Severity is 'info' because confirmed-execution is the baseline forensic finding the wing was built to surface \u2014 chrome.exe, notepad.exe, calc.exe etc. all match. Tagging this 'high' would drown the analyst in execution noise; the wing's weighted scoring escalates to 'Confirmed Execution' label via score thresholds (>=0.70), which is the correct surface for analyst attention.",
       "conditions": [
         {
           "feather_id": "prefetch",
@@ -334,7 +334,7 @@
       "conditions": [
         {
           "feather_id": "srum_app",
-          "field_name": "app_id",
+          "field_name": "app_path",
           "operator": "wildcard",
           "value": "*"
         },
@@ -435,7 +435,6 @@
       "severity": "info"
     }
   ],
-  
   "tags": [
     "execution",
     "default",

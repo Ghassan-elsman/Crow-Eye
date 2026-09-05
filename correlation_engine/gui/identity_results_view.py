@@ -369,6 +369,90 @@ def _search_semantic_data(semantic_data: dict, search_term: str) -> bool:
     return False
 
 
+def _format_semantic_findings(semantic_data: dict, max_findings: int = 6) -> list:
+    """Render stored semantic_data as lines a person reads.
+
+    The tooltip used to be built with `f" {key}: {value}"` where `value` is the
+    whole nested entry, so it rendered by repr() - 1,332 characters of raw
+    Python dict for a single finding, with the rule's regex printed twice. What
+    an analyst needs is what was found, what matched, and where it came from.
+
+    The rule's `rule_pattern` is deliberately never shown: it is the rule's own
+    regex, not evidence, and printing it as though it were is the mistake this
+    replaces. Handles the legacy shapes too - a direct `semantic_value` dict, or
+    a bare string - because old case databases still carry them.
+    """
+    lines = []
+    if not semantic_data or not isinstance(semantic_data, dict):
+        return lines
+
+    try:
+        from ..config.attack_catalog import technique_name
+    except Exception:
+        technique_name = None
+
+    for key, value in semantic_data.items():
+        if key.startswith('_') or not value:
+            continue
+        if len(lines) >= max_findings:
+            lines.append(" ...")
+            break
+
+        if isinstance(value, str):
+            lines.append(" %s: %s" % (key, value))
+            continue
+        if not isinstance(value, dict):
+            continue
+
+        mappings = value.get('semantic_mappings')
+        mapping = mappings[0] if isinstance(mappings, list) and mappings else value
+        if not isinstance(mapping, dict):
+            continue
+
+        headline = mapping.get('semantic_value') or value.get('semantic_value') or key
+        rule_name = mapping.get('rule_name')
+        confidence = mapping.get('confidence')
+        severity = mapping.get('severity')
+        bits = [b for b in (rule_name,
+                            ("confidence %.2f" % confidence)
+                            if isinstance(confidence, (int, float)) else None,
+                            severity if severity and severity != 'info' else None)
+                if b]
+        lines.append(" %s%s" % (headline, ("  (%s)" % ", ".join(bits)) if bits else ""))
+
+        # What actually matched, and in which source.
+        hits = value.get('matched_fields')
+        if isinstance(hits, list) and hits:
+            for hit in hits[:3]:
+                if not isinstance(hit, dict):
+                    continue
+                where = hit.get('feather') or '?'
+                field = hit.get('field') or '?'
+                lines.append("    matched %r in %s.%s"
+                             % (str(hit.get('value', '')), where, field))
+        else:
+            matched = mapping.get('technical_value') or value.get('identity_value')
+            if matched:
+                feathers = mapping.get('matched_feathers') or []
+                where = ", ".join(str(f) for f in feathers) if feathers else None
+                lines.append("    matched %r%s"
+                             % (str(matched), (" in %s" % where) if where else ""))
+
+        techniques = mapping.get('technique_id') or value.get('technique_id') or []
+        tactics = mapping.get('tactic') or value.get('tactic') or []
+        if techniques:
+            named = []
+            for t in techniques[:4]:
+                label = technique_name(t) if technique_name else None
+                named.append("%s (%s)" % (t, label) if label else str(t))
+            line = "    ATT&CK " + ", ".join(named)
+            if tactics:
+                line += "  [%s]" % ", ".join(str(t) for t in tactics)
+            lines.append(line)
+
+    return lines
+
+
 class IdentityResultsView(QWidget):
     """Compact Identity-Based Correlation Results View with Pagination and Scoring."""
     
@@ -391,7 +475,13 @@ class IdentityResultsView(QWidget):
         
         # Load configuration
         try:
-            from ...config.case_history_manager import CaseHistoryManager
+            # Absolute, like engine/time_based_engine.py and the semantic
+            # controller. `...config` climbs above `correlation_engine`,
+            # which is the top-level package, so it always raised
+            # "attempted relative import beyond top-level package" - the
+            # except below swallowed it, the manager stayed None, and the
+            # analyst's cascade-tree-expansion setting was never read.
+            from config.case_history_manager import CaseHistoryManager
             self.case_history_manager = CaseHistoryManager()
         except Exception as e:
             logger.error(f"Failed to load CaseHistoryManager: {e}")
@@ -1704,10 +1794,10 @@ class IdentityResultsView(QWidget):
         # Add semantic data if available
         semantic_data = anchor.get('semantic_data')
         if semantic_data and isinstance(semantic_data, dict) and not semantic_data.get('_unavailable'):
-            tooltip_lines.append(f"\nSemantic Mapping:")
-            for key, value in semantic_data.items():
-                if not key.startswith('_') and value:
-                    tooltip_lines.append(f" {key}: {value}")
+            findings = _format_semantic_findings(semantic_data)
+            if findings:
+                tooltip_lines.append("\nSemantic Mapping:")
+                tooltip_lines.extend(findings)
         
         if tooltip_lines:
             item.setToolTip(0, "\n".join(tooltip_lines))
@@ -2090,10 +2180,8 @@ class IdentityResultsView(QWidget):
                 count_item.setForeground(QBrush(QColor("#F44336")))
             self.scoring_table.setItem(row, 1, count_item)
     
-    def _on_search_text_changed(self):
-        """Handle search text changes with debouncing."""
-        self.search_timer.stop()
-        self.search_timer.start()
+    # NOTE: an earlier definition of `_on_search_text_changed` was removed here. Python keeps
+    # the last one, so it never ran.
     
     def _apply_filters(self):
         """Apply filters with pagination, including semantic value search."""
@@ -2466,7 +2554,7 @@ class IdentityDetailDialog(QDialog):
         layout.addWidget(stats_frame)
         
         # Feather contribution table
-        feather_group = QGroupBox("Feather Contributions")
+        feather_group = QGroupBox()
         feather_group.setStyleSheet("""
             QGroupBox { 
                 font-size: 9pt; font-weight: bold; color: #aaa;
@@ -2476,6 +2564,10 @@ class IdentityDetailDialog(QDialog):
             QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
         """)
         feather_layout = QVBoxLayout(feather_group)
+        from .crow_eye_icons import group_title_label
+        _feather_title = group_title_label("feather", "Feather Contributions", size_px=14)
+        _feather_title.setStyleSheet("font-size: 9pt; color: #aaa;")
+        feather_layout.addWidget(_feather_title)
         
         # Group feather records by base name
         grouped_feather_records = defaultdict(list)
@@ -3040,7 +3132,7 @@ class IdentityDetailDialog(QDialog):
         # Check if we have feather_records to display
         if has_feather_records:
             # Add Feather Records section
-            feather_group = QGroupBox("Feather Records")
+            feather_group = QGroupBox()
             feather_group.setStyleSheet("""
                 QGroupBox { 
                     font-size: 9pt; font-weight: bold; color: #aaa;
@@ -3050,6 +3142,10 @@ class IdentityDetailDialog(QDialog):
                 QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
             """)
             feather_layout = QVBoxLayout(feather_group)
+            from .crow_eye_icons import group_title_label
+            _ce_title = group_title_label("feather", "Feather Records", size_px=14)
+            _ce_title.setStyleSheet("font-size: 9pt; color: #aaa;")
+            feather_layout.addWidget(_ce_title)
             
             # Create tabs for each feather
             feather_tabs = QTabWidget()

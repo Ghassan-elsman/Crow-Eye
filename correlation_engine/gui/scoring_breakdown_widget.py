@@ -93,8 +93,10 @@ class ScoringBreakdownWidget(QWidget):
     
     def _create_breakdown_section(self) -> QWidget:
         """Create the detailed breakdown table section"""
-        group = QGroupBox("Feather Contribution Breakdown")
+        group = QGroupBox()
         layout = QVBoxLayout(group)
+        from .crow_eye_icons import group_title_label
+        layout.addWidget(group_title_label("feather", "Feather Contribution Breakdown"))
         
         # Create breakdown table
         self.breakdown_table = QTableWidget()

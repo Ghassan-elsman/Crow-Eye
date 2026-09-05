@@ -5,7 +5,10 @@ This module provides the FileAccessor class that orchestrates multiple
 file access strategies with automatic retry for transient failures.
 """
 
+import importlib
+import importlib.util
 import os
+import sys
 import time
 from typing import List, Optional
 from .access_strategy import FileAccessStrategy
@@ -73,84 +76,100 @@ class FileAccessor:
             self.strategies.append(RawDiskAccessStrategy())
         
         # Add image access strategies (always available, don't require admin)
-        # Import with try/except to handle missing dependencies gracefully
-        # Use importlib to handle directory name with spaces
-        
-        # Get the path to Artifacts_Collectors directory
+        #
+        # Import them as a package first. They used to be loaded with
+        # `spec_from_file_location("e01_access_strategy", path)` - a bare module
+        # name with no package - so inside each strategy `__package__` was empty
+        # and its import ladder fell to the absolute branch,
+        # `from data_models import PartitionInfo`. data_models.py lives in
+        # Forensics_Image_parsing/, the PARENT of strategies/, and only
+        # Artifacts_Collectors/ was ever added to sys.path, so all five failed
+        # with "No module named 'data_models'" and image access was quietly
+        # unavailable everywhere.
+        #
+        # A real package import gives them `__package__`, so their own preferred
+        # branch (`from ..data_models import ...`) resolves - and sys.modules
+        # caches them, so five loads replace five per FileAccessor.
+        _IMAGE_STRATEGIES = [
+            ('e01_access_strategy', 'E01AccessStrategy'),
+            ('vhdx_access_strategy', 'VHDXAccessStrategy'),
+            ('vmdk_access_strategy', 'VMDKAccessStrategy'),
+            ('iso_access_strategy', 'ISOAccessStrategy'),
+            ('raw_access_strategy', 'RawAccessStrategy'),
+        ]
+
+        for module_name, class_name in _IMAGE_STRATEGIES:
+            strategy_cls, route, error = None, '', None
+
+            # 1. the normal import
+            try:
+                package = ('Artifacts_Collectors.Forensics_Image_parsing'
+                           '.strategies.' + module_name)
+                module = importlib.import_module(package)
+                strategy_cls = getattr(module, class_name)
+                route = 'package'
+            except Exception as exc:
+                error = exc
+
+            # 2. Frozen builds bundle Artifacts_Collectors as DATA rather than
+            #    as importable modules, so fall back to loading the file - this
+            #    time with the strategies' own package directory on sys.path,
+            #    the entry whose absence caused the original failure.
+            if strategy_cls is None:
+                try:
+                    strategy_cls = self._load_strategy_from_file(
+                        module_name, class_name)
+                    route = 'file'
+                except Exception as exc:
+                    error = exc
+
+            if strategy_cls is None:
+                # One unavailable format must not stop the other four. Name the
+                # route so a future failure is diagnosable rather than ambiguous.
+                print("[WARNING] %s not available (package and file "
+                      "load both failed): %s" % (class_name, error))
+                continue
+
+            try:
+                self.strategies.append(strategy_cls())
+            except Exception as exc:
+                print("[WARNING] %s loaded via %s but could not be "
+                      "created: %s" % (class_name, route, exc))
+
+    @staticmethod
+    def _image_strategies_dir():
+        """Directory holding the image access strategies."""
         try:
             from utils.path_utils import PathUtils
-            app_root = PathUtils.get_app_root()
-            artifacts_dir = app_root / 'Artifacts_Collectors'
-        except ImportError:
-            # Fallback if PathUtils is not accessible
-            artifacts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-            
-        forensics_dir = os.path.join(str(artifacts_dir), 'Forensics_Image_parsing', 'strategies')
-        
-        # Add to sys.path temporarily if needed
-        if str(artifacts_dir) not in sys.path:
-            sys.path.insert(0, str(artifacts_dir))
-        
-        try:
-            # Import E01AccessStrategy
-            spec = importlib.util.spec_from_file_location(
-                "e01_access_strategy",
-                os.path.join(forensics_dir, "e01_access_strategy.py")
-            )
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            self.strategies.append(module.E01AccessStrategy())
-        except Exception as e:
-            print(f"[WARNING] E01AccessStrategy not available: {e}")
-        
-        try:
-            # Import VHDXAccessStrategy
-            spec = importlib.util.spec_from_file_location(
-                "vhdx_access_strategy",
-                os.path.join(forensics_dir, "vhdx_access_strategy.py")
-            )
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            self.strategies.append(module.VHDXAccessStrategy())
-        except Exception as e:
-            print(f"[WARNING] VHDXAccessStrategy not available: {e}")
-        
-        try:
-            # Import VMDKAccessStrategy
-            spec = importlib.util.spec_from_file_location(
-                "vmdk_access_strategy",
-                os.path.join(forensics_dir, "vmdk_access_strategy.py")
-            )
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            self.strategies.append(module.VMDKAccessStrategy())
-        except Exception as e:
-            print(f"[WARNING] VMDKAccessStrategy not available: {e}")
-        
-        try:
-            # Import ISOAccessStrategy
-            spec = importlib.util.spec_from_file_location(
-                "iso_access_strategy",
-                os.path.join(forensics_dir, "iso_access_strategy.py")
-            )
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            self.strategies.append(module.ISOAccessStrategy())
-        except Exception as e:
-            print(f"[WARNING] ISOAccessStrategy not available: {e}")
-        
-        try:
-            # Import RawAccessStrategy
-            spec = importlib.util.spec_from_file_location(
-                "raw_access_strategy",
-                os.path.join(forensics_dir, "raw_access_strategy.py")
-            )
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            self.strategies.append(module.RawAccessStrategy())
-        except Exception as e:
-            print(f"[WARNING] RawAccessStrategy not available: {e}")
-    
+            artifacts_dir = PathUtils.get_app_root() / 'Artifacts_Collectors'
+        except Exception:
+            artifacts_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), '..', '..'))
+        return os.path.join(str(artifacts_dir), 'Forensics_Image_parsing')
+
+    def _load_strategy_from_file(self, module_name, class_name):
+        """Load one strategy straight off disk.
+
+        The fallback for a frozen build. `Forensics_Image_parsing` goes on
+        sys.path because the strategy will import its siblings - data_models,
+        partition_detector, error_handler - by bare name once it has no
+        package; that entry was the missing one.
+        """
+        forensics_dir = self._image_strategies_dir()
+        for path in (forensics_dir, os.path.dirname(forensics_dir)):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+
+        spec = importlib.util.spec_from_file_location(
+            module_name,
+            os.path.join(forensics_dir, 'strategies', module_name + '.py'))
+        module = importlib.util.module_from_spec(spec)
+        # Register before executing so a strategy importing a sibling by the
+        # same name gets this module rather than re-executing it.
+        sys.modules.setdefault(module_name, module)
+        spec.loader.exec_module(module)
+        return getattr(module, class_name)
+
     def access_file_with_retry(
         self,
         file_path: str,
