@@ -42,6 +42,24 @@ These tools allow EYE to explore the case environment, query forensic databases,
     *   `search_term` (string): The term or pattern to hunt for.
     *   `use_regex` (boolean): Set to `true` for regex-based hunting.
 
+### 3b. `query_timeline` — "what happened at 14:30?"
+*   **Purpose**: Sweeps **every** forensic database in the case at once and returns one merged chronology — execution, file activity, registry changes, event log records, USB, deletions — ordered by time. This is the tool for any question about a moment or a period.
+*   **Why it exists**: without it, a time question means the model choosing which of eleven databases to `query_database` and issuing them one at a time. Whichever database it doesn't think of is simply missing from the answer, and nothing says so.
+*   **Where the times come from**: `timeline/data/artifact_map.py` — the same map the Timeline plots from, so the tool and the screen agree by construction rather than by maintenance.
+*   **Parameters**:
+    *   `start_time` + `end_time` (`YYYY-MM-DD HH:MM:SS`, UTC), **or** `around` + `window_minutes` (default 30).
+    *   `artifact_types` (optional list, e.g. `["Logs","Prefetch","MftUsn"]`).
+    *   `include_bounded` (default `false`) — add registry KEY write times.
+    *   `include_routine_events` (default `false`) — add the event log records the curated set leaves out.
+    *   `limit` (default 300).
+*   **Every row carries** `timestamp`, `exactness`, `artifact`, `database`, `table`, `rowid`, `time_column`, `kind`, `what`.
+*   **`exactness` is the field to read**:
+    *   `exact` — a moment.
+    *   `key upper bound` — a registry key's write time. It belongs to *every* value under that key and dates none of them, so it reads "at or before" and can never be the sole support for a claim that something happened at a given time. Excluded unless asked for.
+*   **Discovery, not proof**: rows are CANDIDATES. Confirm anything you intend to quote with `query_database` by table and rowid, the same way `semantic_search_artifacts` candidates are confirmed.
+*   **Honest about scope**: the result names `artifacts_searched` and `databases_absent`, and reports `total_in_window` separately from what the cap returned — "nothing happened then" is a claim about what was searched, so the record has to show it.
+*   **Availability**: included in the constrained-model tool set. A small local model is exactly who benefits from one call rather than eleven.
+
 ### 4. `query_correlation_results`
 *   **Purpose**: Direct interface with the **Crow-eye Correlation Engine**.
 *   **Query Types**:

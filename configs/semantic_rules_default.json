@@ -12,7 +12,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "SVCHOST\\.EXE|EXPLORER\\.EXE|DWM\\.EXE|TASKMGR\\.EXE|SERVICES\\.EXE|LSASS\\.EXE|CSRSS\\.EXE|WINLOGON\\.EXE|SMSS\\.EXE|WININIT\\.EXE|SYSTEM|REGISTRY|SPOOLSV\\.EXE|CONHOST\\.EXE|RUNTIMEBROKER\\.EXE|SIHOST\\.EXE|CTFMON\\.EXE|FONTDRVHOST\\.EXE|SEARCHINDEXER\\.EXE|SEARCHPROTOCOLHOST\\.EXE|SEARCHFILTERHOST\\.EXE|AUDIODG\\.EXE|DLLHOST\\.EXE|TASKENG\\.EXE|TASKHOSTW\\.EXE|WMIPRVSE\\.EXE|WUAUCLT\\.EXE|TRUSTEDINSTALLER\\.EXE|MSIEXEC\\.EXE|RUNDLL32\\.EXE|REGSVR32\\.EXE|WERFAULT\\.EXE|WERMGR\\.EXE|MOBSYNC\\.EXE|WSCRIPT\\.EXE|CSCRIPT\\.EXE|MSHTA\\.EXE|CONSENT\\.EXE|LOGONUI\\.EXE|USERINIT\\.EXE|WINRSHOST\\.EXE|WSMPROVHOST\\.EXE|SDIAGNHOST\\.EXE|SLUI\\.EXE|SPPSVC\\.EXE|VSSVC\\.EXE|WBENGINE\\.EXE|SDCLT\\.EXE|BACKGROUNDTASKHOST\\.EXE|APPLICATIONFRAMEHOST\\.EXE",
+          "value": "SVCHOST\\.EXE|EXPLORER\\.EXE|DWM\\.EXE|TASKMGR\\.EXE|SERVICES\\.EXE|LSASS\\.EXE|CSRSS\\.EXE|WINLOGON\\.EXE|SMSS\\.EXE|WININIT\\.EXE|(?<![A-Za-z0-9])SYSTEM|REGISTRY|SPOOLSV\\.EXE|CONHOST\\.EXE|RUNTIMEBROKER\\.EXE|SIHOST\\.EXE|CTFMON\\.EXE|FONTDRVHOST\\.EXE|SEARCHINDEXER\\.EXE|SEARCHPROTOCOLHOST\\.EXE|SEARCHFILTERHOST\\.EXE|AUDIODG\\.EXE|DLLHOST\\.EXE|TASKENG\\.EXE|TASKHOSTW\\.EXE|WMIPRVSE\\.EXE|WUAUCLT\\.EXE|TRUSTEDINSTALLER\\.EXE|MSIEXEC\\.EXE|RUNDLL32\\.EXE|REGSVR32\\.EXE|WERFAULT\\.EXE|WERMGR\\.EXE|MOBSYNC\\.EXE|WSCRIPT\\.EXE|CSCRIPT\\.EXE|MSHTA\\.EXE|CONSENT\\.EXE|LOGONUI\\.EXE|USERINIT\\.EXE|WINRSHOST\\.EXE|WSMPROVHOST\\.EXE|SDIAGNHOST\\.EXE|SLUI\\.EXE|SPPSVC\\.EXE|VSSVC\\.EXE|WBENGINE\\.EXE|SDCLT\\.EXE|BACKGROUNDTASKHOST\\.EXE|APPLICATIONFRAMEHOST\\.EXE",
           "operator": "regex"
         }
       ],
@@ -69,7 +69,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "VLC|MEDIAPLAYER|WMPLAYER|SPOTIFY|ITUNES|WINAMP|FOOBAR|KODI|PLEX",
+          "value": "(?<![A-Za-z0-9])VLC|MEDIAPLAYER|WMPLAYER|SPOTIFY|ITUNES|WINAMP|FOOBAR|KODI|PLEX",
           "operator": "regex"
         }
       ],
@@ -107,7 +107,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "DEFENDER|MSMPENG|MSSECES|AVAST|AVG|AVIRA|BITDEFENDER|KASPERSKY|NORTON|MCAFEE|ESET|NOD32|SOPHOS|TREND MICRO|PANDA|COMODO|MALWAREBYTES|SPYBOT|ADAWARE|SUPERANTISPYWARE|HITMANPRO|EMSISOFT|GDATA|FSECURE|WEBROOT|VIPRE|BULLGUARD|ZONEALARM|AVIRA|CLAMAV|CLAMWIN|IMMUNET|QIHOO|360|BAIDU|TENCENT|KINGSOFT|RISING|JIANGMIN|MICROPOINT|IKARUS|ARCABIT|AHNLAB|HAURI|QUICKHEAL|K7|ESCAN|NPAV|PROTEGENT|IOLO|PCMATIC|SCANGUARD|TOTALAV|SYSTWEAK|RESTORO|REIMAGE|DRIVERUPDATE|DRIVEREASY|DRIVERBOOSTER|DRIVERPACK|SNAPPY|SLIMDRIVERS|DRIVERMAX|DRIVERGENIUS|DRIVERTALENT|DRIVERHUB",
+          "value": "DEFENDER|MSMPENG|MSSECES|AVAST|(?<![A-Za-z0-9])AVG|AVIRA|BITDEFENDER|KASPERSKY|NORTON|MCAFEE|(?<![A-Za-z0-9])ESET|NOD32|SOPHOS|TREND MICRO|PANDA|COMODO|MALWAREBYTES|SPYBOT|ADAWARE|SUPERANTISPYWARE|HITMANPRO|EMSISOFT|GDATA|FSECURE|WEBROOT|VIPRE|BULLGUARD|ZONEALARM|AVIRA|CLAMAV|CLAMWIN|IMMUNET|QIHOO|(?<![A-Za-z0-9])360|BAIDU|TENCENT|KINGSOFT|RISING|JIANGMIN|MICROPOINT|IKARUS|ARCABIT|AHNLAB|HAURI|QUICKHEAL|(?<![A-Za-z0-9])K7|ESCAN|NPAV|PROTEGENT|IOLO|PCMATIC|SCANGUARD|TOTALAV|SYSTWEAK|RESTORO|REIMAGE|DRIVERUPDATE|DRIVEREASY|DRIVERBOOSTER|DRIVERPACK|SNAPPY|SLIMDRIVERS|DRIVERMAX|DRIVERGENIUS|DRIVERTALENT|DRIVERHUB",
           "operator": "regex"
         }
       ],
@@ -126,7 +126,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "7Z|7ZIP|WINRAR|WINZIP|PEAZIP|BANDIZIP",
+          "value": "(?<![A-Za-z0-9])7Z|7ZIP|WINRAR|WINZIP|PEAZIP|BANDIZIP",
           "operator": "regex"
         }
       ],
@@ -145,7 +145,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "TEAMVIEWER|ANYDESK|VNC|LOGMEIN|AMMYY|ULTRAVIEWER|RUSTDESK|MSTSC|RDPCLIP",
+          "value": "TEAMVIEWER|ANYDESK|(?<![A-Za-z0-9])VNC|LOGMEIN|AMMYY|ULTRAVIEWER|RUSTDESK|MSTSC|RDPCLIP",
           "operator": "regex"
         }
       ],
@@ -153,9 +153,7 @@
       "scope": "global",
       "category": "remote_access",
       "severity": "medium",
-      "confidence": 0.8,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.8
     },
     {
       "rule_id": "identity-network-tool",
@@ -174,9 +172,7 @@
       "scope": "global",
       "category": "network_utility",
       "severity": "info",
-      "confidence": 0.8,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.8
     },
     {
       "rule_id": "identity-file-transfer",
@@ -206,7 +202,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "SETUP|INSTALL|INSTALLER|MSIEXEC|INNO|NSIS|INSTALLSHIELD|WISE|ADVANCED INSTALLER|INSTALLAWARE|CLICKTEAM|SETUPFACTORY|ACTUALINSTALLER|SMARTINSTALL|INSTALLCREATOR|INSTALLBUILDER|BITROCK|IZPACK|INSTALL4J|LAUNCH4J|JRE|JDK|DOTNET|VCREDIST|DIRECTX|WEBSETUP|BOOTSTRAPPER|UPDATER|PATCHER|UNINSTALL|UNINS",
+          "value": "SETUP|INSTALL|INSTALLER|MSIEXEC|INNO|NSIS|INSTALLSHIELD|WISE|ADVANCED INSTALLER|INSTALLAWARE|CLICKTEAM|SETUPFACTORY|ACTUALINSTALLER|SMARTINSTALL|INSTALLCREATOR|INSTALLBUILDER|BITROCK|IZPACK|INSTALL4J|LAUNCH4J|(?<![A-Za-z0-9])JRE|(?<![A-Za-z0-9])JDK|DOTNET|VCREDIST|DIRECTX|WEBSETUP|BOOTSTRAPPER|UPDATER|PATCHER|UNINSTALL|UNINS",
           "operator": "regex"
         }
       ],
@@ -233,9 +229,7 @@
       "scope": "global",
       "category": "registry_modification",
       "severity": "medium",
-      "confidence": 0.85,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.85
     },
     {
       "rule_id": "identity-task-scheduler",
@@ -246,7 +240,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "SCHTASKS|TASKSCHD|AT\\.EXE|CRON|ANACRON|SYSTEMD|LAUNCHD|TASKENG|TASKHOSTW|TASKHOST|SCHEDULE|SCHEDULER|AUTOMATOR|HAZEL|KEYBOARD MAESTRO|BETTERTOUCHTOOL|ALFRED",
+          "value": "SCHTASKS|TASKSCHD|AT\\.EXE|CRON|ANACRON|(?<![A-Za-z0-9])SYSTEMD|LAUNCHD|TASKENG|TASKHOSTW|TASKHOST|SCHEDULE|SCHEDULER|AUTOMATOR|HAZEL|KEYBOARD MAESTRO|BETTERTOUCHTOOL|ALFRED",
           "operator": "regex"
         }
       ],
@@ -265,7 +259,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "TASKMGR|PROCEXP|PROCMON|PROCESS EXPLORER|PROCESS MONITOR|PROCESS HACKER|SYSTEM EXPLORER|DAPHNE|PSKILL|PSLIST|PSSUSPEND|PSTOOLS|HANDLE|LISTDLLS|AUTORUNS|TCPVIEW|PORTMON|REGMON|FILEMON|DISKMON|ACCESSCHK|SIGCHECK|STRINGS|STREAMS|SDELETE|PSEXEC|PSFILE|PSINFO|PSGETSID|PSLOGGEDON|PSLOGLIST|PSPASSWD|PSSERVICE|PSSHUTDOWN|PSSUSPEND|HTOP|TOP|ATOP|IOTOP|IFTOP|NETHOGS|GLANCES",
+          "value": "TASKMGR|PROCEXP|PROCMON|PROCESS EXPLORER|PROCESS MONITOR|PROCESS HACKER|SYSTEM EXPLORER|DAPHNE|PSKILL|PSLIST|PSSUSPEND|PSTOOLS|HANDLE|LISTDLLS|AUTORUNS|TCPVIEW|PORTMON|REGMON|FILEMON|DISKMON|ACCESSCHK|SIGCHECK|STRINGS|STREAMS|SDELETE|PSEXEC|PSFILE|PSINFO|PSGETSID|PSLOGGEDON|PSLOGLIST|PSPASSWD|PSSERVICE|PSSHUTDOWN|PSSUSPEND|HTOP|(?<![A-Za-z0-9])TOP|ATOP|IOTOP|IFTOP|NETHOGS|GLANCES",
           "operator": "regex"
         }
       ],
@@ -273,9 +267,7 @@
       "scope": "global",
       "category": "process_monitoring",
       "severity": "info",
-      "confidence": 0.8,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.8
     },
     {
       "rule_id": "identity-disk-tool",
@@ -286,7 +278,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "DISKPART|DISKMGMT|CHKDSK|DEFRAG|CLEANMGR|DISKCLEANUP|TREESIZE|WINDIRSTAT|SPACESNIFFER|SCANNER|DISKANALYZER|DISKUSAGE|DAISYDISK|GRANDPERSPECTIVE|OMNIDISKSWEEPER|DISKWAVE|JDISKREPORT|FILELIGHT|BAOBAB|NCDU|DU|DF|GPARTED|PARTED|FDISK|GDISK|PARTITIONMAGIC|EASEUS|MINITOOL|AOMEI|MACRIUM|ACRONIS|CLONEZILLA|GHOST|TRUEIMAGE|REFLECT|VEEAM|BACKUP|RESTORE|RECUVA|TESTDISK|PHOTOREC|GETDATABACK|R-STUDIO|EASEUS RECOVERY|STELLAR|DISK DRILL|WONDERSHARE|ONTRACK",
+          "value": "DISKPART|DISKMGMT|CHKDSK|DEFRAG|CLEANMGR|DISKCLEANUP|TREESIZE|WINDIRSTAT|SPACESNIFFER|SCANNER|DISKANALYZER|DISKUSAGE|DAISYDISK|GRANDPERSPECTIVE|OMNIDISKSWEEPER|DISKWAVE|JDISKREPORT|FILELIGHT|BAOBAB|NCDU|(?<![A-Za-z0-9])DU|(?<![A-Za-z0-9])DF|GPARTED|PARTED|FDISK|GDISK|PARTITIONMAGIC|EASEUS|MINITOOL|AOMEI|MACRIUM|ACRONIS|CLONEZILLA|GHOST|TRUEIMAGE|REFLECT|VEEAM|BACKUP|RESTORE|RECUVA|TESTDISK|PHOTOREC|GETDATABACK|R-STUDIO|EASEUS RECOVERY|STELLAR|DISK DRILL|WONDERSHARE|ONTRACK",
           "operator": "regex"
         }
       ],
@@ -305,7 +297,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "OUTLOOK|THUNDERBIRD|MAILBIRD|EMCLIENT|POSTBOX|MAILSPRING|MAILMATE|AIRMAIL|SPARK|CANARY|POLYMAIL|NEWTON|SPIKE|SUPERHUMAN|HEY|PROTONMAIL|TUTANOTA|MAILBOX|INBOX|GMAIL|YAHOO MAIL|AOL MAIL|ZOHO MAIL|FASTMAIL|RUNBOX|MAILBOX\\.ORG|POSTEO|STARTMAIL|HUSHMAIL|COUNTERMAIL|MAILFENCE|KOLAB|ROUNDCUBE|SQUIRRELMAIL|HORDE|ZIMBRA|KERIO|MDAEMON|SMARTERMAIL|ICEWARP|AXIGEN|COMMUNIGATE|MERAK|IMAIL|EXCHANGE|LOTUS NOTES|GROUPWISE|EUDORA|PEGASUS|CLAWS|SYLPHEED|MUTT|ALPINE|PINE|ELM|MAIL",
+          "value": "OUTLOOK|THUNDERBIRD|MAILBIRD|EMCLIENT|POSTBOX|MAILSPRING|MAILMATE|AIRMAIL|SPARK|CANARY|POLYMAIL|NEWTON|SPIKE|SUPERHUMAN|(?<![A-Za-z0-9])HEY|PROTONMAIL|TUTANOTA|MAILBOX|INBOX|GMAIL|YAHOO MAIL|AOL MAIL|ZOHO MAIL|FASTMAIL|RUNBOX|MAILBOX\\.ORG|POSTEO|STARTMAIL|HUSHMAIL|COUNTERMAIL|MAILFENCE|KOLAB|ROUNDCUBE|SQUIRRELMAIL|HORDE|ZIMBRA|KERIO|MDAEMON|SMARTERMAIL|ICEWARP|AXIGEN|COMMUNIGATE|MERAK|IMAIL|EXCHANGE|LOTUS NOTES|GROUPWISE|EUDORA|PEGASUS|CLAWS|SYLPHEED|MUTT|ALPINE|PINE|(?<![A-Za-z0-9])ELM|MAIL",
           "operator": "regex"
         }
       ],
@@ -324,7 +316,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "TEAMS|SLACK|DISCORD|SKYPE|ZOOM|TELEGRAM|WHATSAPP|SIGNAL",
+          "value": "(?<![A-Za-z0-9])TEAMS|SLACK|DISCORD|SKYPE|ZOOM|TELEGRAM|WHATSAPP|SIGNAL",
           "operator": "regex"
         }
       ],
@@ -343,7 +335,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "ACRORD32|ACROBAT|READER|FOXIT|FOXITREADER|PDF|SUMATRA|SUMATRAPDF|NITRO|NUANCE|PDFXCHANGE|TRACKER|XODO|SLIM|JAVELIN|COOL|EXPERT|MASTER|ARCHITECT|ANNOTATOR|EDITOR|CREATOR|CONVERTER|MERGER|SPLITTER|COMPRESSOR|OKULAR|EVINCE|XPDF|MUPDF|ZATHURA|QPDFVIEW|APVLV|EPDFVIEW|PDFMOD|PDFTK|GHOSTSCRIPT|GHOSTVIEW|GSVIEW|PREVIEW|SKIM|PDFPEN|PDFELEMENT|SEJDA|SMALLPDF|ILOVEPDF|SODA",
+          "value": "ACRORD32|ACROBAT|READER|FOXIT|FOXITREADER|(?<![A-Za-z0-9])PDF|SUMATRA|SUMATRAPDF|NITRO|NUANCE|PDFXCHANGE|TRACKER|XODO|SLIM|JAVELIN|COOL|EXPERT|MASTER|ARCHITECT|ANNOTATOR|EDITOR|CREATOR|CONVERTER|MERGER|SPLITTER|COMPRESSOR|OKULAR|EVINCE|XPDF|MUPDF|ZATHURA|QPDFVIEW|APVLV|EPDFVIEW|PDFMOD|PDFTK|GHOSTSCRIPT|GHOSTVIEW|GSVIEW|PREVIEW|SKIM|PDFPEN|PDFELEMENT|SEJDA|SMALLPDF|ILOVEPDF|SODA",
           "operator": "regex"
         }
       ],
@@ -362,7 +354,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "PHOTOSHOP|GIMP|PAINT\\.NET|KRITA|INKSCAPE|ILLUSTRATOR|COREL|CORELDRAW|AFFINITY|PHOTO|DESIGNER|PIXELMATOR|ACORN|SKETCH|FIGMA|CANVA|GRAVIT|VECTR|BOXY|LUNACY|PHOTOPEA|PIXLR|BEFUNKY|FOTOR|RIBBET|IPICCY|SUMOPAINT|PHOTOSCAPE|PHOTOFILTRE|ARTWEAVER|PINTA|KOLOURPAINT|MTPAINT|TUXPAINT|XPAINT|GPAINT|SEASHORE|CHOCOFLOP|DRAWBERRY|LINEFORM|PATTERNODES|IMAENGINE|DARKROOM|RAWTHERAPEE|DARKTABLE|LIGHTROOM|CAPTURE ONE|LUMINAR|ON1|DXO|EXPOSURE|AFTERSHOT|SILKYPIX|PHOTOLAB|PHOTODIRECTOR|PAINTSHOP|PHOTOIMPACT|PHOTOPLUS|PHOTOLINE",
+          "value": "PHOTOSHOP|GIMP|PAINT\\.NET|KRITA|INKSCAPE|ILLUSTRATOR|COREL|CORELDRAW|AFFINITY|PHOTO|DESIGNER|PIXELMATOR|ACORN|SKETCH|FIGMA|CANVA|GRAVIT|VECTR|BOXY|LUNACY|PHOTOPEA|PIXLR|BEFUNKY|FOTOR|RIBBET|IPICCY|SUMOPAINT|PHOTOSCAPE|PHOTOFILTRE|ARTWEAVER|PINTA|KOLOURPAINT|MTPAINT|TUXPAINT|XPAINT|GPAINT|SEASHORE|CHOCOFLOP|DRAWBERRY|LINEFORM|PATTERNODES|IMAENGINE|DARKROOM|RAWTHERAPEE|DARKTABLE|LIGHTROOM|CAPTURE ONE|LUMINAR|(?<![A-Za-z0-9])ON1|(?<![A-Za-z0-9])DXO|EXPOSURE|AFTERSHOT|SILKYPIX|PHOTOLAB|PHOTODIRECTOR|PAINTSHOP|PHOTOIMPACT|PHOTOPLUS|PHOTOLINE",
           "operator": "regex"
         }
       ],
@@ -381,7 +373,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "PREMIERE|AFTER EFFECTS|VEGAS|FINAL CUT|DAVINCI|RESOLVE|AVID|MEDIA COMPOSER|EDIUS|LIGHTWORKS|HITFILM|KDENLIVE|OPENSHOT|SHOTCUT|BLENDER|NATRON|OLIVE|FLOWBLADE|PITIVI|CINELERRA|AVIDEMUX|HANDBRAKE|FFMPEG|VIRTUALDUB|MOVAVI|FILMORA|CAMTASIA|SCREENFLOW|OBS|STREAMLABS|XSPLIT|WIRECAST|VMIX|MIRILLIS|BANDICAM|FRAPS|DXTORY|PLAYCLAW|ACTION|SHADOWPLAY|RELIVE|GAMEBAR|CAPTURA|SHAREX|GREENSHOT|LIGHTSHOT|SNAGIT|JING|FASTSTONE|PICPICK|IRFANVIEW",
+          "value": "PREMIERE|AFTER EFFECTS|VEGAS|FINAL CUT|DAVINCI|RESOLVE|AVID|MEDIA COMPOSER|EDIUS|LIGHTWORKS|HITFILM|KDENLIVE|OPENSHOT|SHOTCUT|BLENDER|NATRON|OLIVE|FLOWBLADE|PITIVI|CINELERRA|AVIDEMUX|HANDBRAKE|FFMPEG|VIRTUALDUB|MOVAVI|FILMORA|CAMTASIA|SCREENFLOW|(?<![A-Za-z0-9])OBS|STREAMLABS|XSPLIT|WIRECAST|VMIX|MIRILLIS|BANDICAM|FRAPS|DXTORY|PLAYCLAW|ACTION|SHADOWPLAY|RELIVE|CAPTURA|SHAREX|GREENSHOT|LIGHTSHOT|SNAGIT|JING|FASTSTONE|PICPICK|IRFANVIEW",
           "operator": "regex"
         }
       ],
@@ -427,9 +419,7 @@
       "scope": "global",
       "category": "virtualization",
       "severity": "medium",
-      "confidence": 0.85,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.85
     },
     {
       "rule_id": "identity-backup-software",
@@ -459,7 +449,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "SNAGIT|CAMTASIA|OBS|STREAMLABS|XSPLIT|SHAREX|GREENSHOT",
+          "value": "SNAGIT|CAMTASIA|(?<![A-Za-z0-9])OBS|STREAMLABS|XSPLIT|SHAREX|GREENSHOT|GAMEBAR",
           "operator": "regex"
         }
       ],
@@ -478,7 +468,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "VERACRYPT|TRUECRYPT|BITLOCKER|7ZIP|WINRAR|GPGTOOLS|GPG",
+          "value": "VERACRYPT|TRUECRYPT|BITLOCKER|7ZIP|WINRAR|GPGTOOLS|(?<![A-Za-z0-9])GPG",
           "operator": "regex"
         }
       ],
@@ -486,9 +476,7 @@
       "scope": "global",
       "category": "data_encryption",
       "severity": "medium",
-      "confidence": 0.85,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.85
     },
     {
       "rule_id": "identity-forensic-tool",
@@ -499,7 +487,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "FTK|ENCASE|AUTOPSY|X-WAYS|AXIOM|CELLEBRITE|WIRESHARK|VOLATILITY",
+          "value": "(?<![A-Za-z0-9])FTK|ENCASE|AUTOPSY|X-WAYS|AXIOM|CELLEBRITE|WIRESHARK|VOLATILITY",
           "operator": "regex"
         }
       ],
@@ -507,9 +495,7 @@
       "scope": "global",
       "category": "digital_forensics",
       "severity": "medium",
-      "confidence": 0.9,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.9
     },
     {
       "rule_id": "identity-scripting-language",
@@ -520,7 +506,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "PYTHON|PYTHONW|RUBY|PERL|PHP|NODE|NODEJS|POWERSHELL|PWSH|CMD",
+          "value": "PYTHON|PYTHONW|RUBY|PERL|(?<![A-Za-z0-9])PHP|NODE|NODEJS|POWERSHELL|PWSH|(?<![A-Za-z0-9])CMD",
           "operator": "regex"
         }
       ],
@@ -528,9 +514,7 @@
       "scope": "global",
       "category": "script_execution",
       "severity": "info",
-      "confidence": 0.8,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.8
     },
     {
       "rule_id": "identity-web-server",
@@ -541,7 +525,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "APACHE|HTTPD|NGINX|IIS|W3WP|LIGHTTPD|CADDY|TRAEFIK|HAPROXY|VARNISH|SQUID|TOMCAT|JETTY|JBOSS|WILDFLY|GLASSFISH|PAYARA|WEBLOGIC|WEBSPHERE|RESIN|UNDERTOW|NETTY|VERT\\.X|AKKA|PLAY|SPRAY|FINATRA|RATPACK|SPARK|JAVALIN|MICRONAUT|QUARKUS|HELIDON|GRAILS|SPRING BOOT|DROPWIZARD|LAGOM|HTTP4S|SCALATRA|LIFT|UNFILTERED|COLOSSUS|FINAGLE|TWITTER SERVER",
+          "value": "APACHE|HTTPD|NGINX|(?<![A-Za-z0-9])IIS|W3WP|LIGHTTPD|CADDY|TRAEFIK|HAPROXY|VARNISH|SQUID|TOMCAT|JETTY|JBOSS|WILDFLY|GLASSFISH|PAYARA|WEBLOGIC|WEBSPHERE|RESIN|UNDERTOW|NETTY|VERT\\.X|AKKA|(?<![A-Za-z0-9])PLAY|SPRAY|FINATRA|RATPACK|SPARK|JAVALIN|MICRONAUT|QUARKUS|HELIDON|GRAILS|SPRING BOOT|DROPWIZARD|LAGOM|HTTP4S|SCALATRA|LIFT|UNFILTERED|COLOSSUS|FINAGLE|TWITTER SERVER",
           "operator": "regex"
         }
       ],
@@ -560,7 +544,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "OPENVPN|WIREGUARD|NORDVPN|EXPRESSVPN|SURFSHARK|CYBERGHOST|PIA|PRIVATE INTERNET|PROTONVPN|MULLVAD|IVPN|WINDSCRIBE|TUNNELBEAR|HOTSPOT SHIELD|HIDE\\.ME|PERFECT PRIVACY|AIRVPN|AZIREVPN|BOLEHVPN|CRYPTOSTORM|FREEDOME|GOOSE|HIDE MY ASS|IPVANISH|KEEPSOLID|LIBERTAS|OVPN|PRIVATEVPN|PUREVPN|SAFERVPN|STRONGVPN|TORGUARD|TRUST\\.ZONE|VYPRVPN|ZENMATE|CISCO ANYCONNECT|CHECKPOINT|FORTICLIENT|PALO ALTO|GLOBALPROTECT|PULSE SECURE|JUNIPER|SONICWALL|NETEXTENDER|SOPHOS|CONNECT|PRITUNL|SOFTETHER|HAMACHI|ZEROTIER|TAILSCALE|NEBULA|TINC|N2N",
+          "value": "OPENVPN|WIREGUARD|NORDVPN|EXPRESSVPN|SURFSHARK|CYBERGHOST|(?<![A-Za-z0-9])PIA|PRIVATE INTERNET|PROTONVPN|MULLVAD|IVPN|WINDSCRIBE|TUNNELBEAR|HOTSPOT SHIELD|HIDE\\.ME|PERFECT PRIVACY|AIRVPN|AZIREVPN|BOLEHVPN|CRYPTOSTORM|FREEDOME|GOOSE|HIDE MY ASS|IPVANISH|KEEPSOLID|LIBERTAS|OVPN|PRIVATEVPN|PUREVPN|SAFERVPN|STRONGVPN|TORGUARD|TRUST\\.ZONE|VYPRVPN|ZENMATE|CISCO ANYCONNECT|CHECKPOINT|FORTICLIENT|PALO ALTO|GLOBALPROTECT|PULSE SECURE|JUNIPER|SONICWALL|NETEXTENDER|SOPHOS|CONNECT|PRITUNL|SOFTETHER|HAMACHI|ZEROTIER|TAILSCALE|NEBULA|TINC|(?<![A-Za-z0-9])N2N",
           "operator": "regex"
         }
       ],
@@ -568,9 +552,7 @@
       "scope": "global",
       "category": "vpn_connection",
       "severity": "medium",
-      "confidence": 0.85,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.85
     },
     {
       "rule_id": "identity-torrent-client",
@@ -581,7 +563,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "UTORRENT|BITTORRENT|QBITTORRENT|DELUGE|TRANSMISSION|VUZE|AZUREUS|TIXATI|BITCOMET|FROSTWIRE|TRIBLER|HALITE|RTORRENT|KTORRENT|ARIA2|LIBTORRENT|WEBTORRENT|BIGLYBT|PICOTORRENT|FRAGMENTS|LIBRETORRENT|FLUD|TTORRENT|ATORRENT|BITPORT|ZBIGZ|SEEDR|BITLET|TORRENTFREAK|TORRENTZ|RARBG|1337X|THEPIRATEBAY|KICKASS|LIMETORRENTS|TORLOCK|TORRENTDOWNLOADS|EZTV|YIFY|YTS|NYAA|RUTRACKER",
+          "value": "UTORRENT|BITTORRENT|QBITTORRENT|DELUGE|TRANSMISSION|VUZE|AZUREUS|TIXATI|BITCOMET|FROSTWIRE|TRIBLER|HALITE|RTORRENT|KTORRENT|ARIA2|LIBTORRENT|WEBTORRENT|BIGLYBT|PICOTORRENT|FRAGMENTS|LIBRETORRENT|FLUD|TTORRENT|ATORRENT|BITPORT|ZBIGZ|SEEDR|BITLET|TORRENTFREAK|TORRENTZ|RARBG|1337X|THEPIRATEBAY|KICKASS|LIMETORRENTS|TORLOCK|TORRENTDOWNLOADS|EZTV|YIFY|(?<![A-Za-z0-9])YTS|NYAA|RUTRACKER",
           "operator": "regex"
         }
       ],
@@ -589,9 +571,7 @@
       "scope": "global",
       "category": "p2p_file_sharing",
       "severity": "medium",
-      "confidence": 0.85,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.85
     },
     {
       "rule_id": "identity-cloud-storage",
@@ -602,7 +582,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "DROPBOX|ONEDRIVE|GOOGLEDRIVE|ICLOUD|BOX|MEGA|SYNC",
+          "value": "DROPBOX|ONEDRIVE|GOOGLEDRIVE|ICLOUD|(?<![A-Za-z0-9])BOX|MEGA|SYNC",
           "operator": "regex"
         }
       ],
@@ -621,7 +601,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "IDM|INTERNET DOWNLOAD|FREE DOWNLOAD|JDOWNLOADER|ARIA2",
+          "value": "(?<![A-Za-z0-9])IDM|INTERNET DOWNLOAD|FREE DOWNLOAD|JDOWNLOADER|ARIA2",
           "operator": "regex"
         }
       ],
@@ -629,9 +609,7 @@
       "scope": "global",
       "category": "download_acceleration",
       "severity": "info",
-      "confidence": 0.8,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "confidence": 0.8
     },
     {
       "rule_id": "identity-system-cleaner",
@@ -723,7 +701,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "registry",
+          "feather_id": "autostart",
           "field_name": "key_path",
           "value": ".*Run.*|.*Startup.*|.*Services.*",
           "operator": "regex"
@@ -733,7 +711,15 @@
       "scope": "global",
       "category": "suspicious_execution",
       "severity": "high",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "technique_id": [
+        "T1059",
+        "T1547.001"
+      ],
+      "tactic": [
+        "execution",
+        "persistence"
+      ]
     },
     {
       "rule_id": "behavior-lolbin-abuse",
@@ -748,7 +734,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688|4689",
           "operator": "regex"
@@ -758,24 +744,33 @@
       "scope": "global",
       "category": "lolbin_abuse",
       "severity": "high",
-      "confidence": 0.9
+      "confidence": 0.9,
+      "technique_id": [
+        "T1218",
+        "T1218.011",
+        "T1059"
+      ],
+      "tactic": [
+        "defense-evasion",
+        "execution"
+      ]
     },
     {
       "rule_id": "behavior-data-exfiltration",
       "name": "Data Exfiltration Tool",
       "semantic_value": "Potential Data Exfiltration Activity",
-      "description": "Tools commonly used for data exfiltration",
+      "description": "Transfer tool executed and observed moving data over the network in SRUM",
       "conditions": [
         {
           "feather_id": "prefetch",
           "field_name": "executable_name",
-          "value": "CURL|WGET|POWERSHELL|BITSADMIN|CERTUTIL|FTP|RCLONE",
+          "value": "CURL|WGET|POWERSHELL|BITSADMIN|CERTUTIL|(?<![A-Za-z0-9])FTP|RCLONE",
           "operator": "regex"
         },
         {
-          "feather_id": "browser_history",
-          "field_name": "url",
-          "value": ".*",
+          "feather_id": "srum_network",
+          "field_name": "app_name",
+          "value": "CURL|WGET|POWERSHELL|BITSADMIN|CERTUTIL|(?<![A-Za-z0-9])FTP|RCLONE",
           "operator": "regex"
         }
       ],
@@ -783,7 +778,15 @@
       "scope": "global",
       "category": "data_exfiltration",
       "severity": "critical",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "technique_id": [
+        "T1048",
+        "T1105"
+      ],
+      "tactic": [
+        "exfiltration",
+        "command-and-control"
+      ]
     },
     {
       "rule_id": "behavior-credential-dumping",
@@ -803,8 +806,12 @@
       "category": "credential_theft",
       "severity": "critical",
       "confidence": 0.95,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "technique_id": [
+        "T1003"
+      ],
+      "tactic": [
+        "credential-access"
+      ]
     },
     {
       "rule_id": "behavior-reconnaissance",
@@ -819,7 +826,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688|5156",
           "operator": "regex"
@@ -829,7 +836,14 @@
       "scope": "global",
       "category": "reconnaissance",
       "severity": "medium",
-      "confidence": 0.8
+      "confidence": 0.8,
+      "technique_id": [
+        "T1046",
+        "T1087"
+      ],
+      "tactic": [
+        "discovery"
+      ]
     },
     {
       "rule_id": "behavior-lateral-movement",
@@ -844,7 +858,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4624|4648|4672",
           "operator": "regex"
@@ -854,7 +868,15 @@
       "scope": "global",
       "category": "lateral_movement",
       "severity": "critical",
-      "confidence": 0.9
+      "confidence": 0.9,
+      "technique_id": [
+        "T1021",
+        "T1021.002",
+        "T1570"
+      ],
+      "tactic": [
+        "lateral-movement"
+      ]
     },
     {
       "rule_id": "behavior-persistence",
@@ -869,7 +891,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "registry",
+          "feather_id": "autostart",
           "field_name": "key_path",
           "value": ".*Run.*|.*Startup.*|.*Services.*|.*Winlogon.*",
           "operator": "regex"
@@ -879,7 +901,15 @@
       "scope": "global",
       "category": "persistence",
       "severity": "high",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "technique_id": [
+        "T1547.001",
+        "T1053.005",
+        "T1543"
+      ],
+      "tactic": [
+        "persistence"
+      ]
     },
     {
       "rule_id": "behavior-defense-evasion",
@@ -894,7 +924,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "1102|4688|4719",
           "operator": "regex"
@@ -904,7 +934,15 @@
       "scope": "global",
       "category": "defense_evasion",
       "severity": "high",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "technique_id": [
+        "T1070.001",
+        "T1562.002",
+        "T1562.001"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "behavior-privilege-escalation",
@@ -919,7 +957,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4672|4673|4674",
           "operator": "regex"
@@ -929,7 +967,14 @@
       "scope": "global",
       "category": "privilege_escalation",
       "severity": "critical",
-      "confidence": 0.9
+      "confidence": 0.9,
+      "technique_id": [
+        "T1548.002",
+        "T1078"
+      ],
+      "tactic": [
+        "privilege-escalation"
+      ]
     },
     {
       "rule_id": "behavior-command-control",
@@ -949,8 +994,13 @@
       "category": "command_control",
       "severity": "critical",
       "confidence": 0.95,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "technique_id": [
+        "T1071",
+        "T1105"
+      ],
+      "tactic": [
+        "command-and-control"
+      ]
     },
     {
       "rule_id": "behavior-ransomware-indicators",
@@ -965,7 +1015,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688|4663",
           "operator": "regex"
@@ -975,7 +1025,15 @@
       "scope": "global",
       "category": "ransomware",
       "severity": "critical",
-      "confidence": 0.9
+      "confidence": 0.9,
+      "technique_id": [
+        "T1490",
+        "T1486",
+        "T1485"
+      ],
+      "tactic": [
+        "impact"
+      ]
     },
     {
       "rule_id": "behavior-suspicious-network",
@@ -990,7 +1048,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "5156|5157|5158",
           "operator": "regex"
@@ -1000,7 +1058,14 @@
       "scope": "global",
       "category": "suspicious_network",
       "severity": "high",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "technique_id": [
+        "T1071",
+        "T1572"
+      ],
+      "tactic": [
+        "command-and-control"
+      ]
     },
     {
       "rule_id": "behavior-password-cracking",
@@ -1020,8 +1085,13 @@
       "category": "password_cracking",
       "severity": "critical",
       "confidence": 0.9,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "technique_id": [
+        "T1110",
+        "T1110.002"
+      ],
+      "tactic": [
+        "credential-access"
+      ]
     },
     {
       "rule_id": "behavior-suspicious-file-ops",
@@ -1036,7 +1106,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4663|4656",
           "operator": "regex"
@@ -1047,7 +1117,14 @@
       "category": "suspicious_file_ops",
       "severity": "medium",
       "confidence": 0.8,
-      "disabled": true
+      "disabled": true,
+      "technique_id": [
+        "T1222",
+        "T1070.004"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "evasion-browser-impersonation",
@@ -1062,7 +1139,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688",
           "operator": "regex"
@@ -1072,7 +1149,13 @@
       "scope": "global",
       "category": "evasion",
       "severity": "high",
-      "confidence": 0.7
+      "confidence": 0.7,
+      "technique_id": [
+        "T1036.005"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "evasion-office-impersonation",
@@ -1087,7 +1170,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688",
           "operator": "regex"
@@ -1097,7 +1180,13 @@
       "scope": "global",
       "category": "evasion",
       "severity": "high",
-      "confidence": 0.7
+      "confidence": 0.7,
+      "technique_id": [
+        "T1036.005"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "evasion-system-impersonation",
@@ -1112,7 +1201,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688",
           "operator": "regex"
@@ -1122,7 +1211,13 @@
       "scope": "global",
       "category": "evasion",
       "severity": "critical",
-      "confidence": 0.8
+      "confidence": 0.8,
+      "technique_id": [
+        "T1036.005"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "evasion-security-tool-impersonation",
@@ -1137,7 +1232,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688",
           "operator": "regex"
@@ -1147,7 +1242,14 @@
       "scope": "global",
       "category": "evasion",
       "severity": "high",
-      "confidence": 0.75
+      "confidence": 0.75,
+      "technique_id": [
+        "T1036.005",
+        "T1562.001"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "evasion-suspicious-suffix",
@@ -1167,8 +1269,12 @@
       "category": "evasion",
       "severity": "critical",
       "confidence": 0.9,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "technique_id": [
+        "T1036"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "evasion-typosquatting",
@@ -1183,7 +1289,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688",
           "operator": "regex"
@@ -1193,7 +1299,13 @@
       "scope": "global",
       "category": "evasion",
       "severity": "high",
-      "confidence": 0.85
+      "confidence": 0.85,
+      "technique_id": [
+        "T1036.005"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "evasion-double-extension",
@@ -1213,8 +1325,12 @@
       "category": "evasion",
       "severity": "critical",
       "confidence": 0.95,
-      "_requires_multi_indicator": true,
-      "_min_indicators": 2
+      "technique_id": [
+        "T1036.007"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     },
     {
       "rule_id": "evasion-unicode-homoglyph",
@@ -1229,7 +1345,7 @@
           "operator": "regex"
         },
         {
-          "feather_id": "eventlogs",
+          "feather_id": "security_logs",
           "field_name": "EventID",
           "value": "4688",
           "operator": "regex"
@@ -1239,7 +1355,13 @@
       "scope": "global",
       "category": "evasion",
       "severity": "high",
-      "confidence": 0.8
+      "confidence": 0.8,
+      "technique_id": [
+        "T1036.005"
+      ],
+      "tactic": [
+        "defense-evasion"
+      ]
     }
   ],
   "_modified": "2026-02-04T05:04:21.781182",

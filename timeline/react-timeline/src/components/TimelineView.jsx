@@ -304,7 +304,15 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         { items: (data.amcache || data.amcache_applications)?.application_files, type: 'amcache' },
         { items: (data.amcache || data.amcache_applications)?.applications, type: 'amcache' },
         { items: (data.amcache || data.amcache_applications)?.drivers, type: 'amcache' },
+        { items: (data.amcache || data.amcache_applications)?.devices, type: 'amcache' },
+        { items: (data.amcache || data.amcache_applications)?.driver_packages, type: 'amcache' },
         { items: data.imported, type: 'imported' },
+        // Windows Event Log. This list is hand-written - the registry spreads
+        // itself out below, everything else is named - so a payload key
+        // missing from it is fetched, counted in the pill, and drawn nowhere.
+        // That is exactly what happened here: 553 rows on the day this was
+        // written, all of them absent from the lane.
+        { items: data.event_logs, type: 'event_logs' },
         ...Object.keys(registry).map(table => ({ items: registry[table], type: table.toLowerCase() }))
       ];
     };
@@ -516,7 +524,15 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       };
 
       // 5.1 Unified Data Discovery Engine
-      const artifactSources = getArtifactSources(data);
+      //
+      // Registry KEY write times are an upper bound on every value under
+      // the key, and there are ~2,200 of them on an ordinary machine -
+      // most written once at install. They are drawn only when the
+      // analyst turns them on, and hollow when they are.
+      const artifactSources = getArtifactSources(data).filter(
+        src => (src.type !== 'key_times' || activeArtifacts.key_times)
+            && (src.type !== 'event_logs' || activeArtifacts.event_logs)
+      );
       console.log('[DEBUG] Lane 5 Sources:', artifactSources.map(s => `${s.type}(${s.items?.length || 0})`));
       
       const processedSignatures = new Set();
@@ -1271,7 +1287,15 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                         'lastsavemru': { color: '#10b981', shape: 'square' },
                         'amcache': { color: '#8b5cf6', shape: 'square' },
                         'shimcache': { color: '#ec4899', shape: 'circle' },
-                        'recyclebin': { color: '#ef4444', shape: 'cross' }
+                        'recyclebin': { color: '#ef4444', shape: 'cross' },
+                        // Artifacts the parsers collect that the
+                        // timeline never plotted until now.
+                        'scheduled_tasks': { color: '#f97316', shape: 'triangle_down' },
+                        'registry_changes': { color: '#a855f7', shape: 'diamond' },
+                        'usb_storage': { color: '#14b8a6', shape: 'square' },
+                        'key_times': { color: '#64748b', shape: 'circle' },
+                        'event_logs': { color: '#0ea5e9', shape: 'diamond' },
+                        'network_profiles': { color: '#3b82f6', shape: 'triangle' }
                       };
 
                       const lookupType = (p.subType || p.tsType || '').toLowerCase();
@@ -1280,7 +1304,13 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                       const baseColor = p.op === 'create' ? 'var(--dot-create)' : p.op === 'delete' ? 'var(--dot-delete)' : (fm.color || (lane.key === 'artifacts' ? 'var(--accent-cyan)' : 'var(--accent-blue)'));
                       const textColor = p.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? 'var(--accent-cyan)' : baseColor);
 
+                      // A KEY write time is an upper bound on every value
+                      // under that key, so it is drawn hollow: the shape
+                      // carries the qualification into a screenshot and an
+                      // exported report, where a tooltip cannot follow.
+                      const bounded = !!(p.bounded_time || p.boundedTime);
                       const r = p.isSearchMatch ? 5 : (isLinked ? 3.5 : (p.prx || 2.2));
+                      const dotFill = bounded ? 'none' : textColor;
                       const dotStroke = isSel ? '#FFF' : (p.isSearchMatch ? 'var(--accent-orange)' : 'none');
                       const dotFilter = p.isSearchMatch ? 'drop-shadow(0 0 8px var(--accent-orange))' : (isLinked ? 'drop-shadow(0 0 5px var(--accent-cyan))' : 'none');
 
@@ -1299,24 +1329,24 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                       const shapeType = fm.shape || (p.subType === 'run_time' ? 'diamond' : 'circle');
 
                       if (shapeType === 'diamond') {
-                        dotShape = <polygon points={`${p.x},${p.y - r - 1} ${p.x + r + 1},${p.y} ${p.x},${p.y + r + 1} ${p.x - r - 1},${p.y}`} fill={textColor} stroke={dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
+                        dotShape = <polygon points={`${p.x},${p.y - r - 1} ${p.x + r + 1},${p.y} ${p.x},${p.y + r + 1} ${p.x - r - 1},${p.y}`} fill={dotFill} stroke={bounded ? textColor : dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
                       } else if (shapeType === 'triangle') {
-                        dotShape = <polygon points={`${p.x},${p.y - r - 1} ${p.x + r + 1},${p.y + r} ${p.x - r - 1},${p.y + r}`} fill={textColor} stroke={dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
+                        dotShape = <polygon points={`${p.x},${p.y - r - 1} ${p.x + r + 1},${p.y + r} ${p.x - r - 1},${p.y + r}`} fill={dotFill} stroke={bounded ? textColor : dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
                       } else if (shapeType === 'square') {
-                        dotShape = <rect x={p.x - r} y={p.y - r} width={r * 2} height={r * 2} fill={textColor} stroke={dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
+                        dotShape = <rect x={p.x - r} y={p.y - r} width={r * 2} height={r * 2} fill={dotFill} stroke={bounded ? textColor : dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
                       } else if (shapeType === 'triangle_down') {
-                        dotShape = <polygon points={`${p.x - r - 1},${p.y - r} ${p.x + r + 1},${p.y - r} ${p.x},${p.y + r + 1}`} fill={textColor} stroke={dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
+                        dotShape = <polygon points={`${p.x - r - 1},${p.y - r} ${p.x + r + 1},${p.y - r} ${p.x},${p.y + r + 1}`} fill={dotFill} stroke={bounded ? textColor : dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
                       } else if (shapeType === 'cross') {
                         const st = isSel ? '#FFF' : textColor;
                         dotShape = (
                           <g style={{ filter: dotFilter }}>
-                            <circle cx={p.x} cy={p.y} r={r + 1} fill="transparent" stroke={st} strokeWidth="1" />
+                            <circle cx={p.x} cy={p.y} r={r + 1} fill="none" stroke={st} strokeWidth="1" />
                             <line x1={p.x - r + 1} y1={p.y - r + 1} x2={p.x + r - 1} y2={p.y + r - 1} stroke={st} strokeWidth="1.5" />
                             <line x1={p.x + r - 1} y1={p.y - r + 1} x2={p.x - r + 1} y2={p.y + r - 1} stroke={st} strokeWidth="1.5" />
                           </g>
                         );
                       } else {
-                        dotShape = <circle cx={p.x} cy={p.y} r={r} fill={textColor} stroke={dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
+                        dotShape = <circle cx={p.x} cy={p.y} r={r} fill={dotFill} stroke={bounded ? textColor : dotStroke} strokeWidth="1.5" style={{ filter: dotFilter }} />;
                       }
 
                       return (
@@ -1393,6 +1423,10 @@ function Tooltip({ data }) {
   const type = ev.type || ev.artifact_type || 'Forensic Artifact';
   const ts = formatTime(ev.timestamp || ev.start);
   const subTypeLabel = ev.subType ? SUBTYPE_LABELS[ev.subType] : null;
+  // A registry KEY write time. `<=` leads, because the number on its
+  // own reads as the moment this happened and it is only a ceiling:
+  // writing ANY value under a key updates the whole key.
+  const bounded = !!(ev.bounded_time || ev.boundedTime);
 
   const logonTypeDesc = ev.logon_type ? (LOGON_TYPES[ev.logon_type] || `Type ${ev.logon_type}`) : null;
 
@@ -1401,8 +1435,16 @@ function Tooltip({ data }) {
       <div className="tooltip__title">{name}</div>
       <div className="tooltip__row">
         <span className="tooltip__label">Time:</span>
-        <span className="tooltip__value">{ts}</span>
+        <span className="tooltip__value">{bounded ? `<= ${ts}` : ts}</span>
       </div>
+      {bounded && (
+        <div className="tooltip__row">
+          <span className="tooltip__value" style={{ opacity: 0.8 }}>
+            Registry key write time - an upper bound on every value
+            under that key, not when this one changed.
+          </span>
+        </div>
+      )}
       <div className="tooltip__row">
         <span className="tooltip__label">Type:</span>
         <span className="tooltip__value">{type.replace('_', ' ').toUpperCase()}</span>

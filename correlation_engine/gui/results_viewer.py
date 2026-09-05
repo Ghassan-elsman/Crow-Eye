@@ -13,7 +13,15 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLabel, QGroupBox, QFormLayout,
     QPushButton, QLineEdit, QSlider, QCheckBox, QComboBox,
     QSplitter, QTextEdit, QMessageBox, QFileDialog, QDateTimeEdit,
-    QFrame, QGridLayout, QProgressDialog, QToolTip, QScrollArea
+    QFrame, QGridLayout, QProgressDialog, QToolTip, QScrollArea,
+    # Used by load_last_results to keep the window responsive while it builds
+    # the Summary tab. Three other call sites import it locally and one did
+    # not, so "Load Last Results" died with
+    # `NameError: name 'QApplication' is not defined` after aggregating the
+    # statistics and before showing any of them - the Results tab kept its
+    # "will appear here after wing execution completes" placeholder and the
+    # analyst got an error dialog.
+    QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDateTime, QRect, QPoint
 from PyQt5.QtGui import QColor, QPainter, QBrush, QPen, QFont, QFontMetrics, QPalette
@@ -48,6 +56,27 @@ def format_time_duration(seconds: float) -> str:
                 return f"{hours}h {minutes}m"
     except Exception as e:
         return f"{seconds:.1f}s"
+
+
+def _json_list(value) -> list:
+    """A JSON list column read back as a list, whatever is actually in it.
+
+    `executions.errors` / `.warnings` hold a JSON array, but older rows hold a
+    plain string and empty rows hold NULL. Returning [] for anything
+    unreadable keeps a malformed column from emptying a whole breakdown.
+    """
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    try:
+        import json as _json
+        parsed = _json.loads(value)
+    except Exception:
+        return [str(value)]
+    if isinstance(parsed, list):
+        return parsed
+    return [parsed] if parsed else []
 
 
 class PyQt5BarChart(QWidget):
@@ -2379,6 +2408,114 @@ class DynamicResultsTabWidget(QWidget):
             traceback.print_exc()
             return None
 
+    def create_run_result_tabs(self, wing_summaries: list,
+                               show_progress: bool = False) -> Optional[int]:
+        """Build every tab for a finished run, in one pass.
+
+        The live run used to call `create_wing_result_tab` from the
+        `wing_completed` signal, i.e. after EVERY wing. For identity wings that
+        goes through `create_or_update_identity_tab`, which rebuilds the unified
+        viewer by re-reading and re-parsing every match of every wing finished
+        so far — on the UI thread, while the next wing is already running. Eleven
+        wings meant eleven rebuilds over a growing result set, which is the lag
+        the analyst sees between wings.
+
+        Here the whole run is known, so the identity viewer is built ONCE over
+        all of its executions and each time-window wing gets its own tab. The
+        per-wing methods are untouched: the load-from-database path still uses
+        them.
+
+        `show_progress` puts up the same "Loading identity data…" dialog the
+        load-from-database path uses. The live run asks for it: building a
+        run's worth of matches takes time, and without it the window sits
+        silent while it happens.
+
+        Returns the index of the tab to show, or None.
+        """
+        try:
+            tab_widget = self.enhanced_tab_widget.tab_widget
+
+            identity_wings = [w for w in wing_summaries
+                              if w.get('engine_type') == 'identity_based']
+            other_wings = [w for w in wing_summaries
+                           if w.get('engine_type') != 'identity_based']
+
+            show_index = None
+
+            for wing_summary in other_wings:
+                index = self.create_wing_result_tab(wing_summary,
+                                                    show_progress=show_progress)
+                if index is not None:
+                    show_index = index
+
+            if identity_wings:
+                # Seed the run accumulators from the whole run, then build the
+                # unified viewer a single time.
+                self._identity_run_exec_ids = []
+                self._identity_run_wing_names = []
+                database_path = None
+                for wing_summary in identity_wings:
+                    execution_id = wing_summary.get('execution_id')
+                    wing_name = wing_summary.get('wing_name', 'Unknown Wing')
+                    if execution_id is not None and execution_id not in self._identity_run_exec_ids:
+                        self._identity_run_exec_ids.append(execution_id)
+                    if wing_name not in self._identity_run_wing_names:
+                        self._identity_run_wing_names.append(wing_name)
+                    database_path = wing_summary.get('database_path') or database_path
+
+                if self._identity_tab_container is not None and \
+                        tab_widget.indexOf(self._identity_tab_container) == -1:
+                    self._identity_tab_container = None
+                    self._identity_tab_viewer = None
+
+                if not self._identity_run_exec_ids or not database_path:
+                    print("[DynamicResultsTabWidget] [WARN] Identity wings finished "
+                          "with no execution id or database path; no identity tab built")
+                else:
+                    n_wings = len(self._identity_run_wing_names)
+                    tab_title = f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})"
+                    viewer = self._create_identity_viewer(
+                        database_path,
+                        list(self._identity_run_exec_ids),
+                        show_progress=show_progress,
+                        wing_count=n_wings
+                    )
+
+                    existing_index = -1
+                    if self._identity_tab_container is not None:
+                        existing_index = tab_widget.indexOf(self._identity_tab_container)
+
+                    if existing_index == -1:
+                        container = QWidget()
+                        layout = QVBoxLayout(container)
+                        layout.setContentsMargins(5, 5, 5, 5)
+                        layout.setSpacing(5)
+                        layout.addWidget(viewer)
+                        self._identity_tab_container = container
+                        self._identity_tab_viewer = viewer
+                        show_index = tab_widget.addTab(container, tab_title)
+                    else:
+                        layout = self._identity_tab_container.layout()
+                        if self._identity_tab_viewer is not None:
+                            layout.removeWidget(self._identity_tab_viewer)
+                            self._identity_tab_viewer.setParent(None)
+                            self._identity_tab_viewer.deleteLater()
+                        layout.addWidget(viewer)
+                        self._identity_tab_viewer = viewer
+                        tab_widget.setTabText(existing_index, tab_title)
+                        show_index = existing_index
+
+                    print(f"[DynamicResultsTabWidget] [OK] Unified identity tab built once "
+                          f"for {n_wings} wing(s) across {len(self._identity_run_exec_ids)} execution(s)")
+
+            return show_index
+
+        except Exception as e:
+            print(f"[Error] Failed to build run result tabs: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def _create_wing_summary_section(self, wing_summary: dict) -> QWidget:
         """
         Create summary section for a specific wing.
@@ -2742,15 +2879,19 @@ class DynamicResultsTabWidget(QWidget):
         finally:
             conn.close()
 
-    def _create_timebased_viewer(self, database_path: str, execution_id: str, show_progress=True):
+    def _create_timebased_viewer(self, database_path: str, execution_id: str,
+                                 show_progress=True, result_id=None):
         """
         Create and populate Time-Based results viewer from timebased_results_viewer.py.
-        
+
         Args:
             database_path: Path to the database
             execution_id: Execution ID to load
             show_progress: If False, suppresses the progress dialog
-        
+            result_id: The wing's own results row. Required for a per-wing tab -
+                without it the viewer shows every match in the execution, so
+                each wing's tab renders all of them.
+
         Requirements: 2.5, 3.2
         """
         try:
@@ -2770,7 +2911,8 @@ class DynamicResultsTabWidget(QWidget):
             from PyQt5.QtWidgets import QApplication as _QApp
             result = self._read_timebased_result(
                 database_path, execution_id,
-                progress_cb=lambda done, total: _QApp.processEvents())
+                progress_cb=lambda done, total: _QApp.processEvents(),
+                result_id=result_id)
             viewer.load_from_correlation_result(result, show_progress=show_progress)
 
             return viewer
@@ -2805,9 +2947,17 @@ class DynamicResultsTabWidget(QWidget):
             return viewer
 
     @staticmethod
-    def _read_timebased_result(database_path, execution_id, progress_cb=None, is_canceled=None):
+    def _read_timebased_result(database_path, execution_id, progress_cb=None,
+                               is_canceled=None, result_id=None):
         """PURE-DATA load (no Qt) for a time-based execution: returns a
-        CorrelationResult. Safe to run on a background thread."""
+        CorrelationResult. Safe to run on a background thread.
+
+        `result_id` narrows the read to ONE wing. Without it every per-wing tab
+        showed the whole execution: on a two-wing run both tabs rendered the
+        same 84 windows and the same 2,378 matches, where the wings owned 2,357
+        and 21. That went unnoticed while each wing happened to get its own
+        execution row - filtering by execution separated them by accident.
+        """
         from pathlib import Path
         import sqlite3
         import json
@@ -2819,6 +2969,11 @@ class DynamicResultsTabWidget(QWidget):
         conn = sqlite3.connect(database_path)
         try:
             cursor = conn.cursor()
+            where = "r.execution_id = ?"
+            params = [execution_id]
+            if result_id is not None:
+                where += " AND m.result_id = ?"
+                params.append(result_id)
             cursor.execute("""
                 SELECT
                     m.match_id, m.anchor_feather_id, m.anchor_artifact_type, m.match_score,
@@ -2827,8 +2982,7 @@ class DynamicResultsTabWidget(QWidget):
                     m.weighted_score_value, m.weighted_score_interpretation, m.semantic_data
                 FROM matches m
                 JOIN results r ON m.result_id = r.result_id
-                WHERE r.execution_id = ?
-            """, (execution_id,))
+                WHERE """ + where, tuple(params))
 
             rows = cursor.fetchall()
             total_rows = len(rows)
@@ -3030,7 +3184,14 @@ class DynamicResultsTabWidget(QWidget):
             wing_summaries = []
             for exec_id in run_execution_ids:
                 wing_summaries.extend(self._detect_wings_from_execution(str(db_path), exec_id))
-            
+
+            # Number the wings ONCE, across the whole run. _detect_wings_from_execution
+            # counts from 0 within a single execution, and a live run puts each
+            # wing in its own execution - so an 11-wing run came back as eleven
+            # wings all numbered 0, and the sort below did nothing.
+            for position, wing_summary in enumerate(wing_summaries, start=1):
+                wing_summary['wing_index'] = position
+
             if not wing_summaries:
                 print(f"[DynamicResultsTabWidget] ERROR: No wings found for execution {execution_id}")
                 QMessageBox.information(
@@ -3207,13 +3368,21 @@ class DynamicResultsTabWidget(QWidget):
                 for feather_id, stats in feather_statistics.items():
                     if feather_id.startswith('_'):
                         continue
-                    # Time-window feathers have identities_found=0 (their matches
-                    # aren't identity-keyed) but a real matches_created — the plain
-                    # .get() default is dead since the key is always present, so
-                    # fall back explicitly or they'd vanish from the chart.
-                    matches = stats.get('identities_found', 0)
+                    # A chart titled "Matches by Feather" plots matches.
+                    #
+                    # It used to read `identities_found` first and fall back to
+                    # `matches_created`, because the time-window engine left
+                    # identities_found at 0 and the feathers would otherwise
+                    # have vanished from the chart. The engine now fills both
+                    # in, so that fallback stopped firing and the chart quietly
+                    # started plotting identity counts under a "Matches" axis -
+                    # srum_app drew 206 (its identities) where it contributed
+                    # to 2,094 matches.
+                    matches = stats.get('matches_created', 0)
                     if not matches:
-                        matches = stats.get('matches_created', 0)
+                        # Older databases, written before the engine recorded
+                        # per-feather match counts.
+                        matches = stats.get('identities_found', 0)
                     if matches > 0:
                         matches_data[feather_id] = matches
                 
@@ -3253,8 +3422,13 @@ class DynamicResultsTabWidget(QWidget):
             
             # Add wing breakdown table
             wing_frame = QFrame()
+            # Scoped by object name — see wingBreakdownFrame in
+            # update_summary_tab: an unscoped QFrame rule is inherited by the
+            # QTableWidget inside it (a QTableWidget is a QFrame) and clips the
+            # table's own header.
+            wing_frame.setObjectName("wingBreakdownFrameLast")
             wing_frame.setStyleSheet("""
-                QFrame {
+                QFrame#wingBreakdownFrameLast {
                     background-color: #1E293B;
                     border: 1px solid #334155;
                     border-radius: 4px;
@@ -3269,71 +3443,24 @@ class DynamicResultsTabWidget(QWidget):
             wing_title.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
             wing_layout.addWidget(wing_title)
             
-            # Helper function to format time
-            def format_time(seconds):
-                """Format time as seconds, minutes, or hours"""
-                seconds = seconds or 0  # tolerate None / missing durations
-                if seconds < 60:
-                    return f"{seconds:.1f}s"
-                elif seconds < 3600:
-                    return f"{seconds/60:.1f}m"
-                else:
-                    return f"{seconds/3600:.2f}h"
-            
-            wing_table = QTableWidget()
-            wing_table.setColumnCount(4)
-            wing_table.setHorizontalHeaderLabels(["Wing Name", "Engine Type", "Matches", "Time"])
-            wing_table.horizontalHeader().setStretchLastSection(False)
-            wing_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-            wing_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-            wing_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-            wing_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-            wing_table.verticalHeader().setVisible(False)
-            wing_table.setEditTriggers(QTableWidget.NoEditTriggers)
-            wing_table.setSelectionBehavior(QTableWidget.SelectRows)
-            wing_table.setMaximumHeight(200)
-            wing_table.setStyleSheet("""
-                QTableWidget {
-                    background-color: #0B1220;
-                    color: #E2E8F0;
-                    border: 1px solid #334155;
-                    gridline-color: #334155;
-                }
-                QTableWidget::item {
-                    padding: 4px;
-                }
-                QHeaderView::section {
-                    background-color: #1E293B;
-                    color: #00FFFF;
-                    padding: 4px;
-                    border: 1px solid #334155;
-                    font-weight: bold;
-                }
-            """)
-            
+            # The same builder the Summary tab uses. This table used to be a
+            # second, hand-maintained copy - four columns where the other had
+            # five, and reading `execution_time` where the other read the
+            # wing's own duration.
             wing_summaries = aggregate_stats.get('wing_summaries', [])
-            wing_table.setRowCount(len(wing_summaries))
-            
-            for row, wing_summary in enumerate(wing_summaries):
-                wing_name = wing_summary.get('wing_name', f'Wing {row}')
-                engine_type = wing_summary.get('engine_type', 'unknown')
-                matches = wing_summary.get('total_matches', 0)
-                exec_time = wing_summary.get('execution_time', 0)
-                
-                wing_table.setItem(row, 0, QTableWidgetItem(wing_name))
-                wing_table.setItem(row, 1, QTableWidgetItem(engine_type))
-                
-                matches_item = QTableWidgetItem(f"{matches:,}")
-                matches_item.setForeground(QColor("#4CAF50"))
-                wing_table.setItem(row, 2, matches_item)
-                
-                time_item = QTableWidgetItem(format_time(exec_time))
-                time_item.setForeground(QColor("#00FFFF"))
-                wing_table.setItem(row, 3, time_item)
-            
+            wing_table = self._build_wing_breakdown_table(wing_summaries)
+            # Enough for the taller header plus a few wings; the rest scrolls.
+            wing_table.setMaximumHeight(260)
+
             wing_layout.addWidget(wing_table)
             scroll_layout.addWidget(wing_frame)
-            
+            # Without this the LAST frame absorbs every spare pixel in the
+            # scroll area, and inside it the one-line "Wing Breakdown" QLabel
+            # took the slack: measured 1516x274 for a line of text, against
+            # 1520x20 for the identical "Feather Statistics Charts" label
+            # above. The title floated in the middle of a tall empty box.
+            scroll_layout.addStretch(1)
+
             scroll_area.setWidget(scroll_content)
             summary_layout.addWidget(scroll_area)
             
@@ -3437,7 +3564,9 @@ class DynamicResultsTabWidget(QWidget):
                     # Use the wing's own execution id (live runs give each
                     # wing its own execution)
                     wing_exec_id = wing_summary.get('execution_id', execution_id)
-                    viewer = self._create_timebased_viewer(database_path, wing_exec_id, show_progress=False)
+                    viewer = self._create_timebased_viewer(
+                        database_path, wing_exec_id, show_progress=False,
+                        result_id=wing_summary.get('result_id'))
 
                 if viewer:
                     combined_viewer.addTab(viewer, wing_name)
@@ -3496,7 +3625,7 @@ class DynamicResultsTabWidget(QWidget):
             
             # Query for all results in this execution
             cursor.execute("""
-                SELECT 
+                SELECT
                     r.result_id,
                     r.wing_id,
                     r.wing_name,
@@ -3504,7 +3633,9 @@ class DynamicResultsTabWidget(QWidget):
                     r.execution_id,
                     r.total_matches,
                     r.execution_duration_seconds,
-                    r.feather_metadata
+                    r.feather_metadata,
+                    e.errors,
+                    e.warnings
                 FROM results r
                 JOIN executions e ON r.execution_id = e.execution_id
                 WHERE r.execution_id = ?
@@ -3513,11 +3644,31 @@ class DynamicResultsTabWidget(QWidget):
             
             wing_summaries = []
             wing_index = 0 # Track wing index manually
-            
+
+            # Collapse the duplicate result row an identity wing used to write.
+            # Until the adapter recorded the row it streamed into, every wing
+            # ended up with two rows: the streamed one (which holds the
+            # matches) and an empty copy inserted at report time carrying the
+            # same counts. Keeping the LOWEST result_id keeps the row the
+            # matches actually point at. Rows already in a case are never
+            # rewritten, so this guard is what makes an existing run read
+            # correctly.
+            seen_wings = {}
+
             for row in cursor.fetchall():
                 result_id, wing_id, wing_name, engine_type, exec_id, \
-                total_matches, execution_duration, feather_metadata_json = row
-                
+                total_matches, execution_duration, feather_metadata_json, \
+                errors_json, warnings_json = row
+
+                signature = (exec_id, wing_id, wing_name, total_matches,
+                             execution_duration)
+                if signature in seen_wings:
+                    print(f"[DynamicResultsTabWidget] Duplicate result row "
+                          f"{result_id} for wing '{wing_name}' collapsed into "
+                          f"{seen_wings[signature]}")
+                    continue
+                seen_wings[signature] = result_id
+
                 # Parse feather_metadata JSON
                 feather_metadata = {}
                 if feather_metadata_json:
@@ -3537,11 +3688,26 @@ class DynamicResultsTabWidget(QWidget):
                     'wing_index': wing_index,
                     'engine_type': engine_type or 'unknown',
                     'execution_id': exec_id,
+                    # The wing's own results row. A per-wing tab must read by
+                    # this, not by execution: several wings share one execution
+                    # and filtering by execution gives every tab everything.
+                    'result_id': result_id,
                     'database_path': database_path,
                     'total_matches': total_matches or 0,
                     'execution_time': execution_duration or 0.0,
+                    # The wing's own duration, under the name the live path
+                    # also uses, so the breakdown reads one field either way.
+                    'execution_duration_seconds': execution_duration or 0.0,
+                    # What the run recorded about this wing. Without these the
+                    # breakdown cannot tell a wing that failed from a wing that
+                    # ran and found nothing.
+                    'errors': _json_list(errors_json),
+                    'warnings': _json_list(warnings_json),
                     'feather_metadata': feather_metadata,
-                    'timestamp': execution_duration # Use execution_duration from results table
+                    # No 'timestamp' key: this dict used to carry
+                    # `'timestamp': execution_duration`, a duration in seconds
+                    # under a name that means a point in time. Nothing read it,
+                    # and anything that started to would have been wrong.
                 }
                 
                 wing_index += 1 # Increment for next wing
@@ -3562,6 +3728,180 @@ class DynamicResultsTabWidget(QWidget):
             traceback.print_exc()
             return []
     
+    # Columns of the Wing Breakdown, in order. One definition: the table is
+    # built in two places (the Summary after a run, and the Summary built when
+    # loading the most recent results) and they had already drifted apart -
+    # one of them never got the Status column.
+    WING_BREAKDOWN_COLUMNS = ("Wing Name", "Engine Type", "Matches", "Time",
+                              "Status")
+
+    def _build_wing_breakdown_table(self, wing_summaries: list):
+        """The Wing Breakdown table, built once and used by both Summary paths.
+
+        Header height is derived from the header's own font rather than fixed.
+        Qt sizes a header from its section size hint, and each of these tables
+        sets its OWN stylesheet - which beats the application sheet in
+        `crow_eye_styles.qss` and dropped the section padding from 8px to 4px.
+        The result was a header strip too short for its own text, and it got
+        worse when a fifth column was added. A hardcoded pixel height would
+        fix today's font and break the next one, so the floor is computed.
+        """
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        def format_time(seconds):
+            """Format time as seconds, minutes, or hours."""
+            seconds = seconds or 0  # tolerate None / missing durations
+            if seconds < 60:
+                return f"{seconds:.1f}s"
+            elif seconds < 3600:
+                return f"{seconds / 60:.1f}m"
+            else:
+                return f"{seconds / 3600:.2f}h"
+
+        table = QTableWidget()
+        table.setColumnCount(len(self.WING_BREAKDOWN_COLUMNS))
+        table.setHorizontalHeaderLabels(list(self.WING_BREAKDOWN_COLUMNS))
+        # The wing NAME is what identifies the row, so it takes the slack and
+        # the four short columns take only what they need. Stretching all five
+        # equally elided every wing name to "Account Logon & Privilege Use ..."
+        # while four columns sat half empty.
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in range(1, len(self.WING_BREAKDOWN_COLUMNS)):
+            table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeToContents)
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setStyleSheet("""
+            QTableWidget {
+                background-color: #0B1220;
+                gridline-color: #334155;
+                color: #E2E8F0;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                font-size: 9pt;
+            }
+            QTableWidget::item {
+                padding: 4px;
+                border-bottom: 1px solid #334155;
+            }
+            QTableWidget::item:selected {
+                background-color: #334155;
+                color: #00FFFF;
+            }
+            QHeaderView::section {
+                background-color: #1E293B;
+                color: #00FFFF;
+                padding: 8px 6px;
+                font-weight: bold;
+                font-size: 9pt;
+                border: none;
+                border-bottom: 2px solid #00FFFF;
+            }
+        """)
+
+        # Reserve room for the text plus the 8px of padding above and below it
+        # that the sheet above draws. Derived, so a larger system font still
+        # fits; floored so the band never looks cramped at the default one.
+        header = table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        text_height = QFontMetrics(header.font()).height()
+        header.setMinimumHeight(max(32, text_height + 16))
+
+        table.setRowCount(len(wing_summaries))
+
+        # Every wing, no filtering (Requirements 4.1, 4.2, 4.4)
+        for row, wing_summary in enumerate(wing_summaries):
+            wing_name = wing_summary.get('wing_name', 'Unknown')
+            engine_type = wing_summary.get('engine_type', 'unknown').replace('_', ' ').title()
+            matches = wing_summary.get('total_matches', 0)
+            exec_time = self._wing_seconds(wing_summary)
+            time_formatted = format_time(exec_time)
+            status, reason = self._wing_status(wing_summary)
+
+            print(f"[DynamicResultsTabWidget] Row {row}: {wing_name} | {engine_type} | "
+                  f"{matches:,} matches | {time_formatted} | {status}")
+
+            table.setItem(row, 0, QTableWidgetItem(wing_name))
+            table.setItem(row, 1, QTableWidgetItem(engine_type))
+
+            matches_item = QTableWidgetItem(f"{matches:,}")
+            matches_item.setForeground(QColor("#4CAF50"))
+            table.setItem(row, 2, matches_item)
+
+            time_item = QTableWidgetItem(time_formatted)
+            time_item.setForeground(QColor("#00FFFF"))
+            table.setItem(row, 3, time_item)
+
+            status_item = QTableWidgetItem(status)
+            if reason:
+                status_item.setToolTip(reason)
+            if status == "Failed":
+                status_item.setForeground(QColor("#F87171"))
+            elif status == "Skipped":
+                status_item.setForeground(QColor("#FBBF24"))
+            else:
+                status_item.setForeground(QColor("#4ADE80"))
+            table.setItem(row, 4, status_item)
+
+        # Row height for the body; the header is sized above and separately,
+        # because setDefaultSectionSize on the vertical header does not touch it.
+        table.verticalHeader().setDefaultSectionSize(24)
+        table.verticalHeader().setVisible(False)
+
+        return table
+
+    @staticmethod
+    def _wing_seconds(wing_summary: dict) -> float:
+        """How long THIS wing took.
+
+        Two shapes reach the breakdown and they do not agree. The
+        load-from-database path already carries the wing's own
+        `execution_duration_seconds`. The live path carries the whole
+        executor's wall clock under `execution_time`, which also covers feather
+        creation and report generation for that wing — so the same run read back
+        from the database showed different times than it had shown live. Prefer
+        the wing's own duration wherever it exists.
+        """
+        results = wing_summary.get('results') or []
+        for entry in results:
+            if isinstance(entry, dict) and entry.get('execution_duration_seconds'):
+                return float(entry['execution_duration_seconds'] or 0)
+        for key in ('execution_duration_seconds', 'execution_time'):
+            value = wing_summary.get(key)
+            if value:
+                return float(value)
+        return 0.0
+
+    @staticmethod
+    def _wing_status(wing_summary: dict):
+        """(status, reason) for one wing: Completed / Failed / Skipped.
+
+        A wing that could not run and a wing that ran and found nothing both
+        showed as a row of zeros, which is how nine wings that never executed
+        read as nine wings with no findings. The status column is the
+        difference, and the reason is the wing's own first error or warning.
+        """
+        errors = [e for e in (wing_summary.get('errors') or []) if e]
+        warnings = [w for w in (wing_summary.get('warnings') or []) if w]
+        matches = wing_summary.get('total_matches', 0) or 0
+
+        if errors:
+            return "Failed", str(errors[0])
+
+        if matches == 0:
+            skip_reason = next(
+                (w for w in warnings
+                 if 'skipped' in str(w).lower() or 'not enough feathers' in str(w).lower()),
+                None)
+            if skip_reason:
+                return "Skipped", str(skip_reason)
+            if wing_summary.get('wings_executed') == 0:
+                return "Skipped", (str(warnings[0]) if warnings else
+                                   "The wing was selected but never executed")
+
+        return "Completed", (str(warnings[0]) if warnings else "")
+
     def update_summary_tab(self, aggregate_stats: dict) -> None:
         """
         Update Summary tab with aggregate statistics across ALL wings.
@@ -3988,8 +4328,14 @@ class DynamicResultsTabWidget(QWidget):
                 print(f"[DynamicResultsTabWidget] Creating wing breakdown table with {len(wing_summaries)} wings")
                 
                 breakdown_frame = QFrame()
+                # Scoped by object name, and it has to be. A widget stylesheet
+                # applies to the widget AND its children, and QTableWidget is
+                # itself a QFrame - so a bare `QFrame { padding: 8px }` here was
+                # inherited by the breakdown table, pushing its header 8px into
+                # its own frame and slicing the top off every header label.
+                breakdown_frame.setObjectName("wingBreakdownFrame")
                 breakdown_frame.setStyleSheet("""
-                    QFrame {
+                    QFrame#wingBreakdownFrame {
                         background-color: #1E293B;
                         border: 1px solid #334155;
                         border-radius: 8px;
@@ -4011,76 +4357,11 @@ class DynamicResultsTabWidget(QWidget):
                 """)
                 breakdown_layout.addWidget(breakdown_title)
                 
-                # Create table for wing breakdown
-                from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
-                wing_table = QTableWidget()
-                wing_table.setColumnCount(4)
-                wing_table.setHorizontalHeaderLabels(["Wing Name", "Engine Type", "Matches", "Time"])
-                wing_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-                wing_table.setAlternatingRowColors(True)
-                wing_table.setStyleSheet("""
-                    QTableWidget {
-                        background-color: #0B1220;
-                        gridline-color: #334155;
-                        color: #E2E8F0;
-                        border: 1px solid #334155;
-                        border-radius: 4px;
-                        font-size: 9pt;
-                    }
-                    QTableWidget::item {
-                        padding: 4px;
-                        border-bottom: 1px solid #334155;
-                    }
-                    QTableWidget::item:selected {
-                        background-color: #334155;
-                        color: #00FFFF;
-                    }
-                    QHeaderView::section {
-                        background-color: #1E293B;
-                        color: #00FFFF;
-                        padding: 4px;
-                        font-weight: bold;
-                        font-size: 9pt;
-                        border: none;
-                        border-bottom: 2px solid #00FFFF;
-                    }
-                """)
-                
-                # Helper function to format time
-                def format_time(seconds):
-                    """Format time as seconds, minutes, or hours."""
-                    seconds = seconds or 0  # tolerate None / missing durations
-                    if seconds < 60:
-                        return f"{seconds:.1f}s"
-                    elif seconds < 3600:
-                        minutes = seconds / 60
-                        return f"{minutes:.1f}m"
-                    else:
-                        hours = seconds / 3600
-                        return f"{hours:.2f}h"
-                
-                # Set row count to match ALL wings (Requirements 4.1, 4.4)
-                wing_table.setRowCount(len(wing_summaries))
-                
-                # Populate table with ALL wings - no filtering (Requirements 4.1, 4.2, 4.4)
-                for row, wing_summary in enumerate(wing_summaries):
-                    wing_name = wing_summary.get('wing_name', 'Unknown')
-                    engine_type = wing_summary.get('engine_type', 'unknown').replace('_', ' ').title()
-                    matches = wing_summary.get('total_matches', 0)
-                    exec_time = wing_summary.get('execution_time', 0)
-                    time_formatted = format_time(exec_time)
-                    
-                    print(f"[DynamicResultsTabWidget] Row {row}: {wing_name} | {engine_type} | {matches:,} matches | {time_formatted}")
-                    
-                    wing_table.setItem(row, 0, QTableWidgetItem(wing_name))
-                    wing_table.setItem(row, 1, QTableWidgetItem(engine_type))
-                    wing_table.setItem(row, 2, QTableWidgetItem(f"{matches:,}"))
-                    wing_table.setItem(row, 3, QTableWidgetItem(time_formatted))
-                
-                # Set minimum row height for better spacing
-                wing_table.verticalHeader().setDefaultSectionSize(24)
-                wing_table.verticalHeader().setVisible(False)
-                
+                # One builder, shared with the Summary built by
+                # load_last_results, so the two cannot show different columns
+                # for the same thing again.
+                wing_table = self._build_wing_breakdown_table(wing_summaries)
+
                 breakdown_layout.addWidget(wing_table)
                 scroll_layout.addWidget(breakdown_frame)
                 
@@ -4231,6 +4512,11 @@ class ResultsViewer(QWidget):
         """Connect internal signals"""
         if hasattr(self.results_widget, 'match_selected'):
             self.results_widget.match_selected.connect(self._on_match_selected)
+        # This pair used to sit inside _get_score_interpretation, AFTER its
+        # return statement, so it never executed and Export from this viewer
+        # did nothing at all. Unreachable code does not announce itself.
+        if hasattr(self.results_widget, 'export_requested'):
+            self.results_widget.export_requested.connect(self._on_export_requested)
     
     def _get_score_interpretation(self, score: float) -> str:
         """
@@ -4246,10 +4532,7 @@ class ResultsViewer(QWidget):
         """
         config = self.score_config_manager.get_configuration()
         return config.interpret_score(score)
-        
-        if hasattr(self.results_widget, 'export_requested'):
-            self.results_widget.export_requested.connect(self._on_export_requested)
-    
+
     def _load_results_dialog(self):
         """Show dialog to select results directory"""
         directory = QFileDialog.getExistingDirectory(

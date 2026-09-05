@@ -122,6 +122,23 @@ class DbPool:
         conn = self.get(logical_name)
         return bool(conn) and table_exists(conn, table)
 
+    def has_column(self, logical_name: str, table: str, column: str) -> bool:
+        """Whether a case is new enough to carry this column.
+
+        An extractor that selects a column an older case does not have gets an
+        empty result and a log line, because _rows() catches the error - so the
+        whole behaviour disappears from the report with nothing on screen to
+        say why. Asking first is the difference between a degraded answer and
+        a missing one.
+        """
+        conn = self.get(logical_name)
+        if not conn or not table_exists(conn, table):
+            return False
+        try:
+            return column in table_columns(conn, table)
+        except sqlite3.Error:
+            return False
+
     def close(self):
         for conn in self._conns.values():
             if conn is not None:

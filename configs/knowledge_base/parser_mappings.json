@@ -22,29 +22,29 @@
     "amcache": {
       "parser_file": "Artifacts_Collectors/amcacheparser.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_AmCacheClaw.py",
-      "database": "amcache_data.db",
-      "table": "amcache_data",
-      "description": "Amcache.hve parser for application execution tracking",
-      "anatomy_url": null,
-      "anatomy_summary": "Visual anatomy page not yet published."
+      "database": "amcache.db",
+      "table": "InventoryApplicationFile",
+      "description": "AmCache (Amcache.hve) inventory parser - 29 tables. An inventory of what the Compatibility Appraiser has seen, not an execution log. Recovers entries DELETED from the hive out of free space, flags FileId hashes that are partial (only the first 30 MiB is hashed), and reports the Windows 7/8 Root\\File schema as unparsed rather than returning nothing silently.",
+      "anatomy_url": "https://crow-eye.com/Eye-Describe/amcache_anatomy",
+      "anatomy_summary": "The inventory hive no HKEY points at: the keys under Root, what an InventoryApplicationFile entry holds, the four zeros in front of the SHA-1, and why an entry proves presence rather than execution."
     },
     "shimcache": {
-      "parser_file": "Artifacts_Collectors/shimcache_claw.py",
+      "parser_file": "Artifacts_Collectors/shimcash_claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_ShimCacheClaw.py",
-      "database": "shimcache_data.db",
-      "table": "shimcache_data",
-      "description": "ShimCache (Application Compatibility Cache) parser",
+      "database": "shimcache.db",
+      "table": "shimcache_entries",
+      "description": "ShimCache (Application Compatibility Cache) parser - Windows 10/11 format only; older caches are named and refused rather than mis-parsed",
       "anatomy_url": "https://crow-eye.com/eye-describe/shimcache_anatomy.html",
-      "anatomy_summary": "Byte-level walk of the AppCompatCache registry value: signature, entry-count header, per-entry layout (path length, path UTF-16, last-modified FILETIME, insertion flags, executed flag), and the Windows-version differences (Win7/8/10/11) that change entry size and field order."
+      "anatomy_summary": "Byte-level walk of the AppCompatCache registry value: the header size that identifies the format, then per-record signature, per-record id, cell size, path length, path (UTF-16LE), last-modified FILETIME, data size, and the trailing data blob - an array of 12-byte (tag, type, value) slots carrying the executable's PE machine type and an operating-system-binary flag."
     },
     "registry": {
       "parser_file": "Artifacts_Collectors/Regclaw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_RegClaw.py",
       "database": "registry_data.db",
-      "table": "107 artifact tables in registry_data.db (AutoStartPrograms, UserAssist, Shellbags, SystemServices, registry_hive_state, ...) - there is no single 'registry_data' table",
+      "table": "123 artifact tables in registry_data.db (AutoStartPrograms, UserAssist, Shellbags, startup_approved, registry_value_changes and others)",
       "description": "Windows Registry hive parser. Covers persistence/ASEP keys (Winlogon, IFEO, AppInit_DLLs, Active Setup, per-user CLSID InprocServer32 shadowing, Command Processor AutoRun, Drivers32, SSODL, Browser Helper Objects, credential providers, netsh helper DLLs, AMSI providers, security providers, print monitors and processors, network providers, WMI autorecover MOFs and shell\\open\\command), security posture and anti-forensic settings (RDP-Tcp, usbstor Start, Windows Script Host, Explorer Advanced, FilesNotToSnapshot, event log channel config), device attribution (WPDBUSENUM, DeviceClasses, VolumeInfoCache), host identity (MachineGuid, ProductOptions, OS install history, system environment, network adapters, Group Policy history), per-user activity (FileExts, CIDSizeMRU, ProgramsCache, Regedit LastKey, printer connections), Scheduled Tasks from the SOFTWARE hive TaskCache, and UserAccounts - SAM merged with ProfileList, which maps a SID to a named user. Local group membership from SAM Builtin/Account Aliases, and the SECURITY hive (LSA policy, machine SID, primary domain, audit policy, LSA secret metadata, cached domain logon slots) - the live parser exports SAM and SECURITY with SeBackupPrivilege so both hives parse through the same code as an image case. LSA secrets are recorded by name and size only, never decrypted. Tables are named for the artifact, not the technique that abuses it. Transaction logs (.LOG1/.LOG2) are replayed into a temporary copy before an offline parse so a hive Windows had open is not read as final; the outcome per hive is recorded in registry_hive_state. Live and offline differences are documented in docs/live-vs-offline.md.",
-      "anatomy_url": null,
-      "anatomy_summary": "Visual anatomy page not yet published.",
+      "anatomy_url": "https://crow-eye.com/Eye-Describe/registry_anatomy",
+      "anatomy_summary": "Every registry artifact organised by the question it answers - execution, persistence, devices, user activity, machine identity - with live byte maps for the six value encodings that need binary parsing, and the full list of all 133 keys Crow-Eye reads.",
       "notable_tables": [
         "UserAccounts",
         "SecurityPosture",
@@ -87,7 +87,18 @@
         "lsa_policy",
         "audit_policy",
         "lsa_secrets",
-        "cached_domain_logons"
+        "cached_domain_logons",
+        "registry_value_changes",
+        "registry_key_times",
+        "startup_approved",
+        "app_paths",
+        "safe_boot_services",
+        "zone_map",
+        "app_permissions",
+        "shared_dlls",
+        "hid_devices",
+        "network_cards",
+        "system_configuration"
       ]
     },
     "usn": {
@@ -162,6 +173,10 @@
   "github_base_url": "https://github.com/crow-eye/crow-eye",
   "website_base_url": "https://crow-eye.com",
   "eye_describe_base_url": "https://crow-eye.com/eye-describe",
-  "version": "2.4",
-  "last_updated": "2026-08-19"
+  "version": "3.5",
+  "last_updated": "2026-08-29",
+  "shared_modules": {
+    "registry_transaction_log.py": "Replays a dirty hive's .LOG1/.LOG2 into a working copy before parsing. Used by every hive reader: offline_RegClaw, amcacheparser, offline_ShimCacheClaw, offline_SRUM_Claw, security_hive, user_identity. Amcache.hve has its own logs and is collected with them.",
+    "registry_hive_walk.py": "Walks a hive's allocator rather than its tree, recovering class names, shared security descriptors, and keys and values still present in freed cells. Offline only: all three need the hive file."
+  }
 }

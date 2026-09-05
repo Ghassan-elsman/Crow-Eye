@@ -398,11 +398,46 @@ class ArtifactDetector:
             # Forensic coverage: posture, exposure, devices, activity
             'SecurityPosture', 'DefenderExclusions', 'FirewallRules',
             'NetworkShares', 'ConnectedDevices', 'MountPoints2',
+            # One row per network the machine joined, with the date it was
+            # first seen and the date it was last connected - which is what
+            # makes it worth correlating, unlike the raw per-value tables.
+            'NetworkProfiles',
             'RDPClientMRU', 'OfficeDocuments', 'FeatureUsage',
             'CompatibilityAssistant', 'RecentApps', 'ApplicationArtifacts',
 
             # SRUM application timeline: focus, keyboard and mouse seconds.
             'SRUM_AppTimeline',
+
+            # What a tree walk cannot reach - the hive's allocator rather than
+            # its tree. "Carved" says where a record was found, not that
+            # anybody deleted it: Windows frees cells constantly by itself.
+            'registry_class_names', 'registry_security_descriptors',
+            'registry_carved_keys', 'registry_carved_values',
+
+            # Which value each pending transaction changed, and every key's
+            # last-write time. A key records when it was written and its values
+            # record nothing, so these are the only tables that say WHICH value
+            # moved, and when.
+            'registry_value_changes', 'registry_key_times',
+
+            # Keys nothing used to read until the anatomy page made the gap
+            # visible. startup_approved is the one that corrects a finding:
+            # without it every Run value reads as live persistence.
+            'startup_approved', 'app_paths', 'safe_boot_services', 'zone_map',
+            'app_permissions', 'shared_dlls', 'hid_devices', 'network_cards',
+            'system_configuration',
+
+            # The SAME artifacts under the names the rest of the system uses.
+            # A parser TABLE is snake_case; an artifact TYPE is CamelCase, and
+            # CamelCase is what the feather generator writes into every
+            # `<Name>_CrowEyeFeather.json` and what the shipped Wings name in
+            # their feathers and anchor_priority. Listing only the table names
+            # here left eleven artifact types unknown to the detector - and to
+            # the Feather Builder dropdown this method fills - while feathers
+            # for them existed in the case all along.
+            'StartupApproved', 'AppPaths', 'SafeBootServices', 'ZoneMap',
+            'AppPermissions', 'SharedDLLs', 'HIDDevices', 'NetworkCards',
+            'SystemConfiguration', 'ActiveSetup', 'WinevtChannels',
 
             # Persistence / ASEP subtypes - one table per registry launch point.
             # Named for the artifact, never for the technique that abuses it:
@@ -610,7 +645,13 @@ class ArtifactDetector:
             'Registry': ['key_path', 'value_name', 'value_data', 'hive'],
             'BrowserHistory': ['url', 'visit_count', 'last_visit_time', 'title'],
             'AmCache': ['sha1', 'file_size', 'product_name', 'publisher'],
-            'ShimCache': ['path', 'last_modified', 'file_size', 'shimcache_entry'],
+            # Was ['path', 'last_modified', 'file_size', 'shimcache_entry']:
+            # ShimCache has no file_size column - that one belongs to MFT and
+            # Shellbags, so it scored this artifact on someone else's table -
+            # and 'shimcache_entry' exists nowhere. Across 78 tables in a real
+            # case, cache_entry_position and entry_hash appear only here.
+            'ShimCache': ['cache_entry_position', 'cache_index', 'entry_hash',
+                          'last_modified'],
             'Jumplists': ['app_id', 'target_path', 'access_time', 'jumplist_type'],
             'LNK': ['target_path', 'creation_time', 'access_time', 'link_flags'],
             'USN': ['usn', 'file_reference_number', 'reason', 'source_info'],

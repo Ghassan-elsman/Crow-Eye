@@ -53,6 +53,15 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # Debug mode control
         self.debug_mode = getattr(config, 'debug_mode', False)
         self.verbose_logging = getattr(config, 'verbose_logging', False)
+
+        # `results` rows this engine streamed into during the current execute().
+        # Reset per call; read afterwards to stamp CorrelationResult._result_id.
+        self._streamed_result_ids: List[int] = []
+
+        # Run-scoped feather cache, shared across the wings of one run when the
+        # caller provides one (see set_feather_cache). None = load every time,
+        # which is exactly the behaviour before the cache existed.
+        self._feather_cache = None
         
         # Initialize centralized score configuration manager via the
         # integrated façade so all external entry points share one route.
@@ -235,6 +244,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             total_identities = 0
             total_match_count = 0 # Track total matches even when streaming
             all_feather_stats = {} # Collect feather stats from all wings
+            # Result rows this call streamed into, filled by _process_wing.
+            self._streamed_result_ids = []
             
             for wing_idx, wing_config in enumerate(wing_configs, 1):
                 wing_name = getattr(wing_config, 'wing_name', 'Unknown')
@@ -357,6 +368,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             
             # Store engine type as a direct attribute for easy access
             self.last_results.engine_type = "identity_based"
+
+            self._stamp_streamed_result_id(self.last_results, streaming_enabled)
             
             # Task 7.1: Execute Identity Semantic Phase after correlation completes
             # Requirements: 10.1, 10.2, 10.3
@@ -835,7 +848,268 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             error_result.errors = [f"Wing execution failed: {str(e)}"]
             
             return error_result
-    
+
+    def _stamp_streamed_result_id(self, result, streaming_enabled: bool) -> None:
+        """Point the result at the `results` row this call streamed into.
+
+        Without it `CorrelationResult._result_id` stays 0,
+        `ResultsDatabase.save_result` takes its INSERT branch, and the wing ends
+        up with TWO rows: the streamed one (which the matches point at) and an
+        empty copy carrying the same counts. `executions.total_matches` is
+        SUM(results.total_matches), so every identity wing reported exactly
+        double what it found - 237,282 for a wing with 118,641 matches on the
+        reference run - and the Wing Breakdown listed the wing twice.
+
+        Only when this call produced exactly one row. A collapsed multi-wing
+        result cannot claim any single one of them, and INSERT is then the
+        honest answer.
+        """
+        if not streaming_enabled or result is None:
+            return
+        streamed_ids = getattr(self, '_streamed_result_ids', None) or []
+        if len(streamed_ids) == 1:
+            result._result_id = streamed_ids[0]
+        elif len(streamed_ids) > 1:
+            logger.warning(
+                f"[Identity Engine] {len(streamed_ids)} result rows streamed in one "
+                f"execute() call; leaving _result_id unset so no row is claimed wrongly"
+            )
+
+    def set_feather_cache(self, cache) -> None:
+        """Share one run's feather work across the wings of that run.
+
+        The GUI runs each wing in its own PipelineExecutor, so without this
+        every wing re-opened, re-read and re-derived every feather it names -
+        and wings share feathers heavily. Pass None (the default) and each wing
+        loads for itself, which is exactly the behaviour before the cache
+        existed.
+        """
+        self._feather_cache = cache
+
+    def _filter_signature(self):
+        """What the cached records were filtered BY.
+
+        Records are cached after `_should_filter_record` has run, so a
+        different filter set is a different result and must be a different key.
+        Filters are fixed for a run today; this is in the key so that a
+        per-wing filter added later cannot silently serve the wrong rows.
+        """
+        filters = getattr(self, 'filters', None)
+        if filters is None:
+            return ()
+        return (
+            str(getattr(filters, 'time_period_start', None)),
+            str(getattr(filters, 'time_period_end', None)),
+            tuple(getattr(filters, 'identity_filters', None) or ()),
+            bool(getattr(filters, 'case_sensitive', False)),
+        )
+
+    def _extract_feather_identities(self, feather_id: str, db_path: str):
+        """Read one feather and return (extracted rows, stats) for it.
+
+        The expensive half of loading a feather: the SELECT over every table, a
+        dict per row, the wing filters, and identity extraction. All of it
+        depends only on the feather file and the run's filters - never on which
+        wing asked - so a run-scoped cache can serve it to every wing that names
+        this feather. The per-wing merge into an identity index stays in
+        `_process_wing`.
+
+        Returns:
+            (extracted, stats) where `extracted` is a list of
+            (identity_key, base_name, name, path, hash_val, suffix,
+             variant_key, record) tuples and `stats` is this feather's
+            accounting dict.
+        """
+        import sqlite3
+
+        cache = getattr(self, '_feather_cache', None)
+        cache_key = None
+        if cache is not None:
+            try:
+                cache_key = cache.key(db_path, self._filter_signature(),
+                                      kind="identity_records")
+                hit = cache.get(cache_key)
+            except Exception as e:
+                logger.warning(f"[Identity Engine] Feather cache unusable for "
+                               f"{feather_id}: {e}")
+                cache, cache_key, hit = None, None, None
+            if hit is not None:
+                extracted, stats = hit
+                logger.info(f"[Identity Engine] Reusing {len(extracted)} extracted "
+                            f"record(s) for {feather_id} from this run's cache")
+                return self._copy_extracted(extracted), self._copy_stats(stats)
+
+        # Initialize stats for this feather. The drop sub-buckets
+        # name *why* a record was excluded so the end-of-run
+        # accounting can show no evidence is silently lost.
+        stats = {
+            'total': 0,
+            'extracted': 0,
+            'identities': set(),
+            'filtered': 0, # legacy aggregate (kept for back-compat)
+            'dropped_by_filter': 0, # _should_filter_record rejected
+            'dropped_no_identity': 0, # extract_identity_info found nothing
+            'dropped_read_error': 0, # table read raised
+            'drop_samples': { # first 3 samples per bucket
+                'by_filter': [],
+                'no_identity': [],
+                'read_error': [],
+            },
+        }
+        extracted = []
+
+        # ENHANCEMENT: Load feather metadata for smart identity extraction
+        feather_metadata = self.core_engine.load_feather_metadata(db_path, feather_id)
+        if feather_metadata and self.verbose_logging:
+            logger.info(f"[Identity Engine] Loaded metadata for {feather_id}: "
+                        f"app_col={feather_metadata.get('application_column')}, "
+                        f"path_col={feather_metadata.get('path_column')}")
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Get all tables in the database
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = [row[0] for row in cursor.fetchall()]
+
+            # Count total records first for logging
+            total_feather_records = 0
+            for table in tables:
+                if not table.startswith('sqlite_'):
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                        total_feather_records += cursor.fetchone()[0]
+                    except Exception:
+                        pass
+
+            # Requirement 5.1: Log feather processing start with record count
+            logger.info(f"[Identity Engine] Processing feather: {feather_id} ({total_feather_records} records)")
+
+            if self.verbose_logging:
+                logger.info(f"Loading feather: {feather_id} from {db_path}")
+
+            for table in tables:
+                if table.startswith('sqlite_'):
+                    continue
+                # Skip feather-internal metadata tables - they
+                # hold key/value rows like {'key': 'created_date',
+                # 'value': '2026-05-19T...'} that the identity
+                # extractor would otherwise treat as forensic
+                # identities (a feather's creation date or
+                # source-DB path would become a "matched
+                # application"). Real data lives in the
+                # artifact-specific table (e.g. prefetch_data,
+                # mft_usn_correlated, SystemLogs).
+                tl = table.lower()
+                if tl == 'feather_metadata' or tl.endswith('_metadata'):
+                    continue
+
+                try:
+                    cursor.execute(f"SELECT * FROM {table}")
+                    rows = cursor.fetchall()
+                    columns = [desc[0] for desc in cursor.description]
+
+                    for row in rows:
+                        record = dict(zip(columns, row))
+                        record['_feather_id'] = feather_id
+                        record['_table'] = table
+
+                        stats['total'] += 1
+
+                        # Apply filters - skip record if it should be filtered out
+                        if self._should_filter_record(record):
+                            stats['dropped_by_filter'] += 1
+                            samples = stats['drop_samples']['by_filter']
+                            if len(samples) < 3:
+                                # Sample one identifying value from the row so the
+                                # accounting block can show *what* got filtered.
+                                for key in ('executable_name', 'app_name', 'name', 'filename', 'service_name', 'app_path'):
+                                    if record.get(key):
+                                        samples.append(str(record[key])[:80])
+                                        break
+                            continue
+
+                        # ENHANCEMENT: Extract identity using core engine with feather metadata
+                        name, path, hash_val, id_type = self.core_engine.extract_identity_info(record, feather_metadata)
+
+                        if name or path or hash_val:
+                            # ENHANCEMENT: Normalize identity name to get base and suffix
+                            base_name, suffix = self.core_engine.normalize_identity_name(name) if name else (name, "")
+
+                            # Normalize identity key (uses base_name internally)
+                            identity_key = self.core_engine.normalize_identity_key(name, path, hash_val)
+
+                            variant_key = sub_identity_key(name) if name else ""
+
+                            extracted.append((identity_key, base_name, name, path,
+                                              hash_val, suffix, variant_key, record))
+                            stats['identities'].add(identity_key)
+                            stats['extracted'] += 1
+                        else:
+                            # Record reached us, no filter rejected it,
+                            # but no identity could be extracted.
+                            # Account explicitly so the analyst can
+                            # tell apart "filtered" from "no identity".
+                            stats['dropped_no_identity'] += 1
+                            samples = stats['drop_samples']['no_identity']
+                            if len(samples) < 3:
+                                samples.append(list(record.keys())[:6])
+
+                except Exception as e:
+                    stats['dropped_read_error'] += 1
+                    samples = stats['drop_samples']['read_error']
+                    if len(samples) < 3:
+                        samples.append(f"{table}: {type(e).__name__}: {e}")
+                    # Always log at WARN - the previous behaviour gated
+                    # this on verbose_logging, which meant table-read
+                    # failures vanished silently in production.
+                    logger.warning(
+                        f"[Identity Engine] Failed to read table {table!r} "
+                        f"from feather {feather_id!r}: {e}"
+                    )
+        finally:
+            conn.close()
+
+        # Calculate filtered count (records that didn't produce identities)
+        stats['filtered'] = stats['total'] - stats['extracted']
+
+        if cache is not None and cache_key is not None:
+            try:
+                cache.note_load()
+                cache.put(cache_key, (extracted, stats))
+            except Exception as e:
+                logger.warning(f"[Identity Engine] Could not cache {feather_id}: {e}")
+
+        return self._copy_extracted(extracted), self._copy_stats(stats)
+
+    @staticmethod
+    def _copy_extracted(extracted):
+        """Hand each wing its own record dicts.
+
+        The merge tags every record with `_sub_variant_key` and hands it to
+        match building, so wings must not share the dict objects a cached
+        feather holds - one wing's tagging would otherwise show up in another
+        wing's evidence. A shallow copy is enough: the values are scalars read
+        out of SQLite, and it costs a fraction of the read it replaces.
+        """
+        return [(identity_key, base_name, name, path, hash_val, suffix,
+                 variant_key, dict(record))
+                for (identity_key, base_name, name, path, hash_val, suffix,
+                     variant_key, record) in extracted]
+
+    @staticmethod
+    def _copy_stats(stats):
+        """A per-wing copy of the accounting, so one wing cannot amend another's."""
+        copied = dict(stats)
+        copied['identities'] = set(stats.get('identities') or ())
+        copied['drop_samples'] = {
+            bucket: list(samples)
+            for bucket, samples in (stats.get('drop_samples') or {}).items()
+        }
+        return copied
+
     def _process_wing(self, wing_config: Any, processed_identities_offset: int, total_identities_global: int) -> Tuple[List[CorrelationMatch], int, Dict[str, Dict]]:
         """
         Process a single wing configuration with identity-specific progress tracking.
@@ -875,6 +1149,14 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 feathers_processed=0, # Will update later
                 total_records_scanned=0 # Will update later
             )
+            # Remember which row this wing streamed into. Without it the
+            # CorrelationResult returned to the pipeline carries `_result_id = 0`,
+            # `ResultsDatabase.save_result` takes its INSERT branch, and the wing
+            # ends up with TWO rows in `results` - the streamed one and a copy.
+            # `executions.total_matches` is SUM(results.total_matches), so every
+            # identity wing reported exactly double its real match count and the
+            # Wing Breakdown listed it twice.
+            self._streamed_result_ids.append(result_id)
             logger.info(f"[Identity Engine] Streaming mode active: writing to result_id={result_id}")
         
         # Start wing processing progress with identity-specific formatting
@@ -927,220 +1209,95 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         for feather_id, db_path in feather_paths.items():
             feather_count += 1
             try:
-                # Initialize stats for this feather. The drop sub-buckets
-                # name *why* a record was excluded so the end-of-run
-                # accounting can show no evidence is silently lost.
-                feather_stats[feather_id] = {
-                    'total': 0,
-                    'extracted': 0,
-                    'identities': set(),
-                    'filtered': 0, # legacy aggregate (kept for back-compat)
-                    'dropped_by_filter': 0, # _should_filter_record rejected
-                    'dropped_no_identity': 0, # extract_identity_info found nothing
-                    'dropped_read_error': 0, # table read raised
-                    'drop_samples': { # first 3 samples per bucket
-                        'by_filter': [],
-                        'no_identity': [],
-                        'read_error': [],
-                    },
-                }
-                
-                # ENHANCEMENT: Load feather metadata for smart identity extraction
-                feather_metadata = self.core_engine.load_feather_metadata(db_path, feather_id)
-                if feather_metadata and self.verbose_logging:
-                    logger.info(f"[Identity Engine] Loaded metadata for {feather_id}: "
-                          f"app_col={feather_metadata.get('application_column')}, "
-                          f"path_col={feather_metadata.get('path_column')}")
-                
-                conn = sqlite3.connect(db_path)
-                try:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                
-                    # Get all tables in the database
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                    tables = [row[0] for row in cursor.fetchall()]
-                
-                    # Count total records first for logging
-                    total_feather_records = 0
-                    for table in tables:
-                        if not table.startswith('sqlite_'):
-                            try:
-                                cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                                total_feather_records += cursor.fetchone()[0]
-                            except Exception as e:
-                                pass
-                
-                    # Requirement 5.1: Log feather processing start with record count
-                    logger.info(f"[Identity Engine] Processing feather: {feather_id} ({total_feather_records} records)")
-                
-                    if self.verbose_logging:
-                        logger.info(f"Loading feather: {feather_id} from {db_path}")
-                
-                    feather_records = 0
-                    feather_identities_before_filter = 0
-                
-                    for table in tables:
-                        if table.startswith('sqlite_'):
-                            continue
-                        # Skip feather-internal metadata tables — they
-                        # hold key/value rows like {'key': 'created_date',
-                        # 'value': '2026-05-19T...'} that the identity
-                        # extractor would otherwise treat as forensic
-                        # identities (a feather's creation date or
-                        # source-DB path would become a "matched
-                        # application"). Real data lives in the
-                        # artifact-specific table (e.g. prefetch_data,
-                        # mft_usn_correlated, SystemLogs).
-                        tl = table.lower()
-                        if tl == 'feather_metadata' or tl.endswith('_metadata'):
-                            continue
+                # The expensive half - read, filter, extract - now lives in
+                # _extract_feather_identities(), which a run-scoped cache can
+                # serve to every wing that names this feather. What stays here
+                # is the merge into THIS wing's identity index, which is
+                # per-wing by definition and cheap.
+                extracted, stats = self._extract_feather_identities(feather_id, db_path)
+                feather_stats[feather_id] = stats
 
-                        try:
-                            cursor.execute(f"SELECT * FROM {table}")
-                            rows = cursor.fetchall()
-                            columns = [desc[0] for desc in cursor.description]
-                        
-                            for row in rows:
-                                record = dict(zip(columns, row))
-                                record['_feather_id'] = feather_id
-                                record['_table'] = table
+                feather_records = 0
 
-                                feather_stats[feather_id]['total'] += 1
+                for (identity_key, base_name, name, path, hash_val,
+                     suffix, record_variant_key, record) in extracted:
 
-                                # Apply filters - skip record if it should be filtered out
-                                if self._should_filter_record(record):
-                                    feather_stats[feather_id]['dropped_by_filter'] += 1
-                                    samples = feather_stats[feather_id]['drop_samples']['by_filter']
-                                    if len(samples) < 3:
-                                        # Sample one identifying value from the row so the
-                                        # accounting block can show *what* got filtered.
-                                        for key in ('executable_name', 'app_name', 'name', 'filename', 'service_name', 'app_path'):
-                                            if record.get(key):
-                                                samples.append(str(record[key])[:80])
-                                                break
-                                    continue
+                    if identity_key not in identity_index:
+                        # Create new identity entry with sub-identity tracking
+                        identity_index[identity_key] = {
+                            'base_name': base_name, # Base name without suffix
+                            'name': name, # Original full name
+                            'path': path,
+                            'hash': hash_val,
+                            'records': [],
+                            'sub_identities': [] # Track all versions/variants
+                        }
+                        identity_feathers[identity_key] = set()
 
-                                # ENHANCEMENT: Extract identity using core engine with feather metadata
-                                name, path, hash_val, id_type = self.core_engine.extract_identity_info(record, feather_metadata)
+                    # Track sub-identity. Dedup uses the canonical
+                    # sub_identity_key (case-fold + extension strip
+                    # but version qualifier preserved), so
+                    # "Chrome.exe v1.0" and "chrome.exe v2.0" stay
+                    # as separate variants instead of collapsing
+                    # to one entry. Single source of truth lives
+                    # in identity_grouping.sub_identity_key - both
+                    # engines and both viewers agree.
+                    if suffix or name:
+                        variant_key = record_variant_key
+                        if variant_key:
+                            sub_match = None
+                            for sub in identity_index[identity_key]['sub_identities']:
+                                if sub.get('variant_key') == variant_key:
+                                    sub_match = sub
+                                    break
+                            if sub_match is None:
+                                # New variant just landed on this
+                                # identity. If it isn't the FIRST
+                                # variant, surface a one-shot debug
+                                # log so the analyst can see that
+                                # the canonical identity_key is
+                                # bundling multiple variants -
+                                # they may want them split.
+                                existing_variants = [
+                                    s.get('variant_key')
+                                    for s in identity_index[identity_key]['sub_identities']
+                                ]
+                                if existing_variants and self.debug_mode:
+                                    logger.debug(
+                                        f"[Identity Engine] identity_key={identity_key!r} "
+                                        f"now bundles sub-variants "
+                                        f"{set(existing_variants) | {variant_key}} - "
+                                        f"review if they should be separate identities"
+                                    )
+                                sub_match = {
+                                    'full_name': name,
+                                    'suffix': suffix,
+                                    'variant_key': variant_key,
+                                    'record_count': 0,
+                                }
+                                identity_index[identity_key]['sub_identities'].append(sub_match)
+                            sub_match['record_count'] += 1
 
-                                if name or path or hash_val:
-                                    # ENHANCEMENT: Normalize identity name to get base and suffix
-                                    base_name, suffix = self.core_engine.normalize_identity_name(name) if name else (name, "")
+                    # Tag each record with its sub-variant key so
+                    # the GUI / downstream consumers can group
+                    # records by variant within a single match
+                    # (e.g., "5 records from chrome v1, 3 from
+                    # chrome v2" inside one chrome match). The
+                    # sub_identities array carries the variant
+                    # counts; this tag carries the per-record
+                    # attribution.
+                    if '_sub_variant_key' not in record:
+                        record['_sub_variant_key'] = record_variant_key or '(base)'
 
-                                    # Normalize identity key (uses base_name internally)
-                                    identity_key = self.core_engine.normalize_identity_key(name, path, hash_val)
+                    identity_index[identity_key]['records'].append(record)
+                    identity_feathers[identity_key].add(feather_id)
+                    feather_records += 1
+                    total_records += 1
 
-                                    # Track if this is a new identity for this feather
-                                    is_new_identity = identity_key not in feather_stats[feather_id]['identities']
-
-                                    if identity_key not in identity_index:
-                                        # Create new identity entry with sub-identity tracking
-                                        identity_index[identity_key] = {
-                                            'base_name': base_name, # Base name without suffix
-                                            'name': name, # Original full name
-                                            'path': path,
-                                            'hash': hash_val,
-                                            'records': [],
-                                            'sub_identities': [] # Track all versions/variants
-                                        }
-                                        identity_feathers[identity_key] = set()
-
-                                    # Track sub-identity. Dedup uses the canonical
-                                    # sub_identity_key (case-fold + extension strip
-                                    # but version qualifier preserved), so
-                                    # "Chrome.exe v1.0" and "chrome.exe v2.0" stay
-                                    # as separate variants instead of collapsing
-                                    # to one entry. Single source of truth lives
-                                    # in identity_grouping.sub_identity_key — both
-                                    # engines and both viewers agree.
-                                    record_variant_key = sub_identity_key(name) if name else ""
-                                    if suffix or name:
-                                        variant_key = record_variant_key
-                                        if variant_key:
-                                            sub_match = None
-                                            for sub in identity_index[identity_key]['sub_identities']:
-                                                if sub.get('variant_key') == variant_key:
-                                                    sub_match = sub
-                                                    break
-                                            if sub_match is None:
-                                                # New variant just landed on this
-                                                # identity. If it isn't the FIRST
-                                                # variant, surface a one-shot debug
-                                                # log so the analyst can see that
-                                                # the canonical identity_key is
-                                                # bundling multiple variants —
-                                                # they may want them split.
-                                                existing_variants = [
-                                                    s.get('variant_key')
-                                                    for s in identity_index[identity_key]['sub_identities']
-                                                ]
-                                                if existing_variants and self.debug_mode:
-                                                    logger.debug(
-                                                        f"[Identity Engine] identity_key={identity_key!r} "
-                                                        f"now bundles sub-variants "
-                                                        f"{set(existing_variants) | {variant_key}} — "
-                                                        f"review if they should be separate identities"
-                                                    )
-                                                sub_match = {
-                                                    'full_name': name,
-                                                    'suffix': suffix,
-                                                    'variant_key': variant_key,
-                                                    'record_count': 0,
-                                                }
-                                                identity_index[identity_key]['sub_identities'].append(sub_match)
-                                            sub_match['record_count'] += 1
-
-                                    # Tag each record with its sub-variant key so
-                                    # the GUI / downstream consumers can group
-                                    # records by variant within a single match
-                                    # (e.g., "5 records from chrome v1, 3 from
-                                    # chrome v2" inside one chrome match). The
-                                    # sub_identities array carries the variant
-                                    # counts; this tag carries the per-record
-                                    # attribution.
-                                    if '_sub_variant_key' not in record:
-                                        record['_sub_variant_key'] = record_variant_key or '(base)'
-
-                                    identity_index[identity_key]['records'].append(record)
-                                    identity_feathers[identity_key].add(feather_id)
-                                    feather_stats[feather_id]['identities'].add(identity_key)
-                                    feather_stats[feather_id]['extracted'] += 1
-                                    feather_records += 1
-                                    total_records += 1
-                                else:
-                                    # Record reached us, no filter rejected it,
-                                    # but no identity could be extracted.
-                                    # Account explicitly so the analyst can
-                                    # tell apart "filtered" from "no identity".
-                                    feather_stats[feather_id]['dropped_no_identity'] += 1
-                                    samples = feather_stats[feather_id]['drop_samples']['no_identity']
-                                    if len(samples) < 3:
-                                        samples.append(list(record.keys())[:6])
-
-                        except Exception as e:
-                            feather_stats[feather_id]['dropped_read_error'] += 1
-                            samples = feather_stats[feather_id]['drop_samples']['read_error']
-                            if len(samples) < 3:
-                                samples.append(f"{table}: {type(e).__name__}: {e}")
-                            # Always log at WARN — the previous behaviour gated
-                            # this on verbose_logging, which meant table-read
-                            # failures vanished silently in production.
-                            logger.warning(
-                                f"[Identity Engine] Failed to read table {table!r} "
-                                f"from feather {feather_id!r}: {e}"
-                            )
-                
-                finally:
-                    conn.close()
-                
-                # Calculate filtered count (records that didn't produce identities)
-                feather_stats[feather_id]['filtered'] = feather_stats[feather_id]['total'] - feather_stats[feather_id]['extracted']
-                
                 # Requirement 5.2: Log extraction completion with identity count
                 unique_identities = len(feather_stats[feather_id]['identities'])
                 logger.info(f"[Identity Engine] [OK] Extracted {unique_identities} unique identities from {feather_id}")
-                
+
                 # Requirement 5.3: Log filtering summary if any were filtered.
                 # Show per-reason breakdown so the analyst can see WHY records
                 # were dropped, not just the aggregate. "filtered" stays as
@@ -1150,30 +1307,30 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                     detail_parts = []
                     if stats['dropped_by_filter']:
                         smp = stats['drop_samples']['by_filter']
-                        suffix = f" e.g. {smp}" if smp else ""
-                        detail_parts.append(f"by_filter={stats['dropped_by_filter']}{suffix}")
+                        suffix_text = f" e.g. {smp}" if smp else ""
+                        detail_parts.append(f"by_filter={stats['dropped_by_filter']}{suffix_text}")
                     if stats['dropped_no_identity']:
                         detail_parts.append(f"no_identity={stats['dropped_no_identity']}")
                     if stats['dropped_read_error']:
                         smp = stats['drop_samples']['read_error']
-                        suffix = f" ({'; '.join(str(s) for s in smp)})" if smp else ""
-                        detail_parts.append(f"read_error={stats['dropped_read_error']}{suffix}")
+                        suffix_text = f" ({'; '.join(str(s) for s in smp)})" if smp else ""
+                        detail_parts.append(f"read_error={stats['dropped_read_error']}{suffix_text}")
                     detail_str = ' '.join(detail_parts) if detail_parts else ''
                     logger.info(
                         f"[Identity Engine] Dropped {stats['filtered']} records from {feather_id}"
-                        + (f" — {detail_str}" if detail_str else '')
+                        + (f" - {detail_str}" if detail_str else '')
                     )
-                
+
                 # Requirement 5.6: Log if feather was skipped due to no valid identities
                 if unique_identities == 0:
                     logger.info(f"[Identity Engine] Skipped {feather_id}: No valid identities found")
-                
+
                 if feather_records > 0:
                     feathers_with_records.append(feather_id)
-                    
+
                     if self.verbose_logging:
                         logger.info(f" Loaded {feather_records} records from {feather_id}")
-                    
+
             except Exception as e:
                 # Requirement 5.5: Log errors processing feather
                 logger.info(f"[Identity Engine] Error processing {feather_id}: {e}")

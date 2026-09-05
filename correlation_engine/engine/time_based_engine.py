@@ -16,7 +16,7 @@ import uuid
 import fnmatch
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Iterator, Tuple
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -86,6 +86,65 @@ from ..optimization.performance_config import PerformanceConfig
 
 # Initialize logger
 logger = logging.getLogger(__name__)
+
+
+# Timestamps inside this engine are NAIVE UTC. ResilientTimestampParser
+# normalises every parsed value to that, window boundaries are naive, and every
+# row value is compared against them directly.
+#
+# Converting to and from Unix seconds is where that convention gets lost,
+# because the stdlib's defaults assume local time for naive values:
+#
+#   datetime.timestamp()            reads a naive value as LOCAL   -> wrong instant
+#   datetime.fromtimestamp(ts)      returns a naive LOCAL value    -> wrong instant
+#   datetime.fromtimestamp(ts, utc) returns an AWARE value         -> uncomparable
+#
+# All three are wrong here, and the third is the one that raised
+# "can't compare offset-naive and offset-aware datetimes" 1,114 times on the
+# reference case, each raise costing a whole feather's results for that window.
+# Use these two instead of calling the stdlib directly.
+
+def _naive_utc_to_unix(dt: datetime) -> float:
+    """Unix seconds for a datetime the engine treats as naive UTC.
+
+    An aware value is honoured rather than rejected - it already knows its own
+    offset - so this is safe to call on anything.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc).timestamp()
+    return dt.timestamp()
+
+
+def _unix_to_naive_utc(ts: float) -> datetime:
+    """The engine's naive-UTC datetime for Unix seconds."""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
+
+
+# Columns that hold a path to a FILE. Deliberately excludes `key_path` and
+# `registry_path`: a registry key is not a file path, and putting one in a
+# column named matched_file_path makes the column mean two things - the same
+# mistake as naming a table for the technique instead of the artifact.
+_FILE_PATH_FIELDS = (
+    'full_path', 'file_path', 'app_path', 'executable_path', 'program_path',
+    'process_path', 'target_path', 'reconstructed_path', 'path',
+)
+
+
+def _first_file_path(records) -> Optional[str]:
+    """The first real file path among an anchor's records, or None.
+
+    `matched_file_path` is set by the identity engine and by
+    `correlation_engine._create_match`, and never by this one, so it was empty
+    on every time-window match while the GUI read it.
+    """
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        for field_name in _FILE_PATH_FIELDS:
+            value = record.get(field_name)
+            if value and isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
 
 
 @dataclass
@@ -2503,9 +2562,6 @@ class WindowQueryManager:
         
         # No match found in any pattern, filter out record (exclude)
         return True
-        
-        # No match found, filter out
-        return True
     
     def clear_cache(self):
         """Clear the query cache"""
@@ -3108,142 +3164,12 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             }
         return None
     
-    def get_statistics(self) -> Dict[str, Any]:
-            """
-            Get correlation statistics from last execution.
-
-            Returns:
-                Dictionary containing statistics including:
-                    - Basic execution statistics
-                    - Memory statistics
-                    - Streaming statistics
-                    - Parallel processing statistics
-                    - Progress tracking statistics
-                    - Time estimation statistics
-                    - Cancellation statistics
-                    - Time range detection statistics (NEW)
-                    - Empty window skipping statistics (NEW)
-                    - Efficiency metrics (NEW)
-                    - Cache hit rates (Task 22)
-                    - Index usage rates (Task 22)
-                    - Skip rates (Task 22)
-            """
-            if not self.last_result:
-                return {}
-
-            stats = {
-                'execution_time': self.last_result.execution_duration_seconds,
-                'record_count': self.last_result.total_records_scanned,
-                'match_count': self.last_result.total_matches,
-                'feathers_processed': self.last_result.feathers_processed,
-                'window_size_minutes': self.window_size_minutes,
-                'scanning_approach': 'time_window_scanning',
-                'streaming_mode_used': self.streaming_mode_active,
-                'parallel_processing_enabled': self.enable_parallel_processing
-            }
-
-            # Add memory statistics if available
-            if self.memory_manager:
-                memory_stats = self.memory_manager.get_memory_statistics()
-                stats.update({
-                    'memory_statistics': memory_stats,
-                    'peak_memory_mb': memory_stats.get('peak_memory_mb', 0),
-                    'memory_efficiency_mb_per_1k_records': memory_stats.get('recent_efficiency_mb_per_1k_records', 0)
-                })
-
-            # Add streaming statistics if used
-            if self.streaming_mode_active and self.streaming_writer:
-                stats.update({
-                    'streaming_database_path': self.streaming_writer.database_path,
-                    'total_matches_written': self.streaming_writer.total_matches_written
-                })
-
-            # Add parallel processing statistics if used
-            if self.enable_parallel_processing and self.parallel_processor:
-                parallel_stats = self.parallel_processor.get_processing_stats()
-                stats.update({
-                    'parallel_processing_stats': {
-                        'max_workers': self.max_workers,
-                        'batch_size': self.parallel_batch_size,
-                        'total_windows_processed': parallel_stats.total_windows_processed,
-                        'average_window_time': parallel_stats.average_window_time,
-                        'parallel_speedup': parallel_stats.parallel_speedup,
-                        'load_balancing_efficiency': parallel_stats.load_balancing_efficiency,
-                        'worker_utilization': parallel_stats.worker_utilization
-                    }
-                })
-
-            # Add progress tracking statistics
-            if hasattr(self, 'progress_tracker'):
-                progress_data = self.progress_tracker._create_overall_progress()
-                stats.update({
-                    'progress_tracking_stats': {
-                        'windows_processed': progress_data.windows_processed,
-                        'total_windows': progress_data.total_windows,
-                        'completion_percentage': progress_data.completion_percentage,
-                        'processing_rate_windows_per_second': progress_data.processing_rate_windows_per_second,
-                        'estimated_completion_time': progress_data.estimated_completion_time.isoformat() if progress_data.estimated_completion_time else None,
-                        'time_remaining_seconds': progress_data.time_remaining_seconds
-                    }
-                })
-
-            # Add time estimation statistics
-            if hasattr(self, 'time_estimator'):
-                estimation_stats = self.time_estimator.get_performance_statistics()
-                stats.update({
-                    'time_estimation_stats': estimation_stats
-                })
-
-            # Add cancellation statistics
-            if hasattr(self, 'cancellation_manager'):
-                cancellation_stats = self.cancellation_manager.get_status_summary()
-                stats.update({
-                    'cancellation_stats': cancellation_stats
-                })
-
-            # Add time range detection statistics (NEW)
-            time_range_stats = self.get_time_range_detection_statistics()
-            if time_range_stats.get('available'):
-                stats.update({
-                    'time_range_detection_stats': time_range_stats
-                })
-
-            # Add empty window skipping statistics (NEW)
-            empty_window_stats = self.get_empty_window_skipping_statistics()
-            if empty_window_stats.get('available'):
-                stats.update({
-                    'empty_window_skipping_stats': empty_window_stats
-                })
-
-            # Add cache hit rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
-            cache_stats = self._get_cache_statistics()
-            if cache_stats:
-                stats.update({
-                    'cache_statistics': cache_stats
-                })
-
-            # Add index usage rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
-            index_stats = self._get_index_usage_statistics()
-            if index_stats:
-                stats.update({
-                    'index_usage_statistics': index_stats
-                })
-
-            # Add skip rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
-            skip_stats = self._get_skip_rate_statistics()
-            if skip_stats:
-                stats.update({
-                    'skip_rate_statistics': skip_stats
-                })
-
-            # Add efficiency metrics (NEW)
-            efficiency_metrics = self.get_efficiency_metrics()
-            if efficiency_metrics.get('available'):
-                stats.update({
-                    'efficiency_metrics': efficiency_metrics
-                })
-
-            return stats
+    # NOTE: two earlier `get_statistics` definitions used to sit here and
+    # further down. All three differed, and Python kept the last, so both of
+    # these returned nothing to anybody. They reported window timings, cache
+    # and batch statistics; the live one reports last-execution results. If
+    # the progress-oriented numbers are wanted back, they need a name of
+    # their own rather than a third copy of this one.
 
     
     def configure_parallel_processing(self, 
@@ -3340,7 +3266,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """
         if self.parallel_coordinator:
             return self.parallel_coordinator.get_statistics()
-        return None
+        # The processor fallback below used to sit after a `return None`, so it
+        # could never run: with a processor but no coordinator this reported no
+        # statistics at all rather than the processor's.
         if self.parallel_processor:
             return self.parallel_processor.get_processing_stats()
         return None
@@ -3957,8 +3885,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 # Show performance comparison if we avoided year 2000 default
                 if self.scanning_config.auto_detect_time_range:
                     # Calculate what it would have been from year 2000
-                    from datetime import timezone
-                    year_2000 = datetime(2000, 1, 1, tzinfo=timezone.utc) # Make timezone-aware
+                    # Naive, like start_epoch and every other datetime in the
+                    # engine. It was aware, which made this comparison raise the
+                    # moment start_epoch was correctly naive - the same
+                    # naive/aware split that cost 1,114 queries their results.
+                    year_2000 = datetime(2000, 1, 1)
                     if start_epoch > year_2000:
                         windows_from_2000 = self._calculate_total_windows(year_2000, end_epoch)
                         windows_saved = windows_from_2000 - estimated_windows
@@ -4040,6 +3971,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             logger.info(f"[Time-Window Engine] Windows processed: {total_windows:,}")
             logger.info(f"[Time-Window Engine] Data saved to database")
             
+            # The row about to be written must describe the run that just
+            # finished, so record the duration and the per-feather counts
+            # first. Both are recomputed after cleanup below; the pipeline
+            # then rewrites the row through save_result with the final
+            # values, and the two agree.
+            result.execution_duration_seconds = time.time() - start_time
+            self._record_feather_match_statistics(result)
+
             # Finalize streaming if active
             if self.streaming_mode_active and self.streaming_writer:
                 self._finalize_streaming_mode(result)
@@ -4166,55 +4105,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Record execution time
             result.execution_duration_seconds = time.time() - start_time
             
-            # Update feather_metadata with matches_created counts and identities_found
-            # Count how many matches each feather contributed to and unique identities per feather
-            if result.matches and result.feather_metadata:
-                feather_match_counts = {fid: 0 for fid in result.feather_metadata.keys()}
-                feather_identities_in_matches = {fid: set() for fid in result.feather_metadata.keys()}
-                feather_identities_extracted = {fid: set() for fid in result.feather_metadata.keys()}
-                
-                # First pass: Track all unique identities extracted from each feather
-                # This happens by examining all matches and their feather_records
-                for match in result.matches:
-                    if hasattr(match, 'feather_records') and match.feather_records:
-                        # Get identity value from match
-                        identity_value = getattr(match, 'matched_application', None)
-                        
-                        for fid in match.feather_records.keys():
-                            if fid in feather_identities_extracted and identity_value:
-                                # Track all identities that were extracted from this feather
-                                feather_identities_extracted[fid].add(identity_value)
-                
-                # Second pass: Track identities that participated in matches and count matches
-                for match in result.matches:
-                    if hasattr(match, 'feather_records') and match.feather_records:
-                        # Get identity value from match
-                        identity_value = getattr(match, 'matched_application', None)
-                        
-                        for fid in match.feather_records.keys():
-                            if fid in feather_match_counts:
-                                feather_match_counts[fid] += 1
-                                # Track unique identities that participated in matches
-                                if identity_value and fid in feather_identities_in_matches:
-                                    feather_identities_in_matches[fid].add(identity_value)
-                
-                # Update feather_metadata with correct statistics
-                for fid in result.feather_metadata.keys():
-                    if fid in feather_match_counts:
-                        result.feather_metadata[fid]['matches_created'] = feather_match_counts[fid]
-                        # FIXED: identities_found = unique identities that participated in matches
-                        result.feather_metadata[fid]['identities_found'] = len(feather_identities_in_matches[fid])
-                        # FIXED: identities_extracted = all unique identities extracted from this feather
-                        result.feather_metadata[fid]['identities_extracted'] = len(feather_identities_extracted[fid])
-                
-                if self.debug_mode:
-                    logger.info(f"[Time-Window Engine] Feather statistics:")
-                    for fid in sorted(result.feather_metadata.keys()):
-                        if fid in feather_match_counts and feather_match_counts[fid] > 0:
-                            matches = feather_match_counts[fid]
-                            identities_found = len(feather_identities_in_matches[fid])
-                            identities_extracted = len(feather_identities_extracted[fid])
-                            logger.info(f" • {fid}: {identities_extracted:,} extracted, {identities_found:,} in matches, {matches:,} match contributions")
+            # Per-feather match counts and identity totals. Also called
+            # before the streaming write, so both writers agree.
+            self._record_feather_match_statistics(result)
             
             # Calculate and log total feather data size
             total_feather_data_size = 0
@@ -4284,8 +4177,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     logger.info(f"[Time-Window Engine] • Total records loaded: {total_records_loaded:,}")
                     logger.info(f"[Time-Window Engine] • Records in matches: {total_records_in_matches:,} ({parse_rate:.1f}%)")
                     logger.info(f"[Time-Window Engine] • Records not parsed: {records_not_parsed:,} ({100-parse_rate:.1f}%)")
-                    logger.info(f"[Time-Window Engine] [INFO] Records not parsed were likely filtered by minimum_matches={wing.correlation_rules.minimum_matches}")
-                    logger.info(f"[Time-Window Engine] [INFO] To include all records, set minimum_matches=1 in wing configuration")
+                    logger.info(f"[Time-Window Engine] [INFO] Records not parsed were likely filtered by the corroboration floor: a match must span {wing.correlation_rules.required_feather_count()} feathers (minimum_matches={wing.correlation_rules.minimum_matches})")
+                    logger.info(f"[Time-Window Engine] [INFO] To see every identity including uncorroborated ones, set min_feathers_override=0 on the scanning config")
             
             # Task 23: Add window statistics if available (Requirements 3.3, 9.3, 9.4)
             if self.scanning_config.track_empty_window_stats:
@@ -4631,9 +4524,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             if failed_feathers > 0:
                 logger.info(f"[TimeWindow] {failed_feathers} feathers failed to load - correlation will continue with available feathers")
             
-            # Check if we have enough feathers for correlation
-            # minimum_matches represents the minimum number of feathers required
-            minimum_feathers = wing.correlation_rules.minimum_matches
+            # Check if we have enough feathers for correlation. A match needs
+            # required_feather_count() distinct feathers, so fewer than that
+            # loaded means no match can ever be produced.
+            minimum_feathers = wing.correlation_rules.required_feather_count()
             if loaded_feathers < minimum_feathers:
                 error_msg = f"Insufficient feathers loaded ({loaded_feathers}) for correlation (minimum required: {minimum_feathers})"
                 result.errors.append(error_msg)
@@ -4650,19 +4544,36 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
     
     def _normalize_datetime_to_utc(self, dt: datetime) -> datetime:
         """
-        Normalize a datetime to timezone-aware UTC.
-        
-        This ensures consistent timezone handling when comparing datetimes from
-        different sources (FilterConfig vs database).
-        
+        Normalize a datetime to NAIVE UTC - the engine-wide convention.
+
+        This used to return a timezone-AWARE value, and it is the only thing in
+        the engine that did. Its thirteen call sites all feed
+        `_detect_actual_time_range`, whose result becomes `start_epoch` /
+        `end_epoch` and therefore every window boundary the scan compares
+        against. The row side normalises the other way: ResilientTimestampParser
+        returns naive UTC by design, and `_fan_out_multi_column_timestamps` and
+        `_filter_expanded_for_window` both strip tzinfo before comparing.
+
+        So the engine held two opposite conventions, and every
+        `start_time <= dt <= end_time` between them raised
+        `TypeError: can't compare offset-naive and offset-aware datetimes`.
+        The database error handler caught it and fell back to "returning empty
+        results", which on the reference case happened 1,114 times and removed
+        two whole feathers - mft_usn, the largest, among them - from every
+        time-window query, while the run reported success.
+
+        Naive UTC is the documented contract: see
+        ResilientTimestampParser._normalize_to_utc, whose own docstring names
+        this exact TypeError as the reason it returns naive.
+
         Uses caching to avoid redundant conversions for identical input values.
         Requirements: 6.3, 7.3
-        
+
         Args:
             dt: Datetime object (timezone-aware or naive)
-            
+
         Returns:
-            Timezone-aware datetime in UTC
+            Naive datetime representing UTC
         """
         if dt is None:
             return None
@@ -4672,18 +4583,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         if cached_result is not None:
             return cached_result
         
-        # Perform conversion
+        # Perform conversion. An aware value is converted to UTC and then made
+        # naive; a naive value is already taken to be UTC and is returned as is.
         if dt.tzinfo is not None:
-            # If already timezone-aware, convert to UTC
-            utc_dt = dt.astimezone(datetime.timezone.utc) if hasattr(datetime, 'timezone') else dt
+            utc_dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
         else:
-            # If timezone-naive, assume UTC
-            from datetime import timezone
-            utc_dt = dt.replace(tzinfo=timezone.utc)
-        
+            utc_dt = dt
+
         # Cache the result
         self.timestamp_utc_cache.put(dt, utc_dt)
-        
+
         return utc_dt
     
     def _detect_actual_time_range(self) -> TimeRangeDetectionResult:
@@ -4923,8 +4832,22 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # Need at least 4 timestamps for meaningful statistical analysis
             return timestamps, 0
         
-        # Convert timestamps to Unix timestamps for numerical analysis
-        unix_timestamps = [ts.timestamp() for ts in timestamps]
+        # Convert timestamps to Unix timestamps for numerical analysis.
+        #
+        # `ts.timestamp()` on a NAIVE datetime interprets it as local time, and
+        # every datetime reaching this function is naive UTC - that is the
+        # engine-wide convention the timestamp parser normalises to. On a
+        # machine at UTC+2 the round trip below therefore moved the whole time
+        # range two hours, and the returned value came back tz-AWARE, which
+        # nothing downstream can compare against a naive row value.
+        #
+        # The result was `TypeError: can't compare offset-naive and
+        # offset-aware datetimes` inside query_time_range, caught by the
+        # database error handler, which fell back to "returning empty results".
+        # On the reference case that fired 1,114 times and removed two whole
+        # feathers - including mft_usn, the largest - from every time-window
+        # query, while the run reported success.
+        unix_timestamps = [_naive_utc_to_unix(ts) for ts in timestamps]
         unix_timestamps.sort()
         
         # Calculate quartiles for IQR method
@@ -4996,9 +4919,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             else:
                 filtered_unix.append(unix_ts)
         
-        # Convert back to datetime objects (preserve timezone awareness)
-        from datetime import timezone
-        filtered_timestamps = [datetime.fromtimestamp(ts, tz=timezone.utc) for ts in filtered_unix]
+        # Convert back to naive UTC - the same convention that came in.
+        # This used to return tz-aware datetimes under a comment reading
+        # "preserve timezone awareness", but the input is naive, so it did not
+        # preserve awareness: it INTRODUCED it, and the aware value then
+        # propagated into the engine's overall time range and into every window
+        # boundary derived from it.
+        filtered_timestamps = [_unix_to_naive_utc(ts) for ts in filtered_unix]
         
         # Log detection method statistics
         if self.debug_mode and outliers_removed > 0:
@@ -5500,8 +5427,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             matches = []
             # Threshold: prefer engine-level override (analyst tuning) over wing config.
             # Use `is not None` so override=0 ("emit every identity") is honored.
+            # `required_feather_count()` - not `minimum_matches` directly. The
+            # wing field counts feathers that must CORROBORATE, so the shipped
+            # default of 1 requires a match to span 2. Comparing the raw field
+            # against feather_count made 1 mean "one feather", and 98.3% of
+            # this engine's output was single-feather rows that correlated
+            # nothing. The override still wins, and 0 still means "emit every
+            # identity" for an analyst who wants the unfiltered view.
             override = getattr(self.scanning_config, 'min_feathers_override', None)
-            minimum_feathers = override if override is not None else wing.correlation_rules.minimum_matches
+            minimum_feathers = (override if override is not None
+                                else wing.correlation_rules.required_feather_count())
             low_confidence_mode = bool(getattr(self.scanning_config, 'low_confidence_review_mode', False))
 
             # Track below-threshold identity groups. In normal mode these are
@@ -5560,10 +5495,77 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 else:
                     timestamp_str = str(timestamp)
                 
-                # Calculate time spread (earliest to latest record in group)
-                # Calculate time spread (earliest to latest record in group)
-                earliest_time = window.start_time
-                latest_time = window.end_time
+                # Time spread: earliest to latest record IN THIS GROUP.
+                #
+                # This used the window's own start and end, so every match
+                # reported a spread of exactly the window width - 10,800s for
+                # the shipped 180-minute wings - regardless of whether its
+                # records were three hours apart or in the same second. On the
+                # reference case 2,343 of 2,357 matches carried the identical
+                # value, which is the tell.
+                #
+                # Temporal tightness is one of the strongest signals a match
+                # carries: a binary written, executed and phoning home inside a
+                # few seconds reads very differently from the same three events
+                # scattered across an afternoon. Reporting the window width
+                # threw that signal away and replaced it with a constant.
+                # `_get_first_timestamp` returns the raw field value - usually a
+                # string - so it has to be parsed. Checking `isinstance(_, datetime)`
+                # on it silently matches nothing and leaves the window width in
+                # place, which is the bug wearing a different hat.
+                #
+                # The parser lives on OptimizedFeatherQuery, not on this engine,
+                # so it is fetched per call rather than assumed to be `self`.
+                _spread_parser = getattr(self, 'timestamp_parser', None)
+                if _spread_parser is None:
+                    _q = next(iter((self.feather_queries or {}).values()), None)
+                    _spread_parser = getattr(_q, 'timestamp_parser', None)
+                record_times = []
+                # The anchor's own times, kept apart from the rest so the match
+                # can record the window its anchor actually occupies.
+                anchor_times = []
+                for _fid, _recs in feather_records.items():
+                    for _rec in _recs:
+                        # `_canonical_timestamp` is the value that actually put
+                        # this record in the window, set during the fan-out.
+                        # Prefer it: `_get_first_timestamp` returns whichever
+                        # field comes first in _TIMESTAMP_FIELDS, which for an
+                        # MFT row matched on si_modification_time can be a
+                        # si_creation_time from years earlier. Using it produced
+                        # spreads of up to 12 years inside a 3-hour window.
+                        _raw = _rec.get('_canonical_timestamp') or \
+                            self._get_first_timestamp(_rec)
+                        if not _raw:
+                            continue
+                        if isinstance(_raw, datetime):
+                            _dt = _raw
+                        elif _spread_parser is None:
+                            continue
+                        else:
+                            try:
+                                _parsed = _spread_parser.parse_timestamp(_raw)
+                            except Exception:
+                                continue
+                            if not (_parsed.success
+                                    and isinstance(_parsed.datetime_value, datetime)):
+                                continue
+                            # Naive UTC, like every other datetime in the engine.
+                            _dt = _parsed.datetime_value.replace(tzinfo=None)
+                        # The record was selected BY this window, so a timestamp
+                        # outside it is the wrong field rather than a wide
+                        # spread. Ignore it and let the remaining ones speak.
+                        if window.start_time <= _dt <= window.end_time:
+                            record_times.append(_dt)
+                            if _fid == first_feather_id:
+                                anchor_times.append(_dt)
+                if record_times:
+                    earliest_time = min(record_times)
+                    latest_time = max(record_times)
+                else:
+                    # No parseable timestamp anywhere in the group: fall back to
+                    # the window, which is the only bound actually known.
+                    earliest_time = window.start_time
+                    latest_time = window.end_time
                 time_spread = (latest_time - earliest_time).total_seconds()
                 
                 # Prepare feather_records dict for CorrelationMatch.
@@ -5606,6 +5608,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     confidence_category = "High"
                     confidence_score = 1.0
 
+                # The anchor's own window and weight. `matches` has carried
+                # these three columns all along and nothing ever set them, so
+                # the match detail fell back to the match timestamp for both
+                # ends and to the feather count for the record count. Left as
+                # None when the anchor's records carry no usable timestamp -
+                # the GUI's fallback is better than a fabricated bound.
+                anchor_records = match_feather_records.get(first_feather_id) or []
+                anchor_start = min(anchor_times).isoformat() if anchor_times else None
+                anchor_end = max(anchor_times).isoformat() if anchor_times else None
+
                 match = CorrelationMatch(
                     match_id=str(uuid.uuid4()),
                     timestamp=timestamp_str,
@@ -5616,9 +5628,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     anchor_feather_id=first_feather_id,
                     anchor_artifact_type='Unknown',
                     matched_application=identity_value,
+                    matched_file_path=_first_file_path(anchor_records),
                     confidence_score=confidence_score,
                     confidence_category=confidence_category,
-                    semantic_data=None # Will be populated by post-processing semantic phase
+                    semantic_data=None, # Will be populated by post-processing semantic phase
+                    anchor_start_time=anchor_start,
+                    anchor_end_time=anchor_end,
+                    anchor_record_count=len(anchor_records)
                 )
 
                 matches.append(match)
@@ -5928,8 +5944,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     window.window_id, query_duration, "all_feathers", records_found
                 )
             
-            # Step 2: Skip if window is empty or doesn't meet minimum threshold
-            minimum_feathers = wing.correlation_rules.minimum_matches
+            # Step 2: Skip if window is empty or cannot reach the match floor.
+            # A window holding fewer feathers than a match requires cannot
+            # produce one, so this is an early skip, not a second rule.
+            minimum_feathers = wing.correlation_rules.required_feather_count()
             if populated_window.is_empty() or not populated_window.has_minimum_feathers(minimum_feathers):
                 # Complete window monitoring with no data
                 if window_metrics:
@@ -6556,6 +6574,49 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 if self.debug_mode:
                     logger.info(f"[TimeWindow] Progress listener error: {e}")
     
+    def _retain_feather_error_stats(self):
+        """Aggregate every per-feather DatabaseErrorHandler into one dict.
+
+        Kept on the engine as `retained_error_statistics` so it survives
+        `feather_queries.clear()` and can still be read when the pipeline
+        assembles its summary. Shaped like `DatabaseErrorHandler
+        .get_error_statistics()` so the reader needs no special case, plus
+        `feathers_with_errors` naming which feathers actually dropped results.
+        """
+        retained = getattr(self, 'retained_error_statistics', None) or {
+            'total_operations': 0,
+            'successful_operations': 0,
+            'failed_operations': 0,
+            'fallback_operations': 0,
+            'error_counts_by_type': {},
+            'feathers_with_errors': [],
+        }
+        with_errors = set(retained.get('feathers_with_errors') or [])
+        for feather_id, query_manager in (self.feather_queries or {}).items():
+            handler = getattr(query_manager, 'error_handler', None)
+            if handler is None:
+                continue
+            try:
+                stats = handler.get_error_statistics()
+            except Exception:
+                continue
+            for key in ('total_operations', 'successful_operations',
+                        'failed_operations', 'fallback_operations'):
+                retained[key] += stats.get(key, 0) or 0
+            for kind, n in (stats.get('error_counts_by_type') or {}).items():
+                retained['error_counts_by_type'][str(kind)] = \
+                    retained['error_counts_by_type'].get(str(kind), 0) + n
+            if (stats.get('fallback_operations') or 0) > 0 or \
+                    (stats.get('failed_operations') or 0) > 0:
+                with_errors.add(feather_id)
+        retained['feathers_with_errors'] = sorted(with_errors)
+        total = retained['total_operations']
+        retained['success_rate_percent'] = (
+            round(retained['successful_operations'] / total * 100.0, 2)
+            if total else 100.0
+        )
+        self.retained_error_statistics = retained
+
     def _cleanup_feather_queries(self):
         """Cleanup feather query managers with comprehensive error handling"""
         cleanup_errors = []
@@ -6575,8 +6636,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 if self.debug_mode:
                     logger.info(f"[TimeWindow] Cleanup error for {feather_id}: {e}")
         
+        # Roll the per-feather error statistics up BEFORE dropping the objects
+        # that hold them. Each OptimizedFeatherQuery owns its own
+        # DatabaseErrorHandler, and every silent fallback - "returning empty
+        # results" - is counted there and nowhere else. Cleanup runs inside
+        # execute(), well before the executor builds its summary, so clearing
+        # this dict first meant the evidence-accounting surface had nothing left
+        # to read and reported a clean run no matter how much had been dropped.
+        self._retain_feather_error_stats()
+
         self.feather_queries.clear()
-        
+
         # Cleanup streaming writer
         if self.streaming_writer:
             try:
@@ -6827,6 +6897,94 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         # Emit the event to all listeners
         self.progress_tracker._emit_event(event)
     
+    def _record_feather_match_statistics(self, result):
+        """Fill in the per-feather counts that describe this result.
+
+        Separated out so it can run BEFORE the result row is written.
+        It used to sit inline about 120 lines after
+        `_finalize_streaming_mode`, so a streaming run persisted zero
+        for every feather and the Summary tab drew empty charts.
+        Idempotent - recomputing from `result.matches` is cheap next to
+        the correlation itself.
+        """
+        # Update feather_metadata with matches_created counts and identities_found
+        # Count how many matches each feather contributed to and unique identities per feather
+        if result.matches and result.feather_metadata:
+            feather_match_counts = {fid: 0 for fid in result.feather_metadata.keys()}
+            feather_identities_in_matches = {fid: set() for fid in result.feather_metadata.keys()}
+            feather_identities_extracted = {fid: set() for fid in result.feather_metadata.keys()}
+            
+            # First pass: Track all unique identities extracted from each feather
+            # This happens by examining all matches and their feather_records
+            for match in result.matches:
+                if hasattr(match, 'feather_records') and match.feather_records:
+                    # Get identity value from match
+                    identity_value = getattr(match, 'matched_application', None)
+                    
+                    for fid in match.feather_records.keys():
+                        if fid in feather_identities_extracted and identity_value:
+                            # Track all identities that were extracted from this feather
+                            feather_identities_extracted[fid].add(identity_value)
+            
+            # Second pass: Track identities that participated in matches and count matches
+            for match in result.matches:
+                if hasattr(match, 'feather_records') and match.feather_records:
+                    # Get identity value from match
+                    identity_value = getattr(match, 'matched_application', None)
+                    
+                    for fid in match.feather_records.keys():
+                        if fid in feather_match_counts:
+                            feather_match_counts[fid] += 1
+                            # Track unique identities that participated in matches
+                            if identity_value and fid in feather_identities_in_matches:
+                                feather_identities_in_matches[fid].add(identity_value)
+            
+            # Update feather_metadata with correct statistics
+            for fid in result.feather_metadata.keys():
+                if fid in feather_match_counts:
+                    result.feather_metadata[fid]['matches_created'] = feather_match_counts[fid]
+                    # FIXED: identities_found = unique identities that participated in matches
+                    result.feather_metadata[fid]['identities_found'] = len(feather_identities_in_matches[fid])
+                    # FIXED: identities_extracted = all unique identities extracted from this feather
+                    result.feather_metadata[fid]['identities_extracted'] = len(feather_identities_extracted[fid])
+            
+            if self.debug_mode:
+                logger.info(f"[Time-Window Engine] Feather statistics:")
+                for fid in sorted(result.feather_metadata.keys()):
+                    if fid in feather_match_counts and feather_match_counts[fid] > 0:
+                        matches = feather_match_counts[fid]
+                        identities_found = len(feather_identities_in_matches[fid])
+                        identities_extracted = len(feather_identities_extracted[fid])
+                        logger.info(f" • {fid}: {identities_extracted:,} extracted, {identities_found:,} in matches, {matches:,} match contributions")
+
+        # Records actually read for this run. Only the identity engine set
+        # this, so a time-window run reported 0 records scanned in the
+        # results row, the executions row and the Summary tab. The figure
+        # is already computed here from the feather metadata.
+        if result.feather_metadata:
+            result.total_records_scanned = sum(
+                meta.get("records_processed", 0)
+                for meta in result.feather_metadata.values()
+                if isinstance(meta, dict))
+
+        # The results row has columns for the anchor and never carried one,
+        # because this engine has no wing-level anchor - it anchors each match
+        # on whichever of its feathers comes first. Report the one that
+        # actually dominated, and say plainly how it was chosen rather than
+        # implying a selection policy that does not exist.
+        if result.matches:
+            anchor_counts = {}
+            for match in result.matches:
+                fid = getattr(match, 'anchor_feather_id', None)
+                if fid:
+                    anchor_counts[fid] = anchor_counts.get(fid, 0) + 1
+            if anchor_counts:
+                top, n = max(anchor_counts.items(), key=lambda kv: kv[1])
+                result.anchor_feather_id = top
+                result.anchor_selection_reason = (
+                    "per-match: anchored on the first feather present in each "
+                    "match; %s led %d of %d" % (top, n, len(result.matches)))
+
     def _finalize_streaming_mode(self, result: CorrelationResult):
         """
         Finalize streaming mode and update result metadata.
@@ -6870,14 +7028,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 import traceback
                 traceback.print_exc()
     
-    def get_results(self) -> Any:
-        """
-        Get correlation results from last execution.
-        
-        Returns:
-            CorrelationResult object or None if no execution yet
-        """
-        return self.last_result
+    # NOTE: a duplicate `get_results` used to be defined here. It was
+    # identical to the live one apart from its annotation, so nothing
+    # changed when it went.
     
     def _get_cache_statistics(self) -> Dict[str, Any]:
         """
@@ -7017,142 +7170,12 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         return skip_stats
     
-    def get_statistics(self) -> Dict[str, Any]:
-        """
-        Get correlation statistics from last execution.
-        
-        Returns:
-            Dictionary containing statistics including:
-                - Basic execution statistics
-                - Memory statistics
-                - Streaming statistics
-                - Parallel processing statistics
-                - Progress tracking statistics
-                - Time estimation statistics
-                - Cancellation statistics
-                - Time range detection statistics (NEW)
-                - Empty window skipping statistics (NEW)
-                - Efficiency metrics (NEW)
-                - Cache hit rates (Task 22)
-                - Index usage rates (Task 22)
-                - Skip rates (Task 22)
-        """
-        if not self.last_result:
-            return {}
-        
-        stats = {
-            'execution_time': self.last_result.execution_duration_seconds,
-            'record_count': self.last_result.total_records_scanned,
-            'match_count': self.last_result.total_matches,
-            'feathers_processed': self.last_result.feathers_processed,
-            'window_size_minutes': self.window_size_minutes,
-            'scanning_approach': 'time_window_scanning',
-            'streaming_mode_used': self.streaming_mode_active,
-            'parallel_processing_enabled': self.enable_parallel_processing
-        }
-        
-        # Add memory statistics if available
-        if self.memory_manager:
-            memory_stats = self.memory_manager.get_memory_statistics()
-            stats.update({
-                'memory_statistics': memory_stats,
-                'peak_memory_mb': memory_stats.get('peak_memory_mb', 0),
-                'memory_efficiency_mb_per_1k_records': memory_stats.get('recent_efficiency_mb_per_1k_records', 0)
-            })
-        
-        # Add streaming statistics if used
-        if self.streaming_mode_active and self.streaming_writer:
-            stats.update({
-                'streaming_database_path': self.streaming_writer.database_path,
-                'total_matches_written': self.streaming_writer.total_matches_written
-            })
-        
-        # Add parallel processing statistics if used
-        if self.enable_parallel_processing and self.parallel_processor:
-            parallel_stats = self.parallel_processor.get_processing_stats()
-            stats.update({
-                'parallel_processing_stats': {
-                    'max_workers': self.max_workers,
-                    'batch_size': self.parallel_batch_size,
-                    'total_windows_processed': parallel_stats.total_windows_processed,
-                    'average_window_time': parallel_stats.average_window_time,
-                    'parallel_speedup': parallel_stats.parallel_speedup,
-                    'load_balancing_efficiency': parallel_stats.load_balancing_efficiency,
-                    'worker_utilization': parallel_stats.worker_utilization
-                }
-            })
-        
-        # Add progress tracking statistics
-        if hasattr(self, 'progress_tracker'):
-            progress_data = self.progress_tracker._create_overall_progress()
-            stats.update({
-                'progress_tracking_stats': {
-                    'windows_processed': progress_data.windows_processed,
-                    'total_windows': progress_data.total_windows,
-                    'completion_percentage': progress_data.completion_percentage,
-                    'processing_rate_windows_per_second': progress_data.processing_rate_windows_per_second,
-                    'estimated_completion_time': progress_data.estimated_completion_time.isoformat() if progress_data.estimated_completion_time else None,
-                    'time_remaining_seconds': progress_data.time_remaining_seconds
-                }
-            })
-        
-        # Add time estimation statistics
-        if hasattr(self, 'time_estimator'):
-            estimation_stats = self.time_estimator.get_performance_statistics()
-            stats.update({
-                'time_estimation_stats': estimation_stats
-            })
-        
-        # Add cancellation statistics
-        if hasattr(self, 'cancellation_manager'):
-            cancellation_stats = self.cancellation_manager.get_status_summary()
-            stats.update({
-                'cancellation_stats': cancellation_stats
-            })
-        
-        # Add time range detection statistics (NEW)
-        time_range_stats = self.get_time_range_detection_statistics()
-        if time_range_stats.get('available'):
-            stats.update({
-                'time_range_detection_stats': time_range_stats
-            })
-        
-        # Add empty window skipping statistics (NEW)
-        empty_window_stats = self.get_empty_window_skipping_statistics()
-        if empty_window_stats.get('available'):
-            stats.update({
-                'empty_window_skipping_stats': empty_window_stats
-            })
-        
-        # Add cache hit rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
-        cache_stats = self._get_cache_statistics()
-        if cache_stats.get('available'):
-            stats.update({
-                'cache_statistics': cache_stats
-            })
-        
-        # Add index usage rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
-        index_stats = self._get_index_usage_statistics()
-        if index_stats.get('available'):
-            stats.update({
-                'index_usage_statistics': index_stats
-            })
-        
-        # Add skip rates (Task 22 - Requirements 9.1, 9.2, 9.3, 9.4)
-        skip_stats = self._get_skip_rate_statistics()
-        if skip_stats.get('available'):
-            stats.update({
-                'skip_rate_statistics': skip_stats
-            })
-        
-        # Add efficiency metrics (NEW)
-        efficiency_metrics = self.get_efficiency_metrics()
-        if efficiency_metrics.get('available'):
-            stats.update({
-                'efficiency_metrics': efficiency_metrics
-            })
-        
-        return stats
+    # NOTE: two earlier `get_statistics` definitions used to sit here and
+    # further down. All three differed, and Python kept the last, so both of
+    # these returned nothing to anybody. They reported window timings, cache
+    # and batch statistics; the live one reports last-execution results. If
+    # the progress-oriented numbers are wanted back, they need a name of
+    # their own rather than a third copy of this one.
     
     def get_time_range_detection_statistics(self) -> Dict[str, Any]:
         """
@@ -7963,6 +7986,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 time_spread_seconds=match.time_spread_seconds,
                 anchor_feather_id=match.anchor_feather_id,
                 anchor_artifact_type=match.anchor_artifact_type,
+                anchor_start_time=match.anchor_start_time,
+                anchor_end_time=match.anchor_end_time,
+                anchor_record_count=match.anchor_record_count,
                 matched_application=match.matched_application,
                 matched_file_path=match.matched_file_path,
                 matched_event_id=match.matched_event_id,
@@ -8000,6 +8026,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 time_spread_seconds=match.time_spread_seconds,
                 anchor_feather_id=match.anchor_feather_id,
                 anchor_artifact_type=match.anchor_artifact_type,
+                anchor_start_time=match.anchor_start_time,
+                anchor_end_time=match.anchor_end_time,
+                anchor_record_count=match.anchor_record_count,
                 matched_application=match.matched_application,
                 matched_file_path=match.matched_file_path,
                 matched_event_id=match.matched_event_id,
@@ -8121,6 +8150,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         time_spread_seconds=match.time_spread_seconds,
                         anchor_feather_id=match.anchor_feather_id,
                         anchor_artifact_type=match.anchor_artifact_type,
+                        anchor_start_time=match.anchor_start_time,
+                        anchor_end_time=match.anchor_end_time,
+                        anchor_record_count=match.anchor_record_count,
                         matched_application=match.matched_application,
                         matched_file_path=match.matched_file_path,
                         matched_event_id=match.matched_event_id,
@@ -8161,6 +8193,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                         time_spread_seconds=match.time_spread_seconds,
                         anchor_feather_id=match.anchor_feather_id,
                         anchor_artifact_type=match.anchor_artifact_type,
+                        anchor_start_time=match.anchor_start_time,
+                        anchor_end_time=match.anchor_end_time,
+                        anchor_record_count=match.anchor_record_count,
                         matched_application=match.matched_application,
                         matched_file_path=match.matched_file_path,
                         matched_event_id=match.matched_event_id,
@@ -8203,6 +8238,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     time_spread_seconds=match.time_spread_seconds,
                     anchor_feather_id=match.anchor_feather_id,
                     anchor_artifact_type=match.anchor_artifact_type,
+                    anchor_start_time=match.anchor_start_time,
+                    anchor_end_time=match.anchor_end_time,
+                    anchor_record_count=match.anchor_record_count,
                     matched_application=match.matched_application,
                     matched_file_path=match.matched_file_path,
                     matched_event_id=match.matched_event_id,
@@ -8398,6 +8436,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     time_spread_seconds=match.time_spread_seconds,
                     anchor_feather_id=match.anchor_feather_id,
                     anchor_artifact_type=match.anchor_artifact_type,
+                    anchor_start_time=match.anchor_start_time,
+                    anchor_end_time=match.anchor_end_time,
+                    anchor_record_count=match.anchor_record_count,
                     matched_application=match.matched_application,
                     matched_file_path=match.matched_file_path,
                     matched_event_id=match.matched_event_id,
@@ -8521,6 +8562,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             time_spread_seconds=match.time_spread_seconds,
             anchor_feather_id=match.anchor_feather_id,
             anchor_artifact_type=match.anchor_artifact_type,
+            anchor_start_time=match.anchor_start_time,
+            anchor_end_time=match.anchor_end_time,
+            anchor_record_count=match.anchor_record_count,
             matched_application=match.matched_application,
             matched_file_path=match.matched_file_path,
             matched_event_id=match.matched_event_id,
@@ -8567,6 +8611,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     time_spread_seconds=match.time_spread_seconds,
                     anchor_feather_id=match.anchor_feather_id,
                     anchor_artifact_type=match.anchor_artifact_type,
+                    anchor_start_time=match.anchor_start_time,
+                    anchor_end_time=match.anchor_end_time,
+                    anchor_record_count=match.anchor_record_count,
                     matched_application=match.matched_application,
                     matched_file_path=match.matched_file_path,
                     matched_event_id=match.matched_event_id,

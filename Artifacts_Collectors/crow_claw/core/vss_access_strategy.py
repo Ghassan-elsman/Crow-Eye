@@ -57,6 +57,12 @@ class VSSAccessStrategy(FileAccessStrategy):
         self.vss_available: bool = False
         self._enumerated: bool = False
         self._creation_attempted: dict[str, bool] = {}  # Track per volume
+        # May this strategy CREATE a shadow copy when none exists, or only use
+        # the ones already there? True keeps the collector's behaviour, which is
+        # what acquisition wants. A parse can turn it off: reading evidence and
+        # writing to the machine holding it are different acts, and which one
+        # the analyst agreed to is their call rather than this class's.
+        self.allow_snapshot_creation: bool = True
     
     def _check_admin_privileges(self) -> bool:
         """Check if current process has administrator privileges.
@@ -418,6 +424,12 @@ class VSSAccessStrategy(FileAccessStrategy):
         Returns:
             The newly created ShadowCopy, or None if creation fails
         """
+        if not self.allow_snapshot_creation:
+            logger.info("[VSS] Not creating a shadow copy for %s: creation is "
+                        "disabled by the caller. Existing snapshots are still "
+                        "used.", volume)
+            return None
+
         # Ensure volume format is "C:"
         volume = volume.rstrip('\\')
         if len(volume) > 2:
@@ -541,6 +553,11 @@ class VSSAccessStrategy(FileAccessStrategy):
                 ]
             )
         
+        if not self.allow_snapshot_creation:
+            logger.info("[VSSAccessStrategy] Not creating a shadow copy for %s: "
+                        "creation is disabled by the caller.", volume_normalized)
+            return None
+
         # Mark volume as attempted BEFORE calling create_shadow_copy
         # This ensures we track the attempt even if the manager's internal tracking fails
         self._creation_attempted[volume_normalized] = True

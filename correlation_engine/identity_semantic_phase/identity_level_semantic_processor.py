@@ -193,153 +193,17 @@ class IdentityLevelSemanticProcessor:
         
         return self.statistics
     
-    def determine_optimal_batch_size(self, total_identities: int) -> int:
-        """
-        Determine optimal batch size based on dataset size.
-        
-        Task 17.1: Implement efficient batch sizing for large datasets
-        This method is public to allow testing and verification of batch sizing logic.
-        
-        Args:
-            total_identities: Total number of identities to process
-            
-        Returns:
-            Optimal batch size
-            
-        Requirements: 13.3
-        Property 19: Batch Operations for Large Datasets
-        """
-        # Use adaptive batch sizing based on dataset size
-        if total_identities < 1000:
-            return total_identities # Process all at once for small datasets
-        elif total_identities < 10000:
-            return 500 # Medium batches for medium datasets
-        elif total_identities < 100000:
-            return 1000 # Larger batches for large datasets
-        else:
-            return 2000 # Very large batches for very large datasets
+    # NOTE: an earlier definition of `determine_optimal_batch_size` was removed here. Python keeps
+    # the last one, so it never ran.
     
-    def _process_identities_in_batches(self, pending_identities: List[IdentityRecord], 
-                                      batch_size: int, 
-                                      progress_reporter) -> None:
-        """
-        Process identities in batches for optimal performance on large datasets.
-        
-        Task 17.1: Use batch operations for large datasets (Requirement 13.3)
-        
-        Args:
-            pending_identities: List of identities to process
-            batch_size: Number of identities per batch
-            progress_reporter: Progress reporter for tracking
-            
-        Requirements: 13.3
-        Property 19: Batch Operations for Large Datasets
-        """
-        total_identities = len(pending_identities)
-        
-        # Process identities in batches
-        for batch_start in range(0, total_identities, batch_size):
-            batch_end = min(batch_start + batch_size, total_identities)
-            batch = pending_identities[batch_start:batch_end]
-            
-            if self.debug_mode:
-                logger.debug(f"[Identity-Level Semantic Processor] Processing batch {batch_start//batch_size + 1} "
-                           f"({batch_start+1}-{batch_end} of {total_identities})")
-            
-            # Process each identity in the batch WITHOUT updating progress per identity
-            # This reduces GUI event queue flooding during semantic mapping
-            for identity_record in batch:
-                self._process_single_identity(identity_record, progress_reporter=None)
-            
-            # Update progress once per batch instead of per identity
-            # This significantly reduces the number of progress updates sent to the GUI
-            if progress_reporter:
-                progress_reporter.update(items_processed=len(batch))
+    # NOTE: an earlier definition of `_process_identities_in_batches` was removed here. Python keeps
+    # the last one, so it never ran.
     
-    def _process_identities_sequentially(self, pending_identities: List[IdentityRecord],
-                                        progress_reporter) -> None:
-        """
-        Process identities sequentially for small datasets.
-        
-        Task 17.1: Efficient processing for small datasets
-        
-        Args:
-            pending_identities: List of identities to process
-            progress_reporter: Progress reporter for tracking
-            
-        Requirements: 13.1
-        """
-        # Process each identity sequentially
-        for identity_record in pending_identities:
-            self._process_single_identity(identity_record, progress_reporter)
+    # NOTE: an earlier definition of `_process_identities_sequentially` was removed here. Python keeps
+    # the last one, so it never ran.
     
-    def _process_single_identity(self, identity_record: IdentityRecord, 
-                                 progress_reporter) -> None:
-        """
-        Process a single identity with semantic mapping.
-        
-        Task 17.1: Core identity processing logic extracted for reuse
-        
-        Args:
-            identity_record: Identity to process
-            progress_reporter: Progress reporter for tracking
-            
-        Requirements: 13.1
-        Property 17: Identity-Level Semantic Processing
-        """
-        try:
-            # Apply semantic mapping to this identity
-            semantic_data = self.apply_semantic_mapping_to_identity(identity_record)
-            
-            # Check if there was an error in semantic data
-            if semantic_data.get('_error'):
-                # Mark identity as error
-                identity_record.mark_error(semantic_data['_error'])
-                self.statistics.enhancement_errors += 1
-                self.statistics.fallback_count += 1
-            else:
-                # Mark identity as processed with semantic data
-                identity_record.mark_processed(semantic_data)
-                self.statistics.identities_processed += 1
-                
-                # Track identities by type
-                identity_type = identity_record.identity_type
-                if identity_type not in self.statistics.identities_by_type:
-                    self.statistics.identities_by_type[identity_type] = 0
-                self.statistics.identities_by_type[identity_type] += 1
-                
-                # Count mappings applied (Requirement 5.1 - accumulate for summary)
-                if semantic_data and len(semantic_data) > 0:
-                    # Don't count internal fields starting with _ or _no_mappings flag
-                    mapping_count = sum(1 for key in semantic_data.keys() 
-                                      if not key.startswith('_'))
-                    self.statistics.mappings_applied += mapping_count
-            
-            # Task 8.4: Update progress (will auto-report at 10%, 20%, 30%, etc.)
-            # Requirements: 4.2, 4.3, 4.4
-            # Only update if progress_reporter is provided (batch processing passes None)
-            if progress_reporter:
-                progress_reporter.update(items_processed=1)
-            
-        except Exception as e:
-            # Handle errors gracefully - continue processing other identities
-            # Safely get identity value for logging (may fail if identity_record is malformed)
-            try:
-                identity_value = identity_record.identity_value
-            except Exception:
-                identity_value = "<unknown>"
-            
-            logger.error(f"[Identity-Level Semantic Processor] Error processing identity '{identity_value}': {e}")
-            
-            # Mark identity as error (if possible)
-            try:
-                identity_record.mark_error(str(e))
-            except Exception as mark_error_ex:
-                logger.error(f"[Identity-Level Semantic Processor] Failed to mark identity as error: {mark_error_ex}")
-            
-            # Update error statistics
-            self.statistics.enhancement_errors += 1
-            self.statistics.fallback_count += 1
+    # NOTE: an earlier definition of `_process_single_identity` was removed here. Python keeps
+    # the last one, so it never ran.
     
     def apply_semantic_mapping_to_identity(self, identity_record: IdentityRecord) -> Dict[str, Any]:
         """
@@ -545,153 +409,17 @@ class IdentityLevelSemanticProcessor:
         
         return validation_results
 
-    def determine_optimal_batch_size(self, total_identities: int) -> int:
-        """
-        Determine optimal batch size based on dataset size.
-        
-        Task 17.1: Implement efficient batch sizing for large datasets
-        This method is public to allow testing and verification of batch sizing logic.
-        
-        Args:
-            total_identities: Total number of identities to process
-            
-        Returns:
-            Optimal batch size
-            
-        Requirements: 13.3
-        Property 19: Batch Operations for Large Datasets
-        """
-        # Use adaptive batch sizing based on dataset size
-        if total_identities < 1000:
-            return total_identities # Process all at once for small datasets
-        elif total_identities < 10000:
-            return 500 # Medium batches for medium datasets
-        elif total_identities < 100000:
-            return 1000 # Larger batches for large datasets
-        else:
-            return 2000 # Very large batches for very large datasets
+    # NOTE: an earlier definition of `determine_optimal_batch_size` was removed here. Python keeps
+    # the last one, so it never ran.
     
-    def _process_identities_in_batches(self, pending_identities: List[IdentityRecord], 
-                                      batch_size: int, 
-                                      progress_reporter) -> None:
-        """
-        Process identities in batches for optimal performance on large datasets.
-        
-        Task 17.1: Use batch operations for large datasets (Requirement 13.3)
-        
-        Args:
-            pending_identities: List of identities to process
-            batch_size: Number of identities per batch
-            progress_reporter: Progress reporter for tracking
-            
-        Requirements: 13.3
-        Property 19: Batch Operations for Large Datasets
-        """
-        total_identities = len(pending_identities)
-        
-        # Process identities in batches
-        for batch_start in range(0, total_identities, batch_size):
-            batch_end = min(batch_start + batch_size, total_identities)
-            batch = pending_identities[batch_start:batch_end]
-            
-            if self.debug_mode:
-                logger.debug(f"[Identity-Level Semantic Processor] Processing batch {batch_start//batch_size + 1} "
-                           f"({batch_start+1}-{batch_end} of {total_identities})")
-            
-            # Process each identity in the batch WITHOUT updating progress per identity
-            # This reduces GUI event queue flooding during semantic mapping
-            for identity_record in batch:
-                self._process_single_identity(identity_record, progress_reporter=None)
-            
-            # Update progress once per batch instead of per identity
-            # This significantly reduces the number of progress updates sent to the GUI
-            if progress_reporter:
-                progress_reporter.update(items_processed=len(batch))
+    # NOTE: an earlier definition of `_process_identities_in_batches` was removed here. Python keeps
+    # the last one, so it never ran.
     
-    def _process_identities_sequentially(self, pending_identities: List[IdentityRecord],
-                                        progress_reporter) -> None:
-        """
-        Process identities sequentially for small datasets.
-        
-        Task 17.1: Efficient processing for small datasets
-        
-        Args:
-            pending_identities: List of identities to process
-            progress_reporter: Progress reporter for tracking
-            
-        Requirements: 13.1
-        """
-        # Process each identity sequentially
-        for identity_record in pending_identities:
-            self._process_single_identity(identity_record, progress_reporter)
+    # NOTE: an earlier definition of `_process_identities_sequentially` was removed here. Python keeps
+    # the last one, so it never ran.
     
-    def _process_single_identity(self, identity_record: IdentityRecord, 
-                                 progress_reporter) -> None:
-        """
-        Process a single identity with semantic mapping.
-        
-        Task 17.1: Core identity processing logic extracted for reuse
-        
-        Args:
-            identity_record: Identity to process
-            progress_reporter: Progress reporter for tracking
-            
-        Requirements: 13.1
-        Property 17: Identity-Level Semantic Processing
-        """
-        try:
-            # Apply semantic mapping to this identity
-            semantic_data = self.apply_semantic_mapping_to_identity(identity_record)
-            
-            # Check if there was an error in semantic data
-            if semantic_data.get('_error'):
-                # Mark identity as error
-                identity_record.mark_error(semantic_data['_error'])
-                self.statistics.enhancement_errors += 1
-                self.statistics.fallback_count += 1
-            else:
-                # Mark identity as processed with semantic data
-                identity_record.mark_processed(semantic_data)
-                self.statistics.identities_processed += 1
-                
-                # Track identities by type
-                identity_type = identity_record.identity_type
-                if identity_type not in self.statistics.identities_by_type:
-                    self.statistics.identities_by_type[identity_type] = 0
-                self.statistics.identities_by_type[identity_type] += 1
-                
-                # Count mappings applied (Requirement 5.1 - accumulate for summary)
-                if semantic_data and len(semantic_data) > 0:
-                    # Don't count internal fields starting with _ or _no_mappings flag
-                    mapping_count = sum(1 for key in semantic_data.keys() 
-                                      if not key.startswith('_'))
-                    self.statistics.mappings_applied += mapping_count
-            
-            # Task 8.4: Update progress (will auto-report at 10%, 20%, 30%, etc.)
-            # Requirements: 4.2, 4.3, 4.4
-            # Only update if progress_reporter is provided (batch processing passes None)
-            if progress_reporter:
-                progress_reporter.update(items_processed=1)
-            
-        except Exception as e:
-            # Handle errors gracefully - continue processing other identities
-            # Safely get identity value for logging (may fail if identity_record is malformed)
-            try:
-                identity_value = identity_record.identity_value
-            except Exception:
-                identity_value = "<unknown>"
-            
-            logger.error(f"[Identity-Level Semantic Processor] Error processing identity '{identity_value}': {e}")
-            
-            # Mark identity as error (if possible)
-            try:
-                identity_record.mark_error(str(e))
-            except Exception as mark_error_ex:
-                logger.error(f"[Identity-Level Semantic Processor] Failed to mark identity as error: {mark_error_ex}")
-            
-            # Update error statistics
-            self.statistics.enhancement_errors += 1
-            self.statistics.fallback_count += 1
+    # NOTE: an earlier definition of `_process_single_identity` was removed here. Python keeps
+    # the last one, so it never ran.
 
     def determine_optimal_batch_size(self, total_identities: int) -> int:
         """

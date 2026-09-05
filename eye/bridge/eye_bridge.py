@@ -2894,7 +2894,8 @@ class EYEBridge(QObject):
                 "GEP-9": ("Human Authority",
                           "HITL approvals; write-side authorship (reason + evidence + Eye-stamp); read-only on non-Eye items."),
                 "GEP-10": ("Defensibility",
-                           "Professional/legal-grade tone, structured report blocks, per-answer direct-answer check."),
+                           "Objective, precise output structured for independent review; "
+                           "structured report blocks, per-answer direct-answer check."),
             }
             # An honest status needs a real BASIS — never a bare structural PASS:
             #   verified   = rolled up from live rules (incl. genuinely verified
@@ -2937,7 +2938,8 @@ class EYEBridge(QObject):
                     st, basis, upheld_by = "PASS", "per-answer", []
                     detail = gdesc + " — graded each answer (see Per-Answer GEP Compliance)."
                 else:
-                    # Always-on structural guarantee (e.g. GEP-10 legal-grade output).
+                    # Always-on structural guarantee (e.g. GEP-10 output structured
+                    # for independent review).
                     st, basis, upheld_by = "PASS", "structural", []
                 gep_principles.append({"id": gid, "name": gname, "status": st, "basis": basis,
                                        "detail": detail, "upheld_by": upheld_by})

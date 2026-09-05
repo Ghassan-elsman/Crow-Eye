@@ -1,0 +1,354 @@
+{
+  "config_name": "security_control_tampering_correlation",
+  "wing_name": "Security Control Tampering Correlation",
+  "wing_id": "security_control_tampering_001",
+  "description": "Establishes what the machine's defences were set to, and which of them had been moved off their stock default. Correlates the security posture set (Mark-of-the-Web handling, virtualisation-based security and Credential Guard, SMB signing and guest authentication) with the flat configuration set (fast startup, which decides whether a shutdown was a real one) and the Internet Explorer zone map, where a host promoted to Trusted Sites runs content every other zone would block. Answers the question the other wings assume: were the defences on at the time?",
+  "proves": "A security control was moved off its default, changing what was possible on this machine",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-08-22T00:00:00Z",
+  "last_modified": "2026-08-22T00:00:00Z",
+  "version": "1.0",
+  "feathers": [
+    {
+      "feather_id": "posture",
+      "artifact_type": "SecurityPosture",
+      "feather_config_name": "SecurityPosture_CrowEyeFeather",
+      "feather_database_path": "feathers/SecurityPosture_CrowEyeFeather.db",
+      "tier": 1,
+      "tier_name": "Security setting against its stock default",
+      "weight": 0.4
+    },
+    {
+      "feather_id": "system_config",
+      "artifact_type": "SystemConfiguration",
+      "feather_config_name": "SystemConfiguration_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemConfiguration_CrowEyeFeather.db",
+      "tier": 2,
+      "tier_name": "System configuration that shapes evidence",
+      "weight": 0.25
+    },
+    {
+      "feather_id": "zonemap",
+      "artifact_type": "ZoneMap",
+      "feather_config_name": "ZoneMap_CrowEyeFeather",
+      "feather_database_path": "feathers/ZoneMap_CrowEyeFeather.db",
+      "tier": 2,
+      "tier_name": "Security zone assignment",
+      "weight": 0.2
+    },
+    {
+      "feather_id": "winevt",
+      "artifact_type": "WinevtChannels",
+      "feather_config_name": "WinevtChannels_CrowEyeFeather",
+      "feather_database_path": "feathers/WinevtChannels_CrowEyeFeather.db",
+      "tier": 3,
+      "tier_name": "Event log channel configuration",
+      "weight": 0.15
+    }
+  ],
+  "time_window_minutes": 1440,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "SecurityPosture",
+    "SystemConfiguration",
+    "ZoneMap",
+    "WinevtChannels"
+  ],
+  "use_weighted_scoring": true,
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed": {
+        "min": 0.7,
+        "label": "Multiple Controls Weakened"
+      },
+      "probable": {
+        "min": 0.4,
+        "label": "A Control Was Weakened"
+      },
+      "weak": {
+        "min": 0.2,
+        "label": "Posture Recorded, Nothing Off Default"
+      },
+      "not_proven": {
+        "min": 0.0,
+        "label": "Not Proven"
+      }
+    }
+  },
+  "semantic_rules": [
+    {
+      "rule_id": "sct_control_off_default",
+      "name": "Security Control Off Its Default",
+      "semantic_value": "Security Control Off Its Default",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "medium",
+      "confidence": 0.9,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "posture",
+          "field_name": "assessment",
+          "operator": "equals",
+          "value": "changed"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1562.001",
+        "T1112"
+      ],
+      "description": "SecurityPosture stores every setting beside its stock default and records whether the two agree. 'changed' is that comparison, not a guess - so this rule fires on a value someone moved, and stays quiet on a machine where nothing was touched. The row's own meaning column says what the change permits."
+    },
+    {
+      "rule_id": "sct_motw_suppressed",
+      "name": "Mark-of-the-Web Suppressed",
+      "semantic_value": "Mark-of-the-Web Suppressed",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "high",
+      "confidence": 0.85,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "posture",
+          "field_name": "setting",
+          "operator": "equals",
+          "value": "SaveZoneInformation"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1553.005"
+      ],
+      "description": "SaveZoneInformation controls whether a downloaded file keeps the zone identifier that marks it as having come from the internet. Suppressed, files lose their origin and stop warning anyone - and the absence of a Mark-of-the-Web on a downloaded file stops being evidence that it was not downloaded. Read the row's assessment column: present-and-default is the normal state."
+    },
+    {
+      "rule_id": "sct_lsa_unprotected",
+      "name": "LSASS Protection State",
+      "semantic_value": "LSASS Protection State",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "medium",
+      "confidence": 0.85,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "posture",
+          "field_name": "setting",
+          "operator": "equals",
+          "value": "LsaCfgFlags"
+        }
+      ],
+      "tactic": [
+        "credential-access",
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1562.001",
+        "T1003"
+      ],
+      "description": "Credential Guard decides whether LSASS ran protected, and therefore whether credential theft from memory was possible at all. This is context for a credential-access finding rather than a finding on its own: unset is the default on most consumer installs."
+    },
+    {
+      "rule_id": "sct_vbs_state",
+      "name": "Virtualisation-Based Security State",
+      "semantic_value": "Virtualisation-Based Security State",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "low",
+      "confidence": 0.8,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "posture",
+          "field_name": "setting",
+          "operator": "equals",
+          "value": "EnableVirtualizationBasedSecurity"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1562.001"
+      ],
+      "description": "Whether VBS was enabled. Recorded because it bounds what a kernel-level technique could have done, not because being off is itself suspicious - it is off on a great many ordinary machines."
+    },
+    {
+      "rule_id": "sct_smb_signing",
+      "name": "SMB Signing Not Required",
+      "semantic_value": "SMB Signing Not Required",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "medium",
+      "confidence": 0.85,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "posture",
+          "field_name": "setting",
+          "operator": "equals",
+          "value": "RequireSecuritySignature"
+        }
+      ],
+      "tactic": [
+        "credential-access",
+        "lateral-movement"
+      ],
+      "technique_id": [
+        "T1557"
+      ],
+      "description": "Without required SMB signing, traffic to this host can be relayed - which turns a captured authentication into access somewhere else. Pairs with any network logon evidence the lateral-movement wing found."
+    },
+    {
+      "rule_id": "sct_insecure_guest",
+      "name": "Insecure Guest Logons Allowed",
+      "semantic_value": "Insecure Guest Logons Allowed",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "medium",
+      "confidence": 0.85,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "posture",
+          "field_name": "setting",
+          "operator": "equals",
+          "value": "AllowInsecureGuestAuth"
+        }
+      ],
+      "tactic": [
+        "initial-access",
+        "lateral-movement"
+      ],
+      "technique_id": [
+        "T1557"
+      ],
+      "description": "Insecure guest authentication permits unauthenticated SMB access to a share, so a connection can leave no account behind to attribute it to."
+    },
+    {
+      "rule_id": "sct_trusted_site",
+      "name": "Host Promoted To Trusted Sites",
+      "semantic_value": "Host Promoted To Trusted Sites",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "high",
+      "confidence": 0.85,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "zonemap",
+          "field_name": "zone",
+          "operator": "equals",
+          "value": "2"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1562.001",
+        "T1112"
+      ],
+      "description": "Zone 2 is Trusted Sites, where content runs that every other zone blocks. A host placed here is a deliberate act - the interesting row is one nobody in the organisation recognises."
+    },
+    {
+      "rule_id": "sct_restricted_site",
+      "name": "Host Placed In Restricted Sites",
+      "semantic_value": "Host Placed In Restricted Sites",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "info",
+      "confidence": 0.8,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "zonemap",
+          "field_name": "zone",
+          "operator": "equals",
+          "value": "4"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1112"
+      ],
+      "description": "Zone 4 is Restricted Sites. Recorded for completeness: it is the opposite of a weakening and is usually policy, but it is part of the same picture of how the zone map was arranged."
+    },
+    {
+      "rule_id": "sct_fast_startup",
+      "name": "Fast Startup Masks A Shutdown",
+      "semantic_value": "Fast Startup Masks A Shutdown",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "low",
+      "confidence": 0.9,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "system_config",
+          "field_name": "setting",
+          "operator": "equals",
+          "value": "HiberbootEnabled"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1070"
+      ],
+      "description": "With fast startup on, a shutdown hibernates the kernel session instead, so ShimCache is never flushed and an empty ShimCache proves nothing. The same fact the anti-forensics wing records, kept here because it belongs to the posture picture too."
+    },
+    {
+      "rule_id": "sct_channel_disabled",
+      "name": "Event Log Channel Disabled",
+      "semantic_value": "Event Log Channel Disabled",
+      "scope": "wing",
+      "category": "defense_evasion",
+      "severity": "medium",
+      "confidence": 0.6,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "winevt",
+          "field_name": "enabled",
+          "operator": "equals",
+          "value": "0"
+        }
+      ],
+      "tactic": [
+        "defense-evasion"
+      ],
+      "technique_id": [
+        "T1562.002"
+      ],
+      "description": "A disabled channel explains a silence. Several ship disabled by default - TaskScheduler/Operational and DNS-Client/Operational among them - so judge against that list before calling it tampering."
+    }
+  ],
+  "tags": [
+    "security-posture",
+    "defense-evasion",
+    "anti-forensics",
+    "configuration"
+  ],
+  "case_types": [
+    "intrusion",
+    "malware",
+    "apt",
+    "insider",
+    "compliance"
+  ]
+}

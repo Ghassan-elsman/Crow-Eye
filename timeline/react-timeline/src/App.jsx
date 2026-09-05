@@ -27,6 +27,8 @@ console.log("CROW-EYE TIMELINE V3.0.7 - CONTAINER HEIGHT FIX ACTIVE");
 export default function App() {
   const { callBridge, isLoading: bridgeLoading, isDev } = useBridge();
   const state = useTimelineState();
+  // Read here because `loadDetailData` passes it to the bridge.
+  const allEventIds = state.activeArtifacts?.all_event_ids;
   const {
     timeRange, setTimeRange, viewMode, setViewModeOverride,
     selectedEvent, detailEvent, setDetailEvent, activeArtifacts,
@@ -37,7 +39,8 @@ export default function App() {
   const [data, setData] = useState({
     sessions: null, srum_app: null, srum_net: null, mft_usn: null,
     prefetch: null, lnk: null, bam: null, dam: null, registry: null,
-    amcache: null, shimcache: null, recyclebin: null, imported: null, aggregated: null,
+    amcache: null, shimcache: null, recyclebin: null, imported: null,
+    event_logs: null, aggregated: null,
   });
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState('Initializing forensic engine...');
@@ -166,10 +169,13 @@ export default function App() {
       application_files: mergeArray(existingData.amcache?.application_files, deduplicateBatch(newData.amcache?.application_files, 'link_date'), 'link_date'),
       applications: mergeArray(existingData.amcache?.applications, deduplicateBatch(newData.amcache?.applications)),
       drivers: mergeArray(existingData.amcache?.drivers, deduplicateBatch(newData.amcache?.drivers)),
+      devices: mergeArray(existingData.amcache?.devices, deduplicateBatch(newData.amcache?.devices)),
+      driver_packages: mergeArray(existingData.amcache?.driver_packages, deduplicateBatch(newData.amcache?.driver_packages)),
     } : existingData.amcache;
 
     merged.shimcache = mergeArray(existingData.shimcache, deduplicateBatch(newData.shimcache, 'last_modified'), 'last_modified');
     merged.recyclebin = mergeArray(existingData.recyclebin, deduplicateBatch(newData.recyclebin, 'deletion_time'), 'deletion_time');
+    merged.event_logs = mergeArray(existingData.event_logs, deduplicateBatch(newData.event_logs, 'EventTimestampUTC'), 'EventTimestampUTC');
 
     return merged;
   }, []);
@@ -262,7 +268,8 @@ export default function App() {
         setData({
           sessions: null, srum_app: null, srum_net: null, mft_usn: null,
           prefetch: null, lnk: null, bam: null, dam: null, registry: null,
-          amcache: null, shimcache: null, recyclebin: null, imported: null, aggregated: data.aggregated,
+          amcache: null, shimcache: null, recyclebin: null, imported: null,
+          event_logs: null, aggregated: data.aggregated,
         });
       }
     }
@@ -329,6 +336,12 @@ export default function App() {
         callBridge('getShimcacheData', start, end),
         callBridge('getRecyclebinData', start, end),
         callBridge('getImportedData', start, end),
+        // Windows Event Log. `allEventIds` changes what the BRIDGE
+        // returns, not just what is drawn, so the toggle has to be in
+        // this call and in `loadDetailData`'s dependencies - a filter
+        // applied after the fetch could only ever hide rows, never
+        // fetch the 39,000 the curated set leaves behind.
+        callBridge('getEventLogData', start, end, !!allEventIds),
       ]);
 
       if (currentFetchId !== lastFetchId.current) return;
@@ -350,6 +363,7 @@ export default function App() {
       const rawShimcache = val(9);
       const rawRecycleBin = val(10);
       const rawImported = val(11);
+      const rawEventLogs = val(12);
 
       // DIAGNOSTIC LOGGING: Backend Response
       console.log('[DIAG] Bridge Responses:', {
@@ -387,11 +401,14 @@ export default function App() {
         amcache: rawAmcache ? {
           application_files: heuristicFlatten(rawAmcache.application_files),
           applications: heuristicFlatten(rawAmcache.applications),
-          drivers: heuristicFlatten(rawAmcache.drivers)
+          drivers: heuristicFlatten(rawAmcache.drivers),
+          devices: heuristicFlatten(rawAmcache.devices),
+          driver_packages: heuristicFlatten(rawAmcache.driver_packages)
         } : null,
         shimcache: heuristicFlatten(rawShimcache),
         recyclebin: heuristicFlatten(rawRecycleBin),
         imported: heuristicFlatten(rawImported),
+        event_logs: heuristicFlatten(rawEventLogs),
       };
 
       // Registry table normalization (case-insensitive keys for easier discovery)
@@ -434,7 +451,8 @@ export default function App() {
       console.error('[App] Detail load error:', e);
       setLoading(false);
     }
-  }, [timeRange, viewMode, callBridge, getCachedData, setCachedData, data.aggregated]);
+  }, [timeRange, viewMode, callBridge, getCachedData, setCachedData, data.aggregated,
+      allEventIds]);
 
   useEffect(() => {
     const controller = new AbortController();

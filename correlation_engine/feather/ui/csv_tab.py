@@ -80,6 +80,8 @@ class CSVTab(QWidget):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         self.import_btn = QPushButton("Import to Feather")
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.import_btn.setIcon(CrowEyeIcons.feather())
         self.import_btn.setEnabled(False)
         self.import_btn.clicked.connect(self.import_data)
         button_layout.addWidget(self.import_btn)

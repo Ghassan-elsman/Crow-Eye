@@ -41,6 +41,28 @@ function EventDetailModal({ event, onClose, callBridge }) {
         </div>
         
         <div className="modal__body">
+          {/*
+            A registry KEY write time. Without this the record shows a
+            `bounded_time` column among forty others and the analyst reads the
+            timestamp as the moment this value changed. It is not: writing any
+            value under a key updates the whole key, so the time is a ceiling
+            shared by every value under it.
+          */}
+          {(event.bounded_time || event.boundedTime) && (
+            <div className="modal__field" style={{
+              borderLeft: '3px solid var(--accent-amber, #f59e0b)',
+              paddingLeft: 10, marginBottom: 12
+            }}>
+              <div className="modal__field-label">Time</div>
+              <div className="modal__field-value">
+                &le; {formatTime(event.timestamp || event.access_date)}
+                {' '}&mdash; the containing registry key&rsquo;s last-write time.
+                It is an upper bound on every value under that key, not the
+                moment this one changed.
+                {event.time_basis ? ` (basis: ${event.time_basis})` : ''}
+              </div>
+            </div>
+          )}
           {loading ? (
              <div className="loading__text">Loading full record from database...</div>
           ) : (

@@ -54,15 +54,52 @@ class OutputRedirector(QObject):
             )
     
     def _append_text(self, text):
-        """Append text with single newline"""
-        if self.text_widget:
-            cursor = self.text_widget.textCursor()
+        """Append text with single newline.
+
+        Guarded, and `write()` being guarded is not enough. This is a QUEUED
+        slot: `write` only emits, and Qt calls this later from the event loop,
+        so a RuntimeError raised here never passes through `write`'s try block.
+
+        When the widget is destroyed without the owning panel being closed -
+        which is what happens whenever it is garbage-collected rather than
+        closed - `sys.stdout` is still this object, and the next `print`
+        anywhere in the process raises "wrapped C/C++ object of type QTextEdit
+        has been deleted". Every print, for the rest of the run.
+
+        So on the first failure the widget reference is dropped and the original
+        stream restored if there is one, turning a permanently broken stdout
+        into one line of lost output.
+        """
+        # Bound once. `insertText` on a dying widget can pump the event loop,
+        # which can deliver `destroyed` and run detach() re-entrantly - so
+        # reading self.text_widget again lower down turned the RuntimeError
+        # into "'NoneType' object has no attribute 'setTextCursor'".
+        widget = self.text_widget
+        if widget is None:
+            return
+        try:
+            cursor = widget.textCursor()
             cursor.movePosition(cursor.End)
             # Add text with single newline (text was already stripped of trailing \n)
             cursor.insertText(text + '\n')
-            self.text_widget.setTextCursor(cursor)
-            self.text_widget.ensureCursorVisible()
-    
+            widget.setTextCursor(cursor)
+            widget.ensureCursorVisible()
+        except (RuntimeError, AttributeError):
+            # The C++ side is gone. Stop trying, and hand stdout back.
+            self.detach()
+
+    def detach(self):
+        """Stop writing to the widget and give the real streams back.
+
+        Safe to call more than once, and safe to call when the widget is
+        already destroyed - which is the whole point of it existing.
+        """
+        self.text_widget = None
+        for name in ('stdout', 'stderr'):
+            if getattr(sys, name, None) is self:
+                sys.__dict__[name] = getattr(sys, '__%s__' % name, None) \
+                    or self.original_stream
+
     def write(self, text):
         """Write text to the widget"""
         try:
@@ -241,7 +278,16 @@ class CorrelationEngineWrapper(QObject):
             self.pipeline_config.run_group_id = run_group_id or str(uuid.uuid4())
 
             total_wings = len(self.selected_wings)
-            
+
+            # One feather cache for the whole run, shared by every wing's
+            # executor. Each wing runs in its own PipelineExecutor, so without
+            # this each one re-opened, re-read and re-derived every feather it
+            # names - and the shipped Wings share feathers heavily (mft_usn is
+            # in eight of eleven). The cache lives exactly as long as this run.
+            from ..engine.feather_record_cache import FeatherRecordCache
+            feather_cache = FeatherRecordCache(
+                label=str(self.pipeline_config.pipeline_name or 'run'))
+
             # Execute each wing sequentially
             for wing_index, wing_config in enumerate(self.selected_wings, start=1):
                 # Check for cancellation
@@ -267,7 +313,10 @@ class CorrelationEngineWrapper(QObject):
                 
                 # Create executor for this wing
                 self.executor = PipelineExecutor(single_wing_pipeline)
-                
+
+                # Let this wing reuse what earlier wings already read
+                self.executor.set_feather_cache(feather_cache)
+
                 # Register our progress handler to receive events
                 self.executor.engine.register_progress_listener(self.handle_engine_progress)
                 
@@ -314,6 +363,15 @@ class CorrelationEngineWrapper(QObject):
                 self._emit_evidence_accounting(summary.get('evidence_accounting') or {})
             
             # All wings complete
+            cache_stats = feather_cache.stats()
+            feather_cache.log_summary()
+            self.log_message.emit(
+                f"[Feathers] {cache_stats['loads']} feather load(s) for {total_wings} wing(s); "
+                f"{cache_stats['hits']} reused from this run's cache"
+                + (f", {cache_stats['evictions']} evicted (memory budget)"
+                   if cache_stats['evictions'] else "")
+            )
+
             if not self._cancelled:
                 self.progress_updated.emit(total_wings, total_wings, "All wings executed successfully")
                 
@@ -477,16 +535,13 @@ class ExecutionControlWidget(QWidget):
         # Connect progress message signal to append method with QueuedConnection
         self.progress_message.connect(self._append_to_log, Qt.QueuedConnection)
     
-    def _setup_output_redirection(self):
-        """Setup stdout/stderr redirection to the log output widget"""
-        # Create redirectors that write to both the widget and original streams
-        self.stdout_redirector = OutputRedirector(self.log_output, self.original_stdout)
-        self.stderr_redirector = OutputRedirector(self.log_output, self.original_stderr)
-        
-        # Redirect stdout and stderr
-        sys.stdout = self.stdout_redirector
-        sys.stderr = self.stderr_redirector
-    
+    # NOTE: a second `_setup_output_redirection` used to be defined here. Python
+    # keeps the last definition, so this one never ran - and the two differed:
+    # this one passed the original streams through, the live one further down
+    # does not. Removed rather than merged, because "write to the widget only"
+    # is the deliberate choice (it stops every line being printed twice).
+    # The live definition is the one near closeEvent.
+
     def _restore_output(self):
         """Restore original stdout/stderr"""
         if self.original_stdout:
@@ -569,8 +624,10 @@ class ExecutionControlWidget(QWidget):
     
     def _create_wing_selection_section(self) -> QGroupBox:
         """Create wing selection section"""
-        group = QGroupBox("Wing Selection")
+        group = QGroupBox()
         layout = QVBoxLayout()
+        from .crow_eye_icons import group_title_label
+        layout.addWidget(group_title_label("wing", "Wing Selection"))
         
         # Instructions
         info_label = QLabel("Select which Wings to execute:")
@@ -944,8 +1001,15 @@ class ExecutionControlWidget(QWidget):
             feature_count = len(integration_features)
             self.engine_combo.addItem(f"{display_name} ({complexity}) - {feature_count} features", engine_type)
         
-        # Set Identity-Based as default (index 1, but now index 0 since we removed time_based)
-        self.engine_combo.setCurrentIndex(1)
+        # Identity-Based is the default, resolved by NAME.
+        #
+        # This was `setCurrentIndex(1)` under a comment that already
+        # contradicted itself ("index 1, but now index 0 since we removed
+        # time_based"). The order of EngineSelector.get_available_engines() is
+        # not a contract, and a positional default silently follows it.
+        from ..engine.engine_selector import EngineType
+        default_index = self.engine_combo.findData(EngineType.IDENTITY_BASED)
+        self.engine_combo.setCurrentIndex(default_index if default_index >= 0 else 0)
         
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         engine_layout.addWidget(self.engine_combo, stretch=1)
@@ -1104,7 +1168,35 @@ class ExecutionControlWidget(QWidget):
         # Set output directory from pipeline config
         if pipeline_config.output_directory:
             self.output_dir_input.setText(pipeline_config.output_directory)
-        
+
+        # Show the engine the pipeline was saved with.
+        #
+        # The combo is built with a hardcoded setCurrentIndex(1) and nothing
+        # ever moved it, while execute() does
+        # `execution_pipeline.engine_type = self.engine_combo.currentData()`.
+        # So loading a pipeline saved as `time_window_scanning` and pressing
+        # RUN silently ran the identity engine instead: the selector always
+        # said Identity-Based, and the selector wins.
+        engine_type = getattr(pipeline_config, 'engine_type', None)
+        if engine_type and hasattr(self, 'engine_combo'):
+            index = self.engine_combo.findData(engine_type)
+            if index >= 0:
+                blocked = self.engine_combo.blockSignals(True)
+                self.engine_combo.setCurrentIndex(index)
+                self.engine_combo.blockSignals(blocked)
+                # Keep the description label in step with the new selection.
+                try:
+                    self._on_engine_changed(index)
+                except Exception as e:
+                    logger.warning(
+                        "[ExecutionControl] Could not refresh engine "
+                        "description: %s", e)
+            else:
+                logger.warning(
+                    "[ExecutionControl] Pipeline names engine %r, which is not "
+                    "in the selector; leaving the current selection alone",
+                    engine_type)
+
         # Populate wing list
         self.wing_list.clear()
         
@@ -1121,8 +1213,18 @@ class ExecutionControlWidget(QWidget):
             self._batched_log.append_text("\n[WARN] Warning: No Wings configured in pipeline")
             self._batched_log.append_text("Please add Wings to the pipeline before executing.")
         else:
+            # Exactly one wing starts ticked - the widest one.
+            #
+            # Every wing used to arrive checked, so pressing Execute on a
+            # freshly loaded pipeline ran all eleven shipped Wings, which is
+            # around forty-five minutes of work nobody asked for. The widest
+            # wing is the useful default because it draws on the most
+            # artifacts: Execution Proof, with 14 feathers, against 12 for
+            # Persistence Mechanisms and 3 for Brute Force.
+            default_index = self._widest_wing_index(pipeline_config.wing_configs)
+
             # Populate wings
-            for wing_config in pipeline_config.wing_configs:
+            for wing_index, wing_config in enumerate(pipeline_config.wing_configs):
                 wing_name = getattr(wing_config, 'wing_name', 'Unknown Wing')
                 feather_count = len(getattr(wing_config, 'feathers', []))
 
@@ -1135,7 +1237,8 @@ class ExecutionControlWidget(QWidget):
 
                 item = QListWidgetItem(label)
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Checked) # Default to checked
+                item.setCheckState(Qt.Checked if wing_index == default_index
+                                   else Qt.Unchecked)
                 item.setData(Qt.UserRole, wing_config)
                 if is_advanced:
                     item.setIcon(CrowEyeIcons.bolt())
@@ -1822,16 +1925,34 @@ class ExecutionControlWidget(QWidget):
                 self._batched_log.append_text(f"Total Wings Executed: {summary.get('total_wings_executed', 0)}")
                 self._batched_log.flush() # Force immediate display
             
-            # Show completion message
-            QMessageBox.information(
-                self,
-                "Execution Complete",
+            # Show the completion notice WITHOUT blocking, then start the
+            # results loading.
+            #
+            # `QMessageBox.information(...)` runs its own event loop, and the
+            # emit below is what makes the Results Viewer build. So the viewer
+            # did not start loading when the run ended - it started when the
+            # analyst got round to clicking OK, with nothing on screen saying
+            # the results were waiting on a click.
+            #
+            # Order matters: show() returns immediately, so the notice still
+            # appears the moment the run finishes and the results load
+            # underneath it. Emitting first would put the notice AFTER the load.
+            # The box is kept on self because Python dropping the last
+            # reference destroys the window.
+            self._completion_box = QMessageBox(self)
+            self._completion_box.setIcon(QMessageBox.Information)
+            self._completion_box.setWindowTitle("Execution Complete")
+            self._completion_box.setText(
                 f"All wings executed successfully!\n\n"
                 f"Total Wings: {summary.get('total_wings_executed', 0)}\n\n"
-                f"Results have been saved to separate tabs."
+                f"Results are loading into their tabs."
             )
-            
-            # Emit signal for parent widget
+            self._completion_box.setStandardButtons(QMessageBox.Ok)
+            self._completion_box.setWindowModality(Qt.NonModal)
+            self._completion_box.setAttribute(Qt.WA_DeleteOnClose)
+            self._completion_box.show()
+
+            # Emit signal for parent widget - this is what builds the results
             self.execution_completed.emit(summary)
         except Exception as e:
             logger.error(f"Error handling execution completion: {e}", exc_info=True)
@@ -2198,6 +2319,23 @@ class ExecutionControlWidget(QWidget):
             import traceback
             traceback.print_exc()
     
+    @staticmethod
+    def _widest_wing_index(wing_configs) -> int:
+        """Which wing starts ticked: the one with the most feathers.
+
+        Ties go to the earlier wing in pipeline order - USB and Lateral
+        Movement both declare 8 - so the default is the same every time the
+        pipeline is loaded rather than an accident of iteration.
+
+        Returns -1 when there are no wings, which ticks nothing.
+        """
+        widest_index, widest_count = -1, -1
+        for index, wing_config in enumerate(wing_configs or []):
+            count = len(getattr(wing_config, 'feathers', None) or [])
+            if count > widest_count:
+                widest_index, widest_count = index, count
+        return widest_index
+
     def _select_all_wings(self):
         """Select all wings"""
         for i in range(self.wing_list.count()):
@@ -2731,7 +2869,19 @@ class ExecutionControlWidget(QWidget):
         # Keep strong references to prevent garbage collection
         self.stdout_redirector.setParent(self)
         self.stderr_redirector.setParent(self)
-        
+
+        # Detach when the widget goes away, not only when the panel is closed.
+        # Restoration used to live in closeEvent alone, so a widget destroyed
+        # rather than closed left sys.stdout pointing at freed memory and every
+        # later print in the process raised.
+        try:
+            self.log_output.destroyed.connect(self.stdout_redirector.detach)
+            self.log_output.destroyed.connect(self.stderr_redirector.detach)
+        except Exception:
+            # An older Qt without the signal is not a reason to skip redirecting;
+            # _append_text still self-heals on the first RuntimeError.
+            pass
+
         # Redirect stdout and stderr
         sys.stdout = self.stdout_redirector
         sys.stderr = self.stderr_redirector

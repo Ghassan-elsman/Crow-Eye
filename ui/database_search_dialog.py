@@ -1667,6 +1667,29 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
     # Database Tree Population (Task 4.2)
     # ========================================================================
     
+    @classmethod
+    def _group_databases_for_tree(cls, enhanced_databases) -> List[Tuple[str, List]]:
+        """`[(category, [database, ...]), ...]` for the tree, in display order.
+
+        Pure, and separate from the widget building, so what the tree can reach
+        is testable without a Qt window - which is what
+        `data/tests/test_search_reaches_every_database.py` drives.
+
+        Grouped by the category each discovered database ALREADY carries.
+        `DATABASE_CATEGORIES` decides only the ORDER now: its five names are
+        how an examiner narrows a search, so they come first, and anything else
+        discovered follows.
+        """
+        by_category: Dict[str, List] = {}
+        for db in enhanced_databases:
+            by_category.setdefault(
+                getattr(db, "category", None) or "Custom/Other Artifacts",
+                []).append(db)
+
+        ordered = [c for c in cls.DATABASE_CATEGORIES if c in by_category]
+        ordered += [c for c in sorted(by_category) if c not in ordered]
+        return [(c, by_category[c]) for c in ordered]
+
     def _load_available_databases(self):
         """
         Load and populate the database tree with discovered databases using enhanced metadata.
@@ -1715,10 +1738,26 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             # Group databases by GUI tab name
             grouped_by_tab = discovery_manager.get_databases_by_gui_tab()
             
-            # Organize by category
+            # Organize by category.
+            #
+            # Grouped by the category each discovered database ALREADY carries,
+            # not by looking each one up in `DATABASE_CATEGORIES`. That lookup
+            # kept only databases named in one of its five hand-written lists,
+            # so every imported-evidence database and every custom one was
+            # discovered, enhanced, and then dropped before it reached the
+            # tree - it could not be checked, so it was never searched, and
+            # nothing anywhere said so. `DatabaseManager` has been labelling
+            # them `Imported Evidence` and `Custom/Other Artifacts` the whole
+            # time and nothing read it.
+            #
+            # `DATABASE_CATEGORIES` still decides the ORDER, because those five
+            # names are how an examiner narrows a search; anything else follows.
+            grouped = self._group_databases_for_tree(enhanced_databases)
+
             category_items: Dict[str, QtWidgets.QTreeWidgetItem] = {}
-            
-            for category, db_names in self.DATABASE_CATEGORIES.items():
+
+            for category, category_databases in grouped:
+                db_names = [d.name for d in category_databases]
                 # Create category item
                 category_item = QtWidgets.QTreeWidgetItem(self.database_tree)
                 category_item.setText(0, category)

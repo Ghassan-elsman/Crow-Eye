@@ -41,7 +41,7 @@ def artifacts_dir(tmp_path):
             execution_flags TEXT, parsed_at TEXT);
         CREATE TABLE Shellbags (file_name TEXT, parent_path TEXT,
             accessed_date TEXT, modified_date TEXT, created_date TEXT,
-            registry_path TEXT);
+            registry_path TEXT, bag_views TEXT);
         CREATE TABLE USBDevices (device_id TEXT, description TEXT,
             manufacturer TEXT, friendly_name TEXT, last_connected TEXT);
         CREATE TABLE InstalledSoftware (display_name TEXT, display_version TEXT,
@@ -55,7 +55,52 @@ def artifacts_dir(tmp_path):
             daylight_name TEXT, bias TEXT, active_time_bias TEXT, timestamp TEXT);
         CREATE TABLE RecentDocs (subkey TEXT, name TEXT, data TEXT, type TEXT);
         CREATE TABLE AutoStartPrograms (location TEXT, program_name TEXT,
-            command TEXT, timestamp TEXT);
+            command TEXT, startup_state TEXT, disabled_at TEXT, timestamp TEXT);
+        -- The artifacts the registry parsers collect that had no rule until
+        -- 2026-09-03. RecentDocs above deliberately keeps its OLD `data`
+        -- column so the extractor's row_data/data fallback stays exercised.
+        CREATE TABLE ScheduledTasks (task_path TEXT, task_guid TEXT,
+            command TEXT, arguments TEXT, working_dir TEXT, run_context TEXT,
+            triggers_index TEXT, task_registered TEXT, last_run TEXT,
+            last_completed TEXT, last_result TEXT, parsed_at TEXT);
+        CREATE TABLE DefenderExclusions (exclusion_type TEXT, value TEXT,
+            source TEXT, key_path TEXT, last_written TEXT, time_basis TEXT,
+            parsed_at TEXT);
+        CREATE TABLE SecurityPosture (setting TEXT, value_raw TEXT,
+            value_decoded TEXT, default_value TEXT, assessment TEXT,
+            meaning TEXT, key_path TEXT, last_written TEXT, time_basis TEXT,
+            parsed_at TEXT);
+        CREATE TABLE file_exts (user_name TEXT, extension TEXT,
+            choice_type TEXT, progid TEXT, key_path TEXT, last_written TEXT,
+            time_basis TEXT, parsed_at TEXT);
+        CREATE TABLE clsid_inprocserver32 (hive TEXT, key_path TEXT,
+            name TEXT, data TEXT, data_decoded TEXT, type TEXT,
+            user_name TEXT, parsed_at TEXT);
+        CREATE TABLE FeatureUsage (user_name TEXT, usage_type TEXT,
+            program TEXT, count INTEGER, key_path TEXT, last_written TEXT,
+            time_basis TEXT, parsed_at TEXT);
+        CREATE TABLE CompatibilityAssistant (user_name TEXT, program_path TEXT,
+            blob_size INTEGER, key_path TEXT, last_written TEXT,
+            time_basis TEXT, parsed_at TEXT);
+        CREATE TABLE OpenSaveMRU (subkey TEXT, name TEXT, type TEXT,
+            file_path TEXT, file_name TEXT, extension TEXT, drive_letter TEXT,
+            access_date TEXT, key_last_write TEXT, row_data TEXT,
+            parsed_at TEXT, user_name TEXT);
+        CREATE TABLE ConnectedDevices (device_type TEXT, device_id TEXT,
+            friendly_name TEXT, details TEXT, key_path TEXT,
+            last_written TEXT, time_basis TEXT, parsed_at TEXT);
+        CREATE TABLE MountPoints2 (user_name TEXT, mount_id TEXT,
+            mount_type TEXT, key_path TEXT, last_written TEXT,
+            time_basis TEXT, parsed_at TEXT);
+        CREATE TABLE OfficeDocuments (user_name TEXT, application TEXT,
+            version TEXT, kind TEXT, document TEXT, raw TEXT, key_path TEXT,
+            last_written TEXT, time_basis TEXT, parsed_at TEXT);
+        CREATE TABLE system_configuration (setting TEXT, value_raw TEXT,
+            value_decoded TEXT, area TEXT, meaning TEXT, key_path TEXT,
+            last_written TEXT, time_basis TEXT, parsed_at TEXT);
+        CREATE TABLE system_environment (name TEXT, value TEXT,
+            value_decoded TEXT, key_path TEXT, last_written TEXT,
+            time_basis TEXT, parsed_at TEXT);
         CREATE TABLE SystemServices (service_name TEXT, display_name TEXT,
             description TEXT, image_path TEXT, start_type TEXT, service_type TEXT,
             error_control TEXT, status TEXT, timestamp TEXT);
@@ -79,10 +124,20 @@ def artifacts_dir(tmp_path):
              "app_name": "chrome.exe", "process_path": "C:\\Apps\\chrome.exe",
              "sid": "S-1-5-21-111-222-333-1001", "last_execution": "2026-06-12 11:30:00",
              "execution_flags": "", "parsed_at": ""}],
+        # Three rows on purpose: a bag whose view kind is unknown - an
+        # older case, or a key with no NodeSlot - and one of each kind, so the
+        # extractor's three branches are all reached. Before this the fixture
+        # had no bag_views column at all and two of them never ran.
         "Shellbags": [
             {"file_name": "Secret", "parent_path": "C:\\Users\\Alice\\Documents",
              "accessed_date": "2026-06-12 13:30:00", "modified_date": "",
-             "created_date": "", "registry_path": ""}],
+             "created_date": "", "registry_path": "", "bag_views": None},
+            {"file_name": "Reports", "parent_path": "C:\\Users\\Alice\\Documents",
+             "accessed_date": "2026-06-12 13:31:00", "modified_date": "",
+             "created_date": "", "registry_path": "", "bag_views": "Shell"},
+            {"file_name": "Exports", "parent_path": "C:\\Users\\Alice\\Documents",
+             "accessed_date": "2026-06-12 13:32:00", "modified_date": "",
+             "created_date": "", "registry_path": "", "bag_views": "ComDlg"}],
         "USBDevices": [
             {"device_id": "USB\\VID_1234", "description": "Kingston",
              "manufacturer": "Kingston", "friendly_name": "Kingston DataTraveler",
@@ -112,9 +167,109 @@ def artifacts_dir(tmp_path):
         "AutoStartPrograms": [
             {"location": "HKCU Run", "program_name": "OneDrive",
              "command": "C:\\Users\\Alice\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe",
-             "timestamp": ""},
+             "startup_state": "enabled", "disabled_at": "", "timestamp": ""},
             {"location": "HKLM Run", "program_name": "Sketchy",
-             "command": "C:\\Users\\Alice\\AppData\\Roaming\\evil.exe", "timestamp": ""}],
+             "command": "C:\\Users\\Alice\\AppData\\Roaming\\evil.exe",
+             "startup_state": "unknown", "disabled_at": "", "timestamp": ""},
+            # Switched off by the user. Reported as live persistence - and
+            # escalated to suspicious for its user-writable path - until the
+            # extractor started reading startup_state.
+            {"location": "HKCU Run", "program_name": "Dormant",
+             "command": "C:\\Users\\Alice\\AppData\\Roaming\\dormant.exe",
+             "startup_state": "disabled", "disabled_at": "2026-02-14 02:11:00",
+             "timestamp": ""}],
+        # One row per new rule, each shaped to produce exactly one event. A
+        # rule whose fixture yields nothing passes its test by finding nothing.
+        "ScheduledTasks": [
+            # %windir% is expanded from system_environment below, not from the
+            # machine running the tests.
+            {"task_path": "\\Microsoft\\Windows\\Demo\\Updater",
+             "task_guid": "{1111}", "command": "%windir%\\system32\\demo.exe",
+             "arguments": "/quiet", "working_dir": "", "run_context": "SYSTEM",
+             "triggers_index": "", "task_registered": "2026-06-01 09:00:00",
+             "last_run": "2026-06-02 09:00:00", "last_completed": "",
+             "last_result": "0", "parsed_at": ""}],
+        "DefenderExclusions": [
+            {"exclusion_type": "Path", "value": "C:\\Tools\\imager",
+             "source": "local", "key_path": "SOFTWARE\\...\\Exclusions\\Paths",
+             "last_written": "2026-06-03 10:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""}],
+        "SecurityPosture": [
+            # Assessed 'changed', so the rule has something to fire on. A
+            # machine at its defaults produces none, which is why this row
+            # exists at all.
+            {"setting": "EnableLUA", "value_raw": "0", "value_decoded": "disabled",
+             "default_value": "1 / absent", "assessment": "changed",
+             "meaning": "UAC is switched off", "key_path": "SOFTWARE\\...\\System",
+             "last_written": "2026-06-04 11:00:00",
+             "time_basis": "value (txn log)", "parsed_at": ""},
+            # At its default: must NOT produce an event.
+            {"setting": "SaveZoneInformation", "value_raw": "1",
+             "value_decoded": "enabled", "default_value": "1 / absent",
+             "assessment": "default", "meaning": "", "key_path": "",
+             "last_written": "", "time_basis": "", "parsed_at": ""}],
+        "file_exts": [
+            {"user_name": "Alice", "extension": ".txt",
+             "choice_type": "UserChoice", "progid": "Notepad.exe",
+             "key_path": "", "last_written": "2026-06-05 12:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""},
+            # OpenWithList is the "Open with" menu, not the handler in force.
+            # Counting it would report every listed program as a choice.
+            {"user_name": "Alice", "extension": ".txt",
+             "choice_type": "OpenWithList", "progid": "wordpad.exe",
+             "key_path": "", "last_written": "", "time_basis": "",
+             "parsed_at": ""}],
+        "clsid_inprocserver32": [
+            {"hive": "HKCU", "key_path": "Software\\Classes\\CLSID",
+             "name": "{2222}!(Default)",
+             "data": "C:\\Users\\Alice\\AppData\\Local\\app\\ext.dll",
+             "data_decoded": "", "type": "REG_SZ", "user_name": "Alice",
+             "parsed_at": ""},
+            # ThreadingModel lives in the same key and is not a library path.
+            {"hive": "HKCU", "key_path": "Software\\Classes\\CLSID",
+             "name": "{2222}!ThreadingModel", "data": "Apartment",
+             "data_decoded": "", "type": "REG_SZ", "user_name": "Alice",
+             "parsed_at": ""}],
+        "FeatureUsage": [
+            {"user_name": "Alice", "usage_type": "AppLaunch",
+             "program": "notepad.exe", "count": 7, "key_path": "",
+             "last_written": "2026-06-06 13:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""}],
+        "CompatibilityAssistant": [
+            {"user_name": "Alice", "program_path": "C:\\Tools\\legacy.exe",
+             "blob_size": 24, "key_path": "",
+             "last_written": "2026-06-07 14:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""}],
+        "OpenSaveMRU": [
+            {"subkey": "txt", "name": "0", "type": "REG_BINARY",
+             "file_path": "C:\\Users\\Alice\\Documents", "file_name": "notes.txt",
+             "extension": "txt", "drive_letter": "C:", "access_date": "",
+             "key_last_write": "2026-06-08 15:00:00", "row_data": "",
+             "parsed_at": "", "user_name": "Alice"}],
+        "ConnectedDevices": [
+            {"device_type": "Bluetooth", "device_id": "BTHENUM\\DEV_1",
+             "friendly_name": "Alice's Headset", "details": "",
+             "key_path": "", "last_written": "2026-06-09 16:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""}],
+        "MountPoints2": [
+            {"user_name": "Alice", "mount_id": "E", "mount_type": "drive letter",
+             "key_path": "", "last_written": "2026-06-10 17:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""}],
+        "OfficeDocuments": [
+            {"user_name": "Alice", "application": "Word", "version": "16.0",
+             "kind": "File MRU", "document": "C:\\Users\\Alice\\report.docx",
+             "raw": "", "key_path": "", "last_written": "2026-06-11 18:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""}],
+        "system_configuration": [
+            {"setting": "Favorites", "value_raw": "003A01...",
+             "value_decoded": "2 pinned: Brave.lnk, Explorer.lnk",
+             "area": "taskbar", "meaning": "", "key_path": "",
+             "last_written": "2026-06-12 19:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""}],
+        "system_environment": [
+            {"name": "windir", "value": "%SystemRoot%",
+             "value_decoded": "D:\\Windows", "key_path": "",
+             "last_written": "", "time_basis": "", "parsed_at": ""}],
         "SystemServices": [
             {"service_name": "Dnscache", "display_name": "DNS Client", "description": "",
              "image_path": "C:\\Windows\\System32\\svchost.exe", "start_type": "2",

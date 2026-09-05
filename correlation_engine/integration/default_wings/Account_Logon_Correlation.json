@@ -8,7 +8,6 @@
   "created_date": "2026-05-18T00:00:00Z",
   "last_modified": "2026-05-18T00:00:00Z",
   "version": "1.0",
-
   "feathers": [
     {
       "feather_config_name": "SecurityLogs_CrowEyeFeather",
@@ -33,7 +32,7 @@
       "feather_database_path": "feathers/RecentDocs_CrowEyeFeather.db",
       "artifact_type": "RecentDocs",
       "feather_id": "recentdocs",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 3,
       "tier_name": "Documents opened under the session"
     },
@@ -42,7 +41,7 @@
       "feather_database_path": "feathers/LastSaveMRU_CrowEyeFeather.db",
       "artifact_type": "LastSaveMRU",
       "feather_id": "lastsavemru",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 3,
       "tier_name": "Files saved under the session"
     },
@@ -51,7 +50,7 @@
       "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
       "artifact_type": "MFT",
       "feather_id": "mft_usn",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 3,
       "tier_name": "File-system activity under the session"
     },
@@ -74,7 +73,6 @@
       "tier_name": "Supporting application context"
     }
   ],
-
   "time_window_minutes": 180,
   "minimum_matches": 1,
   "target_application": "",
@@ -91,25 +89,40 @@
     "ApplicationLogs"
   ],
   "use_weighted_scoring": true,
-
   "scoring": {
     "enabled": true,
     "score_interpretation": {
-      "confirmed":  { "min": 0.70, "label": "Confirmed Authenticated Session" },
-      "probable":   { "min": 0.40, "label": "Probable Authenticated Session" },
-      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
-      "not_proven": { "min": 0.00, "label": "Not Proven" }
+      "confirmed": {
+        "min": 0.7,
+        "label": "Confirmed Authenticated Session"
+      },
+      "probable": {
+        "min": 0.4,
+        "label": "Probable Authenticated Session"
+      },
+      "weak": {
+        "min": 0.2,
+        "label": "Weak / Partial Evidence"
+      },
+      "not_proven": {
+        "min": 0.0,
+        "label": "Not Proven"
+      }
     }
   },
-
   "semantic_rules": [
     {
       "rule_id": "auth_successful_logon",
       "name": "Successful Account Logon (4624)",
       "semantic_value": "Account Logon",
-      "description": "Security event 4624 — an account successfully authenticated to the host",
+      "description": "Security event 4624 \u2014 an account successfully authenticated to the host",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4624" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4624"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -118,13 +131,22 @@
     },
     {
       "rule_id": "auth_special_privileges",
-      "technique_id": ["T1078"],
-      "tactic": ["privilege-escalation"],
+      "technique_id": [
+        "T1078"
+      ],
+      "tactic": [
+        "privilege-escalation"
+      ],
       "name": "Elevated Privileges Assigned (4672)",
       "semantic_value": "Privilege Elevation",
-      "description": "Security event 4672 — special privileges (e.g. SeDebugPrivilege, SeTcbPrivilege) assigned to the new logon",
+      "description": "Security event 4672 \u2014 special privileges (e.g. SeDebugPrivilege, SeTcbPrivilege) assigned to the new logon",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4672" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4672"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -135,9 +157,14 @@
       "rule_id": "auth_explicit_creds",
       "name": "Explicit Credential Use (4648)",
       "semantic_value": "Explicit Credentials",
-      "description": "Security event 4648 — a process used explicit credentials to authenticate (RunAs, NetUse, scheduled task auth)",
+      "description": "Security event 4648 \u2014 a process used explicit credentials to authenticate (RunAs, NetUse, scheduled task auth)",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4648" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4648"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -148,9 +175,14 @@
       "rule_id": "auth_failure",
       "name": "Failed Logon (4625)",
       "semantic_value": "Authentication Failure",
-      "description": "Security event 4625 — a logon attempt failed. Bursts of these preceding a 4624 indicate credential stuffing / brute-force.",
+      "description": "Security event 4625 \u2014 a logon attempt failed. Bursts of these preceding a 4624 indicate credential stuffing / brute-force.",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4625" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4625"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -161,10 +193,20 @@
       "rule_id": "auth_confirmed_session_activity",
       "name": "Confirmed Session Activity (AND)",
       "semantic_value": "Account Was Active",
-      "description": "Successful logon AND at least one user-driven artefact (UserAssist run / RecentDocs / MRU) within the window — proves the account didn't just authenticate, it acted",
+      "description": "Successful logon AND at least one user-driven artefact (UserAssist run / RecentDocs / MRU) within the window \u2014 proves the account didn't just authenticate, it acted",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID",        "operator": "equals",   "value": "4624" },
-        { "feather_id": "userassist",    "field_name": "application_name","operator": "wildcard", "value": "*" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4624"
+        },
+        {
+          "feather_id": "userassist",
+          "field_name": "program_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -175,10 +217,20 @@
       "rule_id": "auth_logon_event",
       "name": "Logon Event (Success or Failure)",
       "semantic_value": "Logon Event (4624 or 4625)",
-      "description": "Security log shows either a successful (4624) or failed (4625) logon. Previously this rule used AND semantics with conflicting equals values on the same field, which was logically impossible — a single record's EventID can only equal one value, so the AND rule never fired. Now uses OR so each logon event is correctly tagged. Detecting the failed-then-success SEQUENCE (the original intent — possible credential guessing) requires temporal correlation across multiple records in a window, which is outside the per-record AND/OR rule semantics; analysts should look at scored anchors with both event types present rather than relying on a single rule firing.",
+      "description": "Security log shows either a successful (4624) or failed (4625) logon. Previously this rule used AND semantics with conflicting equals values on the same field, which was logically impossible \u2014 a single record's EventID can only equal one value, so the AND rule never fired. Now uses OR so each logon event is correctly tagged. Detecting the failed-then-success SEQUENCE (the original intent \u2014 possible credential guessing) requires temporal correlation across multiple records in a window, which is outside the per-record AND/OR rule semantics; analysts should look at scored anchors with both event types present rather than relying on a single rule firing.",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4625" },
-        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4624" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4625"
+        },
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4624"
+        }
       ],
       "logic_operator": "OR",
       "scope": "wing",
@@ -186,7 +238,6 @@
       "severity": "info"
     }
   ],
-
   "tags": [
     "authentication",
     "logon",

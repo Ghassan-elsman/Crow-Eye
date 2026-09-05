@@ -17,6 +17,11 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 try:
+    import registry_transaction_log
+except ImportError:                                   # pragma: no cover
+    from Artifacts_Collectors import registry_transaction_log
+
+try:
     from shimcash_claw import ShimCacheParser
 except ImportError:
     try:
@@ -42,12 +47,15 @@ class OfflineShimCacheParser(ShimCacheParser):
             list of (data_bytes, control_set_path)
         """
         if not os.path.exists(system_hive_path):
-            print(f"❌ SYSTEM hive not found at: {system_hive_path}")
+            print(f"[FAIL] SYSTEM hive not found at: {system_hive_path}")
             return []
 
         results = []
         try:
-            reg = Registry.Registry(system_hive_path)
+            # AppCompatCache lives in SYSTEM, which is dirty on any running
+            # machine. Read the recovered state, not the flushed one.
+            reg = Registry.Registry(
+                registry_transaction_log.hive_for_reading(system_hive_path))
             
             # Paths to check in the SYSTEM hive
             # Note: These are relative to the hive root
@@ -67,30 +75,30 @@ class OfflineShimCacheParser(ShimCacheParser):
                         value = target_key.value("AppCompatCache")
                         if value:
                             results.append((value.value(), target_path))
-                            print(f"✓ Found ShimCache data in {target_path}")
+                            print(f"[OK] Found ShimCache data in {target_path}")
                     except Exception:
                         continue
                         
             return results
         except Exception as e:
-            print(f"❌ Error reading offline hive: {e}")
+            print(f"[FAIL] Error reading offline hive: {e}")
             return []
 
     def run_offline(self, system_hive_path: str, db_path: str = None):
         """Run analysis on an offline hive."""
-        print(f"🚀 Starting Offline ShimCache Analysis: {system_hive_path}")
+        print(f"[START] Starting Offline ShimCache Analysis: {system_hive_path}")
         
         # Store db_path for return value
         output_db = db_path if db_path else getattr(self, 'db_path', 'shimcache.db')
         
         all_data = self.get_offline_registry_data(system_hive_path)
         if not all_data:
-            print("❌ No ShimCache data found in hive")
+            print("[FAIL] No ShimCache data found in hive")
             return {"success": False, "records": 0, "output_path": output_db}
             
         all_entries = []
         for data, path in all_data:
-            print(f"📊 Parsing {len(data):,} bytes from {path}...")
+            print(f"[STATS] Parsing {len(data):,} bytes from {path}...")
             entries = self.parse_shimcache_data(data)
             for entry in entries:
                 entry.extract_filename()
@@ -99,7 +107,7 @@ class OfflineShimCacheParser(ShimCacheParser):
                 
         if all_entries:
             self.save_to_database(all_entries)
-            print(f"✅ Successfully parsed {len(all_entries)} total entries")
+            print(f"[OK] Successfully parsed {len(all_entries)} total entries")
             return {"success": True, "records": len(all_entries), "output_path": output_db}
         else:
             return {"success": False, "records": 0, "output_path": output_db}

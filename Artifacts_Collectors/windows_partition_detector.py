@@ -299,10 +299,10 @@ class WindowsPartitionDetector:
 
             if os.path.exists(full_path):
                 found_files += 1
-                logger.debug(f"  ✓ Found: {rel_file_path}")
+                logger.debug(f"  [OK] Found: {rel_file_path}")
             else:
                 missing_files.append(rel_file_path)
-                logger.debug(f"  ✗ Missing: {rel_file_path}")
+                logger.debug(f"  [FAIL] Missing: {rel_file_path}")
         
         # Verify minimum number of critical files exist
         is_valid = found_files >= self.MIN_VERIFICATION_FILES

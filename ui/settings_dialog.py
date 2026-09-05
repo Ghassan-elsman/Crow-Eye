@@ -150,6 +150,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.case_settings_panel = self.create_case_settings_panel()
         self.semantic_mappings_panel = self.create_semantic_mappings_panel()
         self.pipeline_mgmt_panel = self.create_pipeline_management_panel()
+        self.parsing_panel = self.create_parsing_panel()
         self.eye_ai_panel = self.create_eye_ai_panel()
         # Updates section is EXE-only: build it only when the updater package ships
         # (the main/portable build has no `update/` -> no auto-update UI at all).
@@ -160,6 +161,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.content_stack.addWidget(self.case_settings_panel)
         self.content_stack.addWidget(self.semantic_mappings_panel)
         self.content_stack.addWidget(self.pipeline_mgmt_panel)
+        self.content_stack.addWidget(self.parsing_panel)
         self.content_stack.addWidget(self.eye_ai_panel)
         if self.updates_panel is not None:
             self.content_stack.addWidget(self.updates_panel)
@@ -259,14 +261,18 @@ class SettingsDialog(QtWidgets.QDialog):
         sidebar_layout.addWidget(pipelines_btn)
         self.nav_buttons.append(pipelines_btn)
 
-        eye_ai_btn = self.create_nav_button("Eye AI", 5)
+        parsing_btn = self.create_nav_button("Parsing", 5, "settings")
+        sidebar_layout.addWidget(parsing_btn)
+        self.nav_buttons.append(parsing_btn)
+
+        eye_ai_btn = self.create_nav_button("Eye AI", 6)
         eye_ai_btn.setIcon(QtGui.QIcon("GUI Resources/the Eye AI agent transparent.png"))
         eye_ai_btn.setIconSize(QtCore.QSize(20, 20))
         sidebar_layout.addWidget(eye_ai_btn)
         self.nav_buttons.append(eye_ai_btn)
 
         if _UPDATER_AVAILABLE:
-            updates_btn = self.create_nav_button("Updates", 6, "download")
+            updates_btn = self.create_nav_button("Updates", 7, "download")
             sidebar_layout.addWidget(updates_btn)
             self.nav_buttons.append(updates_btn)
         
@@ -1387,6 +1393,83 @@ class SettingsDialog(QtWidgets.QDialog):
         
         return panel
     
+
+    def create_parsing_panel(self):
+        """How a parse is allowed to reach a locked hive.
+
+        Some hives cannot be read in place at all: SAM denies its own subtree,
+        SECURITY denies its root, and every device Properties key under Enum
+        denies an elevated administrator. Crow-Eye reads them as files instead -
+        an existing shadow copy, raw disk, or an NtSaveKeyEx export.
+
+        The one decision worth surfacing is whether a parse may CREATE a shadow
+        copy when none exists, because that writes to the machine under
+        investigation.
+        """
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+
+        header = QtWidgets.QLabel("PARSING")
+        header.setStyleSheet("""
+            QLabel {
+                color: #00FFFF;
+                font-size: 22px;
+                font-weight: 800;
+                font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+            }
+        """)
+        layout.addWidget(header)
+
+        blurb = QtWidgets.QLabel(
+            "Some registry hives cannot be read in place, even as an "
+            "administrator. Crow-Eye reads those as files instead, which is "
+            "also the only way to recover deleted keys and values.")
+        blurb.setWordWrap(True)
+        blurb.setStyleSheet("QLabel { color: #94A3B8; font-size: 13px; }")
+        layout.addWidget(blurb)
+
+        group = QtWidgets.QGroupBox("Locked hives")
+        group.setStyleSheet("""
+            QGroupBox {
+                color: #E2E8F0;
+                font-size: 14px;
+                font-weight: 700;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding: 18px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
+        """)
+        group_layout = QtWidgets.QVBoxLayout(group)
+        group_layout.setSpacing(12)
+
+        self.snapshot_creation_checkbox = QtWidgets.QCheckBox(
+            "Create a shadow copy when one is needed")
+        self.snapshot_creation_checkbox.setStyleSheet(
+            "QCheckBox { color: #E2E8F0; font-size: 13px; font-weight: 600; }")
+        group_layout.addWidget(self.snapshot_creation_checkbox)
+
+        explain = QtWidgets.QLabel(
+            "On, a parse creates a Volume Shadow Copy if none exists, so a "
+            "locked hive can still be read. This writes to the machine being "
+            "examined.\n\n"
+            "Off, only shadow copies that already exist are used. The parse "
+            "then falls back to raw disk access, and then to a registry export "
+            "- which reads every key but cannot recover deleted ones, because "
+            "an export contains no freed cells.\n\n"
+            "Either way, the route each hive was read by is recorded in the "
+            "case, in the Hive State tab.")
+        explain.setWordWrap(True)
+        explain.setStyleSheet("QLabel { color: #94A3B8; font-size: 12px; }")
+        group_layout.addWidget(explain)
+
+        layout.addWidget(group)
+        layout.addStretch()
+        return panel
+
     def create_eye_ai_panel(self):
         """Create the Eye AI settings panel (Compliance payload storage)."""
         panel = QtWidgets.QWidget()
@@ -2797,6 +2880,10 @@ class SettingsDialog(QtWidgets.QDialog):
         cascade_enabled = getattr(config, 'cascade_tree_expansion_enabled', True)
         self.cascade_expansion_checkbox.setChecked(cascade_enabled)
 
+        # Parsing: may a parse create a shadow copy to reach a locked hive.
+        self.snapshot_creation_checkbox.setChecked(
+            getattr(config, 'parser_allow_snapshot_creation', True))
+
         # Load Eye AI settings from configs/eye_config.json
         if read_eye_ai_settings is not None:
             try:
@@ -2935,7 +3022,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 max_history_size=self.max_history_spin.value(),
                 identity_semantic_phase_enabled=self.identity_semantic_phase_checkbox.isChecked(),
                 wings_semantic_mapping_enabled=self.wings_semantic_mapping_checkbox.isChecked(),
-                cascade_tree_expansion_enabled=self.cascade_expansion_checkbox.isChecked()
+                cascade_tree_expansion_enabled=self.cascade_expansion_checkbox.isChecked(),
+                parser_allow_snapshot_creation=self.snapshot_creation_checkbox.isChecked()
             )
 
             # Persist Eye AI settings to configs/eye_config.json

@@ -41,6 +41,18 @@ const DEFAULT_ARTIFACTS = {
   amcache: true,
   shimcache: true,
   recyclebin: true,
+  event_logs: true,
+  // Two start OFF. A registry key's write time is an
+  // upper bound on every value under it, so these are shown only when
+  // the analyst asks - otherwise ~2,200 of them cluster on install day
+  // and drown the times that are actually times.
+  key_times: false,
+  // And the rest of the Windows Event Log. The curated set above is drawn
+  // by default; this fetches everything else - 41,109 further records on a
+  // reference system, of which 22,012 are one ID (5379, a credential-manager
+  // read) that means nothing on its own. It changes what the BRIDGE returns,
+  // not just what is drawn.
+  all_event_ids: false,
 };
 
 /** Default lane heights */

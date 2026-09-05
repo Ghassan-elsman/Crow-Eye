@@ -41,6 +41,8 @@ class WingSelectionDialog(QDialog):
     def _init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Select Wings to Execute")
+        from .crow_eye_icons import CrowEyeIcons
+        self.setWindowIcon(CrowEyeIcons.wing())
         self.setMinimumWidth(600)
         self.setMinimumHeight(400)
         

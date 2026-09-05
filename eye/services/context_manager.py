@@ -554,6 +554,7 @@ class ContextManager:
             "get_schema": f.handle_get_schema,
             "search_artifacts": f.handle_search_artifacts,
             "semantic_search_artifacts": f.handle_semantic_search_artifacts,
+            "query_timeline": f.handle_query_timeline,
             "query_correlation_results": f.handle_query_correlation_results,
             "correlate_imported_evidence": f.handle_correlate_imported_evidence,
             "list_case_files": f.handle_list_case_files,
@@ -1140,6 +1141,30 @@ class ContextManager:
         except Exception:
             pass
 
+        # 2c-bis. TIME QUESTIONS. Always available - it reads the same
+        # timestamp map the timeline plots from, so it needs no correlation
+        # run and no embedding server. Stated here because the alternative the
+        # model reaches for otherwise is one `query_database` per database,
+        # and whichever database it does not think of is missing from the
+        # answer with nothing to say so.
+        core_str += (
+            "\n\n## Time Questions — USE `query_timeline`\n"
+            "For ANY question about when something happened, what happened at "
+            "or around a time, or what happened in a period, call "
+            "`query_timeline` FIRST. It sweeps every artifact database in the "
+            "case in one call and returns a single ordered chronology - "
+            "execution, file activity, registry changes, event log records, "
+            "USB, deletions - rather than you choosing databases one at a "
+            "time and silently missing the ones you did not think of.\n"
+            "Rows are CANDIDATES with database/table/rowid: confirm anything "
+            "you quote with `query_database`.\n"
+            "Read `exactness` on every row. `exact` is a moment. "
+            "`key upper bound` is a registry key's write time, which belongs "
+            "to every value under that key and dates none of them - say "
+            "\"at or before\" for those, and never rest a conclusion on one "
+            "alone. They are excluded unless you pass include_bounded=true."
+        )
+
         # 2d. SEMANTIC EVIDENCE DISCOVERY (when an embedding index is available)
         try:
             esvc = getattr(self, "evidence_index_service", None)
@@ -1562,6 +1587,7 @@ class ContextManager:
         # payload won't fit, so it must be offered exactly here.
         essential_names = [
             "query_database", "analyze_large_dataset", "search_artifacts", "get_schema",
+            "query_timeline",
             "report_append_section", "report_add_data_table", "chat_add_table", "report_add_chart",
             "query_correlation_results", "list_case_files"
         ]

@@ -35,8 +35,23 @@ class EventRenderer:
         'USN': '#f39c12',         # Yellow
         'MFT': '#e91e63',         # Pink
         'Logs': '#8B4513',        # Brown (Windows Event Logs)
+        # Artifacts the parsers collect that had no colour here. Kept in
+        # step with the React `forensicMap`, which is what the shipping
+        # timeline actually draws.
+        'DAM': '#e67e22',         # Orange, same family as BAM
+        'ScheduledTasks': '#f97316',
+        'RegistryChanges': '#a855f7',
+        'USBStorageDevices': '#14b8a6',
+        'Amcache': '#8b5cf6',
+        'Shimcache': '#ec4899',
+        'RecycleBin': '#e74c3c',
         'Unknown': '#95a5a6'      # Gray (fallback)
     }
+
+    # A `time_basis` of anything but `value (txn log)` means the time came
+    # from the containing KEY, which is an upper bound on every value under
+    # it. Those are drawn hollow, so a screenshot still says so.
+    EXACT_TIME_BASIS = 'value (txn log)'
     
     # Power event colors
     POWER_EVENT_COLORS = {
@@ -97,9 +112,16 @@ class EventRenderer:
         )
         
         # Set marker appearance with better contrast
-        marker.setBrush(QBrush(QColor(color)))
-        # Thicker white border for better visibility
-        marker.setPen(QPen(QColor("#FFFFFF"), 2))
+        basis = (event_data.get('time_basis') or '').strip()
+        bounded = bool(basis) and basis != self.EXACT_TIME_BASIS
+        if bounded:
+            # Hollow: the outline is the artifact colour, the fill is gone.
+            marker.setBrush(QBrush(Qt.NoBrush))
+            marker.setPen(QPen(QColor(color), 2))
+        else:
+            marker.setBrush(QBrush(QColor(color)))
+            # Thicker white border for better visibility
+            marker.setPen(QPen(QColor("#FFFFFF"), 2))
         
         # Add effects only for high detail (performance optimization)
         if lod == 0:

@@ -102,7 +102,13 @@ class TimeBasedResultsViewer(QWidget):
         
         # Load configuration
         try:
-            from ...config.case_history_manager import CaseHistoryManager
+            # Absolute, like engine/time_based_engine.py and the semantic
+            # controller. `...config` climbs above `correlation_engine`,
+            # which is the top-level package, so it always raised
+            # "attempted relative import beyond top-level package" - the
+            # except below swallowed it, the manager stayed None, and the
+            # analyst's cascade-tree-expansion setting was never read.
+            from config.case_history_manager import CaseHistoryManager
             self.case_history_manager = CaseHistoryManager()
         except Exception as e:
             logger.error(f"Failed to load CaseHistoryManager: {e}")
@@ -2348,6 +2354,11 @@ class TimeWindowDetailDialog(QDialog):
             self.setWindowTitle(f"Time Window: {time_str}")
         elif self.item_type == 'identity':
             self.setWindowTitle(f"Identity: {self.data.get('identity_name', 'Unknown')}")
+        elif self.item_type == 'sub_identity':
+            # Without this the generic branch below produced
+            # "Sub_identity Details" - underscore and all.
+            self.setWindowTitle(
+                f"Sub-Identity: {self.data.get('original_name', 'Unknown')}")
         elif self.item_type == 'feather':
             self.setWindowTitle(f"Feather: {self.data.get('feather_id', 'Unknown')}")
         elif self.item_type == 'evidence':
@@ -2553,7 +2564,23 @@ class TimeWindowDetailDialog(QDialog):
         return widget
     
     def _create_identity_content(self) -> QWidget:
-        """Create identity content with Summary tab + per-feather tabs (matching IdentityDetailDialog)."""
+        """Summary tab + per-feather tabs for an identity."""
+        return self._create_grouped_content(
+            self.data.get('sub_identities', []))
+
+    def _create_sub_identity_content(self) -> QWidget:
+        """The same view, for a single variant.
+
+        A sub-identity IS one of the groups `_create_grouped_content`
+        walks - its matches sit directly on it rather than under
+        `sub_identities` - so it is passed as a one-element list. This
+        used to be a four-line QTextEdit dump while every sibling level
+        got tabs and tables.
+        """
+        return self._create_grouped_content([self.data])
+
+    def _create_grouped_content(self, sub_identities: list) -> QWidget:
+        """Summary tab + one tab per contributing feather."""
         tabs = QTabWidget()
         # Tabs matching the main app tab style - dark theme
         tabs.setStyleSheet("""
@@ -2587,7 +2614,6 @@ class TimeWindowDetailDialog(QDialog):
         all_matches = []
         timestamps = []
         
-        sub_identities = self.data.get('sub_identities', [])
         if sub_identities:
             for sub in sub_identities:
                 for match in sub.get('matches', []):
@@ -2637,8 +2663,10 @@ class TimeWindowDetailDialog(QDialog):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         
-        # Identity name header
-        name = self.data.get('identity_name', 'Unknown')
+        # Identity name header. A sub-identity carries `original_name`;
+        # reading only `identity_name` titled it 'Unknown'.
+        name = (self.data.get('identity_name')
+                or self.data.get('original_name') or 'Unknown')
         name_lbl = QLabel(f"<h2 style='color: #00FFFF;'>{name}</h2>")
         layout.addWidget(name_lbl)
         
@@ -2647,9 +2675,13 @@ class TimeWindowDetailDialog(QDialog):
         stats_frame.setStyleSheet("background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 8px;")
         stats_layout = QHBoxLayout(stats_frame)
         
-        # Variants count
-        sub_count = len(sub_identities) if sub_identities else 0
-        stats_layout.addWidget(QLabel(f"<b style='color: #E2E8F0;'>Variants:</b> <span style='color: #94A3B8;'>{sub_count}</span>"))
+        # Variants count - meaningless on a single variant, which is
+        # itself one of them.
+        if self.item_type != 'sub_identity':
+            sub_count = len(sub_identities) if sub_identities else 0
+            stats_layout.addWidget(QLabel(
+                f"<b style='color: #E2E8F0;'>Variants:</b> "
+                f"<span style='color: #94A3B8;'>{sub_count}</span>"))
         
         # Matches count
         stats_layout.addWidget(QLabel(f"<b style='color: #E2E8F0;'>Matches:</b> <span style='color: #94A3B8;'>{len(all_matches)}</span>"))
@@ -2668,7 +2700,7 @@ class TimeWindowDetailDialog(QDialog):
         layout.addWidget(stats_frame)
         
         # Feather contribution table
-        feather_group = QGroupBox("Feather Contributions")
+        feather_group = QGroupBox()
         feather_group.setStyleSheet("""
             QGroupBox { 
                 font-size: 10pt; font-weight: bold; color: #00FFFF;
@@ -2684,6 +2716,10 @@ class TimeWindowDetailDialog(QDialog):
             }
         """)
         feather_layout = QVBoxLayout(feather_group)
+        from .crow_eye_icons import group_title_label
+        _ce_title = group_title_label("feather", "Feather Contributions", size_px=16)
+        _ce_title.setStyleSheet("font-size: 10pt; color: #00FFFF;")
+        feather_layout.addWidget(_ce_title)
         
         # Group feather records by base name
         grouped_feather_records = defaultdict(list)
@@ -2783,25 +2819,6 @@ class TimeWindowDetailDialog(QDialog):
         table.setSelectionMode(QTableWidget.SingleSelection)
         
         layout.addWidget(table)
-        
-        return widget
-    
-    def _create_sub_identity_content(self) -> QWidget:
-        """Create sub-identity content."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        text = QTextEdit()
-        text.setReadOnly(True)
-        
-        lines = []
-        lines.append(f"Sub-Identity: {self.data.get('original_name')}")
-        lines.append(f"=" * 50)
-        lines.append(f"Matches: {len(self.data.get('matches', []))}")
-        lines.append(f"Feathers: {', '.join(self.data.get('feathers_found', []))}")
-        
-        text.setPlainText("\n".join(lines))
-        layout.addWidget(text)
         
         return widget
     
@@ -2989,7 +3006,7 @@ class TimeWindowDetailDialog(QDialog):
         # Check if we have feather_records to display
         if has_feather_records:
             # Add Feather Records section
-            feather_group = QGroupBox("Feather Records")
+            feather_group = QGroupBox()
             feather_group.setStyleSheet("""
                 QGroupBox { 
                     font-size: 10pt; font-weight: bold; color: #00FFFF;
@@ -3005,6 +3022,10 @@ class TimeWindowDetailDialog(QDialog):
                 }
             """)
             feather_layout = QVBoxLayout(feather_group)
+            from .crow_eye_icons import group_title_label
+            _ce_title = group_title_label("feather", "Feather Records", size_px=16)
+            _ce_title.setStyleSheet("font-size: 10pt; color: #00FFFF;")
+            feather_layout.addWidget(_ce_title)
             
             # Create tabs for each feather
             feather_tabs = QTabWidget()

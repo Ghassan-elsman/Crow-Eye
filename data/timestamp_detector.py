@@ -58,7 +58,10 @@ class TimestampDetector:
         r'.*uptime.*',  # Uptime values (numeric)
         r'.*bytes.*',  # Byte counts
         r'.*num_.*',  # Numeric counters
-        r'.*count.*',  # Counters
+        # Counters. Bounded on a word edge, because `.*count.*` also matched
+        # `account_expires` and `account_created` - real times excluded from
+        # every time-filtered search because "account" contains "count".
+        r'.*\bcount\b.*',
         r'.*operations.*',  # Operation counts
     ]
     
@@ -72,28 +75,107 @@ class TimestampDetector:
             re.compile(pattern, re.IGNORECASE) for pattern in self.EXCLUDE_PATTERNS
         ]
     
+    # ------------------------------------------------------------------
+    #  What the timestamp map already knows
+    # ------------------------------------------------------------------
+
+    _MAP_CACHE = None
+
+    @classmethod
+    def _map_columns(cls):
+        """`{table: {column: exactness}}` from `timeline/data/artifact_map.py`.
+
+        The map names every time the parsers write, per table, with whether it
+        is exact or a key upper bound. It is guarded by `timeline/tests` and is
+        already what the timeline and Eye's `query_timeline` read - so a
+        seventh hand-maintained list of column names here would only be one
+        more thing to drift.
+
+        Returns `{}` if the map cannot be imported, which leaves the pattern
+        matching below exactly as it was.
+        """
+        if cls._MAP_CACHE is None:
+            out = {}
+            try:
+                import os
+                import sys
+                root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                if root not in sys.path:
+                    sys.path.insert(0, root)
+                from timeline.data import artifact_map as amap
+                for entries in amap.TIMESTAMP_MAPPINGS.values():
+                    for entry in entries:
+                        out.setdefault(entry[0], {})[entry[1]] = (
+                            "key upper bound" if amap.is_key_time(entry)
+                            else "exact")
+            except Exception:
+                out = {}
+            cls._MAP_CACHE = out
+        return cls._MAP_CACHE
+
+    # Columns whose NAME reads like a time and whose VALUE is not one. The
+    # pattern matching accepted every one of these, so a time filter could key
+    # on a duration, a label or an hour-of-day and match nothing at all.
+    NOT_TIMESTAMPS = frozenset((
+        "parsed_at",                 # when the parser ran, not when it happened
+        "analyzing_date",            # the same, under an older name
+        "time_basis",                # a label: "key upper bound"
+        "focus_time",                # a duration, stored as "0.00s"
+        "scheduled_install_time",    # Windows Update's policy HOUR, 0-23
+        "start_type", "start_type_text",   # a service start mode
+        "time_zone_name", "timezone",
+        "first_network",             # a flag on a network profile
+        "last_result", "last_result_text",  # a task's exit code
+        "run_count", "modified_count",
+    ))
+
     def detect_timestamp_columns(
         self,
         table_name: str,
         columns: List[str]
     ) -> List[str]:
         """
-        Identify timestamp columns based on name patterns.
-        
+        Identify timestamp columns for a table.
+
+        The timestamp map is asked first. It knows this table's real time
+        columns, and the pattern matching got nine of them wrong - among them
+        `changed_at` (the transaction log's value changes, the one exact
+        registry time), `key_last_write` (every MRU table and the carved keys)
+        and all five AmCache `_utc` columns, which are the only AmCache dates
+        that parse. A missed column means the table is silently dropped from
+        every time-filtered search.
+
+        A table the map does not know - every imported-evidence and custom
+        database - falls through to the patterns unchanged.
+
         Args:
             table_name: Name of the database table
             columns: List of column names in the table
-            
+
         Returns:
             List of column names that likely contain timestamps
         """
+        known = self._map_columns().get(table_name, {})
+
+        # Union, not replacement. The map says what the TIMELINE plots, which
+        # is not everything a table times: `UserAccounts.account_expires` and
+        # `last_incorrect_password` are real times the map has no reason to
+        # draw, and search should still filter on them. So the map ADDS what
+        # the patterns miss and never takes anything away.
         timestamp_columns = []
-        
         for column in columns:
-            if self._matches_timestamp_pattern(column):
+            if column in known or self._matches_timestamp_pattern(column):
                 timestamp_columns.append(column)
-        
+
         return timestamp_columns
+
+    def exactness(self, table_name: str, column_name: str) -> str:
+        """`"exact"`, `"key upper bound"`, or `""` when the map does not say.
+
+        A key write time belongs to every value under that key and dates none
+        of them, so a result row carrying one must not be read as a moment.
+        """
+        return self._map_columns().get(table_name, {}).get(column_name, "")
     
     def _matches_timestamp_pattern(self, column_name: str) -> bool:
         """
@@ -105,7 +187,12 @@ class TimestampDetector:
         Returns:
             True if the column name matches a timestamp pattern
         """
-        # First check if it matches an exclude pattern
+        # Named non-timestamps first. These read like times and are not, and
+        # a time filter keyed on one silently matches nothing.
+        if column_name.lower() in self.NOT_TIMESTAMPS:
+            return False
+
+        # Then the exclude patterns
         for pattern in self._exclude_patterns:
             if pattern.match(column_name):
                 return False
@@ -171,10 +258,21 @@ class TimestampDetector:
             if not rows:
                 return result
             
-            # Extract values
-            sample_values = [row[0] for row in rows if row[0] is not None]
+            # Extract values.
+            #
+            # Blank is MISSING, not unparseable, and the two must not be scored
+            # together. `registry_value_changes.changed_at` carries an exact
+            # time on the 552 values recovered from the transaction log and is
+            # empty on the other 491 - a 66% "parse rate" that fell under the
+            # 80% bar below, so the whole table was dropped from every
+            # time-filtered search. Half a column of real timestamps is a
+            # timestamp column with gaps, which is the normal shape of
+            # forensic evidence.
+            sample_values = [row[0] for row in rows
+                             if row[0] is not None and str(row[0]).strip() != ""]
             result['sample_values'] = [str(v)[:100] for v in sample_values[:10]]  # Store first 10 for reference
-            
+            result['blank_samples'] = len(rows) - len(sample_values)
+
             if not sample_values:
                 return result
             

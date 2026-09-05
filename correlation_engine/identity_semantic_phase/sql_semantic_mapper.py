@@ -857,6 +857,10 @@ class SQLSemanticMapper:
 
                     # Find matching rules
                     matched_rules = set()
+                    # rule_id -> [{field, feather, value}] for the
+                    # conditions that were satisfied. Only kept for rules
+                    # that go on to match.
+                    rule_hits = {}
 
                     for rule_id, logic_operator, conditions, conditions_json, requires_multi_indicator, min_indicators in parsed_rules:
                         all_conditions_met = True
@@ -874,6 +878,10 @@ class SQLSemanticMapper:
 
                                 has_non_wildcard = True
                                 condition_met = False
+                                # What actually satisfied this condition, so the
+                                # stored evidence can name the value an analyst
+                                # saw rather than echoing the rule's own regex.
+                                cond_hit = None
 
                                 # STRATEGY 1: Check matched_application column directly
                                 if field_name == 'matched_application' and matched_application:
@@ -896,14 +904,35 @@ class SQLSemanticMapper:
                                         if pattern.upper() == matched_app_upper:
                                             condition_met = True
 
+                                    if condition_met:
+                                        cond_hit = (field_name, '_match',
+                                                    str(matched_application))
+
+                                # The feather this condition names, if any.
+                                # '_identity' is the pseudo-feather meaning the
+                                # match's own anchor value (strategy 1), not a
+                                # source to search.
+                                want_feather = condition.get('feather_id')
+                                if want_feather in ('_identity', '', None):
+                                    want_feather = None
+
+                                def _in_scope(name):
+                                    if want_feather is None:
+                                        return True
+                                    return str(name).lower() == str(want_feather).lower()
+
                                 # STRATEGY 2: Check the specific field in feather_records
                                 if not condition_met:
                                     field_value = None
+                                    hit_feather = None
                                     for feather_name, feather_content in feather_data.items():
+                                        if not _in_scope(feather_name):
+                                            continue
                                         if isinstance(feather_content, list):
                                             for record in feather_content:
                                                 if isinstance(record, dict) and field_name in record:
                                                     field_value = record[field_name]
+                                                    hit_feather = feather_name
                                                     break
                                             if field_value is not None:
                                                 break
@@ -928,34 +957,64 @@ class SQLSemanticMapper:
                                             if pattern.upper() == field_value_str:
                                                 condition_met = True
 
+                                        if condition_met:
+                                            cond_hit = (field_name, hit_feather,
+                                                        str(field_value))
+
                                 # STRATEGY 3: Case-insensitive field name search across feather_records
+                                #
+                                # Strategy 2 stops at the FIRST record carrying the
+                                # field, so a match holding 50 WinLog rows is judged
+                                # on row one. This pass reads every value, and keeps
+                                # the one that actually matched.
                                 if not condition_met:
                                     field_name_lower = field_name.lower()
 
                                     def _iter_field_values():
                                         for feather_name, feather_content in feather_data.items():
+                                            if not _in_scope(feather_name):
+                                                continue
                                             if isinstance(feather_content, list):
                                                 for record in feather_content:
                                                     if isinstance(record, dict):
                                                         for key, value in record.items():
                                                             if key.lower() == field_name_lower and value is not None:
-                                                                yield str(value).upper()
+                                                                yield feather_name, str(value)
 
                                     if operator == "regex":
                                         compiled_pattern = self._get_cached_pattern(pattern, rule_id)
                                         if compiled_pattern:
                                             try:
-                                                condition_met = any(compiled_pattern.search(v) for v in _iter_field_values())
+                                                for fname, raw in _iter_field_values():
+                                                    if compiled_pattern.search(raw.upper()):
+                                                        condition_met = True
+                                                        cond_hit = (field_name, fname, raw)
+                                                        break
                                             except Exception as e:
                                                 logger.warning(f"[Worker {worker_id}] Error matching pattern in rule {rule_id}: {e}")
 
                                     elif operator == "contains":
                                         pattern_upper = pattern.upper()
-                                        condition_met = any(pattern_upper in v for v in _iter_field_values())
+                                        for fname, raw in _iter_field_values():
+                                            if pattern_upper in raw.upper():
+                                                condition_met = True
+                                                cond_hit = (field_name, fname, raw)
+                                                break
 
                                     elif operator == "equals":
                                         pattern_upper = pattern.upper()
-                                        condition_met = any(pattern_upper == v for v in _iter_field_values())
+                                        for fname, raw in _iter_field_values():
+                                            if pattern_upper == raw.upper():
+                                                condition_met = True
+                                                cond_hit = (field_name, fname, raw)
+                                                break
+
+                                if condition_met and cond_hit is not None:
+                                    rule_hits.setdefault(rule_id, []).append({
+                                        'field': cond_hit[0],
+                                        'feather': cond_hit[1],
+                                        'value': cond_hit[2][:200],
+                                    })
 
                                 # Handle AND vs OR logic for condition evaluation
                                 if not condition_met:
@@ -1003,7 +1062,10 @@ class SQLSemanticMapper:
                     
                     if matched_rules:
                         sorted_rules = sorted(matched_rules)
-                        results.append((match_id, ','.join(sorted_rules)))
+                        evidence = {r: rule_hits.get(r, [])
+                                    for r in sorted_rules}
+                        results.append((match_id, ','.join(sorted_rules),
+                                        json.dumps(evidence)))
                         
                 except Exception as e:
                     errors += 1
@@ -1277,7 +1339,11 @@ class SQLSemanticMapper:
                 conditions.append({
                     'field_name': cond.field_name,
                     'value': cond.value,
-                    'operator': cond.operator
+                    'operator': cond.operator,
+                    # Kept so the matcher can scope the condition to the
+                    # source the rule names, instead of accepting the field
+                    # from any feather in the match.
+                    'feather_id': getattr(cond, 'feather_id', None)
                 })
             
             rules_data.append((
@@ -1316,7 +1382,78 @@ class SQLSemanticMapper:
         
         return rule_count
     
-    def find_matches_with_semantic_rules(self) -> List[Tuple[str, str]]:
+    def _add_app_name_candidates(self, candidate_matches, rules):
+        """Add matches whose `matched_application` satisfies a rule pattern.
+
+        Returns `candidate_matches` plus any match the FTS5 prefilter missed.
+        Never removes a candidate. Failures here are non-fatal: the prefilter's
+        result is returned unchanged rather than losing the run.
+        """
+        try:
+            patterns = []
+            for rule_row in rules:
+                try:
+                    conditions = json.loads(rule_row[2])
+                except Exception:
+                    continue
+                for cond in conditions:
+                    if cond.get('field_name') != 'matched_application':
+                        continue
+                    if cond.get('operator') != 'regex' or cond.get('value') in (None, '*'):
+                        continue
+                    compiled = self._get_cached_pattern(cond['value'], rule_row[0])
+                    if compiled is not None:
+                        patterns.append(compiled)
+            if not patterns:
+                return candidate_matches
+
+            known = {row[0] for row in candidate_matches}
+
+            self.cursor.execute("""
+                SELECT DISTINCT m.matched_application
+                FROM matches m
+                INNER JOIN results r ON m.result_id = r.result_id
+                WHERE r.execution_id = ?
+                  AND m.matched_application IS NOT NULL
+                  AND m.matched_application != ''
+            """, (self.execution_id,))
+            names = [row[0] for row in self.cursor.fetchall()]
+
+            wanted = [n for n in names
+                      if any(p.search(str(n).upper()) for p in patterns)]
+            if not wanted:
+                return candidate_matches
+
+            added = 0
+            chunk = 400
+            for i in range(0, len(wanted), chunk):
+                part = wanted[i:i + chunk]
+                placeholders = ','.join('?' * len(part))
+                self.cursor.execute("""
+                    SELECT m.match_id, m.feather_records, m.matched_application
+                    FROM matches m
+                    INNER JOIN results r ON m.result_id = r.result_id
+                    WHERE r.execution_id = ?
+                      AND m.matched_application IN (%s)
+                """ % placeholders, [self.execution_id] + part)
+                for row in self.cursor.fetchall():
+                    if row[0] not in known:
+                        known.add(row[0])
+                        candidate_matches.append(row)
+                        added += 1
+
+            if added:
+                logger.info(
+                    "[SQL Semantic] Added %d candidate(s) by app name that the "
+                    "FTS5 prefilter could not reach", added)
+            return candidate_matches
+        except Exception as e:
+            logger.warning(
+                "[SQL Semantic] App-name candidate pass failed (%s); "
+                "continuing with the FTS5 candidates only", e)
+            return candidate_matches
+
+    def find_matches_with_semantic_rules(self) -> List[Tuple[str, str, str]]:
         """
         Use FTS5 + proper regex matching to find all matches that satisfy semantic rules.
         
@@ -1421,8 +1558,17 @@ class SQLSemanticMapper:
                 conditions = json.loads(conditions_json)
                 for cond in conditions:
                     if cond['operator'] == 'regex' and cond['value'] != '*':
-                        # Extract alternatives from regex (split on |)
-                        alternatives = cond['value'].split('|')
+                        # Extract alternatives from regex (split on |).
+                        #
+                        # Strip group constructs FIRST. A guard such as
+                        # `(?<![A-Za-z0-9])CMD` must not be torn apart here:
+                        # splitting a pattern that contains `(?:a|b)` on `|`
+                        # yields fragments that clean up into junk terms, and
+                        # the real term is lost. Terms are what put a match in
+                        # the candidate set, so losing one silently drops
+                        # matches from the scan entirely.
+                        pattern_text = re.sub(r'\(\?[^)]*\)', '', cond['value'])
+                        alternatives = pattern_text.split('|')
                         for alt in alternatives:
                             # Improved cleaning: handle common patterns like CHROME\.EXE
                             # First, replace escaped dots with spaces to separate words
@@ -1507,6 +1653,13 @@ class SQLSemanticMapper:
                 """, (self.execution_id,))
                 candidate_matches = self.cursor.fetchall()
         
+        # The FTS5 prefilter matches whole tokens in feather_records, so a
+        # concatenated app name is unreachable through it. matched_application
+        # is one indexed column with a few hundred distinct values per case -
+        # test it directly and add anything the prefilter could not see.
+        candidate_matches = self._add_app_name_candidates(
+            candidate_matches, rules)
+
         coverage_pct = (len(candidate_matches)/total_matches*100) if total_matches > 0 else 0
         logger.info(f"[SQL Semantic] FTS5 filtered to {len(candidate_matches):,} candidates ({coverage_pct:.1f}%)")
         logger.info("")
@@ -1563,12 +1716,14 @@ class SQLSemanticMapper:
         
         return results
     
-    def build_and_update_semantic_data(self, matches_with_rules: List[Tuple[str, str]]) -> int:
+    def build_and_update_semantic_data(self, matches_with_rules: List[Tuple[str, str, str]]) -> int:
         """
         Build semantic data and update matches in bulk.
         
         Args:
-            matches_with_rules: List of (match_id, matched_rule_ids) tuples
+            matches_with_rules: List of (match_id, matched_rule_ids,
+                evidence_json) tuples. evidence_json maps each rule_id to
+                the field/feather/value that satisfied it.
             
         Returns:
             Number of matches updated
@@ -1595,14 +1750,21 @@ class SQLSemanticMapper:
             # Extract the main pattern from conditions for display
             try:
                 conditions = json.loads(conditions_json)
-                # Find the matched_application or identity_value condition
-                technical_value = ""
+                # The rule's own pattern, kept whole and under a name that
+                # says what it is - NOT the evidence, see below.
+                rule_pattern = ""
                 for cond in conditions:
                     if cond['field_name'] in ('matched_application', 'identity_value'):
-                        technical_value = cond['value'][:100] if len(cond['value']) < 100 else cond['value'][:100]
+                        rule_pattern = cond['value']
                         break
+                if not rule_pattern and conditions:
+                    # Behaviour and evasion rules condition on executable_name
+                    # or EventID, never on matched_application, so the loop
+                    # above leaves them blank. Show their first pattern rather
+                    # than nothing.
+                    rule_pattern = conditions[0].get('value', '') or ''
             except Exception as e:
-                technical_value = ""
+                rule_pattern = ""
             
             try:
                 technique_id = json.loads(technique_id_json) if technique_id_json else []
@@ -1619,7 +1781,7 @@ class SQLSemanticMapper:
                 'category': category,
                 'severity': severity,
                 'confidence': confidence,
-                'technical_value': technical_value,
+                'rule_pattern': rule_pattern,
                 'technique_id': technique_id,
                 'tactic': tactic,
                 'rule_type': rule_type or 'match',
@@ -1635,23 +1797,32 @@ class SQLSemanticMapper:
         build_errors = 0
         total_matches = len(matches_with_rules)
         
-        # Guard against empty matches
+        # Guard against empty matches.
+        #
+        # Returns 0, not a dict. This guard and the one below used to return
+        # apply_semantic_mapping's result shape - copied inward from the caller -
+        # while this function is declared `-> int` and its normal path returns
+        # `successful_updates`. The caller then formatted it as `{value:,}`,
+        # which raises TypeError on a dict, and the whole post-processing phase
+        # is wrapped in `except Exception`. So on any run where either guard
+        # fired, every semantic value was silently discarded and the pipeline
+        # still reported success.
         if total_matches == 0:
             logger.info("[SQL Semantic] No matches to process")
-            return {
-                'identities_processed': 0,
-                'mappings_applied': 0,
-                'matches_updated': 0,
-                'processing_time': 0,
-                'errors': 0
-            }
+            return 0
         
         progress_interval = max(1, total_matches // 20) # 5% increments (100% / 20 = 5%)
         
-        for idx, (match_id, matched_rules_str) in enumerate(matches_with_rules):
+        for idx, row in enumerate(matches_with_rules):
             try:
+                match_id, matched_rules_str = row[0], row[1]
+                evidence_json = row[2] if len(row) > 2 else None
                 if not matched_rules_str:
                     continue
+                try:
+                    rule_evidence = json.loads(evidence_json) if evidence_json else {}
+                except Exception:
+                    rule_evidence = {}
                 
                 matched_rules = matched_rules_str.split(',')
                 
@@ -1665,16 +1836,48 @@ class SQLSemanticMapper:
                     
                     meta = rule_metadata[rule_id]
                     semantic_value_key = f"{meta['semantic_value']}_{rule_id}"
-                    
+
+                    # What this rule actually matched on this match. The
+                    # matcher records the field, the feather it came from and
+                    # the value, for every condition it satisfied. Before this,
+                    # `identity_value` and `technical_value` both held the
+                    # rule's regex truncated to 100 characters, and
+                    # `matched_feathers` was the constant '_identity' - so a
+                    # finding named neither what matched nor where it came
+                    # from.
+                    hits = rule_evidence.get(rule_id) or []
+                    matched_values = []
+                    matched_feathers = []
+                    for hit in hits:
+                        if not isinstance(hit, dict):
+                            continue
+                        val = hit.get('value')
+                        if val and val not in matched_values:
+                            matched_values.append(val)
+                        fth = hit.get('feather')
+                        if fth and fth not in matched_feathers:
+                            matched_feathers.append(fth)
+
+                    # An empty string is more honest than regex dressed up as
+                    # evidence, so there is deliberately no fallback to the
+                    # pattern here.
+                    matched_value = matched_values[0] if matched_values else ''
+                    if not matched_feathers:
+                        matched_feathers = ['_identity']
+
                     semantic_data[semantic_value_key] = {
-                        'identity_value': meta['technical_value'],
+                        'identity_value': matched_value,
                         'identity_type': meta['category'] or 'unknown',
                         'rule_type': meta.get('rule_type', 'match'),
                         'technique_id': meta.get('technique_id', []),
                         'tactic': meta.get('tactic', []),
+                        'matched_fields': hits,
+                        'rule_pattern': meta['rule_pattern'],
                         'semantic_mappings': [{
                             'semantic_value': meta['semantic_value'],
-                            'technical_value': meta['technical_value'],
+                            'technical_value': matched_value,
+                            'matched_values': matched_values,
+                            'rule_pattern': meta['rule_pattern'],
                             'rule_name': meta['rule_name'],
                             'category': meta['category'],
                             'severity': meta['severity'],
@@ -1683,9 +1886,9 @@ class SQLSemanticMapper:
                             'rule_type': meta.get('rule_type', 'match'),
                             'technique_id': meta.get('technique_id', []),
                             'tactic': meta.get('tactic', []),
-                            'matched_feathers': ['_identity']
+                            'matched_feathers': matched_feathers
                         }],
-                        'feather_id': '_identity'
+                        'feather_id': matched_feathers[0]
                     }
                 
                 if semantic_data:
@@ -1722,16 +1925,14 @@ class SQLSemanticMapper:
         # Update in batches with progress reporting and error handling
         # Commit per batch for better error recovery and memory management (Requirement 4.2)
         
-        # Guard against empty update_data
+        # Guard against empty update_data. Returns 0 for the same reason as the
+        # guard above - this is the one that actually fires in practice, because
+        # a case with no matching semantic rules produces matches but no data to
+        # write, and that is an ordinary outcome rather than an error.
         if not update_data:
-            logger.info("[SQL Semantic] No semantic data to update")
-            return {
-                'identities_processed': 0,
-                'mappings_applied': 0,
-                'matches_updated': 0,
-                'processing_time': time.time() - start_time,
-                'errors': build_errors
-            }
+            logger.info("[SQL Semantic] No semantic data to update (%d build error(s))",
+                        build_errors)
+            return 0
         
         batch_size = self.config.get('batch_size', 1000)
         total_batches = (len(update_data) + batch_size - 1) // batch_size
@@ -1902,19 +2103,39 @@ class SQLSemanticMapper:
             
             # Step 3: Build and update semantic data
             matches_updated = self.build_and_update_semantic_data(matches_with_rules)
+            # Belt and braces. Every line below formats this with `{:,}` or
+            # divides by it, and this whole method runs inside the caller's
+            # `except Exception` - so a non-int here does not produce a bad
+            # number, it silently throws away the entire semantic phase. Losing
+            # a count is recoverable; losing the phase is not visible at all.
+            if not isinstance(matches_updated, int) or isinstance(matches_updated, bool):
+                logger.warning(
+                    "[SQL Semantic] build_and_update_semantic_data returned %s, "
+                    "expected int - treating as 0 so the phase still completes",
+                    type(matches_updated).__name__)
+                matches_updated = 0
             
             total_time = time.time() - total_start
             
             logger.info(f"\n{'='*80}")
             logger.info(f"[SQL Semantic] COMPLETE in {total_time:.2f} seconds")
             logger.info(f"{'='*80}")
+            # Both divisors can legitimately be zero, and neither was guarded.
+            # `total_matches` is 0 whenever nothing matched - an ordinary
+            # outcome - and this whole method runs inside the caller's
+            # `except Exception`, so the ZeroDivisionError discarded the entire
+            # semantic phase to print one summary line. The return value below
+            # already guarded `total_matches`; the log line it was copied from
+            # did not.
+            coverage = (matches_updated / total_matches * 100) if total_matches else 0.0
+            throughput = (matches_updated / total_time) if total_time > 0 else 0.0
             logger.info(f" Rules indexed: {rule_count:,}")
             logger.info(f" Total matches: {total_matches:,}")
             logger.info(f" Matches with semantic data: {matches_updated:,}")
-            logger.info(f" Semantic coverage: {matches_updated/total_matches*100:.1f}%")
+            logger.info(f" Semantic coverage: {coverage:.1f}%")
             logger.info(f" Matches without semantic data: {total_matches - matches_updated:,}")
             logger.info(f" Processing time: {total_time:.2f} seconds")
-            logger.info(f" Throughput: {matches_updated/total_time:.0f} matches/second")
+            logger.info(f" Throughput: {throughput:.0f} matches/second")
             logger.info(f"{'='*80}\n")
             
             # Log summary statistics to debug file

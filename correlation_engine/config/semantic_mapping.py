@@ -1012,6 +1012,10 @@ class SemanticRule:
     # Structured MITRE ATT&CK mapping (free-text category/severity kept).
     technique_id: List[str] = field(default_factory=list)
     tactic: List[str] = field(default_factory=list)
+    # Honoured by SQLSemanticMapper.index_semantic_rules, which skips
+    # disabled rules. Before this was a field, `hasattr(rule, 'disabled')`
+    # was always False and switching a rule off did nothing.
+    disabled: bool = False
 
     # Optimization fields (Requirements 9.1, 9.2, 9.3)
     _requires_multi_indicator: bool = False
@@ -1157,6 +1161,8 @@ class SemanticRule:
             data['technique_id'] = list(self.technique_id)
         if self.tactic:
             data['tactic'] = list(self.tactic)
+        if self.disabled:
+            data['disabled'] = True
         return data
     
     @classmethod
@@ -1208,6 +1214,7 @@ class SemanticRule:
             threshold=data.get('threshold'),
             technique_id=data.get('technique_id', []) or [],
             tactic=data.get('tactic', []) or [],
+            disabled=bool(data.get('disabled', False)),
         )
     
     def to_json(self, indent: int = 2) -> str:
@@ -2502,21 +2509,12 @@ The system will continue operating normally with {'built-in' if file_type == 'de
                     )
                     conditions.append(condition)
                 
-                # Create SemanticRule object
-                rule = SemanticRule(
-                    rule_id=rule_data["rule_id"],
-                    name=rule_data["name"],
-                    semantic_value=rule_data["semantic_value"],
-                    description=rule_data.get("description", ""),
-                    conditions=conditions,
-                    logic_operator=rule_data["logic_operator"],
-                    scope=rule_data.get("scope", "global"),
-                    category=rule_data.get("category", ""),
-                    severity=rule_data.get("severity", "info"),
-                    confidence=rule_data.get("confidence", 1.0),
-                    wing_id=rule_data.get("wing_id"),
-                    pipeline_id=rule_data.get("pipeline_id")
-                )
+                # Build through from_dict so every declared field is
+                # carried - technique_id, tactic, rule_type, disabled, the
+                # multi-indicator flags and the advanced-rule spec blocks.
+                # Hand-listing the constructor arguments here is what dropped
+                # them, with no error anywhere.
+                rule = SemanticRule.from_dict(rule_data)
                 
                 rules_dict[rule.rule_id] = rule
                 

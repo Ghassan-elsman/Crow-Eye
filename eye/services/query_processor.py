@@ -3192,6 +3192,7 @@ class QueryProcessor:
     # Investigative (read) tools whose use signals proactive investigation.
     _INVESTIGATIVE_TOOLS = {
         "query_database", "search_artifacts", "query_correlation_results",
+        "query_timeline",
         "list_case_files", "get_schema", "query_threat_intel",
         "query_living_off_the_land_intel",
     }

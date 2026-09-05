@@ -444,22 +444,16 @@ class WeightedScoringIntegration(IScoringIntegration):
             self.log_scoring_calculation(match_id, result, wing_config, case_id)
             
             return result
-            
-            # Update average score
-            if self.stats.scores_calculated > 0:
-                self.stats.average_score = (
-                    (self.stats.average_score * (self.stats.scores_calculated - 1) + score) / 
-                    self.stats.scores_calculated
-                )
-            
-            # Track configuration usage
-            if self.case_specific_config:
-                self.stats.case_specific_configs_used += 1
-            else:
-                self.stats.global_configs_used += 1
-            
-            return result
-            
+
+            # NOTE: a copy of the success path's statistics block used to sit
+            # here, after the return, and could never run. It is deleted rather
+            # than moved above the return for two reasons: the same counters are
+            # already maintained on the success path, and the block reads a
+            # local `score` that is only bound there - on this error path it
+            # would have raised UnboundLocalError the moment it became
+            # reachable. Unreachable code is not a free spare: this copy was
+            # broken as well as dead.
+
         except Exception as e:
             logger.error(f"Failed to calculate weighted scores: {e}")
             self.stats.configuration_errors += 1
@@ -772,25 +766,8 @@ class WeightedScoringIntegration(IScoringIntegration):
         effective_config = self.get_scoring_configuration()
         return effective_config.enabled
     
-    def get_score_interpretation_labels(self, case_id: Optional[str] = None) -> Dict[str, str]:
-        """
-        Get score interpretation labels for UI display.
-        
-        Args:
-            case_id: Optional case ID for case-specific labels
-            
-        Returns:
-            Dictionary mapping score ranges to labels
-        """
-        effective_config = self.get_scoring_configuration(case_id)
-        
-        labels = {}
-        for level, config in effective_config.score_interpretation.items():
-            min_score = config.get('min', 0.0)
-            label = config.get('label', level)
-            labels[f"{min_score}+"] = label
-        
-        return labels
+    # NOTE: an earlier definition of `get_score_interpretation_labels` was removed here. Python keeps
+    # the last one, so it never ran.
     
     def resolve_configuration_conflicts(self, 
                                       global_config: Dict[str, Any],

@@ -43,6 +43,20 @@ EXTRACTORS = {
     "driver_binaries": _artifacts.driver_binaries,
     "autostart_programs": _artifacts.autostart_programs,
     "autostart_service": _artifacts.autostart_service,
+    # Behaviours the parsers collect that had no rule. scheduled_tasks
+    # serves two rules, the way usn_file_activity serves five.
+    "scheduled_tasks": _artifacts.scheduled_tasks,
+    "defender_exclusion": _artifacts.defender_exclusion,
+    "security_posture_changed": _artifacts.security_posture_changed,
+    "file_association_choice": _artifacts.file_association_choice,
+    "com_inprocserver": _artifacts.com_inprocserver,
+    "feature_usage": _artifacts.feature_usage,
+    "compat_assistant_execution": _artifacts.compat_assistant_execution,
+    "file_dialog_history": _artifacts.file_dialog_history,
+    "connected_device": _artifacts.connected_device,
+    "mounted_volume": _artifacts.mounted_volume,
+    "office_document": _artifacts.office_document,
+    "taskbar_pinned": _artifacts.taskbar_pinned,
     "usn_file_activity": _files.usn_file_activity,
     "file_copy_inferred": _files.file_copy_inferred,
 }

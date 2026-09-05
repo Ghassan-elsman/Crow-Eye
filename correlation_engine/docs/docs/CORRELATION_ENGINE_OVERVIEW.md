@@ -449,10 +449,8 @@ The correlation_engine is organized into 7 main directories, each with a specifi
 - `pipeline_management_tab.py` - Pipeline creation/management
 - `correlation_results_view.py` - Results table view
 - `hierarchical_results_view.py` - Tree view of results
-- `timeline_widget.py` - Timeline visualization
 - `execution_control.py` - Control pipeline execution
 - `pipeline_builder.py` - Visual pipeline builder
-- `semantic_mapping_viewer.py` - Edit semantic mappings
 - Plus 18 more UI components
 
 **[📖 Detailed Documentation](gui/GUI_DOCUMENTATION.md)**
@@ -617,7 +615,6 @@ The correlation_engine is organized into 7 main directories, each with a specifi
 1. Open `config/semantic_mapping.py`
 2. Modify `SemanticMappingManager` class
 3. Update default mappings in `config/default_mappings/`
-4. Test with `gui/semantic_mapping_viewer.py`
 
 **Impact**: Medium - affects field matching across all correlations
 

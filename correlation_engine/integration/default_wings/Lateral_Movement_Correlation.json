@@ -6,9 +6,8 @@
   "proves": "Activity originated from or propagated to a remote system",
   "author": "Crow-Eye Team",
   "created_date": "2026-05-18T00:00:00Z",
-  "last_modified": "2026-05-18T00:00:00Z",
+  "last_modified": "2026-08-22T00:00:00Z",
   "version": "1.0",
-
   "feathers": [
     {
       "feather_config_name": "SecurityLogs_CrowEyeFeather",
@@ -24,7 +23,7 @@
       "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
       "artifact_type": "Prefetch",
       "feather_id": "prefetch",
-      "weight": 0.20,
+      "weight": 0.2,
       "tier": 1,
       "tier_name": "Remote-admin tool execution"
     },
@@ -42,7 +41,7 @@
       "feather_database_path": "feathers/TypedPaths_CrowEyeFeather.db",
       "artifact_type": "TypedPaths",
       "feather_id": "typedpaths",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 2,
       "tier_name": "User typed remote path"
     },
@@ -51,7 +50,7 @@
       "feather_database_path": "feathers/AutomaticJumplist_CrowEyeFeather.db",
       "artifact_type": "AutomaticJumplist",
       "feather_id": "jumplist_auto",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 2,
       "tier_name": "Remote-session destination history"
     },
@@ -60,12 +59,29 @@
       "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
       "artifact_type": "MFT",
       "feather_id": "mft_usn",
-      "weight": 0.10,
+      "weight": 0.1,
       "tier": 3,
       "tier_name": "Admin-share file drop"
+    },
+    {
+      "feather_id": "firewall",
+      "artifact_type": "FirewallRules",
+      "feather_config_name": "FirewallRules_CrowEyeFeather",
+      "feather_database_path": "feathers/FirewallRules_CrowEyeFeather.db",
+      "tier": 2,
+      "tier_name": "Host firewall exposure",
+      "weight": 0.1
+    },
+    {
+      "feather_id": "net_cards",
+      "artifact_type": "NetworkCards",
+      "feather_config_name": "NetworkCards_CrowEyeFeather",
+      "feather_database_path": "feathers/NetworkCards_CrowEyeFeather.db",
+      "tier": 3,
+      "tier_name": "Adapter inventory",
+      "weight": 0.05
     }
   ],
-
   "time_window_minutes": 180,
   "minimum_matches": 1,
   "target_application": "",
@@ -81,32 +97,51 @@
     "MFT"
   ],
   "use_weighted_scoring": true,
-
   "scoring": {
     "enabled": true,
     "score_interpretation": {
-      "confirmed":  { "min": 0.70, "label": "Confirmed Lateral Movement" },
-      "probable":   { "min": 0.40, "label": "Probable Lateral Movement" },
-      "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
-      "not_proven": { "min": 0.00, "label": "Not Proven" }
+      "confirmed": {
+        "min": 0.7,
+        "label": "Confirmed Lateral Movement"
+      },
+      "probable": {
+        "min": 0.4,
+        "label": "Probable Lateral Movement"
+      },
+      "weak": {
+        "min": 0.2,
+        "label": "Weak / Partial Evidence"
+      },
+      "not_proven": {
+        "min": 0.0,
+        "label": "Not Proven"
+      }
     }
   },
-
   "semantic_rules": [
     {
       "rule_id": "lat_network_logon",
       "name": "Network or RDP Logon (4624 type 3/10)",
       "semantic_value": "Remote Authentication",
-      "description": "Successful network or RDP logon recorded in Security log — the canonical lateral-movement indicator",
+      "description": "Successful network or RDP logon recorded in Security log \u2014 the canonical lateral-movement indicator",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4624" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4624"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
       "category": "lateral_movement",
       "severity": "high",
-      "technique_id": ["T1021"],
-      "tactic": ["lateral-movement"]
+      "technique_id": [
+        "T1021"
+      ],
+      "tactic": [
+        "lateral-movement"
+      ]
     },
     {
       "rule_id": "lat_remote_tool_run",
@@ -114,7 +149,12 @@
       "semantic_value": "Remote Tool Run",
       "description": "Prefetch evidence of a lateral-movement utility (psexec.exe, mstsc.exe, wmic.exe, winrs.exe, winrm.exe, rdpclip.exe, smbexec.exe, paexec.exe, etc.)",
       "conditions": [
-        { "feather_id": "prefetch", "field_name": "executable_name", "operator": "regex", "value": "\\b(?:psexec|paexec|smbexec|wmic|winrs|winrm|mstsc|rdpclip|net1?\\.exe|sc\\.exe|reg\\.exe|wmiexec|atexec|crackmapexec|impacket)\\b" }
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "regex",
+          "value": "\\b(?:psexec|paexec|smbexec|wmic|winrs|winrm|mstsc|rdpclip|net1?\\.exe|sc\\.exe|reg\\.exe|wmiexec|atexec|crackmapexec|impacket)\\b"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -127,9 +167,24 @@
       "semantic_value": "UNC Path Reference",
       "description": "LNK file or TypedPaths or JumpList entry pointing at \\\\server\\share",
       "conditions": [
-        { "feather_id": "lnk",          "field_name": "target_path", "operator": "contains", "value": "\\\\" },
-        { "feather_id": "typedpaths",   "field_name": "typed_path",  "operator": "contains", "value": "\\\\" },
-        { "feather_id": "jumplist_auto","field_name": "path",        "operator": "contains", "value": "\\\\" }
+        {
+          "feather_id": "lnk",
+          "field_name": "target_path",
+          "operator": "contains",
+          "value": "\\\\"
+        },
+        {
+          "feather_id": "typedpaths",
+          "field_name": "row_data",
+          "operator": "contains",
+          "value": "\\\\"
+        },
+        {
+          "feather_id": "jumplist_auto",
+          "field_name": "path",
+          "operator": "contains",
+          "value": "\\\\"
+        }
       ],
       "logic_operator": "OR",
       "scope": "wing",
@@ -142,15 +197,30 @@
       "semantic_value": "Confirmed Remote Session",
       "description": "Security log shows network/RDP logon AND a UNC-target artefact appears within the time window",
       "conditions": [
-        { "feather_id": "security_logs", "field_name": "EventID",   "operator": "equals",  "value": "4624" },
-        { "feather_id": "lnk",           "field_name": "target_path","operator": "contains","value": "\\\\" }
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4624"
+        },
+        {
+          "feather_id": "lnk",
+          "field_name": "target_path",
+          "operator": "contains",
+          "value": "\\\\"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
       "category": "lateral_movement",
       "severity": "critical",
-      "technique_id": ["T1021.002", "T1570"],
-      "tactic": ["lateral-movement"]
+      "technique_id": [
+        "T1021.002",
+        "T1570"
+      ],
+      "tactic": [
+        "lateral-movement"
+      ]
     },
     {
       "rule_id": "lat_admin_share_drop",
@@ -158,7 +228,12 @@
       "semantic_value": "Admin Share File Drop",
       "description": "MFT/USN shows file creation under an admin share path (C$, ADMIN$, IPC$)",
       "conditions": [
-        { "feather_id": "mft_usn", "field_name": "path", "operator": "contains", "value": "$" }
+        {
+          "feather_id": "mft_usn",
+          "field_name": "path",
+          "operator": "contains",
+          "value": "$"
+        }
       ],
       "logic_operator": "AND",
       "scope": "wing",
@@ -169,24 +244,93 @@
       "rule_id": "lat_ordered_chain",
       "name": "Ordered Lateral Chain (Sequence)",
       "semantic_value": "Ordered Lateral Movement",
-      "description": "Network/RDP logon (4624) → remote-admin tool execution (prefetch) → admin-share file drop (MFT/USN), in that order and within the gap — a full lateral-movement kill-chain. Identity engine only.",
+      "description": "Network/RDP logon (4624) \u2192 remote-admin tool execution (prefetch) \u2192 admin-share file drop (MFT/USN), in that order and within the gap \u2014 a full lateral-movement kill-chain. Identity engine only.",
       "rule_type": "sequence",
       "sequence": {
         "max_gap_minutes": 60,
         "steps": [
-          { "feather_id": "security_logs", "field_name": "EventID", "operator": "equals", "value": "4624" },
-          { "feather_id": "prefetch", "field_name": "executable_name", "operator": "regex", "value": "\\b(?:psexec|paexec|wmic|winrs|winrm|mstsc|smbexec|wmiexec|atexec)\\b" },
-          { "feather_id": "mft_usn", "field_name": "path", "operator": "contains", "value": "$" }
+          {
+            "feather_id": "security_logs",
+            "field_name": "EventID",
+            "operator": "equals",
+            "value": "4624"
+          },
+          {
+            "feather_id": "prefetch",
+            "field_name": "executable_name",
+            "operator": "regex",
+            "value": "\\b(?:psexec|paexec|wmic|winrs|winrm|mstsc|smbexec|wmiexec|atexec)\\b"
+          },
+          {
+            "feather_id": "mft_usn",
+            "field_name": "path",
+            "operator": "contains",
+            "value": "$"
+          }
         ]
       },
       "scope": "wing",
       "category": "lateral_movement",
       "severity": "critical",
-      "technique_id": ["T1021", "T1570"],
-      "tactic": ["lateral-movement"]
+      "technique_id": [
+        "T1021",
+        "T1570"
+      ],
+      "tactic": [
+        "lateral-movement"
+      ]
+    },
+    {
+      "rule_id": "lm_inbound_firewall_rule",
+      "name": "Inbound Firewall Rule",
+      "semantic_value": "Inbound Firewall Rule",
+      "scope": "wing",
+      "category": "lateral_movement",
+      "severity": "low",
+      "confidence": 0.6,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "firewall",
+          "field_name": "direction",
+          "operator": "equals",
+          "value": "In"
+        }
+      ],
+      "tactic": [
+        "lateral-movement"
+      ],
+      "technique_id": [
+        "T1021"
+      ],
+      "description": "An inbound rule is what makes a service reachable from another host. Benign in bulk - Windows ships hundreds - so this is context for a logon that arrived over the network, and escalates only alongside one."
+    },
+    {
+      "rule_id": "lm_network_adapter",
+      "name": "Network Adapter Inventory",
+      "semantic_value": "Network Adapter Inventory",
+      "scope": "wing",
+      "category": "lateral_movement",
+      "severity": "info",
+      "confidence": 0.65,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "net_cards",
+          "field_name": "description",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "tactic": [
+        "discovery"
+      ],
+      "technique_id": [
+        "T1016"
+      ],
+      "description": "The adapter inventory by installation index. It names cards that no longer have an interface, which is how an adapter that was removed still leaves a trace."
     }
   ],
-
   "tags": [
     "lateral_movement",
     "default",

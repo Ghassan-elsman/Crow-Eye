@@ -57,7 +57,7 @@ except ImportError:
 
 # Known GPT Partition Type GUIDs
 # ===================================================================
-# COMPLETE GPT + MBR TYPE DICTIONARY (2025 edition – covers 99.9% of real machines)
+# COMPLETE GPT + MBR TYPE DICTIONARY (2025 edition - covers 99.9% of real machines)
 # ===================================================================
 PARTITION_TYPE_GUIDS = {
     # === Microsoft ===
@@ -98,7 +98,7 @@ PARTITION_TYPE_GUIDS = {
     "024DEE41-33E7-11D3-9D69-0008C781F39F": "MBR partition scheme",
 }
 
-# MBR (legacy) partition type codes → human name
+# MBR (legacy) partition type codes -> human name
 MBR_TYPE_MAP = {
     0x00: "Empty",
     0x07: "NTFS / exFAT / HPFS",
@@ -953,7 +953,7 @@ class PartitionAnalyzer:
                     is_bootable = self._is_disk_bootable(wmi_disk, disk_partitions)
                     disk_size = int(wmi_disk.Size) if hasattr(wmi_disk, 'Size') and wmi_disk.Size else 0
 
-                # FINAL TRUTH ENFORCEMENT — THIS IS THE HOLY GRAIL
+                # FINAL TRUTH ENFORCEMENT - THIS IS THE HOLY GRAIL
                 has_gpt_evidence = any(
                     p.partition_guid or 
                     p.partition_guid == "TEXT-MAPPING" or 

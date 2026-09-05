@@ -441,7 +441,6 @@ The `correlation_engine` is organized into several key directories, each with a 
 -   **`pipeline_management_tab.py`**: Manages pipeline creation and execution.
 -   **`results_viewer.py`, `identity_results_view.py`, `timebased_results_viewer.py`**: Display correlation results. `results_viewer.py` is the `DynamicResultsTabWidget` orchestrator that hosts the identity-centric and time-window viewers. *(The earlier `correlation_results_view.py` and `hierarchical_results_view.py` were removed in the gui consolidation.)*
 -   **`execution_control.py`**: Controls engine execution from the GUI.
--   **`semantic_mapping_viewer.py`**: Manages semantic mappings.
 
 **[📖 Detailed Documentation](gui/GUI_DOCUMENTATION.md)**
 

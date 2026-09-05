@@ -56,6 +56,8 @@ class WingsCreatorWindow(QMainWindow):
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Crow-Eye Wings Creator")
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.setWindowIcon(CrowEyeIcons.wing())
         self.setGeometry(100, 100, 1400, 900)
         
         # Create central widget with scroll area
@@ -170,8 +172,10 @@ class WingsCreatorWindow(QMainWindow):
     
     def create_basic_info_section(self):
         """Create basic wing information section"""
-        group = QGroupBox("Wing Information")
+        group = QGroupBox()
         layout = QVBoxLayout()
+        from ...gui.crow_eye_icons import group_title_label
+        layout.addWidget(group_title_label("wing", "Wing Information"))
         
         # Wing Name
         name_layout = QHBoxLayout()
@@ -220,8 +224,10 @@ class WingsCreatorWindow(QMainWindow):
     
     def create_feathers_section(self):
         """Create feathers configuration section"""
-        group = QGroupBox("Feather Selection (Minimum 1 Required)")
+        group = QGroupBox()
         layout = QVBoxLayout()
+        from ...gui.crow_eye_icons import group_title_label
+        layout.addWidget(group_title_label("feather", "Feather Selection (Minimum 1 Required)"))
         
         # Container for feather widgets
         self.feathers_container = QVBoxLayout()
@@ -353,8 +359,10 @@ class WingsCreatorWindow(QMainWindow):
     
     def create_wing_logic_section(self):
         """Create wing logic section"""
-        group = QGroupBox("Wing Logic")
+        group = QGroupBox()
         layout = QVBoxLayout()
+        from ...gui.crow_eye_icons import group_title_label
+        layout.addWidget(group_title_label("wing", "Wing Logic"))
         
         # Proves
         proves_layout = QHBoxLayout()

@@ -11,8 +11,8 @@
 
   "feathers": [
     {
-      "feather_config_name": "AmCache_CrowEyeFeather",
-      "feather_database_path": "feathers/AmCache_CrowEyeFeather.db",
+      "feather_config_name": "InventoryApplicationFile_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplicationFile_CrowEyeFeather.db",
       "artifact_type": "AmCache",
       "feather_id": "amcache",
       "weight": 0.30,
@@ -85,7 +85,7 @@
       "rule_type": "absence",
       "absence": {
         "expect_present": [
-          { "feather_id": "amcache", "field_name": "executable_name", "operator": "wildcard", "value": "*" }
+          { "feather_id": "amcache", "field_name": "name", "operator": "wildcard", "value": "*" }
         ],
         "require_absent": [
           { "feather_id": "prefetch", "field_name": "executable_name", "operator": "wildcard", "value": "*" }
@@ -128,7 +128,7 @@
       "rule_type": "absence",
       "absence": {
         "expect_present": [
-          { "feather_id": "amcache",   "field_name": "executable_name", "operator": "wildcard", "value": "*" },
+          { "feather_id": "amcache",   "field_name": "name", "operator": "wildcard", "value": "*" },
           { "feather_id": "shimcache", "field_name": "path",            "operator": "wildcard", "value": "*" }
         ],
         "require_absent": [

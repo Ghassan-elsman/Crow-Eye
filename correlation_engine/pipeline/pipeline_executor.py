@@ -16,6 +16,25 @@ from ..engine.base_engine import FilterConfig, BaseCorrelationEngine
 from ..wings.core.wing_model import Wing, FeatherSpec, CorrelationRules
 
 
+class _StatsView:
+    """Adapts a plain statistics dict to the DatabaseErrorHandler interface.
+
+    Lets the evidence-accounting loop treat a retained snapshot exactly like a
+    live handler, rather than growing a second code path that could drift from
+    the first.
+    """
+
+    def __init__(self, stats):
+        self._stats = stats or {}
+        self.feather_status = {
+            fid: {'status': 'error'}
+            for fid in (self._stats.get('feathers_with_errors') or [])
+        }
+
+    def get_error_statistics(self):
+        return self._stats
+
+
 class PipelineExecutor:
     """Executes complete analysis pipelines"""
     
@@ -51,12 +70,20 @@ class PipelineExecutor:
         if engine_type == 'time_based':
             engine_type = EngineType.TIME_WINDOW_SCANNING
 
-        # Store resolved engine_type so summaries report what was actually created
-        # rather than reading from the (possibly missing) config field again.
-        self.engine_type = engine_type
+        # What was ASKED for. `self.engine_type` is set after construction, from
+        # the engine that actually exists - see below.
+        requested_engine_type = engine_type
+
+        # These three are populated during construction, so they have to exist
+        # before it: the fallback path below appends to self.warnings, and it
+        # used to be initialised further down, which is why a silent engine
+        # substitution had nowhere to be recorded.
+        self.results: List[CorrelationResult] = []
+        self.errors: List[str] = []
+        self.warnings: List[str] = []
 
         print(f"[PipelineExecutor] Creating engine: {engine_type}")
-        
+
         try:
             # Create engine with shared integrations (dependency injection)
             self.engine = self._create_engine_with_integrations(
@@ -84,13 +111,64 @@ class PipelineExecutor:
                     engine_type=EngineType.IDENTITY_BASED,
                     filters=self.filters
                 )
-        
-        self.results: List[CorrelationResult] = []
-        self.errors: List[str] = []
-        self.warnings: List[str] = []
+                # A substituted engine is a different correlation strategy with
+                # different semantics, so the run has to say so. This used to
+                # reach logging and stdout only, while the summary - which the
+                # results viewer and the report read - still named the engine
+                # that had FAILED to build.
+                self.warnings.append(
+                    f"Requested engine '{requested_engine_type}' could not be "
+                    f"created ({e2}); fell back to IDENTITY_BASED. Findings in "
+                    f"this run were produced by the identity-based strategy."
+                )
+
+        # Report what EXISTS, not what was asked for. Derived from the object so
+        # it cannot drift from reality the way a pre-assigned value did.
+        self.engine_type = self._engine_type_of(self.engine, requested_engine_type)
+        self.requested_engine_type = requested_engine_type
+
         self.progress_widget = None # Optional progress display widget
         self.verbose = False # Set to True for debug output
+        self.feather_cache = None # Run-scoped; see set_feather_cache()
+
+    def set_feather_cache(self, cache) -> None:
+        """Share one run's feather work across executors.
+
+        A multi-wing GUI run builds one executor per wing, so every wing used to
+        re-open and re-derive every feather it names - and wings share feathers.
+        The caller (the run, not the wing) owns the cache and passes the same
+        one to each executor; the engine takes it from here if it can use it.
+        None means "load every time", which is what happened before this
+        existed, so CLI and test callers are unaffected.
+        """
+        self.feather_cache = cache
+        if cache is not None and hasattr(self.engine, 'set_feather_cache'):
+            self.engine.set_feather_cache(cache)
     
+    @staticmethod
+    def _engine_type_of(engine, fallback: str) -> str:
+        """The engine type of the object that was actually built.
+
+        Read from the instance rather than from the value that was requested.
+        The requested value was previously stored straight into
+        `self.engine_type` under a comment claiming it reported "what was
+        actually created" - so when construction fell back to IDENTITY_BASED,
+        `summary['engine_type']` still named the engine that had failed. The
+        two engines are different correlation strategies, and a forensic
+        summary that names the wrong one is wrong about how its own findings
+        were produced.
+
+        `fallback` is used only when the class is unrecognised, so an engine
+        added later degrades to the requested name instead of reporting
+        nothing.
+        """
+        name = type(engine).__name__ if engine is not None else ""
+        if "TimeWindow" in name:
+            return EngineType.TIME_WINDOW_SCANNING
+        if "Identity" in name:
+            return EngineType.IDENTITY_BASED
+        return fallback
+
     def _create_shared_integrations(self, pipeline_config: PipelineConfig):
         """
         Create shared integration instances for dependency injection.
@@ -449,23 +527,82 @@ class PipelineExecutor:
             'parse_stats_per_feather': {},
         }
 
-        error_handler = getattr(self.engine, 'error_handler', None)
-        if error_handler is not None:
-            try:
-                stats = error_handler.get_error_statistics()
-                evidence['fallback_operations'] = stats.get('fallback_operations', 0)
-                evidence['success_rate_percent'] = stats.get('success_rate_percent', 100.0)
-                evidence['error_counts_by_type'] = stats.get('error_counts_by_type', {})
-            except Exception as e:
-                self.warnings.append(f"[Evidence accounting] error_handler stats unavailable: {e}")
-            try:
-                feather_status = getattr(error_handler, 'feather_status', {}) or {}
-                evidence['feathers_with_errors'] = sorted(
-                    fid for fid, s in feather_status.items()
-                    if isinstance(s, dict) and s.get('status') == 'error'
-                )
-            except Exception as e:
-                self.warnings.append(f"[Evidence accounting] feather_status unavailable: {e}")
+        # Every DatabaseErrorHandler in play, not just one.
+        #
+        # This used to read `self.engine.error_handler` alone. The time-window
+        # engine has no such attribute - it has `error_coordinator` and
+        # `phase1_error_handler` - and the handlers that actually fire live on
+        # the per-feather OptimizedFeatherQuery objects in
+        # `engine.feather_queries`, one each. So `getattr` returned None, the
+        # whole block was skipped, and a run in which 1,114 queries fell back to
+        # "returning empty results" was reported as
+        # `fallback_operations: 0, success_rate_percent: 100.0`.
+        #
+        # The surface built to reveal silent evidence loss was itself silent.
+        handlers = []
+        engine_handler = getattr(self.engine, 'error_handler', None)
+        if engine_handler is not None:
+            handlers.append(('engine', engine_handler))
+        for feather_id, query in (getattr(self.engine, 'feather_queries', {}) or {}).items():
+            h = getattr(query, 'error_handler', None)
+            if h is not None:
+                handlers.append((feather_id, h))
+
+        # The engine clears `feather_queries` during execute(), long before this
+        # runs, so by now that loop usually finds nothing. The engine rolls the
+        # per-feather statistics into `retained_error_statistics` before
+        # discarding the handlers - that snapshot is the real source here, and
+        # without it a run that dropped a whole feather still reported clean.
+        retained = getattr(self.engine, 'retained_error_statistics', None)
+        if isinstance(retained, dict):
+            handlers.append(('retained', _StatsView(retained)))
+
+        if handlers:
+            total_ops = successful_ops = 0
+            reported_rates = []
+            counts_by_type: Dict[str, int] = {}
+            with_errors = set()
+            for owner, handler in handlers:
+                try:
+                    stats = handler.get_error_statistics()
+                except Exception as e:
+                    self.warnings.append(
+                        f"[Evidence accounting] stats unavailable for '{owner}': {e}")
+                    continue
+                evidence['fallback_operations'] += stats.get('fallback_operations', 0) or 0
+                total_ops += stats.get('total_operations', 0) or 0
+                successful_ops += stats.get('successful_operations', 0) or 0
+                if stats.get('success_rate_percent') is not None:
+                    reported_rates.append(stats['success_rate_percent'])
+                for kind, n in (stats.get('error_counts_by_type') or {}).items():
+                    counts_by_type[str(kind)] = counts_by_type.get(str(kind), 0) + n
+                if (stats.get('failed_operations') or 0) > 0 or \
+                        (stats.get('fallback_operations') or 0) > 0:
+                    if owner != 'engine':
+                        with_errors.add(owner)
+                try:
+                    feather_status = getattr(handler, 'feather_status', {}) or {}
+                    with_errors.update(
+                        fid for fid, s in feather_status.items()
+                        if isinstance(s, dict) and s.get('status') == 'error'
+                    )
+                except Exception as e:
+                    self.warnings.append(
+                        f"[Evidence accounting] feather_status unavailable for '{owner}': {e}")
+
+            evidence['error_counts_by_type'] = counts_by_type
+            evidence['feathers_with_errors'] = sorted(with_errors)
+            # Recomputed from the raw counts across every handler, so one quiet
+            # feather cannot average away a broken one. When a handler reports a
+            # rate but no counts, take the WORST rate reported rather than the
+            # mean - an accounting surface should not round a broken feather off.
+            if total_ops:
+                evidence['success_rate_percent'] = round(
+                    successful_ops / total_ops * 100.0, 2)
+            elif reported_rates:
+                evidence['success_rate_percent'] = min(reported_rates)
+            else:
+                evidence['success_rate_percent'] = 100.0
 
         # Phase1ErrorHandler aggregator (used by TimeWindowScanningEngine's
         # two-phase collector). Engines that don't use it just leave this empty.
@@ -991,22 +1128,17 @@ class PipelineExecutor:
                 f"Remember: minimum_matches determines non-anchor feathers required (total = anchor + minimum_matches)."
             )
         
-        # Validate anchor_priority contains valid artifact types
-        try:
-            from ..config.artifact_type_registry import get_registry
-            registry = get_registry()
-            valid_artifact_types = set(registry.get_all_types())
-        except Exception:
-            # Fallback to hard-coded set if registry fails
-            valid_artifact_types = {
-                "Logs", "Prefetch", "SRUM", "AmCache", "ShimCache",
-                "Jumplists", "LNK", "MFT", "USN", "Registry", "Browser"
-            }
-        for artifact_type in wing_config.anchor_priority:
-            if artifact_type not in valid_artifact_types:
-                validation_errors.append(
-                    f"Invalid artifact type in anchor_priority: '{artifact_type}'"
-                )
+        # Check anchor_priority against this wing's OWN feathers - a preference
+        # order, never a reason to refuse to run the wing. See
+        # wings.core.wing_model.validate_anchor_priority for why this is not a
+        # validation error any more.
+        from ..wings.core.wing_model import validate_anchor_priority
+        for message in validate_anchor_priority(
+                wing_config.anchor_priority,
+                [f.artifact_type for f in (wing_config.feathers or [])]):
+            warning = f"Wing '{wing_config.wing_name}': {message}"
+            if warning not in self.warnings:
+                self.warnings.append(warning)
         
         # Validate feather references
         if not wing_config.feathers:
@@ -1168,7 +1300,30 @@ class PipelineExecutor:
                 print(f" " + "=" * 60)
                 print(f" [OK] Matches already saved via streaming mode")
                 
-                # Update execution record with final statistics
+                # Write each result row from the finished CorrelationResult
+                # before rolling the totals up.
+                #
+                # This branch used to call update_execution_stats alone, so the
+                # result row kept whatever the engine wrote mid-run: duration 0,
+                # every feather's matches_created 0, no records scanned, no
+                # anchor. The Summary tab reads that row, so it showed
+                # "Time: 0.00s" on a 749-second run and drew empty charts.
+                # save_result's streamed branch exists for exactly this - it
+                # UPDATEs the streamed row and skips re-writing matches that are
+                # already in the database.
+                with ResultsDatabase(str(db_file)) as db:
+                    for r in self.results:
+                        try:
+                            db.save_result(execution_id, r)
+                        except Exception as e:
+                            warning = (f"Could not finalize result row for wing "
+                                       f"'{getattr(r, 'wing_name', '?')}': {e}")
+                            self.warnings.append(warning)
+                            print(f"[Pipeline] WARNING: {warning}")
+
+                # Update execution record with final statistics. Its totals are
+                # derived from the result rows, so this must run after they are
+                # correct.
                 with ResultsDatabase(str(db_file)) as db:
                     db.update_execution_stats(
                         execution_id=execution_id,

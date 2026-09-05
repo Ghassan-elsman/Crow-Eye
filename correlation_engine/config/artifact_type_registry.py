@@ -305,7 +305,12 @@ class ArtifactTypeRegistry:
         defaults = [
             ("Logs", "Event Logs", 0.4, 1, 1, "primary_evidence", "high"),
             ("Prefetch", "Prefetch Files", 0.3, 1, 2, "primary_evidence", "high"),
-            ("SRUM", "System Resource Usage Monitor", 0.2, 2, 3, "supporting_evidence", "medium"),
+            ("ScheduledTasks", "Scheduled Tasks", 0.25, 2, 3, "primary_evidence", "high"),
+            ("Persistence", "Persistence (ASEP)", 0.25, 2, 4, "primary_evidence", "high"),
+            ("UserAccounts", "User Accounts", 0.1, 3, 5, "contextual_evidence", "medium"),
+            ("SecurityPosture", "Security Posture", 0.15, 2, 6, "supporting_evidence", "medium"),
+            ("DeviceHistory", "Device History", 0.1, 3, 7, "contextual_evidence", "medium"),
+            ("SRUM", "System Resource Usage Monitor", 0.2, 2, 6, "supporting_evidence", "medium"),
             ("AmCache", "AmCache", 0.15, 2, 4, "supporting_evidence", "medium"),
             ("ShimCache", "ShimCache", 0.15, 2, 5, "supporting_evidence", "medium"),
             ("Jumplists", "Jump Lists", 0.1, 3, 6, "contextual_evidence", "low"),

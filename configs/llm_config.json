@@ -369,6 +369,47 @@
       }
     },
     {
+      "name": "query_timeline",
+      "description": "WHAT HAPPENED AT A GIVEN TIME. Sweeps EVERY forensic database in the case at once and returns one merged chronology - execution, file activity, registry changes, event log records, USB, deletions - ordered by time. Use this for any question about a moment or a period ('what happened around 14:30', 'what did the user do that evening', 'what ran just before the file was deleted'), instead of guessing which database to query and issuing query_database against each in turn. Rows are CANDIDATES carrying database/table/rowid: confirm anything you intend to quote with query_database. Each row says whether its time is 'exact' or a 'key upper bound'; a bounded time belongs to every value under a registry key and dates none of them, so it can never be the sole support for a claim that something happened at a specific moment.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "start_time": {
+            "type": "string",
+            "description": "Window start, 'YYYY-MM-DD HH:MM:SS' (UTC). Use with end_time."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "Window end, 'YYYY-MM-DD HH:MM:SS' (UTC)."
+          },
+          "around": {
+            "type": "string",
+            "description": "A moment to centre on, 'YYYY-MM-DD HH:MM:SS' (UTC). Simpler than start/end for 'what happened at X'."
+          },
+          "window_minutes": {
+            "type": "integer",
+            "description": "Minutes either side of `around`. Default 30."
+          },
+          "artifact_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional filter, e.g. ['Logs','Prefetch','MftUsn']. Omit to sweep everything."
+          },
+          "include_bounded": {
+            "type": "boolean",
+            "description": "Include registry KEY write times. Off by default: they are upper bounds, thousands of them cluster on install day, and they crowd out the times that are moments. Turn on when asking what a key could have changed BY."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum events to return. Default 300."
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "name": "query_correlation_results",
       "description": "Find time-based or identity-based correlations between events.",
       "parameters": {

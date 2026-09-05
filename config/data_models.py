@@ -76,6 +76,11 @@ class GlobalConfig:
     identity_semantic_phase_enabled: bool = True  # Enable identity-level semantic mapping by default
     wings_semantic_mapping_enabled: bool = True  # Enable semantic mapping for Wings by default
     cascade_tree_expansion_enabled: bool = True  # Enable cascade expansion in tree views by default
+    # May a parse CREATE a shadow copy to read a locked hive, or only use
+    # ones that already exist? On by default: a hive that cannot be read is
+    # evidence lost. Off, the parser still uses existing snapshots and falls
+    # back to raw disk and then to an NtSaveKeyEx export.
+    parser_allow_snapshot_creation: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -88,7 +93,8 @@ class GlobalConfig:
             'last_updated': self.last_updated.isoformat() if isinstance(self.last_updated, datetime) else self.last_updated,
             'identity_semantic_phase_enabled': self.identity_semantic_phase_enabled,
             'wings_semantic_mapping_enabled': self.wings_semantic_mapping_enabled,
-            'cascade_tree_expansion_enabled': self.cascade_tree_expansion_enabled
+            'cascade_tree_expansion_enabled': self.cascade_tree_expansion_enabled,
+            'parser_allow_snapshot_creation': self.parser_allow_snapshot_creation
         }
     
     @classmethod
@@ -107,7 +113,8 @@ class GlobalConfig:
             last_updated=last_updated,
             identity_semantic_phase_enabled=data.get('identity_semantic_phase_enabled', True),
             wings_semantic_mapping_enabled=data.get('wings_semantic_mapping_enabled', True),
-            cascade_tree_expansion_enabled=data.get('cascade_tree_expansion_enabled', True)
+            cascade_tree_expansion_enabled=data.get('cascade_tree_expansion_enabled', True),
+            parser_allow_snapshot_creation=data.get('parser_allow_snapshot_creation', True)
         )
     
     @classmethod
@@ -122,7 +129,8 @@ class GlobalConfig:
             last_updated=datetime.now(),
             identity_semantic_phase_enabled=True,
             wings_semantic_mapping_enabled=True,
-            cascade_tree_expansion_enabled=True
+            cascade_tree_expansion_enabled=True,
+            parser_allow_snapshot_creation=True
         )
 
 

@@ -109,26 +109,6 @@ The **gui/** directory provides all user interface components for the correlatio
 
 ---
 
-### timeline_widget.py
-
-**Purpose**: Timeline visualization of correlation matches.
-
-**Key Classes**:
-- `TimelineWidget`: Timeline chart widget
-
-**Features**:
-- Display matches on timeline
-- Zoom and pan
-- Highlight time windows
-- Show temporal relationships
-- Interactive selection
-
-**Dependencies**: `engine/correlation_result.py`, PyQt5
-
-**Impact**: MEDIUM - Timeline visualization
-
----
-
 ### execution_control.py
 
 **Purpose**: Control pipeline execution with progress tracking.
@@ -167,26 +147,6 @@ The **gui/** directory provides all user interface components for the correlatio
 **Dependencies**: `config/pipeline_config.py`
 
 **Impact**: MEDIUM - Visual pipeline creation
-
----
-
-### semantic_mapping_viewer.py
-
-**Purpose**: View and edit semantic field mappings.
-
-**Key Classes**:
-- `SemanticMappingViewer`: Mapping editor
-
-**Features**:
-- View current mappings
-- Add new mappings
-- Edit existing mappings
-- Preview mapping effects
-- Validate mappings
-
-**Dependencies**: `config/semantic_mapping.py`
-
-**Impact**: LOW - Mapping management
 
 ---
 
@@ -317,9 +277,6 @@ Identity: chrome.exe (Application)
 ### Dialog Components
 
 **Files**:
-- `anchor_detail_dialog.py` - Anchor record details
-- `identity_detail_dialog.py` - Identity information
-- `match_detail_dialog.py` - Match details
 - `wing_selection_dialog.py` - Select wings
 - `pipeline_selection_dialog.py` - Select pipelines
 
@@ -332,13 +289,7 @@ Identity: chrome.exe (Application)
 ### Widget Components
 
 **Files**:
-- `pipeline_selector_widget.py` - Pipeline selection
-- `progress_display_widget.py` - Progress display
 - `scoring_breakdown_widget.py` - Score breakdown
-- `semantic_filter_panel.py` - Semantic filtering
-- `component_detail.py` - Component details
-- `config_library.py` - Configuration library
-- `identifier_extraction_config_panel.py` - Identifier config
 
 **Purpose**: Reusable UI components
 
@@ -351,7 +302,6 @@ Identity: chrome.exe (Application)
 **Files**:
 - `ui_styling.py` - UI styling utilities
 - `crow_eye_styles.qss` - Qt stylesheet
-- `tooltips_help.py` - Tooltips and help text
 
 **Purpose**: Visual styling and help
 
@@ -393,22 +343,6 @@ Identity: chrome.exe (Application)
 5. Test with sample results
 
 **Impact**: LOW - Adds visualization
-
----
-
-### Scenario 3: Modifying the Timeline Widget
-
-**Files to Modify**:
-1. `timeline_widget.py` - Update rendering logic
-2. Test with various result sets
-
-**Steps**:
-1. Modify rendering code
-2. Update interaction handlers
-3. Test zoom/pan functionality
-4. Verify performance
-
-**Impact**: MEDIUM - Affects timeline display
 
 ---
 

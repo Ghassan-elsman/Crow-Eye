@@ -39,9 +39,13 @@ Nothing here modifies evidence. Recovery reads the originals read-only and
 writes a recovered copy elsewhere; the caller owns that copy's lifetime.
 """
 
+import atexit
+import hashlib
 import logging
 import os
+import shutil
 import struct
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +96,9 @@ class RecoveryResult(object):
         self.entries_applied = 0
         self.highest_sequence = None
         self.reason = ""
+        # The evidence hash, so "the original was never written to" is a fact
+        # the case carries rather than something only a test knows.
+        self.source_sha256 = ""
 
     def __repr__(self):
         return ("<RecoveryResult %s dirty=%s recovered=%s pages=%d reason=%r>"
@@ -165,6 +172,23 @@ def base_block_checksum(block):
     if checksum == _U32:
         return 0xFFFFFFFE
     return checksum
+
+
+def _sha256_of(path):
+    """SHA-256 of a file, read in chunks so a large hive is not held twice.
+
+    Taken before anything else happens to the path, which is the only moment
+    it is known to be the untouched original.
+    """
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError as exc:
+        logger.debug("Cannot hash %s: %s", path, exc)
+        return ""
+    return digest.hexdigest()
 
 
 def read_base_block(path):
@@ -347,6 +371,7 @@ def recover_hive(hive_path, output_path, log_paths=None):
     result.sequence_1 = base["sequence_1"]
     result.sequence_2 = base["sequence_2"]
     result.was_dirty = base["is_dirty"]
+    result.source_sha256 = _sha256_of(hive_path)
 
     if not base["is_dirty"]:
         result.reason = "hive was closed cleanly; nothing to replay"
@@ -448,3 +473,210 @@ def recover_hive(hive_path, output_path, log_paths=None):
     result.reason = "replayed %d entries from %d log file(s)" % (
         entry_count, len(applied))
     return result
+
+
+# ---------------------------------------------------------------------------
+# One replay per hive, shared by every parser that reads one.
+#
+# offline_RegClaw was the only reader that replayed. AmCache, ShimCache, SRUM,
+# security_hive and user_identity each opened the raw file, which meant five
+# parsers reading a hive state Windows had not finished writing. The recovery
+# was already here; nothing made it reachable in one line.
+# ---------------------------------------------------------------------------
+
+_replay_cache = {}
+_replay_dir = None
+_replay_results = []
+_replay_by_source = {}
+
+
+def _replay_workspace():
+    """The directory recovered copies live in, created once and cleaned at exit."""
+    global _replay_dir
+    if _replay_dir is None:
+        _replay_dir = tempfile.mkdtemp(prefix="crow_eye_replay_")
+        atexit.register(shutil.rmtree, _replay_dir, True)
+    return _replay_dir
+
+
+def hive_for_reading(path):
+    """The recovered copy of `path` if its logs applied, otherwise `path`.
+
+    Call this on a hive path before opening it. A clean hive, a hive with no
+    logs collected beside it, an old DIRT log and a log older than the hive all
+    return the original path - the caller parses what it has rather than losing
+    the evidence, and `recovery_results()` says which of those it was.
+
+    Memoised on the source path, so a hive several parsers read is replayed
+    once. Never raises: if anything goes wrong the original path comes back,
+    because a parser that cannot replay still has to parse.
+    """
+    if not path:
+        return path
+    key = os.path.abspath(path)
+    if key in _replay_cache:
+        return _replay_cache[key]
+
+    result = path
+    try:
+        if os.path.exists(path):
+            out = os.path.join(_replay_workspace(),
+                               "%d_%s" % (len(_replay_results), os.path.basename(path)))
+            recovery = recover_hive(path, out)
+            _replay_results.append(recovery)
+            _replay_by_source[key] = recovery
+            if recovery.recovered:
+                result = recovery.recovered_path
+    except Exception as exc:
+        logger.error("Transaction-log replay failed for %s: %s", path, exc)
+
+    _replay_cache[key] = result
+    return result
+
+
+def recovery_results():
+    """Every RecoveryResult produced through hive_for_reading, in order."""
+    return list(_replay_results)
+
+
+def recovery_result_for(path):
+    """The RecoveryResult for a source hive path, or None if it was not tried.
+
+    Looked up by path rather than by taking the last result: hive_for_reading
+    is memoised, so a hive a second parser asks for produces no new result and
+    "the last one" would belong to a different hive.
+    """
+    if not path:
+        return None
+    return _replay_by_source.get(os.path.abspath(path))
+
+
+def reset_replay_cache():
+    """Forget what has been replayed. For tests, and for a second case in one run."""
+    global _replay_dir
+    _replay_cache.clear()
+    _replay_by_source.clear()
+    del _replay_results[:]
+    if _replay_dir:
+        shutil.rmtree(_replay_dir, ignore_errors=True)
+        _replay_dir = None
+
+
+# ---------------------------------------------------------------------------
+# Which bytes a transaction actually changed
+# ---------------------------------------------------------------------------
+# A key records when it was last written. Its values record nothing at all, so
+# "this key changed at 14:02" cannot normally be narrowed to which value did it.
+#
+# The logs can narrow it. Every entry carries the pages it dirtied, and a page
+# is the hive's own bytes AFTER the transaction - while the hive on disk still
+# holds them from BEFORE it. Diffing the two gives the changed spans, and a vk
+# record overlapping one is a value that genuinely changed, with its old data
+# on one side and its new data on the other.
+#
+# The diff is what makes this worth doing rather than a curiosity. A dirty page
+# is 4096 bytes and holds dozens of records, so treating the page as the unit
+# implicates everything that happens to share it. Measured on one NTUSER.DAT:
+# 1,082 dirty pages covering 5,554,176 bytes, of which 75,922 actually differ.
+# That is 1.37% - the page-granular reading is 73 times wider than the truth.
+
+def changed_spans(hive_path, log_paths=None, max_entries=None):
+    """Byte spans each pending transaction changed, oldest transaction first.
+
+    Yields dicts: sequence, and `spans` as a list of (offset, before, after)
+    where offset is absolute in the hive.
+
+    Returns an empty list rather than raising when there is nothing to read:
+    a hive with no logs is the normal case for an export, and a parser that
+    cannot do this must still parse.
+    """
+    if not hive_path or not os.path.exists(hive_path):
+        return []
+
+    try:
+        with open(hive_path, "rb") as handle:
+            image = handle.read()
+    except Exception as exc:
+        logger.debug("changed_spans could not read %s: %s", hive_path, exc)
+        return []
+
+    if log_paths is None:
+        log_paths = find_logs_for(hive_path)
+
+    entries = []
+    for log_path in log_paths or []:
+        # A DIRT log is the old format and its offsets mean something else.
+        # Refusing it is the point; misreading it would corrupt every span.
+        if log_format_of(log_path) != "new":
+            continue
+        try:
+            entries.extend(read_log_entries(log_path))
+        except Exception as exc:
+            logger.debug("changed_spans skipped %s: %s", log_path, exc)
+
+    entries.sort(key=lambda item: item["sequence"])
+    if max_entries:
+        entries = entries[-max_entries:]
+
+    out = []
+    for entry in entries:
+        spans = []
+        for offset, after in entry["pages"]:
+            if offset + len(after) > len(image):
+                # A page past the end of the hive belongs to growth the file
+                # has not taken yet. There is no "before" to diff against.
+                continue
+            before = image[offset:offset + len(after)]
+            if before == after:
+                continue
+            run = None
+            for index in range(len(after)):
+                if after[index] != before[index]:
+                    if run is None:
+                        run = index
+                elif run is not None:
+                    spans.append((offset + run, before[run:index], after[run:index]))
+                    run = None
+            if run is not None:
+                spans.append((offset + run, before[run:], after[run:]))
+        if spans:
+            # The pages themselves travel with the spans. A value CREATED by a
+            # transaction does not exist in the hive yet - its cell is still
+            # free there - so it cannot be named from the hive at any price.
+            # The only place its name exists is the page that created it.
+            out.append({"sequence": entry["sequence"], "spans": spans,
+                        "pages": [(offset, data) for offset, data in entry["pages"]
+                                  if offset + len(data) <= len(image)]})
+    return out
+
+
+def changed_span_stats(hive_path, log_paths=None):
+    """How much of the dirty pages actually differ. The control for the above.
+
+    A diff that quietly matched whole pages would report every record on them
+    as changed and look like a much richer result, so the ratio is measured
+    rather than assumed.
+    """
+    spans = changed_spans(hive_path, log_paths)
+    changed = sum(len(after) for entry in spans for _, _, after in entry["spans"])
+
+    if log_paths is None:
+        log_paths = find_logs_for(hive_path)
+    page_bytes = pages = 0
+    for log_path in log_paths or []:
+        if log_format_of(log_path) != "new":
+            continue
+        try:
+            for entry in read_log_entries(log_path):
+                for _, data in entry["pages"]:
+                    pages += 1
+                    page_bytes += len(data)
+        except Exception:
+            pass
+    return {
+        "transactions": len(spans),
+        "pages": pages,
+        "page_bytes": page_bytes,
+        "changed_bytes": changed,
+        "narrowing": (float(page_bytes) / changed) if changed else 0.0,
+    }

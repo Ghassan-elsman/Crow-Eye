@@ -36,6 +36,13 @@ except ImportError:                                   # pragma: no cover
     REGISTRY_AVAILABLE = False
 
 try:
+    from Artifacts_Collectors import registry_transaction_log
+except ModuleNotFoundError:                           # pragma: no cover
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from Artifacts_Collectors import registry_transaction_log
+
+try:
     from Artifacts_Collectors import registry_binary_parser
 except ModuleNotFoundError:                           # pragma: no cover
     import sys
@@ -75,7 +82,9 @@ def _open(hive_path):
     if not hive_path or not REGISTRY_AVAILABLE or not os.path.exists(hive_path):
         return None
     try:
-        return Registry.Registry(hive_path)
+        # Recovered copy when the logs apply, the original otherwise.
+        return Registry.Registry(
+            registry_transaction_log.hive_for_reading(hive_path))
     except Exception as e:
         logging.debug("SECURITY hive unreadable (%s): %s", hive_path, e)
         return None

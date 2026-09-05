@@ -249,6 +249,32 @@ class EvidenceSeal:
                     "row_count": len(results),
                     "forensic_markers": EvidenceSeal._extract_row_metadata(results)[:100]
                 })
+
+            elif name == "query_timeline":
+                # A chronology sweep returns rows from several databases at
+                # once, so the window and which artifacts were reached are part
+                # of the provenance: "nothing happened then" is a claim about
+                # what was searched, and without `artifacts_searched` there is
+                # no record of whether a database was absent or simply empty.
+                #
+                # The exactness split is recorded too. A key upper bound cannot
+                # support "X happened at T", and a reader of the sealed record
+                # has to be able to see which rows were which.
+                events = inner.get("events") or []
+                bounded = [e for e in events
+                           if isinstance(e, dict)
+                           and e.get("exactness") != "exact"]
+                refs.append({
+                    "tool": "query_timeline",
+                    "window": inner.get("window"),
+                    "row_count": len(events),
+                    "total_in_window": inner.get("total_in_window"),
+                    "artifacts_searched": inner.get("artifacts_searched"),
+                    "databases_absent": inner.get("databases_absent"),
+                    "bounded_rows": len(bounded),
+                    "forensic_markers":
+                        EvidenceSeal._extract_row_metadata(events)[:100],
+                })
             
             else:
                 # Generic fallback for other investigative tools: scan result text for artifacts

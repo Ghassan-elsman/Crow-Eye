@@ -12,7 +12,8 @@ class RegistryDataLoader(BaseDataLoader):
         super().__init__(db_path)
         self.registry_tables = [
             'computer_Name', 'time_zone', 'TimeZoneInfo', 'network_interfaces',
-            'NetworkInterfacesInfo', 'Network_list', 'SystemServices', 'machine_run',
+            'NetworkInterfacesInfo', 'Network_list', 'NetworkProfiles',
+            'SystemServices', 'machine_run',
             'machine_run_once', 'user_run', 'user_run_once', 'Windows_lastupdate',
             'WindowsUpdateInfo', 'ShutdownInfo', 'BrowserHistory', 'USBDevices',
             'USBInstances', 'USBProperties', 'USBStorageDevices', 'USBStorageVolumes',
@@ -34,6 +35,22 @@ class RegistryDataLoader(BaseDataLoader):
             # replayed. Empty on a live parse - there is no hive file to be
             # stale - and the first thing to read on an offline case.
             'registry_hive_state',
+            # What a tree walk cannot reach: the class-name field, the
+            # shared security descriptors, and records still present in
+            # freed cells.
+            'registry_class_names', 'registry_security_descriptors',
+            'registry_carved_keys', 'registry_carved_values',
+            'registry_value_changes',
+            'registry_key_times',
+            'startup_approved',
+            'app_paths',
+            'safe_boot_services',
+            'zone_map',
+            'app_permissions',
+            'shared_dlls',
+            'hid_devices',
+            'network_cards',
+            'system_configuration',
             'SecurityPosture', 'DefenderExclusions', 'FirewallRules',
             'NetworkShares', 'ConnectedDevices', 'MountPoints2',
             'RDPClientMRU', 'OfficeDocuments', 'FeatureUsage',

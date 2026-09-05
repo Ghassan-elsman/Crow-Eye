@@ -190,6 +190,13 @@ def create_ntuser_artifact() -> Artifact:
             # collected or it cannot report the same persistence.
             r"{PARTITION}\Windows\ServiceProfiles\LocalService\NTUSER.DAT",
             r"{PARTITION}\Windows\ServiceProfiles\NetworkService\NTUSER.DAT",
+            # Their logs too. These hives were added for the Run entries the
+            # service accounts carry; a stale read of those is a missed
+            # persistence mechanism.
+            r"{PARTITION}\Windows\ServiceProfiles\LocalService\NTUSER.DAT.LOG1",
+            r"{PARTITION}\Windows\ServiceProfiles\LocalService\NTUSER.DAT.LOG2",
+            r"{PARTITION}\Windows\ServiceProfiles\NetworkService\NTUSER.DAT.LOG1",
+            r"{PARTITION}\Windows\ServiceProfiles\NetworkService\NTUSER.DAT.LOG2",
         ],
         description="Per-user registry hive containing user-specific settings, recent files, run history, and user activity artifacts",
         required_admin=False,
@@ -234,6 +241,13 @@ def create_amcache_artifact() -> Artifact:
         artifact_type=ArtifactType.AMCACHE,
         default_paths=[
             r"{PARTITION}\Windows\AppCompat\Programs\Amcache.hve",
+            # Amcache.hve is a registry hive and Windows keeps it open, so it
+            # is dirty like any other and its outstanding changes live here.
+            # Collected without these, it can never be replayed - and this is
+            # execution evidence, which is the last place to accept a stale
+            # read.
+            r"{PARTITION}\Windows\AppCompat\Programs\Amcache.hve.LOG1",
+            r"{PARTITION}\Windows\AppCompat\Programs\Amcache.hve.LOG2",
         ],
         description="Application Compatibility Cache containing program execution history, installation records, and execution timestamps",
         required_admin=False,
