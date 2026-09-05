@@ -8,7 +8,7 @@
 Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a verdict traceable to its source records.</p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-![Version](https://img.shields.io/badge/version-0.12.6-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-0.13.0-brightgreen.svg)
 ![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.7.0-8a2be2.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational.svg)
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
@@ -55,7 +55,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 - 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux** (live parsers are Windows-only).
 - 🔒 **Private by design** — **0 ms of data sent off-device**; the Eye AI assistant can run fully **air-gapped**.
 - 🧾 **Court-grade** — evidence is cryptographically sealed and every step is auditable.
-- 📦 **Current version:** 0.12.6 · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
+- 📦 **Current version:** 0.13.0 · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
 
 ## ✨ Highlights
 
@@ -414,14 +414,14 @@ The **Crow-Eye Correlation Engine** is a production-grade forensic correlation s
 
 ### 🎯 Accuracy & Evidence-Completeness
 
-A focused accuracy pass, validated end-to-end against a real ~700K-record Windows case, layered on top of earlier reliability work. Every fix below is locked by the pytest regression suite and verified by a holistic validation harness that exercises all 7 default wings against both engines.
+A focused accuracy pass **from the 0.11.0 cycle**, validated end-to-end against a real ~700K-record Windows case and layered on top of earlier reliability work. Every fix below is locked by the pytest regression suite and verified by a holistic validation harness; it exercised the seven default wings that shipped at the time — eleven ship today. The match counts quoted below were measured under the rules of that release: **0.13.0 changed what counts as a match** (a match must now span more than one feather) **and what a confidence score means**, so treat them as a record of that pass rather than as current figures.
 
 **The identity engine captures all the evidence**
 - **Fixed: the identity engine was iterating only the FIRST row of every feather** when a time filter was active (a timezone-aware vs naive datetime comparison raised `TypeError` and aborted the per-row loop). Records-seen jumped from 3,558 → **745,615** on the validation case.
 - **Fixed: log records collapsed every event to its event PROVIDER as the identity** (all 33,855 SecurityLogs records shared one identity). The per-artifact mapping now prioritises real per-row entities (`User`, `ComputerName`, `NewProcessName`, `TargetUserName`) before channel/provider metadata.
 - **Fixed: artifact-aware field mapping never fired** because parsers don't stamp an `artifact` column on each row. The engine now falls back to `feather_metadata.artifact_type`, so SecurityLogs / SystemLogs / ApplicationLogs use their artifact-specific identity priority.
 - **Fixed: placeholder strings became false identities** (`'N/A'`, `'Unknown'`, `'-'`, nil-GUIDs bundled unrelated records together). The validator now rejects 30+ placeholder variants.
-- **Net result on one full-range window**: the Execution Proof wing surfaces **2,856 cross-feather (High) matches** in the identity engine and **643 cross-feather matches** in the time engine, with 24–118 cross-feather matches per wing across the other 6 wings.
+- **Net result on one full-range window, as measured then**: the Execution Proof wing surfaced **2,856 cross-feather (High) matches** in the identity engine and **643 cross-feather matches** in the time engine, with 24–118 cross-feather matches per wing across the other six wings of that release.
 
 **No more "everything is Low — something is wrong"**
 - **Fixed: single-feather matches were tagged `High`.** Matches with `feather_count == 1` now get `confidence_category="Low - single feather"`, so the High view focuses on real cross-feather correlation.
