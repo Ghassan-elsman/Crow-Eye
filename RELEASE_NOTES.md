@@ -4,101 +4,235 @@
 
 ## Version 0.14.0 — Visualizations & Browser Forensics Release (pre-release)
 
-**Release date:** 2026-10-03 · **Pre-release** — source only; the installer on crow-eye.com is still 0.13.0.
-
-**Baseline:** **0.13.0**, the previous release. Every figure below was measured against that tree.
-
-Three themes. Six artifacts get a **dashboard** of their own, opened from the table the analyst is already reading. Browsers become an artifact Crow-Eye parses rather than one it only glimpses through the registry. And every parse now says **why** a table came out empty, because an empty table that looks the same whether the artifact was absent or the parser crashed tells the analyst nothing.
-
-| | 0.13.0 | 0.14.0 |
-|---|---:|---:|
-| Chart dashboards | 0 | **6** |
-| Tables with a **Charts** button | 0 | **37** |
-| Browser tables (`browser_analysis.db`) | 0 | **37** |
-| Timeline artifact types / time columns | 17 / 133 | **18 / 175** |
-| UBA behaviours | 53 | **65** |
-| Hives carved for deleted keys and values | 6 kinds | **10** |
-| SRUM native columns kept | — | **+25** |
-| Eye forensic tools | 31 | 31 |
-| Test files in this repository | 68 | **84** |
+**Release date:** 2026-10-03 · **Status:** pre-release (source). The installer published on crow-eye.com remains 0.13.0.
+**Baseline:** 0.13.0. All figures below are measured against that release.
 
 ---
 
-### Six dashboards, one button above the table
+### Overview
 
-Each dashboard is opened by a **Charts** button in the row above an artifact table, beside **Anatomy**, so the analyst arrives with the question the table raised rather than starting again in a separate tool.
+Version 0.14.0 is organised around three themes:
 
-| Dashboard | Opened from | What it answers |
-|---|---|---|
-| **SRUM** | the five SRUM tables, each opening on its own provider | Which applications used the machine and the network, by day and by hour; who sent far more than they received; what appeared on one day only |
-| **MFT / USN** | MFT and USN tabs | File-system activity by change type, the busiest folders and file types, and the anomalies: timestomp candidates, USN journal gaps, files deleted but still in the MFT, alternate data streams |
-| **LNK & Jump Lists** | LNK and Automatic Jump List tabs | Which files were opened, by which application, from which volume — with removable, network and Temp/Downloads/AppData targets called out |
-| **Prefetch** | Prefetch tab | Which programs ran, coloured by **where they ran from** (System, Program Files, user profile/Temp, removable media); programs that ran once; resources loaded from outside System and Program Files flagged *unusual* |
-| **Shell Items** | **20 registry tables** — Shellbags, OpenSaveMRU, LastSaveMRU, CIDSizeMRU, RecentDocs, TypedPaths, RunMRU, WordWheelQuery, MUICache, User Shell Folders, the three shell-extension tables, RDPClientMRU, Office MRU, MountPoints2, TypedURLs, RecentApps, per-application MRUs, Regedit's last key | Folders browsed, files and commands used, and the volumes and shares they lived on. It **opens filtered to the table it was launched from** |
-| **Browser** | the browser tabs | Visits, searches, downloads, cookies and cache pivoted on the **domain**; typed versus clicked; downloads the browser warned about; domains that left traces but no history row |
+- **Visualization.** Six artifacts gain an interactive dashboard, opened directly from the artifact table under review.
+- **Browser forensics.** Browser data becomes a first-class parsed artifact. A new parser covers the Chromium family, the Firefox family and Electron applications, and its output feeds the Timeline, Database Search, User Behavior Analytics and the Eye.
+- **Transparency and stability.** Every parse records why each artifact did or did not produce data. Every case keeps its own logs. Features that could read half-written data are now held until parsing and loading complete.
 
-What they share, because each was a lesson learned on a real case:
+| Measure | 0.13.0 | 0.14.0 |
+|---|---:|---:|
+| Visualization dashboards | 0 | **6** |
+| Artifact tables with a **Charts** button | 0 | **37** |
+| Browser tables (`browser_analysis.db`) | 0 | **37** |
+| Timeline artifact types / time columns | 17 / 133 | **18 / 175** |
+| User Behavior Analytics behaviours | 53 | **65** |
+| Registry hive types carved for deleted keys and values | 6 | **10** |
+| SRUM native columns retained | — | **+25** |
+| Written explanations for empty tables | 0 | **86** |
+| Features gated during parsing and loading | 0 | **39** |
+| Eye forensic tools | 31 | 31 |
+| Test files in this repository | 68 | **84** |
 
-- **One cell is always one day, including the empty ones.** Plotting only active days erased the gaps — one browser case drew 134 cells for 226 days — and a quiet stretch is often exactly what the investigator is looking for.
-- **Six months at a time, the whole range one click away.** The strip opens on the most recent six months; **Previous / Next 6 months**, **Latest**, the arrow keys, and an overview of the entire range (one bar per week, the current window boxed, click to jump) replace a horizontal scroll bar that ran past 20,000 pixels on a multi-year case.
-- **An insight carries the records behind its count.** "7 programs ran from Temp" opens those seven programs. A bare number left the analyst asking *which ones?*
-- **Every view ends at the full source record** — every column of the underlying row. Passwords, cookie values and card fields are shown as *present but withheld*: dropping the column would hide that the row holds a secret, which is itself a finding; showing the value is not the dashboard's business.
-- **Entries with no recorded time are listed, not dropped.** MUICache, User Shell Folders and the shell-extension tables carry no timestamp. They appear in *All items* as **undated** whatever date range is set, and never on the day strip, where they would be a guess.
+### Highlights
 
-### Browser forensics
+- **Six visualization dashboards:** SRUM, MFT/USN, LNK & Jump Lists, Prefetch, Shell Items and Browser. Each opens from the table it describes.
+- **Browser forensics:** 37 tables from Chromium-family browsers, Firefox-family browsers and Electron applications. Stored secrets are preserved and never decrypted.
+- **Parse Status Report:** ten outcomes per artifact. A **Why empty?** button explains every empty table.
+- **Per-case logging:** each component writes its own log under `<case>/logs/`, browsable in **Settings → Logs**.
+- **No feature opens on half-written data.** 39 features are gated while a parse or load is running.
+- **Data corrections:**
+  - USN Journal timestamps restored;
+  - offline event logs written again;
+  - Shellbags no longer merged;
+  - SRUM application names decoded;
+  - UBA sign-in sessions rebuilt.
 
-New parser, `Browser_Claw`, writing **37 tables** to `browser_analysis.db`.
+---
 
-- **Every Chromium-family browser** — 25 named vendor builds (Chrome in five channels, Edge, Brave, Opera, Vivaldi, Yandex and others) and any other found by its profile layout. **The Firefox family** — Firefox, LibreWolf, Waterfox, Pale Moon, SeaMonkey, Tor Browser. **Electron applications** — Slack, Discord, Teams, Signal, WhatsApp, Telegram, Element, Skype, Notion, Obsidian, VS Code and others, plus any application with a LevelDB or IndexedDB store.
-- History, downloads, cookies, cache, sessions, autofill, extensions, local storage, IndexedDB, service workers and more. Every row records the browser, vendor, user, SID, profile and source path it came from.
-- **SQLite stores are read from a copy that keeps their `-wal`, `-journal` and `-shm` files**, so rows the browser had written but not yet checkpointed are still seen. A locked file falls back to a raw copy.
-- **Secrets are kept, never decrypted.** Stored passwords, cookie values and card data are recorded as found — base64, the encryption scheme, and the DPAPI-wrapped master key — so the analyst can show they exist without Crow-Eye having read them.
-- **The rest of the application reads it.** The Timeline gains a **Browser** lane (42 time columns, each with an event label — *Page visited*, *Download started*, *Cookie last sent* — and always the row's own event time, never the time Crow-Eye parsed it). Database Search gains a Browser Activity category. The Eye gains browser knowledge, so a question about browsing reaches the right tables. UBA gains **nine browser behaviours**.
-- **Live systems only, for now.** Offline and image parsing of browsers are not in this release; the Parse Status Report records Browser as *not run* on those cases rather than implying it found nothing.
+### Visualization Dashboards
 
-### Every parse says why a table is empty
+Each dashboard opens from a **Charts** button in the row above an artifact table, beside **Anatomy**. The analyst starts from the table under review rather than from a separate tool.
 
-An empty evidence table used to look identical whether the machine never had the artifact or the parser crashed — and only one of those is the analyst's problem.
+| Dashboard | Opens from | Principal views | Insights raised |
+|---|---|---|---|
+| **SRUM** | The five SRUM tables; each opens on its own provider | Activity heat map per provider, records by provider, most active applications, network sent/received per day, activity by user | Applications that sent far more than they received; applications seen on a single day |
+| **MFT / USN** | MFT and USN tables | Change activity by category (create, delete, rename, data, metadata), most active directories and file types, per-file lifecycle with `$STANDARD_INFORMATION` against `$FILE_NAME` times | Timestomp candidates; USN Journal gaps; files deleted but still present in the MFT; alternate data streams |
+| **LNK & Jump Lists** | LNK and Automatic Jump List tables | Files opened per source, by application, most opened directories and file types, volume and device history | Targets on removable volumes, network shares, and Temp / Downloads / AppData |
+| **Prefetch** | Prefetch table | Executions coloured by run location (System, Program Files, user profile / Temp, removable media, other), most-run programs, execution device history, program profile with loaded resources | Programs run from user-writable locations; programs run only once; resources loaded from outside System and Program Files |
+| **Shell Items** | 20 Registry tables: Shellbags, OpenSaveMRU, LastSaveMRU, CIDSizeMRU, RecentDocs, TypedPaths, RunMRU, WordWheelQuery, MUICache, User Shell Folders, three shell-extension tables, RDPClientMRU, Office MRU, MountPoints2, TypedURLs, RecentApps, per-application MRUs, Regedit last key | Activity by source, most visited places, most referenced files, all items, volumes and shares. Opens filtered to the table it was launched from | Network and removable targets; Shellbag folder times that disagree with the registry write; users |
+| **Browser** | Browser history, downloads, cookies, cache, shortcuts and search-engine tables | Activity by type (visits, searches, downloads, cookies, cache) pivoted on domain, typed versus clicked visits, what was typed, downloads, per-domain detail across every browser table | Domains with traces but no history row; downloads the browser flagged; executables and scripts downloaded |
 
-- **Each live, offline and image parse records one outcome per artifact**, in `<case>/logs/parse_status.json`: *parsed*, *no records*, *source not found*, *feature disabled*, *unsupported format*, *access denied*, *dependency missing*, *partial*, *failed* or *not run*. **The first four are not failures** — a machine without an artifact is a normal machine — and the report says so.
-- **The Parse Status Report** opens once the data has loaded after each parse, one row per artifact, and is reopened from **Case → Parse Status Report…**. It replaces a box that announced success whether or not the collectors had failed.
-- **A *Why empty?* button sits at the left of the row above every empty table.** It names the artifact, database and table behind it and the reason it is empty, drawn from the last parse and from 86 written explanations (*"Populated only when a user connected out with the Remote Desktop client"*).
-- **Every case keeps its own logs** in `<case>/logs/`: one combined log, one per component (parsers, timeline, visualizations, correlation, eye, uba, dynamic linking, gui, case data, parse status) and a copy of all console output — the windowless build previously logged to nowhere at all. **Settings → Logs** lists them by component and opens any of them whole.
+**Common behaviour across all six dashboards:**
 
-### Nothing opens on half-written data
+- **Continuous day strip.** One cell always represents one day, including days with no activity. Earlier prototypes plotted only active days. On one browser case that drew 134 cells for 226 days and erased the gaps that are often of investigative interest.
+- **Six-month window with a range overview.** The strip opens on the most recent six months. The analyst can step with **Previous / Next 6 months**, **Latest** or the arrow keys, or jump by clicking the whole-range overview (one bar per week, current window outlined). This replaces horizontal scrolling that exceeded 20,000 pixels on multi-year cases.
+- **Drill-down to the source.** Day → hour → item. Every item view ends with the **full source record**, meaning every column of the underlying row.
+- **Secrets are withheld, not hidden.** Passwords, cookie values and payment-card fields appear as *present but withheld*. The existence of a stored secret is itself a finding; its value is not displayed.
+- **Insights carry their subjects.** Each insight lists the records behind its count, so a figure such as "7 programs ran from Temp" opens those seven programs.
+- **Undated records are retained.** Sources that store no timestamp (MUICache, User Shell Folders, shell-extension registrations) appear in **All items** as *undated*, regardless of the date range. They are never placed on the day strip.
 
-The loading window no longer blocks the application during a parse, so the analyst can read Settings or the case while it runs. That made it possible to open a feature against tables that were still being filled — which is how the GUI crashed.
+### Browser Forensics
 
-- **39 features are now gated.** Starting another parse or switching case while one runs is refused with what is running and for how long. Opening a view — the Timeline, UBA, the Eye, Database Search, the Correlation Engine, Dynamic Linking, any dashboard — offers **Open when ready**, which opens it the moment the work finishes. A feature that needs data the case does not have says so, and a database only counts if it holds rows.
-- **Progress never looks frozen.** Every bar carries a moving sweep and an elapsed clock, and the percentage is never invented to fill a silence. While tables fill on the GUI thread the window keeps repainting, so Windows no longer marks it *Not Responding*. Progress also appears on the taskbar button.
-- **UBA → Sessions crashed Crow-Eye** with *SQLite objects created in a thread can only be used in that same thread*. Connections are now kept one per thread per database, and released when the worker finishes.
+A new parser, `Browser_Claw`, writes **37 tables** to `browser_analysis.db`: 29 for Chromium-format data and 8 for Gecko-format data.
 
-### Fixes that change what a case shows
+**Coverage:**
+- **Chromium family:** 25 named vendor builds, including Chrome (five channels), Edge, Brave, Opera, Vivaldi, Yandex, Epic, CocCoc, Whale and Comodo Dragon. Any other Chromium-based browser is discovered from its profile layout.
+- **Firefox family:** Firefox, LibreWolf, Waterfox, Pale Moon, SeaMonkey and Tor Browser.
+- **Electron applications:** 15 named applications (Slack, Discord, Teams, Signal, WhatsApp, Telegram, Element, Skype, Notion, Obsidian, VS Code, Claude and others). An adaptive scan picks up any application with a LevelDB or IndexedDB store.
 
-- **USN Journal records had no timestamps.** A local helper shadowed the time-conversion function it meant to call and called itself until a `RecursionError` that was swallowed — **244,014 rows with no time on any of them.**
-- **Offline event logs wrote zero rows and reported success.** The validator required fractional seconds; the writer emitted whole seconds.
-- **The USN parser switched off the whole application's logging** on import by removing every root handler.
-- **Same-name Shellbags were stored as one row.** Two different items with the same name under one key — two phones' storage, two *Pictures* folders — collapsed together. Items whose name does not decode (control-panel entries, phone delegates) were skipped, and with them the parent path of every folder beneath. They are now kept, labelled by their class.
-- **Shellbags now carry a write time per folder**, read from the bag's own key the way Shellbags Explorer reports it, and **`UsrClass ShellNoRoam\BagMRU`** is enumerated, so a bag that lands there is no longer lost.
-- **Four more hives are carved** — COMPONENTS, DRIVERS, BBI and ELAM. COMPONENTS is the second-largest hive on most machines; its deleted keys were not merely unrecovered, they were never looked for. Collection takes them and their transaction logs, and a hive's **last reorganisation** is now recorded, because compaction discards freed cells — a low carved count means nothing until that is checked.
-- **SRUM application names were timestamp fragments** on about 18% of timeline rows — `basename` of a Store-style AppId. Three identity forms are now decoded into name, path and hosted services. **Byte-identical duplicate rows** (44% of one case's energy rows) are dropped, numbers are stored as numbers, and **25 more native columns** are kept, battery health among them.
-- **SRUM written but not yet flushed is recovered.** Collection now takes the ESE checkpoint and logs, and a dirty database is soft-recovered before it is opened; destructive repair is the last resort, and the path taken is recorded.
-- **UBA sign-in sessions** discarded every logoff on a real case (10 of 10) because same-second rows come out in parser order, and invented durations for sessions with no recorded sign-out (an 82-hour session that never happened). Logons and logoffs are now paired by Logon ID, an unfinished session has no duration, and an unlock resumes a session rather than starting one. **On image-imported cases every sign-in vanished**, because the offline event-log parser stores its fields in a different format — both are read now.
-- **UBA: 53 → 65 behaviours** — nine browser behaviours, failed logons, and Winlogon sign-in/sign-out notifications, which every Windows machine writes with no auditing configured. A new **Sign-ins** view lists each session, and a **day rail** covers the whole case, where reaching the start of a 48-day case took some 44 presses of *Show more*.
-- **The correlation *Matches by Feather* chart** drew 132,446 identities for one feather on a chart whose largest real bar was 1,029.
-- The **Registry BrowserHistory** table was being written into the browser tab's table; it has its own.
+**Artifacts:**
+- history, downloads, cookies, cache, sessions, autofill and addresses, bookmarks, extensions and extension storage;
+- local storage, IndexedDB, service workers, top sites, shortcuts, search engines, favicons, media history, DIPS (bounce tracking), network state;
+- the Firefox equivalents of these.
 
-### Changes that affect a case parsed by an earlier version
+**Evidence handling:**
+- **Provenance on every row:** browser, vendor, user, SID, profile, source path and `parsed_at`.
+- **Uncheckpointed data is read.** SQLite databases are read from a working copy that includes their `-wal`, `-journal` and `-shm` files, so rows the browser has written but not yet checkpointed are included. A locked file falls back to a raw copy.
+- **Stored secrets are preserved and never decrypted.** Passwords, cookie values and card data are recorded as found (base64, together with the encryption scheme and the DPAPI-wrapped master key). Their existence is evidenced without Crow-Eye reading them.
 
-Existing cases open as before and are never rewritten without a re-parse.
+**Integration:**
+- **Timeline:** a new **Browser** lane with 42 time columns. Each has an event label (*Page visited*, *Download started*, *Cookie last sent*, *Site first stored data*) and always uses the record's own event time, never the parse time.
+- **Database Search:** a **Browser Activity** category.
+- **User Behavior Analytics:** nine browser behaviours (see below).
+- **Eye:**
+  - a browser knowledge base;
+  - the `browser_analysis.db` schema in its schema reference (13 table sections);
+  - a parser mapping entry;
+  - retrieval keywords, so browser questions reach the right tables.
 
-- **Shellbags gain `value_name`, `last_written` and `time_basis`.** Re-parsing fills the write times and claims the existing rows instead of appending every Shellbag a second time.
-- **`registry_hive_state` gains `reorganized_at`**, and SRUM tables gain their new columns, all added in place.
-- **Re-parse SRUM, USN and offline event logs** to pick up the fixes above; the data already in a case was produced by the faulty code.
+**Availability:** live systems in this release. Offline and image parsing of browser data is not yet supported. On those cases the Parse Status Report records Browser as *not run*, rather than implying that nothing was found.
 
-### Upgrading
+### Parse Status and Empty-Table Explanations
 
-Nothing to do beyond replacing the tree. The six dashboards ship prebuilt, so they open from a clone with no Node.js.
+Previously, an empty evidence table looked the same whether the artifact was absent from the machine or the parser had failed. Every parse now records the reason.
+
+- **Ten outcomes per artifact**, recorded for live, offline and image parses across 12 artifacts:
+  - not failures: *parsed*, *no records*, *source not found*, *feature disabled*;
+  - other outcomes: *unsupported format*, *access denied*, *dependency missing*, *partial*, *failed*, *not run*.
+
+  A machine that lacks an artifact is a normal machine, and the report presents it as such.
+- **Parse Status Report.** It is displayed once after each parse, after the data has loaded, with one row per artifact. It can be reopened from **Case → Parse Status Report…**. It replaces a completion message that reported success regardless of collector failures.
+- **Why empty?** A button at the left of the row above every empty table identifies the artifact, database and table behind it, and gives the recorded reason. 86 written explanations back it (12 per artifact, 74 per table).
+- **Storage:** results are written to `<case>/logs/parse_status.json` (the last 25 runs) and `parse_status.log`.
+
+### Case Logging
+
+- **Logs per case.** Each case writes its logs to `<case>/logs/`:
+  - a combined `crow_eye.log`;
+  - one log per component: parsers, timeline, visualizations, correlation, eye, uba, dynamic linking, gui, case data, parse status;
+  - `console.log`, which captures all console output. The windowless build previously discarded it.
+- **Rotation:** log files rotate at 5 MB, keeping three backups. An application log is written from launch, before any case is open.
+- **Settings → Logs** lists every log by component, including parser logs and `EYE_Logs`. Any file can be opened in full, together with its rotated backups, oldest first.
+
+### Stability and Responsiveness
+
+- **Non-blocking loading.** The loading window no longer blocks the application, so Settings and the case remain readable during a parse.
+- **39 gated features.** Opening a feature against tables still being written is what previously crashed the interface.
+  - **Work.** Starting another parse, import or case switch while one is running is refused. The message states what is running and for how long.
+  - **Views.** The Timeline, UBA, the Eye, Database Search, the Correlation Engine, Dynamic Linking and every dashboard offer **Open when ready**: the feature opens as soon as the work completes.
+  - **No data.** A feature that needs data the case lacks says so. A database counts only if it holds rows.
+- **Progress indication:**
+  - Every progress bar shows continuous motion and an elapsed-time clock, and the reported percentage is never synthesised.
+  - The window keeps repainting while tables are populated, so Windows no longer marks it *Not Responding*.
+  - Progress is mirrored on the Windows taskbar button.
+- **Correlation Engine.** Pipeline runs and Feather imports are refused while Crow-Eye is parsing or loading. A running pipeline marks the application busy.
+- **Window integration.** Settings, the Eye windows, UBA, Dynamic Linking and the Correlation Engine have their own taskbar buttons and the Crow-Eye icon.
+
+### Registry
+
+- **Shellbags:**
+  - **Same-name items are kept apart.** Two items with the same name under one key, such as two *Pictures* folders or two phones' storage, were merged into one row. Rows are now keyed on the new `value_name` column as well.
+  - **Items without a decodable name are kept.** Control-panel entries, MTP device delegates and property-store roots were skipped, which also broke the path of every folder beneath them. They are now recorded, labelled by their shell-item class.
+  - **Write time per folder.** `last_written` and `time_basis` are taken from each bag's own key, matching the value Shellbags Explorer reports.
+  - `UsrClass ...\ShellNoRoam\BagMRU` is now enumerated.
+- **Four additional hives:**
+  - COMPONENTS, DRIVERS, BBI and ELAM are collected with their transaction logs and carved for deleted keys and values, class names and security descriptors.
+  - COMPONENTS is typically the second-largest hive on a system and was previously not examined at all.
+  - The collection size estimate rises from 100 MB to 165 MB.
+- **Hive reorganisation is recorded.** `registry_hive_state.reorganized_at` records when Windows last compacted each hive. Compaction discards freed cells, so a low carved count is meaningful only when read alongside it.
+
+### SRUM
+
+- **ESE recovery:**
+  - Collection now includes the ESE checkpoint (`.jfm`, `.chk`) and transaction logs.
+  - A database left dirty by an unclean shutdown is soft-recovered before it is opened, which includes data committed but not yet flushed.
+  - Destructive repair is used only as a last resort.
+  - The path taken is recorded in `srum_metadata`, in seven new columns that include `db_state`.
+- **Application identity decoding.** Store-style AppIds previously yielded timestamp fragments as application names on approximately 18% of timeline rows. Three identity forms are now decoded into application name, path and hosted services.
+- **Duplicates removed.** Byte-identical duplicate rows, 44% of one case's energy rows, are discarded.
+- **Raw numbers.** Numeric fields are stored as numbers rather than formatted strings, which corrects dashboard totals.
+- **25 additional native columns**, including battery design and full-charge capacity, wake counts and application-timeline counters.
+
+### User Behavior Analytics
+
+- **Behaviours: 53 → 65.**
+  - **Sign-in:** failed logons; and Winlogon sign-in and sign-out notifications, which are written on every Windows system without auditing configured.
+  - **Browser (nine):**
+    - web history and downloads, including flagged downloads;
+    - abnormal browser exits and download save locations;
+    - account sync and risky extensions;
+    - stored secrets (counts only, never values);
+    - gaps in browser history, presented as an inference with its caveat.
+  - **Modified:**
+    - sign-out now includes event 4647;
+    - boot/shutdown now includes events 6005 and 6006;
+    - registry-based web browsing defers to the browser rules.
+- **Sign-in sessions rebuilt.**
+  - Logons and logoffs are paired by Logon ID; same-second ordering had previously discarded every logoff on a real case.
+  - A session with no recorded sign-out has no duration, where durations were previously invented.
+  - Duplicate records are merged, an unlock resumes the existing session, and service accounts are excluded.
+- **Image-imported cases.** The offline event-log parser stores its fields in a different format, and every sign-in disappeared on those cases. Both formats are now read.
+- **Interface:**
+  - a **Sign-ins** view (one row per session; selecting one narrows the story to that window);
+  - a **day rail** covering the whole case;
+  - a detection-rule picker with event counts;
+  - a coverage filter.
+
+### Eye AI
+
+- **Browser knowledge:**
+  - a dedicated knowledge file;
+  - schema reference entries for `browser_analysis.db`;
+  - a parser mapping;
+  - retrieval keywords (*browser*, *chrome*, *firefox*, *cookie*, *download history* and others).
+- **Parser mappings 3.5 → 3.8.** SRUM now resolves to its real tables instead of a table that does not exist.
+- **Knowledge-base updates:** the registry knowledge base explains how hive reorganisation affects carved counts. The SRUM knowledge base covers recovery state and the new columns.
+- **Logging.** All Eye services and backends now write to the case's `eye.log`.
+- **Tools.** The forensic tool set is unchanged at 31. Browser data is reached through the knowledge base and schema reference, not a dedicated tool.
+
+### Correlation Engine and Timeline
+
+- **Matches by Feather chart.** The results chart drew 132,446 identities for one feather on a chart whose largest real value was 1,029. Both copies of the chart now draw from a single source chosen per run.
+- **Timeline:**
+  - a **Browser** lane (see above);
+  - labels hidden when points are crowded;
+  - URLs ending in `/` no longer display as *Unknown*.
+- **Database Search:** a **Browser Activity** category over six browser tables.
+
+### Bug Fixes
+
+- **USN Journal records had no timestamps.** A local helper shadowed the conversion function it was meant to call and recursed until a suppressed `RecursionError`, leaving **244,014 rows without a time**.
+- **Offline event logs wrote no rows while reporting success.** The timestamp validator required fractional seconds that the writer never produced.
+- **The USN parser disabled application-wide logging** by removing every root log handler on import.
+- **Stray output directories.** Several parsers configured logging at import time, and the MFT/USN correlator created a `Target_Artifacts` folder in whatever directory Crow-Eye was launched from. Both are corrected.
+- **MFT/USN subprocess output** is now captured into the case log.
+- **Registry `BrowserHistory`** was written into the browser module's table; it now has its own.
+- **Image and offline imports** report how many artifact files were parsed, rather than a blanket success message.
+- The **loading window icon** was missing when running from source.
+
+### Known Limitations
+
+- Browser parsing is available for live systems only. Offline and image support is planned.
+- The Eye answers browser questions through its knowledge base and the database schema; there is no dedicated browser tool yet.
+- This is a source pre-release. The installer on crow-eye.com remains 0.13.0.
+
+### Compatibility and Upgrading
+
+- **Existing cases are not modified.** Cases created by earlier versions open as before and are never rewritten without a re-parse.
+- **In-place migrations:**
+  - Shellbags gain `value_name`, `last_written` and `time_basis`. Re-parsing fills the write times and claims existing rows rather than duplicating them.
+  - `registry_hive_state` gains `reorganized_at`.
+  - SRUM tables gain their new columns.
+- **Recommended re-parse:** SRUM, USN Journal and offline event logs, so that the corrections above take effect. The data already in a case was produced by the earlier code.
+- **Upgrading:** replace the source tree. No further steps are required. The six dashboards ship prebuilt and open from a clone without Node.js.
 
 ---
 
