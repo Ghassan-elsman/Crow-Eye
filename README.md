@@ -85,127 +85,151 @@ Crow-Eye is built as an integrated loop — each stage feeds the next, from raw 
 
 | Subsystem | What it does | Stage |
 |---|---|---|
-| **[Crow-Claw](#-analysis-modes)** | High-speed acquisition of live systems and dead-box images. | Acquisition |
-| **[Offline Importer](#-analysis-modes)** | SCAN → COLLECT → PARSE artifacts from any source into the case database. | Acquisition |
-| **[Correlation Engine](#-correlation-engine)** | Dual-engine (Identity + Time-Window) reconstruction via Feathers · Wings · Engines · Pipelines. | Analysis |
-| **[Interactive Timeline](#-analysis-modes)** | Identity-threaded, court-traceable timeline (Heat Map / Week / Day views), read straight from the case databases. | Verification |
-| **[User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)** | Rule-driven, plain-English "what did this user do" activity story. | Intelligence |
-| **[Eye — AI Assistant](#️-eye--the-forensics-ai-assistant)** | Natural-language investigation + the sealed **Narrative Map** case memory. | AI |
-| **[Storage Forensics](#-supported-artifacts)** | Physical disk & partition analysis (hidden/unmounted detection, boot warnings). | Analysis |
+| **[Crow-Claw](#-analysis-modes)** | High-speed acquisition of live systems and dead-box images. | ② Ingest |
+| **[Offline Importer](#-analysis-modes)** | SCAN → COLLECT → PARSE artifacts from any collected folder into the case. | ② Ingest |
+| **[Artifact Parsers](#-supported-artifacts)** | Registry, execution, file-system, user-activity, event-log and browser parsers — live and offline. | ② Ingest |
+| **[Parse Status & Case Logs](#️-architecture)** | One outcome per artifact on every parse, a *Why empty?* answer for every empty table, and per-component logs for each case. | ③ Case |
+| **[Chart Dashboards](#-chart-dashboards)** | Six dashboards (SRUM, MFT/USN, LNK & Jump Lists, Prefetch, Shell Items, Browser), each opened from its own table. | ④ Analyse |
+| **[Database Search](#-search--export)** | Full-text search across every database in the case, imported evidence included. | ④ Analyse |
+| **[Interactive Timeline](#️-interactive-timeline-visualization)** | Identity-threaded timeline (Heat Map / Week / Day), read straight from the case databases. | ④ Analyse |
+| **[User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)** | Rule-driven, plain-English "what did this user do" activity story — 65 behaviours. | ④ Analyse |
+| **[Dynamic Linking](#-dynamic-linking)** | Non-destructive overlay that turns SIDs, MACs and hashes into names inline. | ④ Analyse |
+| **[Correlation Engine](#-correlation-engine)** | Dual-engine (Identity + Time-Window) reconstruction via Feathers · Wings · Engines · Pipelines. | ④ Analyse |
+| **[Eye — AI Assistant](#️-eye--the-forensics-ai-assistant)** | GEP-governed investigation assistant with the sealed **Narrative Map** case memory. | ⑤ AI |
+| **[Storage Forensics](#-supported-artifacts)** | Physical disk & partition analysis (hidden/unmounted detection, boot warnings). | ④ Analyse |
 
 ## 🏗️ Architecture
 
-Crow-Eye is an integrated pipeline, not a bag of parsers. Evidence flows one way, and every stage keeps its link back to the source record.
+Crow-Eye is an integrated pipeline, not a bag of parsers. Evidence flows one way through six stages, and every stage keeps its link back to the source record.
 
 ```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 60, "rankSpacing": 70, "curve": "basis"}, "themeVariables": {"fontSize": "17px", "fontFamily": "system-ui, sans-serif"}} }%%
+%%{init: {"flowchart": {"nodeSpacing": 40, "rankSpacing": 60, "curve": "basis", "padding": 12}, "themeVariables": {"fontSize": "16px", "fontFamily": "system-ui, sans-serif"}} }%%
 flowchart TB
 
-%% ═══════════ 1. EVIDENCE SOURCE ═══════════
-    S1["Live Windows system"]
-    S2["Forensic image<br/>E01 · VHDX · VMDK · Raw"]
-    S3["Collected artifacts<br/>Velociraptor · KAPE · EDR"]
-    S4["Third-party output<br/>Plaso · Autopsy · Volatility"]
+    subgraph SRC["① EVIDENCE SOURCES&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+        direction LR
+        S1["Live Windows<br/>system"]
+        S2["Forensic image<br/>E01 · VHDX · VMDK · Raw"]
+        S3["Collected folder<br/>Velociraptor · KAPE · EDR"]
+        S4["Third-party output<br/>Plaso · Autopsy · Volatility"]
+    end
 
-%% ═══════════ 2. INGEST ═══════════
-    I1["CROW-CLAW<br/>live acquisition"]
-    I2["IMAGE PARSING<br/>direct, no mounting"]
-    I3["OFFLINE IMPORTER<br/>SCAN → COLLECT → PARSE"]
-    I4["IMPORT EVIDENCE<br/>CSV · JSON · SQLite"]
+    subgraph ING["② INGEST&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+        direction LR
+        I0["LIVE PARSE<br/>Parse All Artifacts"]
+        I1["CROW-CLAW<br/>live acquisition"]
+        I2["IMAGE PARSING<br/>direct, no mounting"]
+        I3["OFFLINE IMPORTER<br/>SCAN → COLLECT → PARSE"]
+        I4["IMPORT EVIDENCE<br/>CSV · JSON · SQLite"]
+    end
 
-    REPLAY["DIRTY-HIVE REPLAY<br/>transaction logs applied to a working copy"]
-    PARSERS["ARTIFACT PARSERS<br/>18 artifact types · live and offline"]
+    subgraph PAR["ARTIFACT PARSERS · live and offline&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+        direction LR
+        P1["REGISTRY<br/>hive file · log replay · carving"]
+        P2["EXECUTION<br/>Prefetch · AmCache · ShimCache · SRUM"]
+        P3["FILE SYSTEM<br/>MFT · USN · Recycle Bin"]
+        P4["USER ACTIVITY<br/>LNK · Jump Lists · Shellbags · MRUs"]
+        P5["EVENT LOGS<br/>System · Security · Application"]
+        P6["BROWSERS<br/>Chromium · Firefox · Electron"]
+    end
 
-%% ═══════════ 3. CASE ═══════════
-    CASE[("CASE DATABASES<br/>Target_Artifacts/<br/>Imported_Evidence/")]
-    PSTAT[("PARSE STATUS<br/>logs/parse_status.json<br/>why each table is empty")]
+    subgraph CASE["③ CASE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+        direction LR
+        DB[("Target_Artifacts/<br/>artifact databases")]
+        IMP[("Imported_Evidence/<br/>third-party data")]
+        LOG[("logs/<br/>parse status · component logs")]
+    end
 
-%% ═══════════ 4. ANALYSIS ═══════════
-    TL["INTERACTIVE TIMELINE<br/>heat map · week · day"]
-    UB["USER BEHAVIOR ANALYTICS<br/>40 detections · plain-English story"]
-    CE["CORRELATION ENGINE<br/>Feathers → Wings → Engines → Pipelines"]
-    RES[("Correlation results")]
-    DL["DYNAMIC LINKING<br/>non-destructive enrichment overlay"]
-    INTEL[("Crow_Intelligence.db<br/>SID · MAC · hash · GUID → name")]
+    subgraph ANA["④ READ AND ANALYSE · read-only&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+        direction LR
+        TAB["ARTIFACT TABLES<br/>Anatomy · Charts · Why empty?"]
+        VIZ["CHART DASHBOARDS<br/>SRUM · MFT/USN · LNK · Prefetch<br/>Shell Items · Browser"]
+        SRCH["DATABASE SEARCH<br/>every case database"]
+        TL["TIMELINE<br/>heat map · week · day"]
+        UBA["USER BEHAVIOR ANALYTICS<br/>65 behaviours · sign-in sessions"]
+        DL["DYNAMIC LINKING<br/>SID · MAC · hash → name"]
+        CE["CORRELATION ENGINE<br/>Feathers → Wings → Engines"]
+        RES[("correlation results")]
+    end
 
-%% ═══════════ 5. AI LAYER ═══════════
-    EYE["EYE<br/>GEP-governed AI assistant"]
-    NM["NARRATIVE MAP<br/>hash-chained case memory"]
-    COMP["COMPLIANCE<br/>live GEP status · EvidenceSeal audit"]
+    subgraph AI["⑤ AI LAYER&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+        direction LR
+        EYE["EYE<br/>GEP-governed assistant"]
+        KB["KNOWLEDGE BASE<br/>artifact guides · schema reference"]
+        NM["NARRATIVE MAP<br/>hash-chained case memory"]
+        COMP["COMPLIANCE<br/>EvidenceSeal · GEP status"]
+    end
 
-    OUT["LIVING REPORT<br/>CSV · JSON · HTML"]
+    OUT["⑥ LIVING REPORT<br/>CSV · JSON · HTML"]
 
-%% ═══════════ FLOW ═══════════
+    S1 --> I0
     S1 --> I1
     S2 --> I2
     S3 --> I3
     S4 --> I4
 
-    I1 --> PARSERS
-    I2 --> PARSERS
-    I3 --> PARSERS
+    I0 & I1 & I2 & I3 --> PAR
+    I4 -- "verbatim or converted" --> IMP
+    PAR -- "parsed artifacts" --> DB
+    PAR -. "outcome per artifact" .-> LOG
 
-    PARSERS -- "every registry hive,<br/>evidence never written to" --> REPLAY
-    REPLAY -- "the state Windows<br/>had not finished writing" --> PARSERS
-
-    PARSERS -- "parsed artifacts" --> CASE
-    PARSERS -- "outcome per artifact" --> PSTAT
-    PSTAT -. "i button on empty tables" .-> CASE
-    I4 -- "verbatim copy or<br/>converted to feather" --> CASE
-
-    CASE -- "read-only" --> TL
-    CASE -- "read-only" --> UB
-    CASE -- "read-only" --> CE
-    CASE -- "read-only" --> DL
+    CASE == "read-only" ==> ANA
     CE --> RES
-    DL --> INTEL
-
-    CASE -- "read-only queries" --> EYE
-    RES -. "queried on demand" .-> EYE
-    EYE <== "verdict · narrative · evidence" ==> NM
-
+    CASE == "read-only queries" ==> EYE
+    RES -. "on demand" .-> EYE
+    KB --> EYE
+    EYE <--> NM
     EYE -- "audited by" --> COMP
-
     EYE -- "report_* tools" --> OUT
 
-%% ═══════════ STYLE ═══════════
     classDef src   fill:#334155,stroke:#94a3b8,stroke-width:2px,color:#f1f5f9
     classDef ing   fill:#0f766e,stroke:#2dd4bf,stroke-width:2px,color:#f0fdfa
-    classDef store fill:#92400e,stroke:#fbbf24,stroke-width:3px,color:#fffbeb
+    classDef par   fill:#115e59,stroke:#5eead4,stroke-width:1px,color:#f0fdfa
+    classDef store fill:#92400e,stroke:#fbbf24,stroke-width:2px,color:#fffbeb
     classDef ana   fill:#1e40af,stroke:#60a5fa,stroke-width:2px,color:#eff6ff
     classDef ai    fill:#6b21a8,stroke:#c084fc,stroke-width:2px,color:#faf5ff
     classDef out   fill:#166534,stroke:#4ade80,stroke-width:2px,color:#f0fdf4
 
     class S1,S2,S3,S4 src
-    class I1,I2,I3,I4,PARSERS ing
-    class CASE,RES,INTEL,PSTAT store
-    class TL,UB,CE,DL ana
-    class EYE,NM,COMP ai
+    class I0,I1,I2,I3,I4 ing
+    class P1,P2,P3,P4,P5,P6 par
+    class DB,IMP,LOG,RES store
+    class TAB,VIZ,SRCH,TL,UBA,DL,CE ana
+    class EYE,KB,NM,COMP ai
     class OUT out
+
+    style SRC  fill:#0f172a,stroke:#94a3b8,stroke-width:2px,color:#e2e8f0
+    style ING  fill:#042f2e,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
+    style PAR  fill:#042f2e,stroke:#5eead4,stroke-width:1px,stroke-dasharray:5 4,color:#ccfbf1
+    style CASE fill:#2a1505,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style ANA  fill:#0b1a3d,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
+    style AI   fill:#2a0b45,stroke:#c084fc,stroke-width:2px,color:#f3e8ff
 
     linkStyle default stroke-width:2px
 ```
 
-*Evidence source → Ingest → Case databases → Analysis → AI layer → Report*
+*① Evidence sources → ② Ingest → ③ Case → ④ Read and analyse → ⑤ AI layer → ⑥ Report*
 
 
 **How to read it:**
 
 | Stage | What matters |
 |---|---|
-| ① → ② | **Four independent doors into a case.** You never need Crow-Eye's own collector — a folder from Velociraptor, KAPE, or an EDR package goes through the Offline Importer, and third-party CSV/JSON/SQLite goes through Import Evidence. |
-| ② → ③ | Everything converges on one place: **the case databases**. Parsed artifacts land in `Target_Artifacts/`; imported third-party evidence lands in `Imported_Evidence/` and is auto-discovered. |
-| ② → ③ | **Every parse records why, not just whether.** Live, offline and image parses each write one outcome per artifact to `logs/parse_status.json`: parsed, no records, source not found, feature disabled, unsupported format, access denied, dependency missing, partial, or failed. A missing artifact is **not** a failure. The Parse Status Report appears once the data loads, an **i** button marks every empty table with its reason, and Settings → Logs lists `parse_status.log`. |
-| ③ → ④ | **The three analysis paths are independent of each other.** The Timeline and UBA read the case databases directly — neither requires a correlation run. The Correlation Engine is an *additional* layer, not a prerequisite. |
-| ③ → ④ | **Dynamic Linking sits alongside the Timeline and UBA** — a fourth, independent reader of the case databases (it has nothing to do with the Timeline visualization). It gathers identity mappings (SID → username, MAC → network, hash/GUID → app) into a per-case `Crow_Intelligence.db`, then overlays that context **inline in the artifact data tables** via non-destructive `ATTACH` + `LEFT JOIN`. It changes how records *read*, never the evidence. |
-| ④ → ⑤ | The Eye queries the case databases directly and can pull correlation results **on demand**. It never touches evidence itself — it emits tool calls that Crow-Eye executes and logs. |
-| ⑤ → Report | The **Living Report is built by the Eye alone**, through its `report_*` tools. The Timeline and UBA are analysis surfaces — they do not write to the report. Case-level findings can still be exported separately via [Search & Export](#-search--export). |
-| ⑤ ↔ | The **Narrative Map is bidirectional**: the Eye writes to it, you write to it, and its contents are injected into the Eye's prompt every turn. It is the memory, and you can command it. |
-| ⑤ ⟳ | The **Compliance page audits the Eye.** Every tool call the Eye makes is anchored to the **EvidenceSeal** hash chain; the page renders live per-rule **GEP** status (10 principles) verified from that chain and `EYE_Logs/`, exportable as `audit_trail.json`. |
+| ① → ② | **Five independent doors into a case.** Parse a live system directly, acquire it with Crow-Claw, read a forensic image without mounting it, bring a Velociraptor / KAPE / EDR folder through the Offline Importer, or import third-party CSV / JSON / SQLite with Import Evidence. Crow-Eye's own collector is never required. |
+| ② | **The parsers read evidence, never write to it.** Registry hives are read as files from a working copy with their transaction logs replayed, so a dirty hive is seen in the state Windows had not finished writing, and free space is carved for deleted keys. SRUM is soft-recovered from its ESE logs the same way. Browsers are read from copies that keep their `-wal` files, and stored secrets are kept but never decrypted. |
+| ② → ③ | Everything converges on **the case**. Parsed artifacts land in `Target_Artifacts/`; imported evidence lands in `Imported_Evidence/` and is auto-discovered by every reader. |
+| ② → ③ | **Every parse records why, not just whether.** Live, offline and image parses write one outcome per artifact to `logs/parse_status.json` — parsed, no records, source not found, feature disabled, unsupported format, access denied, dependency missing, partial, failed or not run. A missing artifact is **not** a failure. The Parse Status Report appears once the data loads, a **Why empty?** button explains every empty table, and each case keeps per-component logs browsable in Settings → Logs. |
+| ③ → ④ | **Nothing reads half-written data.** While a parse or load runs, the readers in stage ④ and the Eye are held — each offers *Open when ready* — so no view opens against tables still being filled. |
+| ③ → ④ | **Every reader is independent and read-only.** The artifact tables carry **Anatomy** (how the artifact is read, byte by byte), **Charts** (the dashboard for that table) and **Why empty?**. The Timeline, UBA, Database Search and the dashboards read the case databases directly — none requires a correlation run. The Correlation Engine is an *additional* layer, not a prerequisite. |
+| ③ → ④ | **Dynamic Linking** gathers identity mappings (SID → username, MAC → network, hash/GUID → app) into a per-case `Crow_Intelligence.db`, then overlays that context **inline in the artifact tables** via non-destructive `ATTACH` + `LEFT JOIN`. It changes how records *read*, never the evidence. |
+| ③ → ⑤ | The **Eye** queries the case databases directly, pulls correlation results **on demand**, and is grounded in a knowledge base of artifact guides and the live schema reference. It never touches evidence itself — it emits tool calls that Crow-Eye executes and logs. |
+| ⑤ ↔ | The **Narrative Map is bidirectional**: the Eye writes to it, the analyst writes to it, and its contents are injected into the Eye's prompt every turn. |
+| ⑤ ⟳ | **Compliance audits the Eye.** Every tool call is anchored to the **EvidenceSeal** hash chain; the page renders live per-rule **GEP** status (10 principles) verified from that chain and `EYE_Logs/`, exportable as `audit_trail.json`. |
+| ⑤ → ⑥ | The **Living Report is built by the Eye alone**, through its `report_*` tools. The Timeline, UBA and the dashboards are analysis surfaces — they do not write to the report. Case-level findings can still be exported separately via [Search & Export](#-search--export). |
 
-**Independent stages.** The Timeline and UBA read the case artifact databases **directly** — neither requires a correlation run, and the Timeline does not depend on the Correlation Engine (it applies its own lightweight temporal grouping). Correlation is an additional analysis layer whose results the Eye can query.
+**Independent stages.** The Timeline, UBA, Database Search and the Chart dashboards read the case artifact databases **directly** — none requires a correlation run, and the Timeline does not depend on the Correlation Engine (it applies its own lightweight temporal grouping). Correlation is an additional analysis layer whose results the Eye can query.
 
-**Read-only by design.** Parsing writes to the case database; every downstream stage (UBA, the Timeline, correlation viewers, the Eye) opens those databases **read-only**. The original evidence is never modified — [Dynamic Linking](#-analysis-modes) reads the case databases to build a per-case `Crow_Intelligence.db` of identity mappings and enriches the artifact data tables inline via non-destructive `ATTACH` + `LEFT JOIN` queries rather than rewriting rows.
+**Read-only by design.** Parsing writes to the case database; every downstream stage (the dashboards, Database Search, UBA, the Timeline, correlation viewers, the Eye) opens those databases **read-only**. The original evidence is never modified — [Dynamic Linking](#-analysis-modes) reads the case databases to build a per-case `Crow_Intelligence.db` of identity mappings and enriches the artifact data tables inline via non-destructive `ATTACH` + `LEFT JOIN` queries rather than rewriting rows.
 
 **Governed by design.** Every action the Eye takes is anchored to the tamper-evident **EvidenceSeal** hash chain, and the **Compliance** page continuously verifies the Eye against the [Ghassan Elsman Protocol (GEP)](eye/docs/GEP_standard.md) — live per-rule status, exportable to `EYE_Logs/audit_trail.json`.
 
